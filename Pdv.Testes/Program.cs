@@ -960,6 +960,11 @@ Console.WriteLine();
 Console.WriteLine("--- TEF (maquininha simulada) ---");
 TestesTef.Rodar((cond, nome) => Check("tef: " + nome, cond));
 
+// ── NFC-e: emissão e cancelamento contra o autorizador de mentira ───────────
+Console.WriteLine();
+Console.WriteLine("--- NFC-e / SEFAZ (autorizador simulado) ---");
+TestesSefaz.Rodar((cond, nome) => Check("nfce: " + nome, cond));
+
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }
