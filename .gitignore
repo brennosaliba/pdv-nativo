@@ -1,0 +1,15 @@
+﻿.env
+.env.*
+*.pem
+*.ppk
+*.pfx
+*.p12
+*.key
+appsettings.Production.json
+secrets.json
+bin/
+obj/
+node_modules/
+dist/
+publish/
+.vs/

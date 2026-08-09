@@ -1,0 +1,37 @@
+<UserControl x:Class="Pdv.Telas.Login"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:t="clr-namespace:Pdv.Telas"
+             Background="{StaticResource Fundo}">
+    <Grid>
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="420">
+
+            <TextBlock Text="PDV" FontSize="46" FontWeight="Bold"
+                       Foreground="{StaticResource Marca}" HorizontalAlignment="Center"/>
+            <TextBlock x:Name="TxtLoja" Style="{StaticResource Rotulo}" HorizontalAlignment="Center" Margin="0,2,0,26"/>
+
+            <TextBlock x:Name="TxtEtapa" Text="CPF do funcionário" Style="{StaticResource Rotulo}" HorizontalAlignment="Center"/>
+
+            <!-- Bolinhas em vez de números: o cliente do outro lado do balcão não
+                 precisa ver quantos dígitos nem quais. -->
+            <TextBlock x:Name="TxtPin" Text="" FontSize="44" FontWeight="Bold" Margin="0,6,0,4"
+                       Foreground="{StaticResource Texto}" HorizontalAlignment="Center" MinHeight="56"/>
+
+            <TextBlock x:Name="TxtErro" Text="" Foreground="{StaticResource Erro}" FontSize="15"
+                       HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"
+                       MinHeight="24" Margin="0,0,0,10"/>
+
+            <t:TecladoNumerico x:Name="Teclado"/>
+
+            <Button x:Name="BtnEntrar" Style="{StaticResource BotaoPrincipal}" Content="Entrar"
+                    Margin="5,14,5,0" Click="Entrar" IsEnabled="False"/>
+        </StackPanel>
+
+        <!-- Configuração fica no rodapé, discreta e protegida por senha: o operador
+             não deve nem pensar em mexer nisso. -->
+        <Button x:Name="BtnConfig" Content="Configuração" Click="AbrirConfig"
+                Style="{StaticResource BotaoBase}" MinHeight="40" FontSize="13"
+                Background="Transparent" BorderThickness="0" Foreground="{StaticResource TextoFraco}"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,14,10"/>
+    </Grid>
+</UserControl>

@@ -1,0 +1,109 @@
+<UserControl x:Class="Pdv.Telas.Configuracao"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource Fundo}">
+    <Grid Margin="0">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,24,0,24">
+            <StackPanel Width="560" HorizontalAlignment="Center">
+
+                <TextBlock Text="Configuração do caixa" Style="{StaticResource Titulo}"/>
+                <TextBlock Text="Preenchido uma vez. Depois disso o caixa abre direto no login."
+                           Style="{StaticResource Rotulo}" Margin="0,4,0,22"/>
+
+                <TextBlock Text="LOJA" Foreground="{StaticResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
+                <TextBlock Text="Nome da loja" Style="{StaticResource Rotulo}"/>
+                <TextBox x:Name="TxtLoja" Margin="0,4,0,12"/>
+                <TextBlock Text="CNPJ (só números)" Style="{StaticResource Rotulo}"/>
+                <TextBox x:Name="TxtCnpj" Margin="0,4,0,12" MaxLength="18"/>
+
+                <TextBlock Text="FISCAL" Foreground="{StaticResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
+                <TextBlock Text="Série deste caixa" Style="{StaticResource Rotulo}"/>
+                <TextBox x:Name="TxtSerie" Margin="0,4,0,2" MaxLength="3"/>
+                <TextBlock Text="Cada caixa precisa de uma série só dele — duas fontes na mesma série geram numeração duplicada e a SEFAZ rejeita."
+                           Foreground="{StaticResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                <TextBlock Text="Ambiente" Style="{StaticResource Rotulo}"/>
+                <ComboBox x:Name="CmbAmbiente" Margin="0,4,0,12" FontSize="18" Padding="10,8">
+                    <ComboBoxItem Content="Homologação (teste — sem valor fiscal)" IsSelected="True"/>
+                    <ComboBoxItem Content="Produção (nota vale de verdade)"/>
+                </ComboBox>
+
+                <TextBlock Text="Endereço do servidor (IP ou domínio)" Style="{StaticResource Rotulo}"/>
+                <TextBox x:Name="TxtApi" Margin="0,4,0,12"/>
+
+                <TextBlock Text="Certificado digital A1 (.pfx)" Style="{StaticResource Rotulo}"/>
+                <Grid Margin="0,4,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="TxtPfx" Grid.Column="0" IsReadOnly="True" Margin="0,0,8,0"/>
+                    <Button x:Name="BtnPfx" Grid.Column="1" Content="Escolher" Click="EscolherPfx"
+                            Style="{StaticResource BotaoBase}" MinHeight="48" FontSize="15" Padding="18,0"/>
+                </Grid>
+                <TextBlock Text="Senha do certificado" Style="{StaticResource Rotulo}"/>
+                <PasswordBox x:Name="TxtSenhaPfx" Margin="0,4,0,2" FontSize="18" Padding="12,10"
+                             Background="{StaticResource Painel}" Foreground="{StaticResource Texto}"
+                             BorderBrush="{StaticResource Borda}" PasswordChanged="ConferirCert"/>
+                <TextBlock x:Name="TxtStatusCert" Foreground="{StaticResource TextoFraco}" FontSize="12"
+                           TextWrapping="Wrap" MinHeight="18" Margin="0,0,0,12"/>
+
+                <TextBlock Text="CSC (código de segurança do contribuinte)" Style="{StaticResource Rotulo}"/>
+                <PasswordBox x:Name="TxtCsc" Margin="0,4,0,12" FontSize="18" Padding="12,10"
+                             Background="{StaticResource Painel}" Foreground="{StaticResource Texto}"
+                             BorderBrush="{StaticResource Borda}"/>
+                <TextBlock Text="ID do CSC" Style="{StaticResource Rotulo}"/>
+                <TextBox x:Name="TxtIdCsc" Margin="0,4,0,12" MaxLength="6"/>
+
+                <TextBlock Text="IMPRESSORA" Foreground="{StaticResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
+                <TextBlock Text="Impressora do cupom" Style="{StaticResource Rotulo}"/>
+                <ComboBox x:Name="CboImpressora" Margin="0,4,0,6" FontSize="16" Padding="12,10"/>
+                <TextBlock Text="Bobina de 80mm. Em branco, usa a impressora padrão do Windows."
+                           Foreground="{StaticResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                <Button x:Name="BtnTesteImpressao" Content="Imprimir cupom de teste" Click="TestarImpressao"
+                        Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                <TextBlock x:Name="TxtStatusImpressao" Foreground="{StaticResource TextoFraco}" FontSize="12.5"
+                           TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                <!-- Sem bloco NUVEM e sem senha de admin aqui, por decisão do dono:
+                     o catálogo desce pela chave pública (botão Sincronizar) e a senha
+                     de administrador passa a ser gerida pelo painel. Menos campo na
+                     tela do caixa = menos jeito de configurar errado. -->
+
+                <TextBlock Text="PAINEL" Foreground="{StaticResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
+                <Button x:Name="BtnParear" Content="Parear com o painel (código de 6 dígitos)" Click="Parear"
+                        Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                <TextBlock x:Name="TxtStatusPareamento"
+                           Text="Sem parear, o caixa vende normalmente — mas vendas e notas ficam só neste PC."
+                           Foreground="{StaticResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                <TextBlock x:Name="TxtPrimeiroOperador" Text="PRIMEIRO OPERADOR" Foreground="{StaticResource Marca}"
+                           FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
+                <StackPanel x:Name="BlocoOperador">
+                    <TextBlock Text="Nome" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtOpNome" Margin="0,4,0,12"/>
+                    <TextBlock Text="CPF (é o login dele no caixa)" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtOpCpf" Margin="0,4,0,12" MaxLength="14"/>
+                    <TextBlock Text="Senha (4 a 6 dígitos)" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtOpPin" Margin="0,4,0,2" MaxLength="6"/>
+                    <TextBlock Text="Este primeiro operador entra como gerente — ele autoriza sangria e cancelamento."
+                               Foreground="{StaticResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                </StackPanel>
+
+                <TextBlock x:Name="TxtErro" Foreground="{StaticResource Erro}" FontSize="14"
+                           TextWrapping="Wrap" MinHeight="30" Margin="0,6,0,0"/>
+
+                <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="2*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" x:Name="BtnVoltar" Content="Voltar" Click="Voltar"
+                            Style="{StaticResource BotaoBase}" Margin="0,0,5,0" Visibility="Collapsed"/>
+                    <Button Grid.Column="1" Content="Salvar e continuar" Click="Salvar"
+                            Style="{StaticResource BotaoPrincipal}"/>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

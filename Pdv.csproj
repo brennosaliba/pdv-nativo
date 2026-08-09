@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Pdv</AssemblyName>
+    <AssemblyTitle>PDV - Frente de Caixa</AssemblyTitle>
+    <Version>0.2.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- SQLite direto + Dapper: no caminho da venda o comportamento precisa ser
+         previsível. EF Core traz change-tracker e materialização que atrapalham mais
+         do que ajudam num modelo append-only de dinheiro. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <PackageReference Include="Dapper" Version="2.1.35" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- QR do cupom da NFC-e. MIT, sem dependência nativa; o XamlQRCode devolve um
+         DrawingBrush do WPF, então não puxa System.Drawing.Common junto. -->
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Pdv.Nucleo\Pdv.Nucleo.csproj" />
+  </ItemGroup>
+
+  <!-- Os subprojetos ficam DENTRO desta pasta, e o SDK varre tudo por padrão —
+       sem isso ele tenta compilar os fontes (e os obj/) deles junto, dando erro de
+       atributo duplicado. -->
+  <ItemGroup>
+    <Compile Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
+    <Page Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
+    <None Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
+    <EmbeddedResource Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
+    <ApplicationDefinition Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
+  </ItemGroup>
+
+</Project>

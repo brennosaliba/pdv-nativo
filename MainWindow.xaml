@@ -1,0 +1,23 @@
+<Window x:Class="Pdv.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Pdv"
+        Title="PDV" WindowState="Maximized" WindowStyle="None"
+        Background="{StaticResource Fundo}"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <Grid>
+        <ContentControl x:Name="Conteudo"/>
+
+        <!-- Janela sem moldura (quiosque) precisa dos próprios botões de janela.
+             Discretos de propósito: existem pro dono/suporte, não pro operador. -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Panel.ZIndex="99" Margin="0,4,8,0">
+            <Button Content="─" Click="Minimizar" Width="34" Height="26" FontSize="12"
+                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                    Foreground="{StaticResource TextoFraco}" ToolTip="Minimizar (Ctrl+M)"/>
+            <Button Content="✕" Click="Fechar" Width="34" Height="26" FontSize="12"
+                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                    Foreground="{StaticResource TextoFraco}" ToolTip="Fechar o PDV"/>
+        </StackPanel>
+    </Grid>
+</Window>

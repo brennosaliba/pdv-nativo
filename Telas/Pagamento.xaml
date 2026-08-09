@@ -1,0 +1,148 @@
+<UserControl x:Class="Pdv.Telas.Pagamento"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:telas="clr-namespace:Pdv.Telas"
+             Background="{StaticResource Fundo}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ══ TOPO: o valor manda na tela ══ -->
+        <Border Grid.Row="0" Background="{StaticResource BarraDegrade}" Padding="28,18"
+                BorderBrush="{StaticResource Borda}" BorderThickness="0,0,0,1">
+            <Grid>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtEtapa" Text="Pagamento" Foreground="{StaticResource TextoFraco}"
+                               FontSize="13" FontWeight="Bold"/>
+                    <TextBlock x:Name="TxtResumo" Foreground="{StaticResource Texto}" FontSize="15" Margin="0,4,0,0"/>
+                </StackPanel>
+                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtRotuloTotal" Text="TOTAL" Foreground="{StaticResource TextoFraco}"
+                               FontSize="12" FontWeight="Bold" HorizontalAlignment="Right"/>
+                    <TextBlock x:Name="TxtTotal" Foreground="{StaticResource Texto}" FontSize="46"
+                               FontWeight="Bold" HorizontalAlignment="Right"/>
+                    <!-- na conta dividida, a conta inteira fica à vista: total − pago = falta -->
+                    <TextBlock x:Name="TxtContaPagamento" Foreground="{StaticResource TextoFraco}" FontSize="14"
+                               HorizontalAlignment="Right" Visibility="Collapsed" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ══ 1. ESCOLHA DA FORMA ══ -->
+        <Grid x:Name="PainelForma" Grid.Row="1" Margin="28,22,28,26">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <UniformGrid Grid.Row="0" Columns="2" x:Name="GradeFormas"/>
+
+            <!-- CPF na nota: opcional, mas vira obrigatório acima do limite legal -->
+            <Border Grid.Row="1" Background="{StaticResource PainelDegrade}" CornerRadius="14"
+                    BorderBrush="{StaticResource Borda}" BorderThickness="1" Padding="18,14" Margin="0,18,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock x:Name="TxtRotuloDoc" Text="CPF/CNPJ na nota" Foreground="{StaticResource Texto}"
+                                   FontSize="15" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="TxtDoc" Text="não informado" Foreground="{StaticResource TextoFraco}"
+                                   FontSize="14" Margin="0,3,0,0"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" x:Name="BtnDoc" Content="Informar" Click="InformarDocumento"
+                            Style="{StaticResource BotaoBase}" MinHeight="52" FontSize="16" Padding="26,0"/>
+                </Grid>
+            </Border>
+
+            <Button Grid.Row="2" Content="Voltar para a comanda" Click="Cancelar"
+                    Style="{StaticResource BotaoBase}" MinHeight="58" FontSize="16" Margin="0,14,0,0"/>
+        </Grid>
+
+        <!-- ══ 2. DINHEIRO ══ -->
+        <Grid x:Name="PainelDinheiro" Grid.Row="1" Margin="28,20,28,24" Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="380"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- esquerda: quanto o cliente entregou, e o que volta -->
+            <Grid Grid.Column="0" Margin="0,0,24,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Background="{StaticResource PainelDegrade}" CornerRadius="16"
+                        BorderBrush="{StaticResource Borda}" BorderThickness="1" Padding="24,18">
+                    <StackPanel>
+                        <TextBlock x:Name="TxtRotuloEntrada" Text="RECEBIDO" Foreground="{StaticResource TextoFraco}" FontSize="13" FontWeight="Bold"/>
+                        <TextBlock x:Name="TxtRecebido" Text="R$ 0,00" Foreground="{StaticResource Ciano}"
+                                   FontSize="52" FontWeight="Bold" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- valores redondos: é o que o cliente entrega de verdade -->
+                <UniformGrid Grid.Row="1" x:Name="GradeAtalhos" Columns="4" Margin="0,14,0,0"/>
+
+                <Border Grid.Row="2" x:Name="CaixaTroco" CornerRadius="16" Padding="24,18" Margin="0,14,0,0"
+                        VerticalAlignment="Top" Background="#1A2E9E5B" BorderBrush="#552E9E5B" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock x:Name="TxtRotuloTroco" Text="TROCO" Foreground="{StaticResource Ok}"
+                                   FontSize="14" FontWeight="Bold"/>
+                        <TextBlock x:Name="TxtTroco" Text="R$ 0,00" Foreground="{StaticResource Ok}"
+                                   FontSize="64" FontWeight="Bold" Margin="0,2,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <Grid Grid.Row="3" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Voltar" Click="VoltarParaFormas"
+                            Style="{StaticResource BotaoBase}" MinHeight="66" FontSize="17" Padding="30,0" Margin="0,0,12,0"/>
+                    <Button Grid.Column="1" x:Name="BtnConfirmarDinheiro" Content="Confirmar pagamento"
+                            Click="ConfirmarDinheiro" Style="{StaticResource BotaoPrincipal}" MinHeight="66" IsEnabled="False"/>
+                </Grid>
+            </Grid>
+
+            <telas:TecladoNumerico Grid.Column="1" x:Name="Teclado"/>
+        </Grid>
+
+        <!-- ══ 3. TEF / EMISSÃO / DESFECHO — tudo com a mesma moldura ══ -->
+        <Grid x:Name="PainelEstado" Grid.Row="1" Margin="28,24,28,26" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="720">
+                <TextBlock x:Name="TxtIconeEstado" FontSize="64" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="TxtTituloEstado" Foreground="{StaticResource Texto}" FontSize="30"
+                           FontWeight="Bold" TextAlignment="Center" TextWrapping="Wrap" Margin="0,18,0,0"/>
+                <TextBlock x:Name="TxtDetalheEstado" Foreground="{StaticResource TextoFraco}" FontSize="17"
+                           TextAlignment="Center" TextWrapping="Wrap" Margin="0,12,0,0" LineHeight="25"/>
+
+                <Border x:Name="CaixaTrocoFinal" CornerRadius="18" Padding="34,22" Margin="0,26,0,0"
+                        HorizontalAlignment="Center" Visibility="Collapsed"
+                        Background="#1A2E9E5B" BorderBrush="#552E9E5B" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="TROCO PARA O CLIENTE" Foreground="{StaticResource Ok}" FontSize="14"
+                                   FontWeight="Bold" HorizontalAlignment="Center"/>
+                        <TextBlock x:Name="TxtTrocoFinal" Foreground="{StaticResource Ok}" FontSize="76"
+                                   FontWeight="Bold" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <UniformGrid Grid.Row="1" x:Name="GradeAcoes" Columns="3" Margin="0,20,0,0"/>
+        </Grid>
+    </Grid>
+</UserControl>
