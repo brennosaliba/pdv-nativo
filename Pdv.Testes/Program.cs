@@ -1,6 +1,7 @@
 using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
+using Pdv.Testes;
 
 // Testes do ciclo do dinheiro. Sem framework: `dotnet run` e código != 0 se falhar.
 // O que está aqui é o que, se quebrar, faz a loja perder dinheiro ou o operador
@@ -951,6 +952,13 @@ if (!string.IsNullOrWhiteSpace(emailNuvem) && !string.IsNullOrWhiteSpace(senhaNu
     }
 }
 else Console.WriteLine("(pulei o teste de nuvem — defina PDV_EMAIL e PDV_SENHA para rodá-lo)");
+
+// ── TEF: o caminho do cartão, contra a maquininha de mentira ────────────────
+// Antes disto o TEF nunca era exercitado (exige hardware da Rede Smart), e é por
+// ele que o dinheiro entra sem passar pela gaveta.
+Console.WriteLine();
+Console.WriteLine("--- TEF (maquininha simulada) ---");
+TestesTef.Rodar((cond, nome) => Check("tef: " + nome, cond));
 
 cx.Dispose();
 SqliteConnection.ClearAllPools();
