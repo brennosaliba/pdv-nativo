@@ -30,6 +30,8 @@ public sealed class FakePostgrest : IDisposable
     public ConcurrentDictionary<string, byte> Fechamentos { get; } = new();
     public ConcurrentDictionary<string, byte> Movimentos { get; } = new();
     public ConcurrentDictionary<string, byte> Sessoes { get; } = new();
+    /// <summary>Códigos de cortesia queimados via courtesy_redeem.</summary>
+    public ConcurrentDictionary<string, byte> Resgatadas { get; } = new();
     public int Vinculos;
 
     // ── injeção de falhas ───────────────────────────────────────────────────
@@ -112,6 +114,22 @@ public sealed class FakePostgrest : IDisposable
                     { Responder(ctx, 200, """{"ok":false,"error":"venda_nao_encontrada"}"""); return; }
                     Canceladas.TryAdd(chave, 1);
                     Responder(ctx, 200, """{"ok":true,"sale_id":"fake"}""");
+                    return;
+                }
+                case "/rest/v1/rpc/courtesy_redeem":
+                {
+                    string? code = null;
+                    try {
+                        using var d = JsonDocument.Parse(corpo);
+                        if (d.RootElement.TryGetProperty("_code", out var cv) && cv.ValueKind == JsonValueKind.String)
+                            code = cv.GetString();
+                    } catch { }
+                    if (string.IsNullOrWhiteSpace(code))
+                    { Responder(ctx, 200, """{"ok":false,"error":"sem_code"}"""); return; }
+                    // uso único: segundo resgate do mesmo código responde ja_resgatado
+                    if (!Resgatadas.TryAdd(code!, 1))
+                    { Responder(ctx, 200, """{"ok":false,"error":"ja_resgatado"}"""); return; }
+                    Responder(ctx, 200, """{"ok":true}""");
                     return;
                 }
                 case "/rest/v1/pdv_caixa_fechamentos":

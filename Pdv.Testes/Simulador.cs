@@ -345,6 +345,14 @@ public static class Simulador
         if (chaveCancelAntesDaVenda is not null)
             fake.FalhaPorChave[chaveCancelAntesDaVenda] = (503, 15);
 
+        // cortesia_resgate: o resgate que falhou na hora vira fila durável. Enfileiro
+        // DOIS do mesmo código — o segundo prova que 'ja_resgatado' conta como sucesso
+        // (não trava a fila). Sem isto, o cupom parcial ficava reutilizável na rede caída.
+        Caixa.Enfileirar(cx, null, "cortesia_resgate", "CO-TESTE-1", "CO-TESTE-1",
+            new { codigo = "CO-TESTE-1", operador = "Ana", loja = "Savassi" });
+        Caixa.Enfileirar(cx, null, "cortesia_resgate", "CO-TESTE-1b", "CO-TESTE-1b",
+            new { codigo = "CO-TESTE-1", operador = "Ana", loja = "Savassi" });
+
         var nuvem = new Nuvem(fake.Url);
         Check("nuvem fake autentica", await nuvem.EntrarAsync("sim@sim.com", "x"));
         using var dren = new Drenagem(nuvem, fake.Url);
@@ -363,6 +371,14 @@ public static class Simulador
             if (pendentes == 0) break;
         }
         Console.WriteLine($"fila convergiu em {varreduras} varreduras pós-caos");
+
+        // cortesia: o cupom foi queimado na nuvem (resgate durável funcionou), e o
+        // segundo enfileiramento do mesmo código não travou a fila (ja_resgatado=ok)
+        Check("cortesia_resgate: cupom foi queimado na nuvem pela fila durável",
+            fake.Resgatadas.ContainsKey("CO-TESTE-1"));
+        Check("cortesia_resgate: reenvio do mesmo código (ja_resgatado) saiu da fila",
+            cx.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM outbox WHERE tipo='cortesia_resgate' AND enviado_em IS NULL") == 0);
 
         // ════ INVARIANTES ═══════════════════════════════════════════════════
         // I6 — convergência: nada pendente; nada preso mudo

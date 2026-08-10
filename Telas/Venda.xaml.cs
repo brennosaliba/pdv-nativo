@@ -931,8 +931,25 @@ public partial class Venda : UserControl
 
     private async Task ResgatarSilenciosoAsync(string codigo)
     {
-        try { await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja); }
-        catch { /* o resgate não pode derrubar a venda já concluída */ }
+        // O resgate não pode derrubar a venda já concluída — mas também não pode
+        // ser "dispara e esquece": se a rede caiu, o cupom continuava ATIVO no
+        // servidor e o cliente já tinha levado os itens (cupom reutilizável).
+        // Tenta na hora; se falhar, enfileira para a fila durável reprocessar,
+        // como o resto (venda, fechamento, cancelamento).
+        try
+        {
+            var r = await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja);
+            if (r.Ok) return;
+        }
+        catch { /* cai no enfileiramento abaixo */ }
+
+        try
+        {
+            using var cx = Banco.Abrir();
+            Caixa.Enfileirar(cx, null, "cortesia_resgate", codigo, codigo,
+                new { codigo, operador = _operador.Nome, loja = _loja });
+        }
+        catch { /* último recurso: nada mais a fazer sem derrubar a venda */ }
     }
 
     private async Task ResgatarEConcluirBrindeAsync()

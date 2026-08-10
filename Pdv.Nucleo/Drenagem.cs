@@ -143,7 +143,7 @@ public sealed class Drenagem : IDisposable
                       FROM outbox
                      WHERE enviado_em IS NULL
                        AND tipo IN ('venda', 'nfce_vinculo', 'venda_cancelada', 'fechamento',
-                                    'movimento', 'caixa_sessao')
+                                    'movimento', 'caixa_sessao', 'cortesia_resgate')
                      ORDER BY id
                      LIMIT 50
                     """).ToList();
@@ -175,6 +175,11 @@ public sealed class Drenagem : IDisposable
                     // nuvem. (Venda com nota autorizada nem chega aqui — Vendas.Cancelar
                     // recusa antes; a nota se cancela na SEFAZ.)
                     "venda_cancelada" => await CancelarVendaAsync((string)item.client_key, (string)item.payload, token, ct).ConfigureAwait(false),
+                    // Resgate de cortesia que falhou na hora (rede caiu). Sem esta fila,
+                    // o cupom parcial continuava ATIVO no servidor apos a venda: cliente
+                    // levava os itens de graca E o cupom ficava resgatavel de novo, sem
+                    // rastro. Agora o resgate e' duravel como o resto.
+                    "cortesia_resgate" => await ResgatarCortesiaAsync((string)item.payload, token, ct).ConfigureAwait(false),
                     // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
                     // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
                     // para o dead-letter abaixo depois de poucas tentativas.
@@ -543,6 +548,55 @@ public sealed class Drenagem : IDisposable
             return (false, $"cancel recusado: {Corta(resp)}");
         }
         catch { return (null, "resposta ilegível do cancelamento"); }
+    }
+
+    /// <summary>
+    /// Queima o cupom de cortesia na nuvem (courtesy_redeem). Roda pela fila quando
+    /// o resgate na hora da venda falhou por rede — o cupom nao pode ficar ativo
+    /// depois que o cliente ja levou os itens. Tri-state: 'ja_resgatado' conta como
+    /// sucesso (o cupom esta morto, que e' o objetivo).
+    /// </summary>
+    private async Task<(bool? Ok, string? Erro)> ResgatarCortesiaAsync(string payload, string token, CancellationToken ct)
+    {
+        string? codigo = null, operador = null, loja = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var r = doc.RootElement;
+            if (r.TryGetProperty("codigo", out var c) && c.ValueKind == JsonValueKind.String) codigo = c.GetString();
+            if (r.TryGetProperty("operador", out var o) && o.ValueKind == JsonValueKind.String) operador = o.GetString();
+            if (r.TryGetProperty("loja", out var l) && l.ValueKind == JsonValueKind.String) loja = l.GetString();
+        }
+        catch { return (false, "payload de cortesia corrompido"); }
+
+        if (string.IsNullOrWhiteSpace(codigo)) return (false, "cortesia sem código");
+
+        var corpo = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["_code"] = codigo,
+            ["_staff_name"] = operador,
+            ["_store"] = loja,
+        });
+
+        var (status, resp) = await RpcAsync("courtesy_redeem", corpo, token, ct).ConfigureAwait(false);
+        if (status is < 200 or >= 300) return DesfechoDeStatus(status, resp);
+        try
+        {
+            using var doc = JsonDocument.Parse(resp!);
+            var r = doc.RootElement;
+            if (r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True)
+                return (true, null);
+
+            var err = r.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String
+                ? e.GetString() : null;
+
+            // Cupom já resgatado: o objetivo (cupom morto) já foi atingido — sucesso.
+            if (err is "ja_resgatado" or "already_redeemed" or "cortesia_ja_resgatada")
+                return (true, null);
+
+            return (false, $"resgate recusado: {err ?? Corta(resp)}");
+        }
+        catch { return (null, "resposta ilegível do resgate"); }
     }
 
     /// <summary>A linha 'venda' desta client_key ainda espera envio? (dependência viva)</summary>
