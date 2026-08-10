@@ -127,4 +127,22 @@ public static class Sincronizacao
         }
         catch { return (0, 0); }
     }
+
+    /// <summary>
+    /// Vendas que a nuvem NUNCA recebeu e que o dreno desistiu de enviar
+    /// (dead-letter). Elas somem de Pendencias() porque o dead-letter carimba
+    /// enviado_em — então sem este contador o caixa mostrava "tudo em dia"
+    /// enquanto o SQLite local guardava venda que a nuvem não tem. Precisa de
+    /// reconciliação manual: aparece aqui em vez de sumir em silêncio.
+    /// </summary>
+    public static int Desistidos()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            return cx.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM outbox WHERE tipo = 'venda' AND ultimo_erro LIKE 'desistido%'");
+        }
+        catch { return 0; }
+    }
 }
