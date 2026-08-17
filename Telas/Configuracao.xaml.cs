@@ -36,7 +36,10 @@ public partial class Configuracao : UserControl
             TxtLoja.Text = (string)t.loja_nome;
             TxtCnpj.Text = (string)t.cnpj;
             TxtSerie.Text = ((long)t.serie_nfce).ToString();
-            CmbAmbiente.SelectedIndex = (long)t.ambiente == 1 ? 1 : 0;
+            // modo recibo (sem emissão) vive na config, por cima do ambiente da SEFAZ
+            CmbAmbiente.SelectedIndex = Vendas.Config(cx, "modo_fiscal") == "recibo" ? 2
+                : (long)t.ambiente == 1 ? 1 : 0;
+            ChkImprimirAuto.IsChecked = Vendas.Config(cx, "imprimir_automatico", "1") != "0";
             TxtApi.Text = t.api_base as string ?? "";
             BtnVoltar.Visibility = Visibility.Visible;
             // reabrir vem preenchido: reconfigurar não pode ser redigitar tudo
@@ -319,7 +322,73 @@ public partial class Configuracao : UserControl
         if (TxtSenhaPfx.Password.Length == 0) TxtSenhaPfx.Focus();
     }
 
-    /// <summary>Abre o .pfx com a senha digitada — pega senha errada aqui, não na 1ª venda.</summary>
+    // ── CNPJ: máscara + algoritmo em tempo real ─────────────────────────────
+    // O dígito verificador pega CNPJ digitado errado AQUI, não na Rejeição 207
+    // da SEFAZ com cliente no balcão. A máscara (00.000.000/0000-00) elimina a
+    // dúvida "com ou sem pontos?" — aceita dos dois jeitos e exibe formatado.
+    private bool _formatandoCnpj;
+
+    private void FormatarCnpj(object sender, TextChangedEventArgs e)
+    {
+        if (_formatandoCnpj) return;
+        _formatandoCnpj = true;
+        try
+        {
+            var dig = new string(TxtCnpj.Text.Where(char.IsDigit).Take(14).ToArray());
+            var sb = new StringBuilder(18);
+            for (var i = 0; i < dig.Length; i++)
+            {
+                if (i == 2 || i == 5) sb.Append('.');
+                else if (i == 8) sb.Append('/');
+                else if (i == 12) sb.Append('-');
+                sb.Append(dig[i]);
+            }
+            TxtCnpj.Text = sb.ToString();
+            TxtCnpj.CaretIndex = TxtCnpj.Text.Length; // digitação de CNPJ é sempre "no fim"
+
+            if (dig.Length == 0) { TxtStatusCnpj.Text = ""; }
+            else if (dig.Length < 14)
+            {
+                TxtStatusCnpj.Text = $"… {dig.Length}/14 dígitos";
+                TxtStatusCnpj.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextoFraco"];
+            }
+            else if (Documentos.CnpjValido(dig))
+            {
+                TxtStatusCnpj.Text = "✓ CNPJ válido";
+                TxtStatusCnpj.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Ok"];
+            }
+            else
+            {
+                TxtStatusCnpj.Text = "✗ Dígitos verificadores não conferem — confira número por número.";
+                TxtStatusCnpj.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Erro"];
+            }
+            // CNPJ mudou: se já há certificado carregado, refaz a comparação
+            if (TxtSenhaPfx.Password.Length > 0) ConferirCert(this, new RoutedEventArgs());
+        }
+        finally { _formatandoCnpj = false; }
+    }
+
+    /// <summary>CNPJ do titular do certificado ICP-Brasil (CN = "RAZÃO SOCIAL:CNPJ").</summary>
+    private static string? CnpjDoCertificado(X509Certificate2 c)
+    {
+        var cn = c.GetNameInfo(X509NameType.SimpleName, false) ?? "";
+        var i = cn.LastIndexOf(':');
+        if (i >= 0)
+        {
+            var dig = new string(cn[(i + 1)..].Where(char.IsDigit).ToArray());
+            if (dig.Length == 14) return dig;
+        }
+        // fallback: qualquer sequência de 14 dígitos no Subject
+        var m = System.Text.RegularExpressions.Regex.Match(c.Subject, @"\d{14}");
+        return m.Success ? m.Value : null;
+    }
+
+    /// <summary>
+    /// Abre o .pfx com a senha digitada — pega senha errada AQUI, não na 1ª venda.
+    /// Roda a cada tecla da senha (PasswordChanged) e também confere se o CNPJ do
+    /// certificado é o MESMO da loja: certificado de outro CNPJ emite nota que a
+    /// SEFAZ rejeita (ou pior, autoriza em nome de outra empresa).
+    /// </summary>
     private void ConferirCert(object sender, RoutedEventArgs e)
     {
         var caminho = _pfxEscolhido ?? (File.Exists(ArqCert) ? ArqCert : null);
@@ -328,16 +397,166 @@ public partial class Configuracao : UserControl
         {
             using var c = new X509Certificate2(caminho, TxtSenhaPfx.Password);
             var dias = (int)(c.NotAfter - DateTime.Now).TotalDays;
-            TxtStatusCert.Text = dias < 0
-                ? $"✗ Certificado VENCIDO em {c.NotAfter:dd/MM/yyyy} — a SEFAZ recusa as notas."
-                : $"✓ {c.GetNameInfo(X509NameType.SimpleName, false)} · válido até {c.NotAfter:dd/MM/yyyy}"
-                  + (dias <= 30 ? $" (faltam {dias} dias)" : "");
-            TxtStatusCert.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[dias < 0 ? "Erro" : "Ok"];
+            if (dias < 0)
+            {
+                TxtStatusCert.Text = $"✗ Certificado VENCIDO em {c.NotAfter:dd/MM/yyyy} — a SEFAZ recusa as notas.";
+                TxtStatusCert.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Erro"];
+                return;
+            }
+            var texto = $"✓ {c.GetNameInfo(X509NameType.SimpleName, false)} · válido até {c.NotAfter:dd/MM/yyyy}"
+                        + (dias <= 30 ? $" (faltam {dias} dias)" : "");
+            var chave = dias <= 30 ? "Erro" : "Ok";
+
+            // Comparação pela RAIZ (8 primeiros dígitos = a empresa): certificado da
+            // MATRIZ 0001 assina nota das FILIAIS 0002/0003... — a SEFAZ aceita.
+            // Erro de verdade é raiz DIFERENTE (outra empresa).
+            var cnpjCert = CnpjDoCertificado(c);
+            var cnpjLoja = new string(TxtCnpj.Text.Where(char.IsDigit).ToArray());
+            if (cnpjCert is not null && cnpjLoja.Length == 14)
+            {
+                if (cnpjCert == cnpjLoja) texto += " · CNPJ confere com a loja";
+                else if (cnpjCert[..8] == cnpjLoja[..8])
+                    texto += $" · certificado da matriz/outra filial ({Documentos.Formatar(cnpjCert)}) — mesma empresa, a SEFAZ aceita";
+                else
+                {
+                    texto += $"\n✗ Certificado de OUTRA EMPRESA ({Documentos.Formatar(cnpjCert)}) — a raiz do CNPJ não confere; nota sairia em nome de outra empresa.";
+                    chave = "Erro";
+                }
+            }
+            TxtStatusCert.Text = texto;
+            TxtStatusCert.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[chave];
         }
         catch
         {
             TxtStatusCert.Text = "✗ Senha incorreta para este certificado.";
             TxtStatusCert.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Erro"];
+        }
+    }
+
+    // ── TESTE GERAL ─────────────────────────────────────────────────────────
+    /// <summary>
+    /// Confere a configuração inteira de uma vez, na ordem em que as coisas
+    /// quebram na vida real: CNPJ → certificado → CSC → emissor local → servidor
+    /// fiscal → pareamento. Cada linha é ✓/⚠/✗ com o motivo — pra descobrir o
+    /// problema AGORA, não na primeira venda com cliente esperando.
+    /// </summary>
+    private async void TestarConfiguracao(object sender, RoutedEventArgs e)
+    {
+        BtnTestarTudo.IsEnabled = false;
+        TxtStatusTeste.Text = "Testando…";
+        var linhas = new List<string>();
+        var pior = 0; // 0 ok, 1 aviso, 2 erro
+        void Add(int nivel, string msg) { linhas.Add(msg); pior = Math.Max(pior, nivel); }
+
+        try
+        {
+            // 1. CNPJ (algoritmo)
+            var cnpj = new string(TxtCnpj.Text.Where(char.IsDigit).ToArray());
+            if (cnpj.Length == 14 && Documentos.CnpjValido(cnpj)) Add(0, "✓ CNPJ válido");
+            else Add(2, cnpj.Length == 14 ? "✗ CNPJ com dígito verificador errado" : "✗ CNPJ incompleto");
+
+            // Modo RECIBO (sem emissão): certificado/CSC/emissor não são exigidos —
+            // testar e reprovar por eles confundiria (a loja ESCOLHEU não emitir).
+            var modoRecibo = CmbAmbiente.SelectedIndex == 2;
+            if (modoRecibo)
+                Add(1, "ℹ Modo RECIBO (sem emissão fiscal): certificado, CSC e emissor não são exigidos");
+
+            // 2. Certificado (abre? validade? CNPJ bate?)
+            var caminhoCert = _pfxEscolhido ?? (File.Exists(ArqCert) ? ArqCert : null);
+            var producao = CmbAmbiente.SelectedIndex == 1;
+            if (modoRecibo) { /* pula certificado/CSC/emissor — segue pros testes de rede */ }
+            else
+            if (caminhoCert is null || TxtSenhaPfx.Password.Length == 0)
+                Add(producao ? 2 : 1, producao
+                    ? "✗ Sem certificado/senha — produção NÃO emite nota"
+                    : "⚠ Sem certificado (ok em homologação, obrigatório pra produção)");
+            else
+            {
+                try
+                {
+                    using var c = new X509Certificate2(caminhoCert, TxtSenhaPfx.Password);
+                    var dias = (int)(c.NotAfter - DateTime.Now).TotalDays;
+                    if (dias < 0) Add(2, $"✗ Certificado VENCIDO em {c.NotAfter:dd/MM/yyyy}");
+                    else if (dias <= 30) Add(1, $"⚠ Certificado vence em {dias} dias ({c.NotAfter:dd/MM/yyyy}) — renove");
+                    else Add(0, $"✓ Certificado ok (válido até {c.NotAfter:dd/MM/yyyy})");
+                    var cnpjCert = CnpjDoCertificado(c);
+                    if (cnpjCert is not null && cnpj.Length == 14)
+                    {
+                        if (cnpjCert == cnpj) Add(0, "✓ CNPJ do certificado confere com a loja");
+                        else if (cnpjCert[..8] == cnpj[..8])
+                            Add(0, $"✓ Certificado da matriz/outra filial ({Documentos.Formatar(cnpjCert)}) — mesma empresa, aceito");
+                        else Add(2, $"✗ Certificado de OUTRA EMPRESA ({Documentos.Formatar(cnpjCert)}) — raiz do CNPJ não confere");
+                    }
+                }
+                catch { Add(2, "✗ Senha do certificado incorreta"); }
+            }
+
+            // 3. CSC + ID (a SEFAZ só valida o CSC de verdade na 1ª emissão)
+            if (!modoRecibo)
+            {
+                if (TxtCsc.Password.Length >= 16) Add(0, "✓ CSC preenchido (validação final acontece na 1ª nota)");
+                else Add(producao ? 2 : 1, TxtCsc.Password.Length == 0
+                    ? (producao ? "✗ CSC vazio — produção NÃO gera o QR Code" : "⚠ CSC vazio (necessário pra emitir)")
+                    : "⚠ CSC muito curto — confira no portal da SEFAZ");
+                if (!TxtIdCsc.Text.Trim().All(char.IsDigit) || TxtIdCsc.Text.Trim().Length == 0)
+                    Add(1, "⚠ ID do CSC deve ser numérico (ex.: 000001)");
+            }
+
+            // 4. Emissor fiscal local (o vigia sobe junto com o PDV — MAS só nas
+            // máquinas de caixa, onde C:\kiosk\agent está instalado; ver Agente.cs)
+            if (modoRecibo) { /* recibo não usa emissor */ }
+            else if (!File.Exists(@"C:\kiosk\agent\pdv-agent.cjs"))
+            {
+                Add(1, "⚠ Emissor local não instalado NESTA máquina (normal fora do caixa da loja; no caixa ele vem com a instalação)");
+            }
+            else
+            {
+                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+                try
+                {
+                    var r = await http.GetAsync("http://127.0.0.1:4610/health");
+                    Add(r.IsSuccessStatusCode ? 0 : 1, r.IsSuccessStatusCode
+                        ? "✓ Emissor fiscal local no ar"
+                        : $"⚠ Emissor local respondeu HTTP {(int)r.StatusCode}");
+                }
+                catch { Add(1, "⚠ Emissor fiscal local fora do ar — feche e abra o PDV (o vigia religa em 30s)"); }
+            }
+
+            // 5. Servidor fiscal (api_base)
+            var api = TxtApi.Text.Trim();
+            if (api.Length == 0) Add(1, "⚠ Endereço do servidor vazio");
+            else
+            {
+                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+                try
+                {
+                    using var r = await http.GetAsync(api);
+                    Add(0, $"✓ Servidor fiscal alcançável ({api})"); // qualquer resposta HTTP = rede ok
+                }
+                catch (Exception ex) { Add(2, $"✗ Servidor fiscal inalcançável: {ex.Message.Split('\n')[0]}"); }
+            }
+
+            // 6. Pareamento com o painel (OBRIGATÓRIO pra salvar)
+            var seg = LerSegredos();
+            Add(seg.ContainsKey("nuvemEmail") ? 0 : 2, seg.ContainsKey("nuvemEmail")
+                ? "✓ Pareado com o painel (vendas e notas sobem no Sincronizar)"
+                : "✗ Não pareado — obrigatório parear antes de salvar (última seção)");
+
+            // 7. Impressora (o teste REAL de papel é o botão acima)
+            var imp = ImpressoraEscolhida();
+            Add(0, imp is null ? "✓ Impressora: padrão do Windows" : $"✓ Impressora: {imp}");
+            linhas.Add("   (papel/corte/QR: use o botão \"Imprimir cupom de teste\")");
+        }
+        catch (Exception ex)
+        {
+            Add(2, "✗ Teste interrompido: " + ex.Message);
+        }
+        finally
+        {
+            TxtStatusTeste.Text = string.Join("\n", linhas);
+            TxtStatusTeste.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[
+                pior == 2 ? "Erro" : pior == 1 ? "TextoFraco" : "Ok"];
+            BtnTestarTudo.IsEnabled = true;
         }
     }
 
@@ -349,44 +568,68 @@ public partial class Configuracao : UserControl
             var cnpj = new string(TxtCnpj.Text.Where(char.IsDigit).ToArray());
             if (loja.Length < 2) throw new InvalidOperationException("Informe o nome da loja.");
             if (cnpj.Length != 14) throw new InvalidOperationException("O CNPJ precisa ter 14 dígitos.");
+            // Dígito verificador AQUI, não na Rejeição 207 da SEFAZ com cliente no balcão.
+            if (!Documentos.CnpjValido(cnpj))
+                throw new InvalidOperationException("CNPJ inválido — os dígitos verificadores não conferem.");
             if (!int.TryParse(TxtSerie.Text.Trim(), out var serie) || serie < 1 || serie > 999)
                 throw new InvalidOperationException("Série deve ser um número de 1 a 999.");
+            // Índice 2 = "Sem emissão — só recibo": a venda NÃO chama o emissor e o papel
+            // sai como recibo (SEM VALOR FISCAL). O ambiente da SEFAZ fica em homologação
+            // por segurança — se religarem a emissão sem revisar, nada sobe pra produção.
+            var modoRecibo = CmbAmbiente.SelectedIndex == 2;
             var ambiente = CmbAmbiente.SelectedIndex == 1 ? 1 : 2;
+
+            // INTEGRAÇÃO É OBRIGATÓRIA (decisão do dono): sem parear com o painel,
+            // vendas e notas ficariam presas neste PC — o Salvar não conclui.
+            if (!LerSegredos().ContainsKey("nuvemEmail"))
+                throw new InvalidOperationException(
+                    "Pareamento obrigatório: gere o código de 6 dígitos no painel e use o botão " +
+                    "\"Parear com o painel\" (última seção) antes de salvar.");
 
             using var cx = Banco.Abrir();
             using var tx = cx.BeginTransaction();
 
-            // Senha de admin não se digita mais aqui (vai ser gerida pelo painel).
-            // Na 1ª instalação nasce com o padrão 1234 — trocável pelo comando de
-            // suporte (`dotnet run -- admin X`) ou, adiante, pelo painel. Não nascer
-            // com senha nenhuma deixaria a tela de configuração aberta a qualquer um.
             var temAdmin = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM operador WHERE id='_admin_'", transaction: tx) > 0;
-            if (!temAdmin)
-            {
-                var (h, s) = Operadores.GerarHash("1234");
-                cx.Execute("""
-                    INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado)
-                    VALUES ('_admin_','Administrador',@H,@S,'gerente',0,@Em)
-                    """, new { H = h, S = s, Em = DateTime.Now.ToString("o") }, tx);
-                Caixa.Auditar(cx, tx, "senha_admin_padrao", null, null, "primeira instalação — senha 1234");
-            }
+            var adminNasceuPadrao = false;
 
-            // primeiro operador (só quando ainda não há nenhum)
+            // ADMINISTRADOR DA LOJA (dono) — só quando ainda não há nenhum operador.
+            // Ele entra com TODOS os privilégios e a senha dele passa a ser a senha
+            // desta tela de configuração (o "_admin_" espelha o hash do dono —
+            // morre o 1234 padrão).
             if (BlocoOperador.Visibility == Visibility.Visible)
             {
                 var nome = TxtOpNome.Text.Trim();
                 var pin = TxtOpPin.Text.Trim();
                 var cpfOp = Documentos.SoDigitos(TxtOpCpf.Text);
-                if (nome.Length < 2) throw new InvalidOperationException("Informe o nome do primeiro operador.");
-                // CPF é o login do funcionário: sem ele, a abertura de caixa não tem dono de verdade
+                if (nome.Length < 2) throw new InvalidOperationException("Informe o nome do administrador (dono).");
+                // CPF é o login: sem ele, a abertura de caixa não tem dono de verdade
                 if (!Documentos.CpfValido(cpfOp))
-                    throw new InvalidOperationException("CPF do operador inválido — ele é o login dele no caixa.");
+                    throw new InvalidOperationException("CPF do administrador inválido — ele é o login dele no caixa.");
                 if (!Operadores.PinValido(pin)) throw new InvalidOperationException("A senha deve ter de 4 a 6 dígitos.");
                 var (h, s) = Operadores.GerarHash(pin);
                 cx.Execute("""
                     INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,cpf,ativo,atualizado)
                     VALUES (@Id,@N,@H,@S,'gerente',@Cpf,1,@Em)
                     """, new { Id = Guid.NewGuid().ToString(), N = nome, H = h, S = s, Cpf = cpfOp, Em = DateTime.Now.ToString("o") }, tx);
+                // a senha do DONO é a senha da configuração (upsert do _admin_ espelhando o hash)
+                cx.Execute("""
+                    INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado)
+                    VALUES ('_admin_',@N,@H,@S,'gerente',0,@Em)
+                    ON CONFLICT(id) DO UPDATE SET nome=@N, pin_hash=@H, pin_salt=@S, atualizado=@Em
+                    """, new { N = "Administrador (" + nome + ")", H = h, S = s, Em = DateTime.Now.ToString("o") }, tx);
+                Caixa.Auditar(cx, tx, "admin_definido", null, null, $"dono {nome} — senha da configuração é a dele");
+            }
+            else if (!temAdmin)
+            {
+                // instalação sem bloco de operador (já havia operadores) e sem admin:
+                // fallback raro — nasce 1234 pra tela não ficar aberta a qualquer um.
+                var (h, s) = Operadores.GerarHash("1234");
+                cx.Execute("""
+                    INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado)
+                    VALUES ('_admin_','Administrador',@H,@S,'gerente',0,@Em)
+                    """, new { H = h, S = s, Em = DateTime.Now.ToString("o") }, tx);
+                Caixa.Auditar(cx, tx, "senha_admin_padrao", null, null, "sem dono cadastrado — senha 1234");
+                adminNasceuPadrao = true;
             }
 
             var agora = DateTime.Now.ToString("o");
@@ -408,6 +651,8 @@ public partial class Configuracao : UserControl
             var impressora = ImpressoraEscolhida();
             if (impressora is null) cx.Execute("DELETE FROM config WHERE chave='impressora'");
             else Vendas.GravarConfig(cx, "impressora", impressora);
+            Vendas.GravarConfig(cx, "modo_fiscal", modoRecibo ? "recibo" : "nfce");
+            Vendas.GravarConfig(cx, "imprimir_automatico", ChkImprimirAuto.IsChecked == false ? "0" : "1");
 
             // Segredos fora do banco e cifrados pela máquina (DPAPI). Em produção o
             // certificado é obrigatório — sem ele não sai nota.
@@ -422,12 +667,12 @@ public partial class Configuracao : UserControl
             seg["idCsc"] = TxtIdCsc.Text.Trim() is { Length: > 0 } i ? i : "000001";
             GravarSegredos(seg);
 
-            if (ambiente == 1 && (!File.Exists(ArqCert) || !seg.ContainsKey("csc")))
+            if (!modoRecibo && ambiente == 1 && (!File.Exists(ArqCert) || !seg.ContainsKey("csc")))
             {
                 Dialogo.Avisar(Window.GetWindow(this)!, "Falta o certificado",
                     "Salvo, mas sem o certificado e/ou o CSC o caixa não consegue emitir nota em produção.", "erro");
             }
-            if (!temAdmin)
+            if (adminNasceuPadrao)
                 Dialogo.Avisar(Window.GetWindow(this)!, "Senha desta tela: 1234",
                     "A senha de administrador nasceu com o padrão 1234. " +
                     "Troque assim que possível (pelo painel, quando existir, ou pelo suporte).", "ok");
@@ -437,6 +682,18 @@ public partial class Configuracao : UserControl
         {
             TxtErro.Text = ex.Message;
         }
+    }
+
+    /// <summary>
+    /// Revelação progressiva: "Sem emissão — só recibo" esconde certificado/CSC/ID
+    /// (não fazem sentido sem NFC-e). O guard de null cobre o disparo que o WPF dá
+    /// durante o InitializeComponent, antes de BlocoCertificado existir.
+    /// </summary>
+    private void AmbienteMudou(object sender, SelectionChangedEventArgs e)
+    {
+        if (BlocoCertificado is null) return;
+        BlocoCertificado.Visibility = CmbAmbiente.SelectedIndex == 2
+            ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void Voltar(object sender, RoutedEventArgs e) => Concluiu?.Invoke();

@@ -977,6 +977,83 @@ public partial class Venda : UserControl
 
     // ── CICLO DO DINHEIRO ───────────────────────────────────────────────────
     private void Sangria(object sender, RoutedEventArgs e) => Movimento("sangria");
+
+    /// <summary>
+    /// Troca a impressora do cupom SEM voltar na configuração (que exige senha de
+    /// admin): bobina acabou/entalou no meio do expediente, o operador aponta pra
+    /// outra e segue vendendo. Escolha operacional, não fiscal — não precisa de senha.
+    /// </summary>
+    private async void TrocarImpressora(object sender, RoutedEventArgs e)
+    {
+        var dono = Window.GetWindow(this)!;
+        List<string> nomes;
+        try { nomes = (await Impressao.ImpressorasAsync()).ToList(); }
+        catch (Exception ex)
+        {
+            Dialogo.Avisar(dono, "Impressoras", "Não consegui listar as impressoras: " + ex.Message, "erro");
+            return;
+        }
+
+        using var cx = Banco.Abrir();
+        var atual = Vendas.Config(cx, "impressora");
+
+        var janela = new Window
+        {
+            Title = "Impressora do cupom",
+            Owner = dono,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            SizeToContent = SizeToContent.Height,
+            Width = 420,
+            ResizeMode = ResizeMode.NoResize,
+            Background = (Brush)Application.Current.Resources["Fundo"],
+        };
+        var painel = new StackPanel { Margin = new Thickness(20) };
+        painel.Children.Add(new TextBlock
+        {
+            Text = "Pra onde sai o cupom?",
+            FontSize = 16,
+            FontWeight = FontWeights.Bold,
+            Foreground = (Brush)Application.Current.Resources["Texto"],
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        var combo = new ComboBox { FontSize = 16, Padding = new Thickness(10, 8, 10, 8) };
+        combo.Items.Add("(padrão do Windows)");
+        foreach (var n in nomes) combo.Items.Add(n);
+        combo.SelectedIndex = atual is { Length: > 0 } && combo.Items.Contains(atual)
+            ? combo.Items.IndexOf(atual) : 0;
+        painel.Children.Add(combo);
+        // Impressão automática mora aqui também (decisão operacional, sem admin):
+        // balcão com fila desliga, quem quer papel sempre liga.
+        var chkAuto = new CheckBox
+        {
+            Content = "Imprimir automaticamente ao concluir a venda",
+            IsChecked = Vendas.Config(cx, "imprimir_automatico", "1") != "0",
+            FontSize = 14,
+            Foreground = (Brush)Application.Current.Resources["Texto"],
+            Margin = new Thickness(0, 12, 0, 0),
+        };
+        painel.Children.Add(chkAuto);
+        var ok = new Button
+        {
+            Content = "Usar esta impressora",
+            Style = (Style)Application.Current.Resources["BotaoPrincipal"],
+            Margin = new Thickness(0, 14, 0, 0),
+        };
+        ok.Click += (_, _) => { janela.DialogResult = true; };
+        painel.Children.Add(ok);
+        janela.Content = painel;
+
+        if (janela.ShowDialog() != true) return;
+        var escolhida = combo.SelectedItem as string;
+        if (escolhida is null || escolhida.StartsWith("(padrão"))
+            cx.Execute("DELETE FROM config WHERE chave='impressora'");
+        else Vendas.GravarConfig(cx, "impressora", escolhida);
+        Vendas.GravarConfig(cx, "imprimir_automatico", chkAuto.IsChecked == false ? "0" : "1");
+        Caixa.Auditar(cx, null, "impressora_trocada", _operador.Id, null,
+            (escolhida ?? "padrão do Windows") + (chkAuto.IsChecked == false ? " · impressão automática OFF" : ""));
+        Dialogo.Avisar(dono, "Impressora",
+            $"Cupons passam a sair em: {escolhida ?? "impressora padrão do Windows"}.", "ok");
+    }
     private void Suprimento(object sender, RoutedEventArgs e) => Movimento("suprimento");
 
     private void Movimento(string tipo)

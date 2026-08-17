@@ -504,11 +504,13 @@ public partial class Pagamento : UserControl
 
         // Gravar ANTES de emitir. Se o dinheiro entrou, a venda tem que existir mesmo
         // que a SEFAZ recuse a nota — senão o caixa fecha com falta.
+        bool modoRecibo;
         try
         {
             using var cx = Banco.Abrir();
             _venda = Vendas.Finalizar(cx, _sessao, _operador, _itens, _partes,
                 _documento, _loja, _lojaId);
+            modoRecibo = Vendas.Config(cx, "modo_fiscal") == "recibo";
         }
         catch (Exception ex)
         {
@@ -521,7 +523,76 @@ public partial class Pagamento : UserControl
             return;
         }
 
+        // Modo RECIBO (sem emissão fiscal): a venda está gravada e sobe pro painel
+        // normalmente — só não existe NFC-e. O papel sai como recibo simples.
+        if (modoRecibo) { await ConcluirReciboAsync(); return; }
+
         await EmitirAsync();
+    }
+
+    /// <summary>
+    /// Desfecho do modo RECIBO: sem emissor, sem SEFAZ — imprime recibo (se a
+    /// impressão automática estiver ligada) e conclui. A venda já foi gravada e o
+    /// Dreno a sobe pro painel igual a qualquer outra.
+    /// </summary>
+    private async Task ConcluirReciboAsync(bool forcarImpressao = false)
+    {
+        Servicos.Dreno()?.Cutucar();
+
+        bool autoImp;
+        string? cnpj;
+        string? impressora;
+        using (var cx = Banco.Abrir())
+        {
+            autoImp = Vendas.Config(cx, "imprimir_automatico", "1") != "0";
+            impressora = Vendas.Config(cx, "impressora");
+            cnpj = cx.ExecuteScalar<string>("SELECT cnpj FROM terminal LIMIT 1");
+        }
+
+        string? erro = null;
+        if (autoImp || forcarImpressao)
+        {
+            var dados = new DadosCupom(
+                EmitenteNome: _loja, EmitenteCnpj: cnpj, EmitenteIe: null, EmitenteEndereco: null,
+                Numero: 0, Serie: 0, Chave: null, Emissao: DateTime.Now, QrCode: null, TpAmb: null,
+                Itens: _itens.Select(i => new ItemCupom(i.Codigo ?? "", i.Descricao, i.Qtd, i.Unidade, i.Preco, i.Total)).ToList(),
+                Total: _total, VNf: null,
+                Pagamentos: _partes.Select(p => new PagamentoCupom(Rotulo(p.Forma),
+                    new Dinheiro(p.Valor.Centavos - p.Troco.Centavos))).ToList(),
+                Recebido: new Dinheiro(_partes.Sum(p => p.Valor.Centavos)),
+                Documento: _documento, Contingencia: false, Operador: _operador.Nome,
+                Recibo: true);
+            erro = await Impressao.ImprimirAsync(dados, impressora);
+        }
+
+        var troco = new Dinheiro(_partes.Sum(p => p.Troco.Centavos));
+        var detalhe = "Modo recibo (sem emissão fiscal) — nenhuma nota foi gerada.";
+        if (!autoImp && !forcarImpressao) detalhe += "\nImpressão automática desligada.";
+        if (erro is not null) detalhe += $"\n\n⚠️ O recibo não imprimiu: {erro}";
+
+        var acaoImpressao = erro is not null
+            ? ("Reimprimir", (Action)(() => _ = ConcluirReciboAsync(true)))
+            : !autoImp && !forcarImpressao
+                ? ("Imprimir recibo", (Action)(() => _ = ConcluirReciboAsync(true)))
+                : default;
+        Estado("✅", "Venda concluída — recibo", detalhe,
+            acaoImpressao,
+            ("Nova venda", () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
+        Ir(Fase.Sucesso);
+
+        if (troco.Positivo)
+        {
+            TxtTrocoFinal.Text = troco.Formatado();
+            CaixaTrocoFinal.Visibility = Visibility.Visible;
+        }
+
+        _avanco?.Stop();
+        if (erro is null && (autoImp || !forcarImpressao))
+        {
+            _avanco = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(troco.Positivo ? 4000 : 1600) };
+            _avanco.Tick += (_, _) => { _avanco?.Stop(); Encerrou?.Invoke(DesfechoVenda.Concluida); };
+            _avanco.Start();
+        }
     }
 
     private async Task EmitirAsync()
@@ -604,9 +675,15 @@ public partial class Pagamento : UserControl
         Ir(Fase.Falha);
     }
 
-    private async Task ImprimirEConcluirAsync(ResultadoEmissao r)
+    private async Task ImprimirEConcluirAsync(ResultadoEmissao r, bool forcarImpressao = false)
     {
-        var erro = await ImprimirAsync(r);
+        // Impressão automática é escolha da loja (Configuração/botão 🖨). Desligada,
+        // a venda conclui sem papel e o botão "Imprimir cupom" fica à mão.
+        bool autoImp;
+        using (var cxImp = Banco.Abrir())
+            autoImp = Vendas.Config(cxImp, "imprimir_automatico", "1") != "0";
+        var erro = autoImp || forcarImpressao ? await ImprimirAsync(r) : null;
+        var semImpressao = !autoImp && !forcarImpressao;
 
         var troco = new Dinheiro(_partes.Sum(p => p.Troco.Centavos));
         var titulo = r.Contingencia ? "Venda concluída — em contingência"
@@ -617,9 +694,15 @@ public partial class Pagamento : UserControl
             : r.Sucesso ? $"Nota {r.Numero}/{r.Serie} autorizada."
             : "Emita a nota depois pelo relatório de vendas.";
         if (erro is not null) detalhe += $"\n\n⚠️ O cupom não imprimiu: {erro}";
+        if (semImpressao) detalhe += "\n(Impressão automática desligada — use \"Imprimir cupom\" se precisar.)";
 
+        var acaoImpressao = erro is not null
+            ? ("Reimprimir", (Action)(() => _ = ImprimirEConcluirAsync(r, true)))
+            : semImpressao
+                ? ("Imprimir cupom", (Action)(() => _ = ImprimirEConcluirAsync(r, true)))
+                : default;
         Estado(r.Sucesso ? "✅" : "⚠️", titulo, detalhe,
-            erro is not null ? ("Reimprimir", () => _ = ImprimirEConcluirAsync(r)) : default,
+            acaoImpressao,
             ("Nova venda", () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
         Ir(Fase.Sucesso);
 

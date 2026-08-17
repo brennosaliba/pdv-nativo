@@ -87,7 +87,11 @@ public sealed record DadosCupom(
     bool Contingencia,
     string? Operador,
     string? Protocolo = null,
-    DateTime? ProtocoloEm = null);
+    DateTime? ProtocoloEm = null,
+    // RECIBO (sem emissão fiscal): loja optou por operar sem NFC-e — o papel sai
+    // como recibo simples, SEM cabeçalho DANFE, chave, QR, protocolo ou carimbos
+    // fiscais, e com o aviso "SEM VALOR FISCAL" explícito.
+    bool Recibo = false);
 
 /// <summary>
 /// Impressão do cupom da NFC-e em bobina de 80 mm, SEM diálogo nenhum.
@@ -671,12 +675,22 @@ public static class Impressao
 
         pilha.Children.Add(Regua());
 
-        // ── identificação do documento (texto exigido no DANFE NFC-e) ──
-        pilha.Children.Add(Texto(
-            "DANFE NFC-e - Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica",
-            Miudo, centro: true, quebra: true));
-        pilha.Children.Add(Texto("Não permite aproveitamento de crédito de ICMS",
-            Miudo, centro: true, quebra: true, margemBaixo: 2));
+        // ── identificação do documento ──
+        if (d.Recibo)
+        {
+            pilha.Children.Add(Texto("RECIBO DE VENDA", Corpo, negrito: true, centro: true));
+            pilha.Children.Add(Texto("SEM VALOR FISCAL — não substitui documento fiscal",
+                Miudo, centro: true, quebra: true, margemBaixo: 2));
+        }
+        else
+        {
+            // texto exigido no DANFE NFC-e
+            pilha.Children.Add(Texto(
+                "DANFE NFC-e - Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica",
+                Miudo, centro: true, quebra: true));
+            pilha.Children.Add(Texto("Não permite aproveitamento de crédito de ICMS",
+                Miudo, centro: true, quebra: true, margemBaixo: 2));
+        }
 
         pilha.Children.Add(Regua());
 
@@ -735,12 +749,12 @@ public static class Impressao
 
         pilha.Children.Add(Regua(margemCima: 4));
 
-        // ── carimbos que mudam o valor jurídico do papel ──
-        if (!producao)
+        // ── carimbos que mudam o valor jurídico do papel (não se aplicam a recibo) ──
+        if (!d.Recibo && !producao)
             pilha.Children.Add(Texto("EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL",
                 Corpo, negrito: true, centro: true, quebra: true, margemBaixo: 3));
 
-        if (d.Contingencia)
+        if (!d.Recibo && d.Contingencia)
         {
             pilha.Children.Add(Texto("EMITIDA EM CONTINGÊNCIA OFFLINE", Corpo,
                 negrito: true, centro: true, quebra: true));
@@ -748,15 +762,18 @@ public static class Impressao
                 centro: true, quebra: true, margemBaixo: 3));
         }
 
-        // ── consulta pela chave ──
-        pilha.Children.Add(Texto("Consulte pela Chave de Acesso em", Miudo, centro: true));
-        // Mesma fonte do carimbo (tpAmb): assim não existe a combinação "URL de produção
-        // com carimbo de homologação", que dois campos independentes permitiam montar.
-        pilha.Children.Add(Texto(producao ? PortalProducao : PortalHomologacao,
-            Miudo, centro: true, quebra: true, margemBaixo: 2));
-        // Grupos de 4 com quebra automática: 44 dígitos + separadores passam de uma
-        // linha em algumas larguras, e cortar a chave inutiliza a consulta.
-        pilha.Children.Add(Texto(Chave(d.Chave), 9, centro: true, quebra: true, margemBaixo: 3));
+        // ── consulta pela chave (recibo não tem chave — pula o bloco inteiro) ──
+        if (!d.Recibo)
+        {
+            pilha.Children.Add(Texto("Consulte pela Chave de Acesso em", Miudo, centro: true));
+            // Mesma fonte do carimbo (tpAmb): assim não existe a combinação "URL de produção
+            // com carimbo de homologação", que dois campos independentes permitiam montar.
+            pilha.Children.Add(Texto(producao ? PortalProducao : PortalHomologacao,
+                Miudo, centro: true, quebra: true, margemBaixo: 2));
+            // Grupos de 4 com quebra automática: 44 dígitos + separadores passam de uma
+            // linha em algumas larguras, e cortar a chave inutiliza a consulta.
+            pilha.Children.Add(Texto(Chave(d.Chave), 9, centro: true, quebra: true, margemBaixo: 3));
+        }
 
         // ── consumidor ──
         var doc = SoDigitos(d.Documento);
@@ -769,8 +786,9 @@ public static class Impressao
             },
             Corpo, centro: true, quebra: true, margemBaixo: 2));
 
-        // ── numeração, emissão e protocolo ──
-        pilha.Children.Add(Texto($"NFC-e nº {d.Numero}   Série {d.Serie}", Corpo, centro: true));
+        // ── numeração, emissão e protocolo (recibo não tem numeração fiscal) ──
+        if (!d.Recibo)
+            pilha.Children.Add(Texto($"NFC-e nº {d.Numero}   Série {d.Serie}", Corpo, centro: true));
         // ⚠️ `Emissao` é a hora do ENVIO, não o dhEmi do XML — o agente não devolve dhEmi
         // (ver o doc-comment de DadosCupom). Quem preencher esse campo com DateTime.Now da
         // impressão faz o papel divergir do XML pelo tempo do round-trip. A linha "Impresso
@@ -789,8 +807,9 @@ public static class Impressao
                 Miudo, centro: true, quebra: true));
         }
 
-        // ── QR ──
-        if (Qr(d.QrCode, 40 * MM) is { } qr)
+        // ── QR (recibo não tem QR nem deve disparar o alerta de "cupom sem QR") ──
+        if (d.Recibo) { /* nada */ }
+        else if (Qr(d.QrCode, 40 * MM) is { } qr)
         {
             qr.Margin = new Thickness(0, 5 * MM, 0, 0);
             pilha.Children.Add(qr);
