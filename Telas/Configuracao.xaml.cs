@@ -48,6 +48,12 @@ public partial class Configuracao : UserControl
             TxtCsc.Password = seg.GetValueOrDefault("csc", "");
             TxtIdCsc.Text = seg.GetValueOrDefault("idCsc", "000001");
             if (File.Exists(ArqCert)) { TxtPfx.Text = "cert.pfx (já configurado)"; ConferirCert(this, new RoutedEventArgs()); }
+            // status do pareamento na PRÓPRIA seção (a bateria de teste não fala dele)
+            if (LerSegredos().ContainsKey("nuvemEmail"))
+            {
+                TxtStatusPareamento.Text = "✓ Este caixa já está pareado com o painel — vendas e notas sobem no Sincronizar.";
+                TxtStatusPareamento.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Ok"];
+            }
             // operador já existe: não pede de novo
             if (Operadores.ExisteAlgum(cx))
             {
@@ -536,13 +542,12 @@ public partial class Configuracao : UserControl
                 catch (Exception ex) { Add(2, $"✗ Servidor fiscal inalcançável: {ex.Message.Split('\n')[0]}"); }
             }
 
-            // 6. Pareamento com o painel (OBRIGATÓRIO pra salvar)
-            var seg = LerSegredos();
-            Add(seg.ContainsKey("nuvemEmail") ? 0 : 2, seg.ContainsKey("nuvemEmail")
-                ? "✓ Pareado com o painel (vendas e notas sobem no Sincronizar)"
-                : "✗ Não pareado — obrigatório parear antes de salvar (última seção)");
+            // Pareamento NÃO entra nesta bateria: o botão de teste fica ANTES da
+            // seção de pareamento (ele confere a COMUNICAÇÃO fiscal) — acusar "não
+            // pareado" aqui era ruído óbvio. O status do pareamento vive na própria
+            // seção (TxtStatusPareamento, atualizado no load e ao parear).
 
-            // 7. Impressora (o teste REAL de papel é o botão acima)
+            // 6. Impressora (o teste REAL de papel é o botão acima)
             var imp = ImpressoraEscolhida();
             Add(0, imp is null ? "✓ Impressora: padrão do Windows" : $"✓ Impressora: {imp}");
             linhas.Add("   (papel/corte/QR: use o botão \"Imprimir cupom de teste\")");
