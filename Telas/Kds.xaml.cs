@@ -7,14 +7,16 @@ using Pdv.Nucleo;
 namespace Pdv.Telas;
 
 /// <summary>
-/// A tela de preparo do quiosque. Fonte de verdade é o SQLite local (kds_ticket);
-/// a nuvem só ABASTECE a fila com os pedidos de delivery — se a internet cair,
-/// quem está produzindo continua vendo e tocando a fila local.
+/// O quadro de preparo do quiosque, no fluxo do KDS da Savassi:
 ///
-/// Toque 1 no card = assumir (recebido → preparando).
-/// Toque 2 = liberar (preparando → pronto, sai da tela).
-/// As transições exigem o estado anterior lá no Kds (Núcleo): dois dedos rápidos
-/// não pulam etapa nem reescrevem carimbo de tempo.
+///   A PREPARAR → EM PREPARO → PRONTO · AGUARDANDO COLETA → (entregue, sai)
+///
+/// Fonte de verdade é o SQLite local (kds_ticket); a nuvem só ABASTECE a
+/// coluna da esquerda com os pedidos do delivery. Sem internet, quem produz
+/// continua movendo cards — igual ao resto do PDV.
+///
+/// Toque avança a etapa. As transições exigem o estado anterior lá no Núcleo:
+/// dois dedos rápidos não pulam coluna nem reescrevem carimbo de tempo.
 /// </summary>
 public partial class Kds : UserControl
 {
@@ -33,8 +35,7 @@ public partial class Kds : UserControl
         _ = PuxarAsync();
 
         // 10 s repinta o local (os relógios de espera andam); a cada 3ª batida
-        // (30 s) busca a nuvem. Delivery não precisa de menos — o aceite é da
-        // ponte no servidor, aqui é PRODUÇÃO.
+        // (30 s) busca a nuvem. O aceite é da ponte no servidor — aqui é produção.
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         _timer.Tick += (_, _) =>
         {
@@ -63,7 +64,6 @@ public partial class Kds : UserControl
         }
         catch
         {
-            // Sem rede o quiosque segue com a fila local — igual ao resto do PDV.
             TxtStatus.Text = $"sem nuvem · fila local · {DateTime.Now:HH:mm:ss}";
         }
         finally
@@ -74,50 +74,63 @@ public partial class Kds : UserControl
         }
     }
 
-    // ── pintura ─────────────────────────────────────────────────────────────
+    // ── pintura do quadro ───────────────────────────────────────────────────
     private void Pintar()
     {
         var abertos = Nucleo.Kds.Abertos();
-        TxtContagem.Text = abertos.Count == 1 ? "1 na fila" : $"{abertos.Count} na fila";
-        PainelVazio.Visibility = abertos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        PainelCards.Children.Clear();
-        foreach (var t in abertos) PainelCards.Children.Add(Card(t));
+        Encher(ColPreparar, abertos.Where(t => t.Status == Nucleo.Kds.Recebido));
+        Encher(ColPreparo,  abertos.Where(t => t.Status == Nucleo.Kds.Preparando));
+        Encher(ColPronto,   abertos.Where(t => t.Status == Nucleo.Kds.Pronto));
+
+        TxtQtdPreparar.Text = ColPreparar.Children.Count.ToString();
+        TxtQtdPreparo.Text  = ColPreparo.Children.Count.ToString();
+        TxtQtdPronto.Text   = ColPronto.Children.Count.ToString();
+    }
+
+    private void Encher(StackPanel coluna, IEnumerable<Ticket> tickets)
+    {
+        coluna.Children.Clear();
+        foreach (var t in tickets) coluna.Children.Add(Card(t));
     }
 
     /// <summary>
-    /// O card é UM botão inteiro: em pé, com pressa e farinha na mão, o alvo é
-    /// "o pedido", não um botãozinho dentro dele.
+    /// O card é UM botão: com farinha na mão, o alvo é "o pedido", não um
+    /// botãozinho dentro dele. O rodapé diz o que o toque faz NESTA coluna.
     /// </summary>
     private Button Card(Ticket t)
     {
-        var preparando = t.Status == Nucleo.Kds.Preparando;
+        var (acaoTexto, acaoCor, acaoFundo) = t.Status switch
+        {
+            Nucleo.Kds.Preparando => ("TOCAR QUANDO FICAR PRONTO", "Ok", "ChipOkFundo"),
+            Nucleo.Kds.Pronto     => ("TOCAR NA COLETA ✓", "Texto", "VeuElevado"),
+            _                     => ("TOCAR PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
+        };
 
         var b = new Button
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
-            Width = 330, MinHeight = 210, Margin = new Thickness(7),
+            MinHeight = 150, Margin = new Thickness(4, 4, 4, 6),
             Padding = new Thickness(0), Tag = t.Id,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
         };
-        if (preparando)
-            b.SetResourceReference(Button.BorderBrushProperty, "Ciano");
 
         var raiz = new Grid();
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         raiz.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        // ── cabeçalho: número + origem + espera ────────────────────────────
-        var cab = new Grid { Margin = new Thickness(14, 10, 14, 6) };
+        // ── cabeçalho: número + origem + espera ─────────────────────────────
+        var cab = new Grid { Margin = new Thickness(12, 8, 12, 4) };
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var esq = new StackPanel { Orientation = Orientation.Horizontal };
         var numero = new TextBlock
         {
-            Text = "#" + t.Numero, FontSize = 26, FontWeight = FontWeights.Bold,
+            Text = "#" + t.Numero, FontSize = 24, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
         };
         numero.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
@@ -126,13 +139,13 @@ public partial class Kds : UserControl
                               t.Origem == "ifood" ? "Ciano" : "Rosa"));
         cab.Children.Add(esq);
 
-        // espera pinta o card de urgência: verde <10 min, amarelo <20, vermelho dali pra frente
+        // a espera pinta a urgência: verde <10 min, amarelo <20, vermelho depois
         var min = (int)t.Espera.TotalMinutes;
         var corEspera = min < 10 ? "Ok" : min < 20 ? "Amarelo" : "Erro";
         var espera = new TextBlock
         {
             Text = min < 1 ? "agora" : $"{min} min",
-            FontSize = 15, FontWeight = FontWeights.Bold,
+            FontSize = 14, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
         };
         espera.SetResourceReference(TextBlock.ForegroundProperty, corEspera);
@@ -141,13 +154,13 @@ public partial class Kds : UserControl
         raiz.Children.Add(cab);
 
         // ── corpo: cliente + itens ──────────────────────────────────────────
-        var corpo = new StackPanel { Margin = new Thickness(14, 0, 14, 6) };
+        var corpo = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };
         if (t.Cliente is { Length: > 0 })
         {
             var cli = new TextBlock
             {
-                Text = t.Cliente, FontSize = 13, FontWeight = FontWeights.SemiBold,
-                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 4),
+                Text = t.Cliente, FontSize = 12, FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 3),
             };
             cli.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
             corpo.Children.Add(cli);
@@ -157,7 +170,7 @@ public partial class Kds : UserControl
             var qtd = i.Qtd % 1000 == 0 ? (i.Qtd / 1000).ToString() : (i.Qtd / 1000m).ToString("0.###");
             var linha = new TextBlock
             {
-                Text = $"{qtd}× {i.Descricao}", FontSize = 16,
+                Text = $"{qtd}× {i.Descricao}", FontSize = 15,
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1),
             };
             linha.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
@@ -166,8 +179,8 @@ public partial class Kds : UserControl
             {
                 var obs = new TextBlock
                 {
-                    Text = "· " + i.Observacao, FontSize = 13, FontStyle = FontStyles.Italic,
-                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(14, 0, 0, 2),
+                    Text = "· " + i.Observacao, FontSize = 12, FontStyle = FontStyles.Italic,
+                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12, 0, 0, 2),
                 };
                 obs.SetResourceReference(TextBlock.ForegroundProperty, "Amarelo");
                 corpo.Children.Add(obs);
@@ -176,18 +189,15 @@ public partial class Kds : UserControl
         Grid.SetRow(corpo, 1);
         raiz.Children.Add(corpo);
 
-        // ── rodapé: o que o próximo toque faz ───────────────────────────────
-        var rodape = new Border
-        {
-            Padding = new Thickness(0, 9, 0, 10), CornerRadius = new CornerRadius(0, 0, 13, 13),
-        };
-        rodape.SetResourceReference(Border.BackgroundProperty, preparando ? "ChipOkFundo" : "ChipInfoFundo");
+        // ── rodapé: o que o toque faz aqui ──────────────────────────────────
+        var rodape = new Border { Padding = new Thickness(0, 8, 0, 9), CornerRadius = new CornerRadius(0, 0, 13, 13) };
+        rodape.SetResourceReference(Border.BackgroundProperty, acaoFundo);
         var acao = new TextBlock
         {
-            Text = preparando ? "TOCAR PARA LIBERAR ✓" : "TOCAR PARA ASSUMIR",
-            FontSize = 13, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center,
+            Text = acaoTexto, FontSize = 12, FontWeight = FontWeights.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center,
         };
-        acao.SetResourceReference(TextBlock.ForegroundProperty, preparando ? "Ok" : "Ciano");
+        acao.SetResourceReference(TextBlock.ForegroundProperty, acaoCor);
         rodape.Child = acao;
         Grid.SetRow(rodape, 2);
         raiz.Children.Add(rodape);
@@ -195,8 +205,12 @@ public partial class Kds : UserControl
         b.Content = raiz;
         b.Click += (_, _) =>
         {
-            if (preparando) Nucleo.Kds.Liberar(t.Id);
-            else Nucleo.Kds.Assumir(t.Id);
+            switch (t.Status)
+            {
+                case Nucleo.Kds.Recebido:   Nucleo.Kds.Assumir(t.Id);  break;
+                case Nucleo.Kds.Preparando: Nucleo.Kds.Liberar(t.Id);  break;
+                case Nucleo.Kds.Pronto:     Nucleo.Kds.Entregar(t.Id); break;
+            }
             Pintar();
         };
         return b;
@@ -204,17 +218,16 @@ public partial class Kds : UserControl
 
     private FrameworkElement Chip(string texto, string cor)
     {
-        var tb = new TextBlock { Text = texto, FontSize = 11, FontWeight = FontWeights.Bold };
+        var tb = new TextBlock { Text = texto, FontSize = 10, FontWeight = FontWeights.Bold };
         tb.SetResourceReference(TextBlock.ForegroundProperty, cor);
         var chip = new Border
         {
-            CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 2, 8, 3),
-            Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
-            Child = tb,
+            CornerRadius = new CornerRadius(7), Padding = new Thickness(7, 1, 7, 2),
+            Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            Child = tb, BorderThickness = new Thickness(1),
         };
         chip.SetResourceReference(Border.BackgroundProperty, cor == "Ciano" ? "ChipInfoFundo" : "ChipErroFundo");
         chip.SetResourceReference(Border.BorderBrushProperty, cor == "Ciano" ? "ChipInfoBorda" : "ChipErroBorda");
-        chip.BorderThickness = new Thickness(1);
         return chip;
     }
 }

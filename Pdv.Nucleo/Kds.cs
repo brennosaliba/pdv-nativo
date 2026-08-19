@@ -55,6 +55,7 @@ public static class Kds
     public const string Recebido   = "recebido";
     public const string Preparando = "preparando";
     public const string Pronto     = "pronto";
+    public const string Entregue   = "entregue";
     public const string Cancelado  = "cancelado";
 
     /// <summary>
@@ -118,13 +119,16 @@ public static class Kds
             new { o = origem, r = refId });
     }
 
-    /// <summary>O que está na tela agora: o que chegou e o que está no forno.</summary>
+    /// <summary>
+    /// O quadro inteiro: a preparar, em preparo e pronto aguardando coleta.
+    /// Entregue e cancelado saem — quadro é presente, não histórico.
+    /// </summary>
     public static List<Ticket> Abertos()
     {
         using var cx = Banco.Abrir();
         return cx.Query(
             @"SELECT * FROM kds_ticket
-               WHERE status IN ('recebido','preparando')
+               WHERE status IN ('recebido','preparando','pronto')
                ORDER BY criado_em")
             .Select(Ler).ToList();
     }
@@ -141,9 +145,13 @@ public static class Kds
     public static bool Assumir(string ticketId) =>
         Avancar(ticketId, de: Recebido, para: Preparando, carimbo: "preparo_em");
 
-    /// <summary>Segundo toque: saiu do forno, pode entregar.</summary>
+    /// <summary>Segundo toque: saiu do forno — vai pra coluna de coleta.</summary>
     public static bool Liberar(string ticketId) =>
         Avancar(ticketId, de: Preparando, para: Pronto, carimbo: "pronto_em");
+
+    /// <summary>Terceiro toque: o entregador levou (ou o cliente retirou). Sai do quadro.</summary>
+    public static bool Entregar(string ticketId) =>
+        Avancar(ticketId, de: Pronto, para: Entregue, carimbo: "entregue_em");
 
     /// <summary>
     /// A transição exige o status ANTERIOR na cláusula WHERE. Sem isso, dois
@@ -219,6 +227,17 @@ public static class Kds
     /// </summary>
     public static int SincronizarDelivery(IEnumerable<PedidoDelivery> pedidos)
     {
+        // Quadro é PRESENTE, não histórico: ticket de delivery parado há mais de
+        // 4h (o teto da janela do servidor) não vai mais ser preparado por
+        // ninguém — expira sozinho, senão o quadro acumula card morto até
+        // ninguém mais confiar no que ele mostra.
+        using (var cxLimpa = Banco.Abrir())
+            cxLimpa.Execute(
+                @"UPDATE kds_ticket SET status = @s
+                   WHERE origem = 'ifood' AND status IN ('recebido','preparando')
+                     AND criado_em < @limite",
+                new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o") });
+
         var novos = 0;
         foreach (var p in pedidos)
         {
@@ -234,8 +253,24 @@ public static class Kds
             var existia = cx.QueryFirstOrDefault<string>(
                 "SELECT id FROM kds_ticket WHERE origem = 'ifood' AND ref_id = @r",
                 new { r = p.OrderId }) is not null;
-            if (!existia && DoDelivery(p.OrderId, p.Numero, p.Cliente, itens) is not null)
-                novos++;
+            if (!existia)
+            {
+                if (DoDelivery(p.OrderId, p.Numero, p.Cliente, itens) is not null) novos++;
+            }
+            else
+            {
+                // Ticket que ainda não saiu do forno acompanha a nuvem: um parser
+                // corrigido (ou pedido editado no iFood) tem que consertar o card
+                // na tela — sem isso, "(item sem nome)" gravado fica errado pra
+                // sempre, porque a criação é idempotente de propósito.
+                cx.Execute(
+                    @"UPDATE kds_ticket
+                         SET itens_json = @j, cliente = @c, numero = @n
+                       WHERE origem = 'ifood' AND ref_id = @r
+                         AND status IN ('recebido','preparando')",
+                    new { j = System.Text.Json.JsonSerializer.Serialize(itens),
+                          c = p.Cliente, n = p.Numero, r = p.OrderId });
+            }
         }
         return novos;
     }

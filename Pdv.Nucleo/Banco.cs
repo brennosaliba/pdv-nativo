@@ -73,6 +73,8 @@ public static class Banco
             // fila conta a partir daqui, NÃO do criado_em: um terminal que ficou semanas
             // desligado religaria com itens "velhos" e os perderia no primeiro soluço.
             "ALTER TABLE outbox ADD COLUMN primeiro_erro_em TEXT",
+            // 4a etapa do quadro do KDS (pronto -> entregue/coletado)
+            "ALTER TABLE kds_ticket ADD COLUMN entregue_em TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

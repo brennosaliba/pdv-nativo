@@ -51,12 +51,19 @@ public static class TestesKds
 
             checar(Kds.Liberar(t1!), "segundo toque libera o pedido");
             checar(!Kds.Liberar(t1!), "liberar duas vezes não reescreve a hora de saída");
-            checar(Kds.Pendentes() == 0, "pedido liberado sai da fila");
+            checar(Kds.Pendentes() == 0, "pedido pronto sai do contador do botão");
 
-            // ── o tempo de preparo tem que ser mensurável ───────────────────
+            // ── quadro: pronto fica na coluna de coleta até alguém levar ────
             var pronto = Kds.Abertos().FirstOrDefault(x => x.Id == t1);
-            checar(pronto is null, "pedido pronto não volta na lista de abertos");
+            checar(pronto is not null && pronto.Status == Kds.Pronto,
+                   "pedido pronto continua no quadro, aguardando coleta");
             checar(Carimbo(t1!, "pronto_em") is not null, "a hora de saída fica gravada");
+
+            checar(!Kds.Entregar("id-que-nao-existe"), "entregar ticket inexistente não finge sucesso");
+            checar(Kds.Entregar(t1!), "toque na coleta marca como entregue");
+            checar(!Kds.Entregar(t1!), "entregar duas vezes não reescreve o carimbo");
+            checar(Kds.Abertos().All(x => x.Id != t1), "entregue sai do quadro");
+            checar(Carimbo(t1!, "entregue_em") is not null, "a hora da coleta fica gravada");
 
             // ── venda de balcão vira ticket, e cancelada some ───────────────
             var vendaId = SemearVenda(arquivo);
@@ -117,6 +124,17 @@ public static class TestesKds
                    "pedido cancelado na nuvem sai da fila de preparo");
             checar(Nucleo.Kds.Abertos().Any(x => x.RefId == "nuvem-2"),
                    "cancelar um pedido nao derruba o vizinho");
+
+            // ── re-sync CONSERTA card gravado com parser antigo ─────────────
+            // (aconteceu de verdade: "(item sem nome)" ficou queimado no banco
+            // local porque a criacao e idempotente e nada atualizava depois)
+            var consertado = new[] { new PedidoDelivery("nuvem-2", "0102", "Cliente B",
+                "[{\"qtd\": 1, \"descricao\": \"DONUT ABACAXI\"}]", "faturado") };
+            Nucleo.Kds.SincronizarDelivery(consertado);
+            var vivo = Nucleo.Kds.Abertos().First(x => x.RefId == "nuvem-2");
+            checar(vivo.Itens[0].Descricao == "DONUT ABACAXI",
+                   "re-sync atualiza os itens de ticket ainda nao pronto");
+            checar(vivo.Cliente == "Cliente B", "re-sync atualiza o cliente");
         }
         finally
         {
