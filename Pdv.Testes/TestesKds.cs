@@ -59,6 +59,20 @@ public static class TestesKds
                    "pedido pronto continua no quadro, aguardando coleta");
             checar(Carimbo(t1!, "pronto_em") is not null, "a hora de saída fica gravada");
 
+            // ── desfazer o assumir (pegou o card errado) ────────────────────
+            var t9 = Kds.DoDelivery("order-desfaz", "9999", null, itens);
+            Kds.Assumir(t9!);
+            checar(Kds.Desassumir(t9!), "desfazer devolve o pedido para A PREPARAR");
+            checar(Carimbo(t9!, "preparo_em") is null,
+                   "desfazer APAGA a hora de início — senão o tempo de preparo mente");
+            checar(!Kds.Desassumir(t9!), "desfazer duas vezes não inventa transição");
+            checar(!Kds.Liberar(t9!), "desfeito não pode ser liberado sem assumir de novo");
+            checar(Kds.Assumir(t9!) && Carimbo(t9!, "preparo_em") is not null,
+                   "assumir de novo grava hora NOVA de início");
+            // tira o t9 do quadro: os testes seguintes contam a fila inteira
+            Kds.Liberar(t9!);
+            Kds.Entregar(t9!);
+
             checar(!Kds.Entregar("id-que-nao-existe"), "entregar ticket inexistente não finge sucesso");
             checar(Kds.Entregar(t1!), "toque na coleta marca como entregue");
             checar(!Kds.Entregar(t1!), "entregar duas vezes não reescreve o carimbo");

@@ -154,6 +154,21 @@ public static class Kds
         Avancar(ticketId, de: Pronto, para: Entregue, carimbo: "entregue_em");
 
     /// <summary>
+    /// Desfazer o "assumir": o pedido volta para A PREPARAR. O carimbo de início
+    /// é APAGADO — ele nunca foi preparado de verdade, e deixar a hora antiga lá
+    /// faria o tempo de preparo mentir quando alguém assumir de novo.
+    /// </summary>
+    public static bool Desassumir(string ticketId)
+    {
+        using var cx = Banco.Abrir();
+        return cx.Execute(
+            @"UPDATE kds_ticket
+                 SET status = @para, preparo_em = NULL
+               WHERE id = @id AND status = @de",
+            new { id = ticketId, de = Preparando, para = Recebido }) == 1;
+    }
+
+    /// <summary>
     /// A transição exige o status ANTERIOR na cláusula WHERE. Sem isso, dois
     /// toques rápidos no mesmo card (ou duas pessoas em dois monitores) reescrevem
     /// o carimbo e o tempo de preparo vira ficção.

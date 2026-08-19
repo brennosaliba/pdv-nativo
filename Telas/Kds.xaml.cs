@@ -150,7 +150,25 @@ public partial class Kds : UserControl
         };
         espera.SetResourceReference(TextBlock.ForegroundProperty, corEspera);
         Grid.SetColumn(espera, 1);
-        cab.Children.Add(espera);
+
+        var dir = new StackPanel { Orientation = Orientation.Horizontal };
+        dir.Children.Add(espera);
+        if (t.Status == Nucleo.Kds.Preparando)
+        {
+            // Desfazer: pegou o card errado com a cozinha cheia — volta pra fila
+            // sem drama. Botão próprio (o Click interno não vaza pro card).
+            var desfaz = new Button
+            {
+                Content = "↩", FontSize = 16, MinHeight = 40, MinWidth = 44,
+                Margin = new Thickness(10, 0, 0, 0), Padding = new Thickness(0),
+                Style = (Style)Application.Current.Resources["BotaoBase"],
+                ToolTip = "Devolver para A PREPARAR",
+            };
+            desfaz.Click += (_, _) => { Nucleo.Kds.Desassumir(t.Id); Pintar(); };
+            dir.Children.Add(desfaz);
+        }
+        Grid.SetColumn(dir, 1);
+        cab.Children.Add(dir);
         raiz.Children.Add(cab);
 
         // ── corpo: cliente + itens ──────────────────────────────────────────
@@ -207,9 +225,28 @@ public partial class Kds : UserControl
         {
             switch (t.Status)
             {
-                case Nucleo.Kds.Recebido:   Nucleo.Kds.Assumir(t.Id);  break;
-                case Nucleo.Kds.Preparando: Nucleo.Kds.Liberar(t.Id);  break;
-                case Nucleo.Kds.Pronto:     Nucleo.Kds.Entregar(t.Id); break;
+                case Nucleo.Kds.Recebido:
+                    Nucleo.Kds.Assumir(t.Id);
+                    break;
+
+                case Nucleo.Kds.Preparando:
+                    // PRONTO é declaração para fora: quando a ponte ligar o
+                    // readyToPickup, isso aciona o entregador no iFood. Toque
+                    // acidental aqui vira motoboy na porta sem donut na caixa —
+                    // por isso a confirmação explícita.
+                    var dono = Window.GetWindow(this)!;
+                    var aviso = t.Origem == "ifood"
+                        ? $"O pedido #{t.Numero} vai constar como PRONTO para coleta no iFood — " +
+                          "o entregador pode ser acionado. Confirma que está tudo embalado?"
+                        : $"Marcar o pedido #{t.Numero} como PRONTO para entrega ao cliente?";
+                    if (Dialogo.Confirmar(dono, "Pedido pronto?", aviso,
+                                          "Sim, está pronto", "Ainda não"))
+                        Nucleo.Kds.Liberar(t.Id);
+                    break;
+
+                case Nucleo.Kds.Pronto:
+                    Nucleo.Kds.Entregar(t.Id);
+                    break;
             }
             Pintar();
         };
