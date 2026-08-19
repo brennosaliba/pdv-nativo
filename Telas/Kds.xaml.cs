@@ -34,13 +34,14 @@ public partial class Kds : UserControl
         Pintar();
         _ = PuxarAsync();
 
-        // 10 s repinta o local (os relógios de espera andam); a cada 3ª batida
-        // (30 s) busca a nuvem. O aceite é da ponte no servidor — aqui é produção.
+        // A cada 10 s: repinta o local E busca a nuvem (o _puxando impede
+        // sobreposição). Pedido novo tem que APARECER, não esperar dedo no botão —
+        // o Atualizar vira só o "quero agora".
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         _timer.Tick += (_, _) =>
         {
             Pintar();
-            if (++_batidas % 3 == 0) _ = PuxarAsync();
+            _ = PuxarAsync();
         };
         _timer.Start();
         Unloaded += (_, _) => { _timer?.Stop(); _timer = null; };
@@ -61,6 +62,7 @@ public partial class Kds : UserControl
         {
             var novos = await Nucleo.Kds.PuxarDaNuvemAsync(Servicos.Nuvem(), _loja);
             TxtStatus.Text = $"nuvem ok · {DateTime.Now:HH:mm:ss}" + (novos > 0 ? $" · {novos} novo(s)" : "");
+            if (novos > 0) Alerta.PedidoNovo();
         }
         catch
         {
@@ -164,7 +166,14 @@ public partial class Kds : UserControl
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Devolver para A PREPARAR",
             };
-            desfaz.Click += (_, _) => { Nucleo.Kds.Desassumir(t.Id); Pintar(); };
+            desfaz.Click += (_, e) =>
+            {
+                Nucleo.Kds.Desassumir(t.Id);
+                Pintar();
+                // Click e roteado e BORBULHA: sem isto o clique segue pro card e
+                // abre a confirmacao de PRONTO - exatamente o bug que o dono viu.
+                e.Handled = true;
+            };
             dir.Children.Add(desfaz);
         }
         Grid.SetColumn(dir, 1);

@@ -116,6 +116,26 @@ public partial class Venda : UserControl
     /// </summary>
     private void AbrirKds(object sender, RoutedEventArgs e) => PediuKds?.Invoke();
 
+    private DispatcherTimer? _toastSome;
+
+    private void NotificarPedidoNovo(int quantos)
+    {
+        TxtToastKds.Text = quantos == 1 ? "Pedido novo do iFood!" : $"{quantos} pedidos novos do iFood!";
+        ToastKds.Visibility = Visibility.Visible;
+        Alerta.PedidoNovo();
+
+        _toastSome?.Stop();
+        _toastSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _toastSome.Tick += (_, _) => { ToastKds.Visibility = Visibility.Collapsed; _toastSome?.Stop(); };
+        _toastSome.Start();
+    }
+
+    private void AbrirKdsPeloToast(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        ToastKds.Visibility = Visibility.Collapsed;
+        PediuKds?.Invoke();
+    }
+
     private void AlternarTema(object sender, RoutedEventArgs e)
     {
         var novo = Aparencia.Atual == ModoTema.Claro ? ModoTema.Escuro : ModoTema.Claro;
@@ -211,11 +231,18 @@ public partial class Venda : UserControl
 
             // Delivery desce a cada 4 batidas (60 s) mesmo com o KDS fechado: o
             // pedido do iFood precisa acender o badge ANTES de alguém abrir a tela.
-            if (++_batidasKds % 4 == 0 && Servicos.TemContaDeNuvem() && !_puxandoKds)
+            if (++_batidasKds % 2 == 0 && Servicos.TemContaDeNuvem() && !_puxandoKds)
             {
                 _puxandoKds = true;
                 _ = Nucleo.Kds.PuxarDaNuvemAsync(Servicos.Nuvem(), _loja)
-                    .ContinueWith(_ => _puxandoKds = false);
+                    .ContinueWith(tt =>
+                    {
+                        _puxandoKds = false;
+                        // Pedido novo com o CAIXA aberto: toast + som. Ninguém fica
+                        // olhando badge pequeno com fila no balcão.
+                        if (tt.Status == TaskStatus.RanToCompletion && tt.Result > 0)
+                            Dispatcher.Invoke(() => NotificarPedidoNovo(tt.Result));
+                    });
             }
 
             // Modo automático: reavalia no mesmo tick do relógio. NUNCA com comanda
