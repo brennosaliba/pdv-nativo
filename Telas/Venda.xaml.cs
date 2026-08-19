@@ -77,10 +77,47 @@ public partial class Venda : UserControl
         TxtSessao.Text = $"Caixa aberto às {sessao.AberturaEm:HH:mm} · {DateTime.Parse(sessao.BusinessDate):dd/MM}";
         CarregarIdentificacao();
         PintarModo();
+        PintarBotaoTema();
         CarregarCatalogo();
+        // O que esta tela desenha em C# (cards de categoria/produto, comanda) não
+        // segue DynamicResource — quando o tema troca, os pintores rodam de novo.
+        Aparencia.Mudou += TemaMudou;
         Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); };
-        Unloaded += (_, _) => { _relogio?.Stop(); _relogio = null; };
+        Unloaded += (_, _) => { _relogio?.Stop(); _relogio = null; Aparencia.Mudou -= TemaMudou; };
     }
+
+    private void TemaMudou()
+    {
+        PintarBotaoTema();
+        PintarModo();
+        RepintarCategorias();
+        PintarProdutos();
+        PintarComanda();
+        PintarPendencias();
+    }
+
+    private void PintarBotaoTema() =>
+        BtnTema.Content = Aparencia.Atual == ModoTema.Claro ? "🌙 modo escuro" : "☀ modo claro";
+
+    /// <summary>
+    /// Atalho do rodapé: vira o tema AGORA e grava a escolha — inclusive por cima
+    /// do modo automático, porque quem está no balcão sabe mais que o relógio.
+    /// </summary>
+    private void AlternarTema(object sender, RoutedEventArgs e)
+    {
+        var novo = Aparencia.Atual == ModoTema.Claro ? ModoTema.Escuro : ModoTema.Claro;
+        using var cx = Banco.Abrir();
+        Vendas.GravarConfig(cx, "tema", novo == ModoTema.Claro ? "claro" : "escuro");
+        Caixa.Auditar(cx, null, "tema_trocado", _operador.Id, null,
+            novo == ModoTema.Claro ? "claro (manual)" : "escuro (manual)");
+        Aparencia.Aplicar(novo);
+    }
+
+    /// <summary>Byte do tema atual (alphas dos véus de categoria).</summary>
+    private static byte RB(string chave) => (byte)Application.Current.Resources[chave];
+
+    /// <summary>Double do tema atual (fatores de degradê, opacidade de glow).</summary>
+    private static double RD(string chave) => (double)Application.Current.Resources[chave];
 
     /// <summary>Nome da loja no topo e a ficha do terminal no rodapé.</summary>
     private void CarregarIdentificacao()
@@ -124,7 +161,7 @@ public partial class Venda : UserControl
         // rodando o dia inteiro em teste sem ninguém perceber.
         var amb = t is not null && Convert.ToInt64(t.ambiente) == 2 ? "  ·  ⚠ HOMOLOGAÇÃO" : "";
         TxtRodape.Text = $"{loja}  ·  Série {serie}  ·  Versão {versao}{amb}";
-        if (amb.Length > 0) TxtRodape.Foreground = (Brush)Application.Current.Resources["Amarelo"];
+        if (amb.Length > 0) TxtRodape.SetResourceReference(TextBlock.ForegroundProperty, "Amarelo");
     }
 
     private void IniciarRelogio()
@@ -133,7 +170,9 @@ public partial class Venda : UserControl
         {
             TxtRelogio.Text = DateTime.Now.ToString("HH:mm  ·  dd/MM/yyyy");
             var online = NetworkInterface.GetIsNetworkAvailable();
-            var cor = (Brush)Application.Current.Resources[online ? "Ok" : "Erro"];
+            // Referência por CHAVE, não brush resolvido: quando o tema troca, o
+            // WPF re-resolve sozinho — sem isso o chip fica com a cor do tema velho.
+            var corChave = online ? "Ok" : "Erro";
             // De onde a nota sai importa pro operador saber: muda a série impressa no
             // cupom, e nota do agente local ainda não aparece na 2ª via do servidor.
             var caminho = Servicos.CaminhoDoEmissor() switch
@@ -147,11 +186,20 @@ public partial class Venda : UserControl
             // HD de loja. Isso precisa estar à vista, não escondido numa tela de config.
             if (!Servicos.TemContaDeNuvem()) caminho += "  ·  ⚠ NOTAS SÓ NESTE PC";
             TxtRede.Text = (online ? "ONLINE" : "OFFLINE") + caminho;
-            TxtRede.Foreground = cor;
-            LuzRede.Fill = cor;
-            var rgb = ((SolidColorBrush)cor).Color;
-            ChipRede.Background = new SolidColorBrush(Color.FromArgb(0x1A, rgb.R, rgb.G, rgb.B));
-            ChipRede.BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, rgb.R, rgb.G, rgb.B));
+            TxtRede.SetResourceReference(TextBlock.ForegroundProperty, corChave);
+            LuzRede.SetResourceReference(Shape.FillProperty, corChave);
+            ChipRede.SetResourceReference(Border.BackgroundProperty, online ? "ChipOkFundo" : "ChipErroFundo");
+            ChipRede.SetResourceReference(Border.BorderBrushProperty, online ? "ChipOkBorda" : "ChipErroBorda");
+
+            // Modo automático: reavalia no mesmo tick do relógio. NUNCA com comanda
+            // aberta — a tela mudar de cara no meio da venda desorienta o operador
+            // (e Aplicar() já é no-op quando o tema não muda).
+            if (_comanda.Count == 0)
+            {
+                using var cxTema = Banco.Abrir();
+                if (Vendas.Config(cxTema, "tema") == "auto")
+                    Aparencia.Aplicar(Aparencia.Resolver(cxTema));
+            }
         }
         Bater();
         _relogio = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
@@ -333,11 +381,11 @@ public partial class Venda : UserControl
         sp.Children.Add(new Border
         {
             Width = 34, Height = 34, CornerRadius = new CornerRadius(17),
-            Background = Degrade(cor, 1.25, 0.75),
+            Background = Degrade(cor, RD("FatorDegradeClaro"), RD("FatorDegradeEscuro")),
             HorizontalAlignment = HorizontalAlignment.Center,
             Effect = new System.Windows.Media.Effects.DropShadowEffect
             {
-                Color = cor, BlurRadius = 16, ShadowDepth = 0, Opacity = 0.55,
+                Color = cor, BlurRadius = 16, ShadowDepth = 0, Opacity = RD("GlowCategoriaOpacidade"),
             },
             Child = new TextBlock
             {
@@ -357,7 +405,7 @@ public partial class Venda : UserControl
         sp.Children.Add(new Border
         {
             CornerRadius = new CornerRadius(9), Padding = new Thickness(9, 1, 9, 2),
-            Background = new SolidColorBrush(Color.FromArgb(0x1E, 0xFF, 0xFF, 0xFF)),
+            Background = (Brush)Application.Current.Resources["VeuElevado"],
             HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0),
             Child = new TextBlock
             {
@@ -383,11 +431,13 @@ public partial class Venda : UserControl
             var cat = (string?)b.Tag ?? "";
             var (_, cor) = Visual(cat);
             var ativa = cat == _categoriaAtual;
+            // Alphas vêm do tema: os do escuro lavam sobre creme, os do claro
+            // estouram sobre grafite. Byte por chave, calibrado por paleta.
             b.Background = new LinearGradientBrush(
-                Color.FromArgb(ativa ? (byte)0x5A : (byte)0x26, cor.R, cor.G, cor.B),
-                Color.FromArgb(ativa ? (byte)0x1E : (byte)0x0A, cor.R, cor.G, cor.B),
+                Color.FromArgb(RB(ativa ? "AlfaCatAtivaTopo" : "AlfaCatInativaTopo"), cor.R, cor.G, cor.B),
+                Color.FromArgb(RB(ativa ? "AlfaCatAtivaBase" : "AlfaCatInativaBase"), cor.R, cor.G, cor.B),
                 new Point(0, 0), new Point(0, 1));
-            b.BorderBrush = new SolidColorBrush(Color.FromArgb(ativa ? (byte)0xFF : (byte)0x3A, cor.R, cor.G, cor.B));
+            b.BorderBrush = new SolidColorBrush(Color.FromArgb(RB(ativa ? "AlfaCatBordaAtiva" : "AlfaCatBordaInativa"), cor.R, cor.G, cor.B));
             b.BorderThickness = new Thickness(ativa ? 2 : 1);
         }
     }
@@ -413,7 +463,7 @@ public partial class Venda : UserControl
 
         var (icone, cor) = Visual(_categoriaAtual);
         TxtIconeCategoria.Text = icone;
-        SeloCategoria.Background = Degrade(cor, 1.25, 0.75);
+        SeloCategoria.Background = Degrade(cor, RD("FatorDegradeClaro"), RD("FatorDegradeEscuro"));
         TxtCategoriaAberta.Text = Capitalizar(_categoriaAtual);
         TxtContagem.Text = lista.Count == 1 ? "1 item" : $"{lista.Count} itens";
 

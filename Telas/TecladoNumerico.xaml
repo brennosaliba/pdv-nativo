@@ -13,8 +13,8 @@
         <Button Style="{StaticResource BotaoTecla}" Content="7" Click="Tecla"/>
         <Button Style="{StaticResource BotaoTecla}" Content="8" Click="Tecla"/>
         <Button Style="{StaticResource BotaoTecla}" Content="9" Click="Tecla"/>
-        <Button Style="{StaticResource BotaoTecla}" Content="C" Click="Limpar" Foreground="{StaticResource TextoFraco}"/>
+        <Button Style="{StaticResource BotaoTecla}" Content="C" Click="Limpar" Foreground="{DynamicResource TextoFraco}"/>
         <Button Style="{StaticResource BotaoTecla}" Content="0" Click="Tecla"/>
-        <Button Style="{StaticResource BotaoTecla}" Content="⌫" Click="Apagar" Foreground="{StaticResource TextoFraco}"/>
+        <Button Style="{StaticResource BotaoTecla}" Content="⌫" Click="Apagar" Foreground="{DynamicResource TextoFraco}"/>
     </UniformGrid>
 </UserControl>

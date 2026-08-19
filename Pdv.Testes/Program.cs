@@ -965,6 +965,19 @@ Console.WriteLine();
 Console.WriteLine("--- NFC-e / SEFAZ (autorizador simulado) ---");
 TestesSefaz.Rodar((cond, nome) => Check("nfce: " + nome, cond));
 
+// -- KDS: a fila de preparo do monitor touch ---------------------------------
+// Card duplicado faz produzir duas vezes; card que some faz o cliente esperar.
+Console.WriteLine();
+Console.WriteLine("--- KDS (fila de preparo) ---");
+TestesKds.Rodar((cond, nome) => Check("kds: " + nome, cond));
+
+// -- TEMA: decisao diurno/noturno + contraste da paleta clara ----------------
+// O teste de contraste le Temas/Claro.xaml de verdade: paleta ilegivel derruba
+// a bateria aqui, nao espera reclamacao no balcao.
+Console.WriteLine();
+Console.WriteLine("--- Tema (diurno/noturno) ---");
+TestesTema.Rodar((cond, nome) => Check("tema: " + nome, cond));
+
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }

@@ -30,6 +30,16 @@ public partial class Configuracao : UserControl
         _jaConfigurado = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM terminal") > 0;
         _ = CarregarImpressorasAsync(Vendas.Config(cx, "impressora"));
 
+        // Tema: preferência da MÁQUINA, carrega mesmo antes da primeira configuração
+        // e grava na hora (não espera o Salvar — o Salvar valida identidade fiscal,
+        // e uma preferência de luz não pode ficar refém do pareamento).
+        _carregandoTema = true;
+        CboTema.SelectedIndex = Vendas.Config(cx, "tema") switch { "claro" => 1, "auto" => 2, _ => 0 };
+        TxtTemaDe.Text = Vendas.Config(cx, "tema_claro_de", "06:00");
+        TxtTemaAte.Text = Vendas.Config(cx, "tema_claro_ate", "18:00");
+        BlocoJanelaTema.Visibility = CboTema.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        _carregandoTema = false;
+
         if (_jaConfigurado)
         {
             var t = cx.QueryFirst("SELECT loja_nome, cnpj, serie_nfce, ambiente, api_base FROM terminal LIMIT 1");
@@ -699,6 +709,27 @@ public partial class Configuracao : UserControl
         if (BlocoCertificado is null) return;
         BlocoCertificado.Visibility = CmbAmbiente.SelectedIndex == 2
             ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    // ── tema ────────────────────────────────────────────────────────────────
+    private bool _carregandoTema;
+
+    private void TemaSelecionado(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_carregandoTema || BlocoJanelaTema is null) return;
+        BlocoJanelaTema.Visibility = CboTema.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        using var cx = Banco.Abrir();
+        Vendas.GravarConfig(cx, "tema", CboTema.SelectedIndex switch { 1 => "claro", 2 => "auto", _ => "escuro" });
+        Aparencia.Aplicar(Aparencia.Resolver(cx));   // preview imediato: ver é decidir
+    }
+
+    private void JanelaTemaMudou(object sender, RoutedEventArgs e)
+    {
+        if (_carregandoTema) return;
+        using var cx = Banco.Abrir();
+        Vendas.GravarConfig(cx, "tema_claro_de", TxtTemaDe.Text.Trim());
+        Vendas.GravarConfig(cx, "tema_claro_ate", TxtTemaAte.Text.Trim());
+        if (CboTema.SelectedIndex == 2) Aparencia.Aplicar(Aparencia.Resolver(cx));
     }
 
     private void Voltar(object sender, RoutedEventArgs e) => Concluiu?.Invoke();

@@ -335,5 +335,29 @@ public static class Banco
         );
         CREATE INDEX IF NOT EXISTS ix_tef_pendente
           ON tef_transacao(situacao) WHERE situacao IN ('criando','aguardando','orfa');
+
+        -- ── KDS: fila de preparo ──────────────────────────────────────────────
+        -- O ticket NAO e dinheiro, entao ele muda de status no lugar (o append-only
+        -- vale para venda e caixa). Mas os CARIMBOS de tempo sao gravados uma vez e
+        -- nunca reescritos: e deles que sai o tempo de preparo no painel, e carimbo
+        -- reescrito faz a loja parecer mais rapida do que ela e.
+        CREATE TABLE IF NOT EXISTS kds_ticket (
+          id            TEXT PRIMARY KEY,
+          origem        TEXT NOT NULL,            -- balcao | ifood | encomenda
+          ref_id        TEXT NOT NULL,            -- venda.id  |  order_id do iFood
+          numero        TEXT NOT NULL,            -- o que o funcionario le no monitor
+          cliente       TEXT,
+          itens_json    TEXT NOT NULL,
+          status        TEXT NOT NULL DEFAULT 'recebido',  -- recebido|preparando|pronto|cancelado
+          criado_em     TEXT NOT NULL,
+          preparo_em    TEXT,
+          pronto_em     TEXT,
+          -- O mesmo pedido do iFood volta no proximo polling e a mesma venda pode ser
+          -- reprocessada. A unicidade e a defesa: repeticao nao vira ticket duplicado
+          -- na tela de quem esta produzindo.
+          UNIQUE(origem, ref_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_kds_aberto
+          ON kds_ticket(criado_em) WHERE status IN ('recebido','preparando');
         """;
 }

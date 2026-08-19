@@ -37,7 +37,8 @@ public static class Dialogo
         BorderBrush = R("Borda"),
         BorderThickness = new Thickness(1),
         Padding = new Thickness(26, 22, 26, 22),
-        Effect = new DropShadowEffect { BlurRadius = 28, ShadowDepth = 6, Opacity = 0.55, Color = Colors.Black },
+        Effect = new DropShadowEffect { BlurRadius = 28, ShadowDepth = 6, Color = Colors.Black,
+            Opacity = (double)Application.Current.Resources["SombraDialogoOpacidade"] },
         Child = conteudo,
     };
 
@@ -47,7 +48,7 @@ public static class Dialogo
         Style = (Style)Application.Current.Resources[destaque ? "BotaoPrincipal" : "BotaoBase"],
         MinHeight = 58,
         FontSize = 17,
-        Background = cor ?? (destaque ? R("Marca") : R("Fundo")),
+        Background = cor ?? (destaque ? R("RosaDegrade") : R("PainelAlto")),
     };
 
     /// <summary>Pergunta sim/não. `perigo` pinta a ação de vermelho (é destrutiva).</summary>

@@ -52,6 +52,17 @@ public partial class App : Application
             return;
         }
 
+        // Tema antes da primeira janela: se a config manda claro (ou o horário
+        // manda, no modo auto), o operador não vê a tela piscar de escuro pra
+        // claro na abertura. Config ilegível não derruba o caixa — fica o escuro.
+        try
+        {
+            Banco.Migrar();
+            using var cx = Banco.Abrir();
+            Aparencia.Aplicar(Aparencia.Resolver(cx));
+        }
+        catch { /* banco indisponível aqui vira erro de verdade logo adiante, com mensagem melhor */ }
+
         // O emissor fiscal local nasce com o PDV e morre com ele. Janela solta de
         // terminal, alguém fecha — e a loja fica sem nota sem ninguém saber por quê.
         Agente.IniciarVigia();

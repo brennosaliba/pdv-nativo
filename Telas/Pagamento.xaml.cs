@@ -85,27 +85,29 @@ public partial class Pagamento : UserControl
     }
 
     // ── 1. FORMA ────────────────────────────────────────────────────────────
+    // A cor é CHAVE do tema, não hex: no claro, o verde/ciano/roxo/rosa têm
+    // variantes mais escuras para segurar contraste sobre creme.
     private static readonly (string forma, string rotulo, string icone, string cor)[] Formas =
     {
-        ("dinheiro", "Dinheiro", "💵", "#2E9E5B"),
-        ("debito",   "Débito",   "💳", "#00ABD5"),
-        ("credito",  "Crédito",  "💳", "#9B6DD4"),
-        ("pix",      "PIX",      "⚡", "#F276A5"),
+        ("dinheiro", "Dinheiro", "💵", "Ok"),
+        ("debito",   "Débito",   "💳", "Ciano"),
+        ("credito",  "Crédito",  "💳", "Roxo"),
+        ("pix",      "PIX",      "⚡", "Rosa"),
     };
 
     private void MontarFormas()
     {
         foreach (var (forma, rotulo, icone, cor) in Formas)
         {
-            var c = (Color)ColorConverter.ConvertFromString(cor)!;
+            var c = ((SolidColorBrush)Application.Current.Resources[cor]).Color;
             var b = new Button
             {
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 Margin = new Thickness(8), MinHeight = 140, Padding = new Thickness(10),
                 Background = new LinearGradientBrush(
-                    Color.FromArgb(0x3A, c.R, c.G, c.B), Color.FromArgb(0x12, c.R, c.G, c.B),
+                    Color.FromArgb(RB("AlfaFormaTopo"), c.R, c.G, c.B), Color.FromArgb(RB("AlfaFormaBase"), c.R, c.G, c.B),
                     new Point(0, 0), new Point(0, 1)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, c.R, c.G, c.B)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(RB("AlfaFormaBorda"), c.R, c.G, c.B)),
                 BorderThickness = new Thickness(2),
             };
             var sp = new StackPanel();
@@ -324,8 +326,8 @@ public partial class Pagamento : UserControl
     private static void Pintar(Border caixa, TextBlock rotulo, TextBlock valor, string cor)
     {
         var b = (SolidColorBrush)Application.Current.Resources[cor];
-        caixa.Background = new SolidColorBrush(Color.FromArgb(0x1A, b.Color.R, b.Color.G, b.Color.B));
-        caixa.BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, b.Color.R, b.Color.G, b.Color.B));
+        caixa.Background = new SolidColorBrush(Color.FromArgb(RB("AlfaChipFundo"), b.Color.R, b.Color.G, b.Color.B));
+        caixa.BorderBrush = new SolidColorBrush(Color.FromArgb(RB("AlfaChipBorda"), b.Color.R, b.Color.G, b.Color.B));
         rotulo.Foreground = b;
         valor.Foreground = b;
     }
@@ -810,4 +812,7 @@ public partial class Pagamento : UserControl
     }
 
     private void Cancelar(object sender, RoutedEventArgs e) => ConfirmarAbandono();
+
+    /// <summary>Byte do tema atual (alphas de véu e borda).</summary>
+    private static byte RB(string chave) => (byte)Application.Current.Resources[chave];
 }

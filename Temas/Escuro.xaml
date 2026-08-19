@@ -1,0 +1,122 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- TEMA ESCURO (noturno) — a paleta original do PDV, extraída de Estilos.xaml.
+         Fundo escuro no caixa reduz cansaço em turno de 8h e faz o valor em
+         destaque saltar.
+
+         As cores de marca são as do BRAND.md (variantes digitais): rosa #F276A5 =
+         ação, ciano #00ABD5 = acento. O teal do selo (#45A5AE) fica de fora de
+         propósito — o manual proíbe ele lado a lado com o ciano.
+
+         REGRA DE MANUTENÇÃO: este arquivo e Claro.xaml têm que ter EXATAMENTE o
+         mesmo conjunto de x:Key. Chave que existe só num deles não quebra no
+         build — quebra em produção, na primeira tela que pedir a chave ausente,
+         com ResourceReferenceKeyNotFoundException no meio do turno. -->
+
+    <Color x:Key="CorFundo">#0C1216</Color>
+    <Color x:Key="CorPainel">#18232B</Color>
+    <Color x:Key="CorPainelAlto">#22303A</Color>
+    <Color x:Key="CorBorda">#2B3A44</Color>
+    <Color x:Key="CorTexto">#ECEFF1</Color>
+    <Color x:Key="CorTextoFraco">#8296A2</Color>
+    <Color x:Key="CorRosa">#F276A5</Color>
+    <Color x:Key="CorRosaEscuro">#D44685</Color>
+    <Color x:Key="CorCiano">#00ABD5</Color>
+    <Color x:Key="CorAmarelo">#FFE23E</Color>
+    <Color x:Key="CorMarca">#00ABD5</Color>
+    <Color x:Key="CorOk">#2E9E5B</Color>
+    <Color x:Key="CorErro">#D2544C</Color>
+    <Color x:Key="CorRoxo">#9B6DD4</Color>
+
+    <SolidColorBrush x:Key="Fundo" Color="{StaticResource CorFundo}"/>
+    <SolidColorBrush x:Key="Painel" Color="{StaticResource CorPainel}"/>
+    <SolidColorBrush x:Key="PainelAlto" Color="{StaticResource CorPainelAlto}"/>
+    <SolidColorBrush x:Key="Borda" Color="{StaticResource CorBorda}"/>
+    <SolidColorBrush x:Key="Texto" Color="{StaticResource CorTexto}"/>
+    <SolidColorBrush x:Key="TextoFraco" Color="{StaticResource CorTextoFraco}"/>
+    <SolidColorBrush x:Key="Rosa" Color="{StaticResource CorRosa}"/>
+    <SolidColorBrush x:Key="RosaEscuro" Color="{StaticResource CorRosaEscuro}"/>
+    <SolidColorBrush x:Key="Ciano" Color="{StaticResource CorCiano}"/>
+    <SolidColorBrush x:Key="Amarelo" Color="{StaticResource CorAmarelo}"/>
+    <SolidColorBrush x:Key="Marca" Color="{StaticResource CorMarca}"/>
+    <SolidColorBrush x:Key="Ok" Color="{StaticResource CorOk}"/>
+    <SolidColorBrush x:Key="Erro" Color="{StaticResource CorErro}"/>
+    <SolidColorBrush x:Key="Roxo" Color="{StaticResource CorRoxo}"/>
+
+    <!-- Superfície "afundada" (mais escura que o fundo): as colunas laterais da
+         Venda. Promovida do hex #0F171D que vivia cravado na tela. -->
+    <SolidColorBrush x:Key="FundoAfundado" Color="#0F171D"/>
+
+    <!-- Chips translúcidos sobre painel escuro. No claro eles viram cor sólida:
+         alpha sobre fundo claro lava a cor e o chip some. -->
+    <SolidColorBrush x:Key="ChipOkFundo" Color="#1A2E9E5B"/>
+    <SolidColorBrush x:Key="ChipOkBorda" Color="#552E9E5B"/>
+    <SolidColorBrush x:Key="ChipAlertaFundo" Color="#33FFE23E"/>
+    <SolidColorBrush x:Key="ChipAlertaBorda" Color="#88FFE23E"/>
+    <SolidColorBrush x:Key="ChipInfoFundo" Color="#1E00ABD5"/>
+    <SolidColorBrush x:Key="ChipInfoBorda" Color="#5500ABD5"/>
+    <SolidColorBrush x:Key="ChipErroFundo" Color="#1AD2544C"/>
+    <SolidColorBrush x:Key="ChipErroBorda" Color="#55D2544C"/>
+    <SolidColorBrush x:Key="AvisoFundo" Color="#26D9A441"/>
+    <SolidColorBrush x:Key="AvisoBorda" Color="#88D9A441"/>
+
+    <!-- Véu de elevação: branco translúcido no escuro, PRETO translúcido no claro
+         (branco sobre branco = nada). -->
+    <SolidColorBrush x:Key="VeuElevado" Color="#12FFFFFF"/>
+    <SolidColorBrush x:Key="CianoFraco" Color="#4700ABD5"/>
+
+    <!-- Texto sobre superfície de marca (rosa/ciano): branco nos dois temas. -->
+    <SolidColorBrush x:Key="SobreMarca" Color="#FFFFFF"/>
+
+    <!-- Gradientes: o PINCEL INTEIRO é trocado pelo tema. GradientStop.Color com
+         DynamicResource é no-op silencioso no WPF — comprovado; não tente. -->
+    <LinearGradientBrush x:Key="PainelDegrade" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#22303A" Offset="0"/>
+        <GradientStop Color="#141D24" Offset="1"/>
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="BarraDegrade" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#1B2731" Offset="0"/>
+        <GradientStop Color="#131C23" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Antes era #F98BB4→#E2578F, mas branco sobre #F98BB4 dá 2,24:1 — o botão
+         Finalizar já reprovava WCAG no escuro. O rosa profundo resolve nos dois
+         temas e continua sendo a cor #1 da marca. -->
+    <LinearGradientBrush x:Key="RosaDegrade" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#D6296B" Offset="0"/>
+        <GradientStop Color="#A81E54" Offset="1"/>
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="AvatarDegrade" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#00ABD5" Offset="0"/>
+        <GradientStop Color="#0086AA" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- O glow do botão principal: o efeito inteiro é recurso (mesma razão dos
+         gradientes — Color de Freezable não aceita referência dinâmica). -->
+    <DropShadowEffect x:Key="GlowRosa" Color="#D6296B" BlurRadius="26" ShadowDepth="0" Opacity="0.5"/>
+
+    <!-- Constantes que o code-behind lê por chave (Venda pinta card de categoria
+         e produto em C#). Byte = canal alpha; Double = opacidade/fator. -->
+    <sys:Double x:Key="GlowOpacidade">0.5</sys:Double>
+    <sys:Double x:Key="GlowCategoriaOpacidade">0.55</sys:Double>
+    <sys:Double x:Key="SombraDialogoOpacidade">0.55</sys:Double>
+    <sys:Double x:Key="FatorDegradeClaro">1.25</sys:Double>
+    <sys:Double x:Key="FatorDegradeEscuro">0.75</sys:Double>
+    <sys:Byte x:Key="AlfaCatAtivaTopo">90</sys:Byte>
+    <sys:Byte x:Key="AlfaCatAtivaBase">30</sys:Byte>
+    <sys:Byte x:Key="AlfaCatInativaTopo">38</sys:Byte>
+    <sys:Byte x:Key="AlfaCatInativaBase">10</sys:Byte>
+    <sys:Byte x:Key="AlfaCatBordaAtiva">255</sys:Byte>
+    <sys:Byte x:Key="AlfaCatBordaInativa">58</sys:Byte>
+
+    <sys:Byte x:Key="AlfaChipFundo">26</sys:Byte>
+    <sys:Byte x:Key="AlfaChipBorda">85</sys:Byte>
+    <sys:Byte x:Key="AlfaFormaTopo">58</sys:Byte>
+    <sys:Byte x:Key="AlfaFormaBase">18</sys:Byte>
+    <sys:Byte x:Key="AlfaFormaBorda">102</sys:Byte>
+
+</ResourceDictionary>
