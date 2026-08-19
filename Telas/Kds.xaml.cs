@@ -236,8 +236,8 @@ public partial class Kds : UserControl
                     // por isso a confirmação explícita.
                     var dono = Window.GetWindow(this)!;
                     var aviso = t.Origem == "ifood"
-                        ? $"O pedido #{t.Numero} vai constar como PRONTO para coleta no iFood — " +
-                          "o entregador pode ser acionado. Confirma que está tudo embalado?"
+                        ? $"O pedido #{t.Numero} vai constar como PRONTO para coleta no iFood " +
+                          "e o entregador VAI ser acionado. Confirma que está tudo embalado?"
                         : $"Marcar o pedido #{t.Numero} como PRONTO para entrega ao cliente?";
                     if (Dialogo.Confirmar(dono, "Pedido pronto?", aviso,
                                           "Sim, está pronto", "Ainda não"))
