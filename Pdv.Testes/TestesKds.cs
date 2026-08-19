@@ -91,6 +91,13 @@ public static class TestesKds
                    "JSON quebrado devolve vazio, nao excecao");
             checar(Nucleo.Kds.ItensDeJson(null).Count == 0, "itens nulos devolvem vazio");
 
+            // O shape que a ponte grava DE VERDADE em producao (medido 19/08/2026):
+            var real = Nucleo.Kds.ItensDeJson(
+                "[{\"qtd\": 1, \"descricao\": \"Donut Homer\", \"valor_unitario\": 21.9}," +
+                "{\"qtd\": 2, \"descricao\": \"Donut Churros\", \"valor_unitario\": 21.9}]");
+            checar(real.Count == 2 && real[0].Descricao == "Donut Homer" && real[1].Qtd == 2000,
+                   "o shape REAL da ponte (qtd/descricao) vira card com nome e quantidade");
+
             // ── sincronizacao com a nuvem: dedup e cancelamento ─────────────
             var lote = new[]
             {

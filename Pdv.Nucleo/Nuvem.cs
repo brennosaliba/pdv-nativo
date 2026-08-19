@@ -269,14 +269,18 @@ public sealed class Nuvem
     /// leve: so o que a tela de preparo mostra. Falha de rede devolve lista VAZIA -
     /// o KDS continua com o que ja tem no SQLite, que e o contrato do PDV inteiro.
     /// </summary>
-    public async Task<List<PedidoDelivery>> BaixarPedidosDeliveryAsync(string loja, string businessDate)
+    public async Task<List<PedidoDelivery>> BaixarPedidosDeliveryAsync(string loja, int janelaMin = 45)
     {
         try
         {
-            var caminho = "/rest/v1/ifood_orders?select=order_id,display_id,customer_name,itens,status" +
-                          $"&store=eq.{Uri.EscapeDataString(loja)}&business_date=eq.{businessDate}" +
-                          "&order=recebido_em.asc&limit=80";
-            using var req = Montar(HttpMethod.Get, caminho);
+            // RPC com escopo, nao a tabela: ifood_orders tem RLS de gestor, e o
+            // terminal pareado nao e gestor. A funcao devolve so a janela recente
+            // da PROPRIA loja - e exige sessao valida (o anon le zero, de proposito).
+            if (!await SessaoOkAsync()) return new();
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_pedidos");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _loja = loja, _janela_min = janelaMin }),
+                Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req);
             if (!resp.IsSuccessStatusCode) return new();
 

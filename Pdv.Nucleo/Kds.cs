@@ -187,7 +187,10 @@ public static class Kds
             foreach (var e in doc.RootElement.EnumerateArray())
             {
                 if (e.ValueKind != JsonValueKind.Object) continue;
-                var nome = Texto(e, "name") ?? Texto(e, "nome") ?? Texto(e, "item") ?? "(item sem nome)";
+                // "descricao" primeiro: e o shape REAL da ponte em producao
+                // ({"qtd":1,"descricao":"Donut Homer"}), medido antes de confiar.
+                var nome = Texto(e, "descricao") ?? Texto(e, "name") ?? Texto(e, "nome")
+                        ?? Texto(e, "item") ?? "(item sem nome)";
                 var qtd = Numero(e, "quantity") ?? Numero(e, "quantidade") ?? Numero(e, "qtd") ?? 1m;
                 var obs = Texto(e, "observations") ?? Texto(e, "observacao") ?? Texto(e, "obs");
                 r.Add(new TicketItem(nome, (int)Math.Round(qtd * 1000), obs));
@@ -249,7 +252,7 @@ public static class Kds
     /// <summary>Puxa os pedidos do dia e alimenta a fila. Chamado pelo KDS e pelo
     /// tick da Venda — falha de rede é silenciosa (a fila local continua valendo).</summary>
     public static async Task<int> PuxarDaNuvemAsync(Nuvem nuvem, string loja)
-        => SincronizarDelivery(await nuvem.BaixarPedidosDeliveryAsync(loja, Caixa.DiaOperacional()));
+        => SincronizarDelivery(await nuvem.BaixarPedidosDeliveryAsync(loja));
 
     private static Ticket Ler(dynamic r) => new(
         (string)r.id, (string)r.origem, (string)r.ref_id, (string)r.numero,
