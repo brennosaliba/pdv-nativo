@@ -56,6 +56,7 @@ public partial class Venda : UserControl
 
     public event Action? Deslogou;
     public event Action? FechouCaixa;
+    public event Action? PediuKds;
 
     /// <summary>
     /// Quantas colunas a grade de produtos usa. Calculado pela largura real da área,
@@ -86,10 +87,20 @@ public partial class Venda : UserControl
         Unloaded += (_, _) => { _relogio?.Stop(); _relogio = null; Aparencia.Mudou -= TemaMudou; };
     }
 
+    private int _batidasKds;
+    private bool _puxandoKds;
+
     private void TemaMudou()
     {
         PintarBotaoTema();
         PintarModo();
+        // Os cards de categoria carregam degradê e glow com FATORES do tema,
+        // resolvidos na criação — repintar não basta, é reconstruir. São ~10
+        // botões; reconstruir é imperceptível e elimina a classe inteira de
+        // "sobrou cor do tema velho".
+        var cats = ListaCategorias.Items.Cast<Button>().Select(b => (string)b.Tag!).ToList();
+        ListaCategorias.Items.Clear();
+        foreach (var c in cats) ListaCategorias.Items.Add(BotaoCategoria(c));
         RepintarCategorias();
         PintarProdutos();
         PintarComanda();
@@ -103,6 +114,8 @@ public partial class Venda : UserControl
     /// Atalho do rodapé: vira o tema AGORA e grava a escolha — inclusive por cima
     /// do modo automático, porque quem está no balcão sabe mais que o relógio.
     /// </summary>
+    private void AbrirKds(object sender, RoutedEventArgs e) => PediuKds?.Invoke();
+
     private void AlternarTema(object sender, RoutedEventArgs e)
     {
         var novo = Aparencia.Atual == ModoTema.Claro ? ModoTema.Escuro : ModoTema.Claro;
@@ -190,6 +203,20 @@ public partial class Venda : UserControl
             LuzRede.SetResourceReference(Shape.FillProperty, corChave);
             ChipRede.SetResourceReference(Border.BackgroundProperty, online ? "ChipOkFundo" : "ChipErroFundo");
             ChipRede.SetResourceReference(Border.BorderBrushProperty, online ? "ChipOkBorda" : "ChipErroBorda");
+
+            // Badge do KDS: o que está esperando produção, à vista de quem cobra.
+            var pendentes = Nucleo.Kds.Pendentes();
+            TxtBadgeKds.Text = pendentes.ToString();
+            BadgeKds.Visibility = pendentes > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            // Delivery desce a cada 4 batidas (60 s) mesmo com o KDS fechado: o
+            // pedido do iFood precisa acender o badge ANTES de alguém abrir a tela.
+            if (++_batidasKds % 4 == 0 && Servicos.TemContaDeNuvem() && !_puxandoKds)
+            {
+                _puxandoKds = true;
+                _ = Nucleo.Kds.PuxarDaNuvemAsync(Servicos.Nuvem(), _loja)
+                    .ContinueWith(_ => _puxandoKds = false);
+            }
 
             // Modo automático: reavalia no mesmo tick do relógio. NUNCA com comanda
             // aberta — a tela mudar de cara no meio da venda desorienta o operador
@@ -394,26 +421,34 @@ public partial class Venda : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
             },
         });
-        sp.Children.Add(new TextBlock
+        // Estes cards vivem a sessão INTEIRA (só o fundo é repintado na troca de
+        // categoria/tema) — então o texto precisa de referência VIVA ao recurso.
+        // Brush resolvido na criação congela a cor do tema de nascença: virar pro
+        // claro deixava o nome BRANCO sobre véu claro, ilegível. Bug real de balcão.
+        var nome = new TextBlock
         {
             Text = Capitalizar(categoria), FontSize = 13, FontWeight = FontWeights.Bold,
             TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
-            Foreground = (Brush)Application.Current.Resources["Texto"],
             Margin = new Thickness(0, 7, 0, 0), MaxHeight = 36,
             TextTrimming = TextTrimming.CharacterEllipsis, LineHeight = 15,
-        });
-        sp.Children.Add(new Border
+        };
+        nome.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
+        sp.Children.Add(nome);
+
+        var contador = new TextBlock
+        {
+            Text = _quantosPorCategoria.GetValueOrDefault(categoria).ToString(),
+            FontSize = 11, FontWeight = FontWeights.Bold,
+        };
+        contador.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+        var selo = new Border
         {
             CornerRadius = new CornerRadius(9), Padding = new Thickness(9, 1, 9, 2),
-            Background = (Brush)Application.Current.Resources["VeuElevado"],
             HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0),
-            Child = new TextBlock
-            {
-                Text = _quantosPorCategoria.GetValueOrDefault(categoria).ToString(),
-                FontSize = 11, FontWeight = FontWeights.Bold,
-                Foreground = (Brush)Application.Current.Resources["TextoFraco"],
-            },
-        });
+            Child = contador,
+        };
+        selo.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
+        sp.Children.Add(selo);
         b.Content = sp;
         AutomationProperties.SetName(b, categoria);
         b.Click += (_, _) => { _categoriaAtual = categoria; RepintarCategorias(); PintarProdutos(); };

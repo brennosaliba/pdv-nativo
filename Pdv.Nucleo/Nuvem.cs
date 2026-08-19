@@ -264,6 +264,44 @@ public sealed class Nuvem
         catch { return 0; }
     }
 
+    /// <summary>
+    /// Pedidos de delivery do dia (ifood_orders), para o KDS do quiosque. Leitura
+    /// leve: so o que a tela de preparo mostra. Falha de rede devolve lista VAZIA -
+    /// o KDS continua com o que ja tem no SQLite, que e o contrato do PDV inteiro.
+    /// </summary>
+    public async Task<List<PedidoDelivery>> BaixarPedidosDeliveryAsync(string loja, string businessDate)
+    {
+        try
+        {
+            var caminho = "/rest/v1/ifood_orders?select=order_id,display_id,customer_name,itens,status" +
+                          $"&store=eq.{Uri.EscapeDataString(loja)}&business_date=eq.{businessDate}" +
+                          "&order=recebido_em.asc&limit=80";
+            using var req = Montar(HttpMethod.Get, caminho);
+            using var resp = await _http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) return new();
+
+            var r = new List<PedidoDelivery>();
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                var id = e.TryGetProperty("order_id", out var oid) ? oid.GetString() : null;
+                if (id is null) continue;
+                r.Add(new PedidoDelivery(
+                    id,
+                    e.TryGetProperty("display_id", out var d) && d.ValueKind == JsonValueKind.String
+                        ? d.GetString()! : id[..Math.Min(4, id.Length)],
+                    e.TryGetProperty("customer_name", out var c) && c.ValueKind == JsonValueKind.String
+                        ? c.GetString() : null,
+                    e.TryGetProperty("itens", out var it) && it.ValueKind is JsonValueKind.Array or JsonValueKind.Object
+                        ? it.GetRawText() : "[]",
+                    e.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String
+                        ? st.GetString() ?? "" : ""));
+            }
+            return r;
+        }
+        catch { return new(); }
+    }
+
     private static Dapper.DynamicParameters BuildParams(List<string> ids, string agora)
     {
         var p = new Dapper.DynamicParameters();

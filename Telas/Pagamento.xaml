@@ -64,7 +64,11 @@
         </Grid>
 
         <!-- ══ 2. DINHEIRO ══ -->
-        <Grid x:Name="PainelDinheiro" Grid.Row="1" Margin="28,20,28,24" Visibility="Collapsed">
+        <!-- MaxWidth: em monitor ultrawide (3440px) a coluna * esticava a caixa de
+             valor a 3 metros do teclado, e o operador varria a tela com o pescoço.
+             1360 é o maior layout que ainda se lê de um golpe; sobrando tela, centra. -->
+        <Grid x:Name="PainelDinheiro" Grid.Row="1" Margin="28,20,28,24" Visibility="Collapsed"
+              MaxWidth="1360" HorizontalAlignment="Center">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="380"/>
@@ -113,7 +117,11 @@
                 </Grid>
             </Grid>
 
-            <telas:TecladoNumerico Grid.Column="1" x:Name="Teclado"/>
+            <!-- Altura fixa: o UniformGrid do teclado estica pra preencher o que
+                 der — em tela alta as teclas viravam lajes com vão no meio. 500px
+                 dá tecla de ~110px: alvo generoso de dedo, sem desperdício. -->
+            <telas:TecladoNumerico Grid.Column="1" x:Name="Teclado"
+                                   Height="500" VerticalAlignment="Center"/>
         </Grid>
 
         <!-- ══ 3. TEF / EMISSÃO / DESFECHO — tudo com a mesma moldura ══ -->

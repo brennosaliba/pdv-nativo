@@ -142,6 +142,14 @@ public static class Vendas
         });
 
         tx.Commit();
+
+        // KDS opcional do balcao (config kds_balcao=1): quiosque com forno liga,
+        // vitrine que so entrega da estufa deixa desligado - senao cada venda de
+        // balcao vira card e a fila real do delivery some no meio. NUNCA pode
+        // derrubar a venda: o dinheiro ja esta gravado quando isto roda.
+        try { if (Config(cx, "kds_balcao") == "1") Kds.DoBalcao(vendaId); }
+        catch { /* fila de preparo nunca e motivo para perder venda */ }
+
         return new VendaGravada(vendaId, clientKey, numero, total, sessao.BusinessDate);
     }
 

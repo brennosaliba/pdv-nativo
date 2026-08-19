@@ -74,12 +74,46 @@ public partial class MainWindow : Window
         Conteudo.Content = t;
     }
 
+    private Venda? _telaVenda;
+
     private void MostrarVenda()
     {
+        // Caixa aberto por OUTRO operador (foi embora sem fechar): quem entra
+        // precisa saber que está assumindo o turno — e a conferência — de outra
+        // pessoa. Sem este aviso, a diferença do fechamento cai em quem fechou,
+        // que nem sabia que a gaveta não era dele.
+        if (_sessao!.OperadorId != _operador!.Id)
+        {
+            var assume = Dialogo.Confirmar(this, "Caixa de outro operador",
+                $"Este caixa foi aberto por {_sessao.OperadorNome} às {_sessao.AberturaEm:HH:mm} " +
+                "e continua aberto. Ao entrar, você passa a operar o turno dele — e a " +
+                "conferência do fechamento também vira responsabilidade sua.",
+                "Assumir este caixa", "Voltar ao login");
+            if (!assume) { _operador = null; Roteia(); return; }
+            using var cx = Banco.Abrir();
+            Caixa.Auditar(cx, null, "caixa_assumido", _operador.Id, null,
+                $"turno aberto por {_sessao.OperadorNome} ({_sessao.OperadorId}) às {_sessao.AberturaEm:HH:mm}");
+        }
+
         var t = new Venda(_operador!, _sessao!);
-        t.Deslogou += () => { _operador = null; Roteia(); };
-        t.FechouCaixa += () => { _operador = null; _sessao = null; Roteia(); };
+        t.Deslogou += () => { _operador = null; _telaVenda = null; Roteia(); };
+        t.FechouCaixa += () => { _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
+        t.PediuKds += MostrarKds;
+        _telaVenda = t;
         Conteudo.Content = t;
+    }
+
+    /// <summary>
+    /// KDS do quiosque: troca só o CONTEÚDO da janela — a tela de Venda fica viva
+    /// atrás, com a comanda intacta. Voltar não recria nada.
+    /// </summary>
+    private void MostrarKds()
+    {
+        using var cx = Banco.Abrir();
+        var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
+        var k = new Telas.Kds(loja);
+        k.Voltou += () => Conteudo.Content = _telaVenda;
+        Conteudo.Content = k;
     }
 
     private void MostrarConfiguracao()

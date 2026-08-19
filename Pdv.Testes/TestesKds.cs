@@ -78,6 +78,38 @@ public static class TestesKds
             checar(lido.Itens[1].Observacao == "sem gelo",
                    "a observação do cliente não se perde no caminho");
             checar(lido.Itens[0].Qtd == 2000, "quantidade em milésimos preserva 2 unidades");
+
+            // ── o JSON do iFood, nos shapes que ele realmente tem ───────────
+            var doIfood = Nucleo.Kds.ItensDeJson(
+                "[{\"name\":\"COOKIE TRIPLO\",\"quantity\":2}," +
+                "{\"nome\":\"AGUA 500ML\",\"qtd\":\"1\",\"observacao\":\"sem gelo\"}]");
+            checar(doIfood.Count == 2, "parser aceita name/quantity E nome/qtd no mesmo pedido");
+            checar(doIfood[0].Qtd == 2000, "quantity numerico vira milesimos");
+            checar(doIfood[1].Qtd == 1000 && doIfood[1].Observacao == "sem gelo",
+                   "qtd em string e observacao sobrevivem");
+            checar(Nucleo.Kds.ItensDeJson("{nao-e-json").Count == 0,
+                   "JSON quebrado devolve vazio, nao excecao");
+            checar(Nucleo.Kds.ItensDeJson(null).Count == 0, "itens nulos devolvem vazio");
+
+            // ── sincronizacao com a nuvem: dedup e cancelamento ─────────────
+            var lote = new[]
+            {
+                new PedidoDelivery("nuvem-1", "0101", "Cliente A",
+                    "[{\"name\":\"DONUT\",\"quantity\":3}]", "faturado"),
+                new PedidoDelivery("nuvem-2", "0102", null,
+                    "[{\"name\":\"COOKIE\",\"quantity\":1}]", "faturado"),
+            };
+            checar(Nucleo.Kds.SincronizarDelivery(lote) == 2, "dois pedidos novos = dois tickets");
+            checar(Nucleo.Kds.SincronizarDelivery(lote) == 0,
+                   "o MESMO lote de novo nao cria nada (polling repete, tela nao duplica)");
+
+            var cancelado = new[] { new PedidoDelivery("nuvem-1", "0101", "Cliente A",
+                "[{\"name\":\"DONUT\",\"quantity\":3}]", "cancelado") };
+            Nucleo.Kds.SincronizarDelivery(cancelado);
+            checar(!Nucleo.Kds.Abertos().Any(x => x.RefId == "nuvem-1"),
+                   "pedido cancelado na nuvem sai da fila de preparo");
+            checar(Nucleo.Kds.Abertos().Any(x => x.RefId == "nuvem-2"),
+                   "cancelar um pedido nao derruba o vizinho");
         }
         finally
         {
