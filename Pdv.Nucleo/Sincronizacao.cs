@@ -67,6 +67,13 @@ public static class Sincronizacao
             var antes = ImpressaoDigital(cx);
             produtos = await nuvem.BaixarProdutosAsync(cx).ConfigureAwait(false);
 
+            // promocoes descem SEMPRE junto do catalogo: foi a falta disto que
+            // deixou o "donuts do dia" publicado no painel invisivel pro caixa
+            andamento?.Report("Baixando as promoções…");
+            var lojaPromo = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
+            try { await nuvem.BaixarPromocoesAsync(cx, lojaPromo).ConfigureAwait(false); }
+            catch { /* espelho anterior continua valendo */ }
+
             // operadores criados no painel passam a logar no caixa (CPF + senha)
             andamento?.Report("Atualizando os operadores…");
             try { await nuvem.BaixarOperadoresAsync(cx).ConfigureAwait(false); }
@@ -107,7 +114,10 @@ public static class Sincronizacao
               FROM produto ORDER BY id
             """)
             .Concat(cx.Query<string>(
-                "SELECT id||'§'||nome||'§'||pin_hash||'§'||perfil||'§'||ativo FROM operador ORDER BY id"));
+                "SELECT id||'§'||nome||'§'||pin_hash||'§'||perfil||'§'||ativo FROM operador ORDER BY id"))
+            // promocao entra na digital: sem isto, publicar so promocao dizia
+            // "tudo em dia" pro operador - o bug exato que o dono viu na quinta
+            .Concat(cx.Query<string>("SELECT id||'§'||payload FROM promo ORDER BY id"));
         using var sha = System.Security.Cryptography.SHA256.Create();
         return Convert.ToHexString(sha.ComputeHash(
             System.Text.Encoding.UTF8.GetBytes(string.Join("\n", partes))));

@@ -273,6 +273,14 @@ public static class Banco
         );
         CREATE INDEX IF NOT EXISTS ix_outbox_pendente ON outbox(id) WHERE enviado_em IS NULL;
 
+        -- ── PROMOÇÕES (espelho de pdv_promocoes, payload jsonb cru) ───────────
+        -- O motor (Promocoes.cs) parseia na carga; JSON estranho é ignorado.
+        CREATE TABLE IF NOT EXISTS promo (
+          id            TEXT PRIMARY KEY,
+          payload       TEXT NOT NULL,
+          atualizado_em TEXT NOT NULL
+        );
+
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────
         -- Chave/valor em vez de coluna nova em `terminal`: Migrar() só faz CREATE TABLE
         -- IF NOT EXISTS, não tem ALTER nem versionamento. Coluna nova só chegaria em

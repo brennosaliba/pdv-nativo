@@ -33,6 +33,11 @@ public sealed class RealtimeKds : IDisposable
     /// quem assina faz o Dispatcher.</summary>
     public event Action? Ping;
 
+    /// <summary>O painel publicou catálogo ou mexeu em promoção: o PDV baixa
+    /// sozinho. É o "webhook" que o dono pediu — na única forma que alcança
+    /// uma máquina atrás do NAT da loja.</summary>
+    public event Action? CatalogoMudou;
+
     public bool Conectado { get; private set; }
 
     public RealtimeKds(string urlNuvem, string anonKey, Func<Task<string?>> tokenAsync, string loja)
@@ -101,6 +106,12 @@ public sealed class RealtimeKds : IDisposable
         if (!confirmado) return;
         Conectado = true;
 
+        // canal do CATÁLOGO (rede inteira): best-effort — se o join falhar, o
+        // botão Sincronizar continua sendo o caminho, como sempre foi
+        await EnviarAsync(ws, MontarQuadro("realtime:kds:catalogo", "phx_join",
+            $$"""{"config":{"broadcast":{"self":false},"private":true},"access_token":"{{token}}"}""",
+            ProximoRef()), ct).ConfigureAwait(false);
+
         var ultimoPulso = DateTime.UtcNow;
         while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
@@ -127,6 +138,7 @@ public sealed class RealtimeKds : IDisposable
             // ficava surdo achando que estava conectado
             if (FechouCanal(texto, _topico)) break;
             if (EhSino(texto)) Ping?.Invoke();
+            if (EhCatalogo(texto)) CatalogoMudou?.Invoke();
         }
     }
 
@@ -192,6 +204,21 @@ public sealed class RealtimeKds : IDisposable
                 && t.GetString() == topico
                 && doc.RootElement.TryGetProperty("event", out var ev)
                 && ev.GetString() is "phx_close" or "phx_error";
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Publicação de catálogo/promoção? (event=broadcast, payload.event=catalogo)</summary>
+    public static bool EhCatalogo(string quadroJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(quadroJson);
+            if (!doc.RootElement.TryGetProperty("event", out var ev)
+                || ev.GetString() != "broadcast") return false;
+            return doc.RootElement.TryGetProperty("payload", out var p)
+                && p.TryGetProperty("event", out var pe)
+                && pe.GetString() == "catalogo";
         }
         catch { return false; }
     }

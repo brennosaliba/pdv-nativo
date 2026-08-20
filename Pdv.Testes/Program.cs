@@ -978,6 +978,11 @@ Console.WriteLine();
 Console.WriteLine("--- Tema (diurno/noturno) ---");
 TestesTema.Rodar((cond, nome) => Check("tema: " + nome, cond));
 
+// -- PROMOCOES: o motor que faltava (a promocao de quinta invisivel no caixa) --
+Console.WriteLine();
+Console.WriteLine("--- Promocoes (motor de preco) ---");
+TestesPromocoes.Rodar((cond, nome) => Check("promo: " + nome, cond));
+
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }

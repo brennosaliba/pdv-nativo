@@ -87,17 +87,56 @@ public partial class Venda : UserControl
         // sino: pedido novo chega por websocket e adianta a puxada — o tick de
         // 30 s continua embaixo como rede de segurança
         Servicos.Sino(_loja ?? "").Ping += SinoTocou;
+        Servicos.Sino(_loja ?? "").CatalogoMudou += CatalogoTocou;
         Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); };
         Unloaded += (_, _) =>
         {
             _relogio?.Stop(); _relogio = null;
             Aparencia.Mudou -= TemaMudou;
             Servicos.Sino(_loja ?? "").Ping -= SinoTocou;
+            Servicos.Sino(_loja ?? "").CatalogoMudou -= CatalogoTocou;
         };
     }
 
     private int _batidasKds;
     private bool _puxandoKds;
+
+    private bool _sincronizandoPainel;
+
+    /// <summary>
+    /// O painel publicou (catálogo ou promoção): baixa e recarrega SOZINHO.
+    /// É o "webhook" do catálogo — ninguém mais precisa tocar em Sincronizar
+    /// pra promoção de quinta valer na quinta.
+    /// </summary>
+    private void CatalogoTocou() => Dispatcher.Invoke(() =>
+    {
+        if (_sincronizandoPainel) return;
+        _sincronizandoPainel = true;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Sincronizacao.ExecutarAsync(
+                    Servicos.Nuvem(), Servicos.Guarda(), Servicos.Dreno(), null)
+                    .ConfigureAwait(false);
+            }
+            catch { /* o botão Sincronizar continua existindo */ }
+            finally
+            {
+                _sincronizandoPainel = false;
+                Dispatcher.Invoke(() =>
+                {
+                    RecarregarCatalogo();
+                    TxtToastKds.Text = "Catálogo atualizado pelo painel";
+                    ToastKds.Visibility = Visibility.Visible;
+                    _toastSome?.Stop();
+                    _toastSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+                    _toastSome.Tick += (_, _) => { ToastKds.Visibility = Visibility.Collapsed; _toastSome?.Stop(); };
+                    _toastSome.Start();
+                });
+            }
+        });
+    });
 
     /// <summary>Sino (thread de fundo) → puxada imediata + notificação na UI.</summary>
     private void SinoTocou() => Dispatcher.Invoke(() =>
@@ -270,6 +309,15 @@ public partial class Venda : UserControl
                     });
             }
 
+            // Promoção liga/desliga pelo RELÓGIO (meia-noite, janela de hora):
+            // repinta a grade só quando algum preço efetivo mudou de verdade.
+            var assinatura = AssinaturaPromos();
+            if (assinatura != _assinaturaPromo)
+            {
+                _assinaturaPromo = assinatura;
+                PintarProdutos();
+            }
+
             // Modo automático: reavalia no mesmo tick do relógio. NUNCA com comanda
             // aberta — a tela mudar de cara no meio da venda desorienta o operador
             // (e Aplicar() já é no-op quando o tema não muda).
@@ -398,9 +446,25 @@ public partial class Venda : UserControl
     }
 
     // ── CATÁLOGO ────────────────────────────────────────────────────────────
+    private List<Nucleo.Promocoes.Promo> _promos = new();
+    private string _assinaturaPromo = "";
+
+    /// <summary>Preço efetivo AGORA (motor de promoções). Base intacta quando
+    /// nada se aplica; entre promoções vale a melhor pro cliente.</summary>
+    private (Dinheiro Preco, string? Promo) PrecoDe(Produto p)
+    {
+        var (cent, nome) = Nucleo.Promocoes.PrecoEfetivoCent(
+            _promos, p.Id, p.Categoria, p.Preco.Centavos, DateTime.Now);
+        return (new Dinheiro(cent), nome);
+    }
+
+    private string AssinaturaPromos()
+        => string.Join("|", _catalogo.Select(p => p.Id + ":" + PrecoDe(p).Preco.Centavos));
+
     private void CarregarCatalogo()
     {
         using var cx = Banco.Abrir();
+        _promos = Nucleo.Promocoes.Carregar(cx);
         foreach (var r in cx.Query("""
             SELECT id, plu, nome, categoria, preco_cent, unidade, ncm, cest, csosn, origem, foto_local
               FROM produto WHERE ativo = 1 ORDER BY categoria, nome
@@ -634,11 +698,13 @@ public partial class Venda : UserControl
         Grid.SetColumn(nome, 1);
         g.Children.Add(nome);
 
+        var (precoEf, promoNome) = PrecoDe(p);
         var preco = new TextBlock
         {
-            Text = p.Preco.Formatado(), FontSize = 17, FontWeight = FontWeights.Bold,
+            Text = precoEf.Formatado(), FontSize = 17, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = (Brush)Application.Current.Resources["Ciano"],
+            Foreground = (Brush)Application.Current.Resources[promoNome is null ? "Ciano" : "Rosa"],
+            ToolTip = promoNome is null ? null : "PROMO: " + promoNome,
         };
         Grid.SetColumn(preco, 2);
         g.Children.Add(preco);
@@ -739,11 +805,13 @@ public partial class Venda : UserControl
         Grid.SetRow(nome, 1);
         grade.Children.Add(nome);
 
+        var (precoEf2, promoNome2) = PrecoDe(p);
         var preco = new TextBlock
         {
-            Text = p.Preco.Formatado(), FontSize = 18, FontWeight = FontWeights.Bold,
+            Text = precoEf2.Formatado(), FontSize = 18, FontWeight = FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 4, 0, 0),
-            Foreground = (Brush)Application.Current.Resources["Ciano"],
+            Foreground = (Brush)Application.Current.Resources[promoNome2 is null ? "Ciano" : "Rosa"],
+            ToolTip = promoNome2 is null ? null : "PROMO: " + promoNome2,
         };
         Grid.SetRow(preco, 2);
         grade.Children.Add(preco);
@@ -759,6 +827,12 @@ public partial class Venda : UserControl
     // ── COMANDA ─────────────────────────────────────────────────────────────
     private void Adicionar(Produto p)
     {
+        // preço da comanda = preço efetivo NO MOMENTO do toque (promoção do
+        // dia, %, valor). O card já mostrou este preço; cobrar outro seria
+        // exatamente o "promoção não vinculada" que o dono viu na quinta.
+        var (efetivo, _) = PrecoDe(p);
+        if (efetivo.Centavos != p.Preco.Centavos) p = p with { Preco = efetivo };
+
         // segundo toque no mesmo produto INCREMENTA — não cria linha nova
         var existente = _comanda.FirstOrDefault(i => i.Produto.Id == p.Id);
         if (existente is not null) existente.Qtd = new Quantidade(existente.Qtd.Milesimos + 1000);

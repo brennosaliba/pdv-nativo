@@ -308,6 +308,44 @@ public sealed class Nuvem
         catch { return new(); }
     }
 
+    /// <summary>
+    /// Espelha as promocoes VIGENTES da loja no SQLite (substitui tudo: o
+    /// servidor ja filtrou vigencia e loja; dia/hora quem decide e o motor
+    /// local). Sem sessao ou sem rede devolve -1 e o espelho anterior fica.
+    /// </summary>
+    public async Task<int> BaixarPromocoesAsync(SqliteConnection cx, string loja)
+    {
+        try
+        {
+            if (!await SessaoOkAsync().ConfigureAwait(false)) return -1;
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_promocoes_ativas");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _loja = loja }), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return -1;
+
+            var corpo = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(corpo);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return -1;
+
+            var agora = DateTime.Now.ToString("o");
+            using var tx = cx.BeginTransaction();
+            cx.Execute("DELETE FROM promo", transaction: tx);
+            var n = 0;
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                var id = e.TryGetProperty("id", out var i) ? i.GetString() : null;
+                if (id is null) continue;
+                cx.Execute("INSERT INTO promo (id, payload, atualizado_em) VALUES (@i, @p, @a)",
+                    new { i = id, p = e.GetRawText(), a = agora }, tx);
+                n++;
+            }
+            tx.Commit();
+            return n;
+        }
+        catch { return -1; }
+    }
+
     private static Dapper.DynamicParameters BuildParams(List<string> ids, string agora)
     {
         var p = new Dapper.DynamicParameters();
