@@ -197,14 +197,21 @@ public partial class AberturaCaixa : UserControl
             if (esperado is { } exp && exp.Centavos != _centavos)
             {
                 var dif = new Dinheiro(_centavos - exp.Centavos);
+                // Tom de CONFERÊNCIA, nunca de acusação: quem está contando agora
+                // muitas vezes nem estava aqui quando a diferença nasceu (turno
+                // anterior, sangria fora de hora, troco reposto). O controle é o
+                // registro com os dois valores — não a bronca na tela.
                 var texto = dif.Centavos > 0
-                    ? $"sobrando {dif.Formatado()} — de onde veio esse dinheiro?"
-                    : $"faltando {dif.Abs.Formatado()} — cadê esse dinheiro?";
-                if (!Dialogo.Confirmar(Window.GetWindow(this)!, "A gaveta não bate com o fechamento",
-                        $"O último fechamento deixou {exp.Formatado()} na gaveta.\n" +
-                        $"Você contou {new Dinheiro(_centavos).Formatado()} — {texto}\n\n" +
-                        "Confirma a abertura com essa diferença?",
-                        "Abrir mesmo assim", "Recontar", perigo: true))
+                    ? $"{dif.Formatado()} a mais"
+                    : $"{dif.Abs.Formatado()} a menos";
+                if (!Dialogo.Confirmar(Window.GetWindow(this)!, "Conferência do fundo de troco",
+                        $"O último fechamento registrou {exp.Formatado()} na gaveta e a contagem " +
+                        $"de agora encontrou {new Dinheiro(_centavos).Formatado()} — {texto}.\n\n" +
+                        "Pode ser troco reposto, sangria de ontem ou erro de contagem. " +
+                        "A diferença fica anotada com os dois valores, e o fechamento de " +
+                        "hoje já começa explicado.\n\n" +
+                        "Registrar a diferença e abrir o caixa?",
+                        "Registrar e abrir", "Recontar"))
                     return;
                 Caixa.Auditar(cx, null, "abertura_divergente", _operador.Id, null,
                     $"esperado={exp.Formatado()} contado={new Dinheiro(_centavos).Formatado()}");

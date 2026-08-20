@@ -299,8 +299,12 @@ public static class Caixa
         {
             var detalhe = string.Join("; ", linhas.Where(l => l.Diferenca.Centavos != 0)
                 .Select(l => $"{l.Forma}: {l.Situacao} de {l.Diferenca.Abs.Formatado()}"));
+            // "Justifique" e o marcador que a tela usa pra abrir o campo de
+            // justificativa (catch por Contains) - manter a palavra ao reescrever.
             throw new InvalidOperationException(
-                $"A diferença de {desvio.Formatado()} passa da tolerância ({tolerancia.Formatado()}) — {detalhe}. Justifique para fechar.");
+                $"A conferência encontrou {desvio.Formatado()} de diferença " +
+                $"(tolerância: {tolerancia.Formatado()}) — {detalhe}. " +
+                "Diferença acontece em qualquer operação; descreva o que houve. Justifique para fechar.");
         }
 
         using var tx = cx.BeginTransaction();
