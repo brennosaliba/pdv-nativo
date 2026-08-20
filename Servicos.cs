@@ -49,8 +49,25 @@ public static class Servicos
 
     private static readonly object Trava = new();
     private static Nuvem? _nuvem;
+    private static RealtimeKds? _sino;
     private static IEmissorFiscal? _emissor;
     private static ClienteTef? _tef;
+
+    /// <summary>
+    /// Sino do KDS (websocket). Um por processo; nasce no primeiro uso e vive
+    /// até o app fechar. Acelerador do polling, nunca substituto.
+    /// </summary>
+    public static RealtimeKds Sino(string loja)
+    {
+        if (_sino is null)
+        {
+            var n = Nuvem();
+            _sino = new RealtimeKds(Pdv.Nucleo.Nuvem.UrlPadrao, Pdv.Nucleo.Nuvem.AnonKey,
+                                    () => n.TokenAsync(), loja);
+            _sino.Iniciar();
+        }
+        return _sino;
+    }
 
     public static Nuvem Nuvem()
     {

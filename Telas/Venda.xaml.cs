@@ -57,6 +57,7 @@ public partial class Venda : UserControl
     public event Action? Deslogou;
     public event Action? FechouCaixa;
     public event Action? PediuKds;
+    public event Action? PediuChat;
 
     /// <summary>
     /// Quantas colunas a grade de produtos usa. Calculado pela largura real da área,
@@ -83,12 +84,34 @@ public partial class Venda : UserControl
         // O que esta tela desenha em C# (cards de categoria/produto, comanda) não
         // segue DynamicResource — quando o tema troca, os pintores rodam de novo.
         Aparencia.Mudou += TemaMudou;
+        // sino: pedido novo chega por websocket e adianta a puxada — o tick de
+        // 30 s continua embaixo como rede de segurança
+        Servicos.Sino(_loja ?? "").Ping += SinoTocou;
         Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); };
-        Unloaded += (_, _) => { _relogio?.Stop(); _relogio = null; Aparencia.Mudou -= TemaMudou; };
+        Unloaded += (_, _) =>
+        {
+            _relogio?.Stop(); _relogio = null;
+            Aparencia.Mudou -= TemaMudou;
+            Servicos.Sino(_loja ?? "").Ping -= SinoTocou;
+        };
     }
 
     private int _batidasKds;
     private bool _puxandoKds;
+
+    /// <summary>Sino (thread de fundo) → puxada imediata + notificação na UI.</summary>
+    private void SinoTocou() => Dispatcher.Invoke(() =>
+    {
+        if (_puxandoKds) return;
+        _puxandoKds = true;
+        _ = Nucleo.Kds.PuxarDaNuvemAsync(Servicos.Nuvem(), _loja)
+            .ContinueWith(tt =>
+            {
+                _puxandoKds = false;
+                if (tt.Status == TaskStatus.RanToCompletion && tt.Result > 0)
+                    Dispatcher.Invoke(() => NotificarPedidoNovo(tt.Result));
+            });
+    });
 
     private void TemaMudou()
     {
@@ -115,6 +138,8 @@ public partial class Venda : UserControl
     /// do modo automático, porque quem está no balcão sabe mais que o relógio.
     /// </summary>
     private void AbrirKds(object sender, RoutedEventArgs e) => PediuKds?.Invoke();
+
+    private void AbrirChat(object sender, RoutedEventArgs e) => PediuChat?.Invoke();
 
     private DispatcherTimer? _toastSome;
 

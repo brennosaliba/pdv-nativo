@@ -17,6 +17,7 @@
          do que ajudam num modelo append-only de dinheiro. -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
     <PackageReference Include="Dapper" Version="2.1.35" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <!-- QR do cupom da NFC-e. MIT, sem dependência nativa; o XamlQRCode devolve um
          DrawingBrush do WPF, então não puxa System.Drawing.Common junto. -->
@@ -31,11 +32,11 @@
        sem isso ele tenta compilar os fontes (e os obj/) deles junto, dando erro de
        atributo duplicado. -->
   <ItemGroup>
-    <Compile Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
-    <Page Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
-    <None Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
-    <EmbeddedResource Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
-    <ApplicationDefinition Remove="Pdv.Nucleo\**;Pdv.Testes\**" />
+    <Compile Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
+    <Page Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
+    <None Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
+    <EmbeddedResource Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
+    <ApplicationDefinition Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
   </ItemGroup>
 
 </Project>

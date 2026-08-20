@@ -145,9 +145,34 @@ public static class Kds
     public static bool Assumir(string ticketId) =>
         Avancar(ticketId, de: Recebido, para: Preparando, carimbo: "preparo_em");
 
-    /// <summary>Segundo toque: saiu do forno — vai pra coluna de coleta.</summary>
-    public static bool Liberar(string ticketId) =>
-        Avancar(ticketId, de: Preparando, para: Pronto, carimbo: "pronto_em");
+    /// <summary>
+    /// Segundo toque: saiu do forno — vai pra coluna de coleta. Pedido de
+    /// DELIVERY também enfileira o aviso pra nuvem (outbox): a ponte lê o
+    /// carimbo e dispara o readyToPickup no iFood. Fila, não chamada direta —
+    /// internet caída no momento do toque não pode engolir o sinal.
+    /// </summary>
+    public static bool Liberar(string ticketId)
+    {
+        if (!Avancar(ticketId, de: Preparando, para: Pronto, carimbo: "pronto_em"))
+            return false;
+
+        using var cx = Banco.Abrir();
+        var t = cx.QueryFirstOrDefault(
+            "SELECT origem, ref_id FROM kds_ticket WHERE id = @id", new { id = ticketId });
+        if (t is not null && (string)t.origem == "ifood")
+        {
+            // dedup por tipo+ref: liberar de novo (após desfazer manual no banco,
+            // por exemplo) não gera segundo aviso
+            cx.Execute("""
+                INSERT INTO outbox (tipo, ref_id, client_key, payload, criado_em)
+                SELECT 'kds_pronto', @r, 'kds_pronto:' || @r,
+                       json_object('order_id', @r), @em
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM outbox WHERE tipo = 'kds_pronto' AND ref_id = @r)
+                """, new { r = (string)t.ref_id, em = DateTime.Now.ToString("o") });
+        }
+        return true;
+    }
 
     /// <summary>Terceiro toque: o entregador levou (ou o cliente retirou). Sai do quadro.</summary>
     public static bool Entregar(string ticketId) =>

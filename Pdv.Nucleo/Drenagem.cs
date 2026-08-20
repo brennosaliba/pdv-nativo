@@ -180,6 +180,9 @@ public sealed class Drenagem : IDisposable
                     // levava os itens de graca E o cupom ficava resgatavel de novo, sem
                     // rastro. Agora o resgate e' duravel como o resto.
                     "cortesia_resgate" => await ResgatarCortesiaAsync((string)item.payload, token, ct).ConfigureAwait(false),
+                    // PRONTO do KDS: carimba kds_pronto_em na nuvem; a ponte no
+                    // servidor ve o carimbo e dispara o readyToPickup no iFood.
+                    "kds_pronto" => await EnviarKdsProntoAsync(refId, token, ct).ConfigureAwait(false),
                     // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
                     // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
                     // para o dead-letter abaixo depois de poucas tentativas.
@@ -644,6 +647,26 @@ public sealed class Drenagem : IDisposable
     /// "recusa permanente" (4xx) — colapsar tudo em null fazia um payload
     /// malformado (400) ou uma RPC renomeada (404) virar retry ETERNO e mudo.
     /// </summary>
+    private async Task<(bool? Ok, string? Erro)> EnviarKdsProntoAsync(string orderId, string token, CancellationToken ct)
+    {
+        try
+        {
+            var corpo = JsonSerializer.Serialize(new { _order_id = orderId });
+            var (status, resp) = await RpcAsync("pdv_kds_pronto", corpo, token, ct).ConfigureAwait(false);
+            if (status is >= 200 and < 300)
+            {
+                // "null" = o pedido nao existe na nuvem. Nao insiste: o ticket
+                // NASCEU da nuvem, entao isso so acontece se alguem apagou a
+                // linha - e re-tentar pra sempre nao a traz de volta.
+                return (resp?.Trim() == "null" || string.IsNullOrWhiteSpace(resp?.Trim()))
+                    ? (true, "pedido nao existe na nuvem; nada a marcar")
+                    : (true, null);
+            }
+            return (false, $"pdv_kds_pronto HTTP {status}: {resp?[..Math.Min(resp.Length, 160)]}");
+        }
+        catch (Exception ex) { return (false, "kds_pronto: " + ex.Message); }
+    }
+
     private async Task<(int Status, string? Corpo)> RpcAsync(string nome, string corpoJson, string token, CancellationToken ct)
     {
         try

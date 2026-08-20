@@ -1,0 +1,49 @@
+<UserControl x:Class="Pdv.Telas.ChatIfood"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf">
+    <!-- CHAT DO iFOOD: o widget só existe dentro do Gestor de Pedidos (não há
+         API pública de envio), então o Gestor mora aqui dentro num WebView2.
+         O perfil fica em ProgramData: loga UMA vez e a sessão sobrevive a
+         atualização do exe. A tela é mantida VIVA pelo MainWindow — trocar de
+         aba não derruba a conversa nem o login. -->
+    <Grid Background="{DynamicResource Fundo}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="{DynamicResource BarraDegrade}" Padding="20,12"
+                BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,0,1">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="💬" FontSize="20" VerticalAlignment="Center"/>
+                    <TextBlock Text="CHAT DO iFOOD" Foreground="{DynamicResource Texto}" FontSize="20"
+                               FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtEstado" Foreground="{DynamicResource TextoFraco}" FontSize="12"
+                               Margin="14,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button Click="Recarregar" Style="{StaticResource BotaoBarra}">
+                        <TextBlock Text="⟳ Recarregar"/>
+                    </Button>
+                    <Button Click="Voltar" Style="{StaticResource BotaoBarra}" FontWeight="Bold">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="←" FontSize="16" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Voltar ao caixa" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <wv2:WebView2 x:Name="Web" Grid.Row="1" Visibility="Collapsed"/>
+
+        <StackPanel x:Name="PainelErro" Grid.Row="1" HorizontalAlignment="Center"
+                    VerticalAlignment="Center" Visibility="Collapsed" MaxWidth="560">
+            <TextBlock Text="💬" FontSize="44" HorizontalAlignment="Center" Opacity="0.5"/>
+            <TextBlock x:Name="TxtErro" Foreground="{DynamicResource Texto}" FontSize="16"
+                       TextWrapping="Wrap" TextAlignment="Center" Margin="0,14,0,0"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

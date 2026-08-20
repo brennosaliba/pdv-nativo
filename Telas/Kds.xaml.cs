@@ -47,7 +47,11 @@ public partial class Kds : UserControl
         Unloaded += (_, _) => { _timer?.Stop(); _timer = null; };
         Aparencia.Mudou += Pintar;
         Unloaded += (_, _) => Aparencia.Mudou -= Pintar;
+        Servicos.Sino(loja).Ping += SinoTocou;
+        Unloaded += (_, _) => Servicos.Sino(loja).Ping -= SinoTocou;
     }
+
+    private void SinoTocou() => Dispatcher.Invoke(() => _ = PuxarAsync());
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
 

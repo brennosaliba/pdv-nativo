@@ -149,6 +149,39 @@ public static class TestesKds
             checar(vivo.Itens[0].Descricao == "DONUT ABACAXI",
                    "re-sync atualiza os itens de ticket ainda nao pronto");
             checar(vivo.Cliente == "Cliente B", "re-sync atualiza o cliente");
+
+            // ── PRONTO do delivery viaja pela OUTBOX (ponte dispara readyToPickup) ──
+            var tIf = Kds.DoDelivery("order-ready-1", "7777", null,
+                Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+            Kds.Assumir(tIf!);
+            Kds.Liberar(tIf!);
+            using (var cxq = Banco.Abrir())
+            {
+                checar(cxq.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM outbox WHERE tipo='kds_pronto' AND ref_id='order-ready-1'") == 1,
+                    "liberar delivery enfileira o pronto pra nuvem");
+                var antesBal = cxq.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM outbox WHERE tipo='kds_pronto'");
+                var tBal = Kds.DoBalcao(SemearVenda(arquivo, numero: 77));
+                if (tBal is not null) { Kds.Assumir(tBal); Kds.Liberar(tBal); }
+                checar(cxq.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM outbox WHERE tipo='kds_pronto'") == antesBal,
+                    "balcao pronto NAO avisa o iFood (nao e pedido de la)");
+            }
+            Kds.Entregar(tIf!);
+
+            // ── sino (Realtime): protocolo puro ─────────────────────────────
+            var quadro = RealtimeKds.MontarQuadro("realtime:kds:Loja X", "phx_join", "{\"a\":1}", "1");
+            checar(quadro.Contains("\"topic\":\"realtime:kds:Loja X\"")
+                && quadro.Contains("\"event\":\"phx_join\"")
+                && quadro.Contains("\"ref\":\"1\""),
+                "quadro phoenix sai com topico, evento e ref");
+            checar(RealtimeKds.EhSino(
+                "{\"event\":\"broadcast\",\"payload\":{\"event\":\"novo_pedido\",\"payload\":{\"order_id\":\"x\"}}}"),
+                "toque de sino e reconhecido");
+            checar(!RealtimeKds.EhSino("{\"event\":\"phx_reply\",\"payload\":{}}"),
+                "resposta de join NAO e sino");
+            checar(!RealtimeKds.EhSino("lixo{{{"), "quadro ilegivel nao derruba o cliente");
         }
         finally
         {

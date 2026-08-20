@@ -99,8 +99,25 @@ public partial class MainWindow : Window
         t.Deslogou += () => { _operador = null; _telaVenda = null; Roteia(); };
         t.FechouCaixa += () => { _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
         t.PediuKds += MostrarKds;
+        t.PediuChat += MostrarChat;
         _telaVenda = t;
         Conteudo.Content = t;
+    }
+
+    private Telas.ChatIfood? _telaChat;
+
+    /// <summary>
+    /// Chat do iFood: a tela nasce UMA vez e fica viva — trocar de aba não
+    /// derruba o login do Gestor nem a conversa aberta.
+    /// </summary>
+    private void MostrarChat()
+    {
+        if (_telaChat is null)
+        {
+            _telaChat = new Telas.ChatIfood();
+            _telaChat.Voltou += () => Conteudo.Content = _telaVenda;
+        }
+        Conteudo.Content = _telaChat;
     }
 
     /// <summary>
