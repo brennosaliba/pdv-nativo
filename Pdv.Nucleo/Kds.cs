@@ -16,10 +16,16 @@ public sealed record Ticket(
     string Status,          // recebido | preparando | pronto | cancelado
     DateTime CriadoEm,
     DateTime? PreparoEm,
-    DateTime? ProntoEm)
+    DateTime? ProntoEm,
+    DateTime? PreparoAte = null)
 {
     /// <summary>Há quanto tempo esse pedido está esperando. É o que decide a cor do card.</summary>
     public TimeSpan Espera => (ProntoEm ?? DateTime.Now) - CriadoEm;
+
+    /// <summary>Quanto falta até o prazo que o iFood prometeu (negativo = estourou).
+    /// É O MESMO relógio do Gestor — pedido do dono: os dois painéis não podem
+    /// contar tempos diferentes do mesmo pedido.</summary>
+    public TimeSpan? PrazoRestante => PreparoAte is { } p ? p - DateTime.Now : null;
 
     public IReadOnlyList<TicketItem> Itens =>
         JsonSerializer.Deserialize<List<TicketItem>>(ItensJson) ?? new();
@@ -33,7 +39,8 @@ public sealed record TicketItem(string Descricao, int Qtd, string? Observacao);
 /// card conta DAQUI, não da hora em que o PDV importou — senão pedido de 20 min
 /// nasce mostrando "agora" e a cozinha prioriza errado.</param>
 public sealed record PedidoDelivery(string OrderId, string Numero, string? Cliente,
-                                    string ItensJson, string Status, string? RecebidoEm = null);
+                                    string ItensJson, string Status, string? RecebidoEm = null,
+                                    string? PreparoAte = null);
 
 /// <summary>
 /// A fila de preparo do balcão.
@@ -90,12 +97,12 @@ public static class Kds
     /// <summary>Cria (ou reaproveita) o ticket de um pedido de delivery.</summary>
     public static string? DoDelivery(string orderId, string numeroVisivel,
                                      string? cliente, IEnumerable<TicketItem> itens,
-                                     DateTime? chegadaReal = null)
-        => Criar("ifood", orderId, numeroVisivel, cliente, itens.ToList(), chegadaReal);
+                                     DateTime? chegadaReal = null, DateTime? preparoAte = null)
+        => Criar("ifood", orderId, numeroVisivel, cliente, itens.ToList(), chegadaReal, preparoAte);
 
     private static string? Criar(string origem, string refId, string numero,
                                  string? cliente, List<TicketItem> itens,
-                                 DateTime? chegadaReal = null)
+                                 DateTime? chegadaReal = null, DateTime? preparoAte = null)
     {
         if (itens.Count == 0) return null;
 
@@ -107,8 +114,8 @@ public static class Kds
 
         var id = Guid.NewGuid().ToString();
         cx.Execute(
-            @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em)
-              VALUES (@id, @o, @r, @n, @c, @j, @s, @t)
+            @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em, preparo_ate)
+              VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pa)
               ON CONFLICT(origem, ref_id) DO NOTHING",
             new
             {
@@ -116,6 +123,7 @@ public static class Kds
                 j = JsonSerializer.Serialize(itens), s = Recebido,
                 // o relógio do card conta da CHEGADA no iFood quando conhecida
                 t = (chegadaReal ?? DateTime.Now).ToString("o"),
+                pa = preparoAte?.ToString("o"),
             });
 
         // O ON CONFLICT pode ter engolido o insert numa corrida com o polling do
@@ -315,6 +323,18 @@ public static class Kds
                 DespacharDelivery(p.OrderId);
                 continue;
             }
+            // PRONTO no Gestor: a cozinha já terminou POR LÁ. Aqui o card pula
+            // direto pra coluna de coleta — mostrar como "a preparar" era a
+            // confusão gigante que o dono viu no quadro.
+            if (p.Status.Equals("pronto", StringComparison.OrdinalIgnoreCase))
+            {
+                var itensPr = ItensDeJson(p.ItensJson);
+                if (itensPr.Count > 0)
+                    DoDelivery(p.OrderId, p.Numero, p.Cliente, itensPr,
+                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte));
+                PromoverProntoDelivery(p.OrderId);
+                continue;
+            }
             var itens = ItensDeJson(p.ItensJson);
             if (itens.Count == 0) continue;
 
@@ -324,7 +344,8 @@ public static class Kds
                 new { r = p.OrderId }) is not null;
             if (!existia)
             {
-                if (DoDelivery(p.OrderId, p.Numero, p.Cliente, itens, ChegadaLocal(p.RecebidoEm)) is not null)
+                if (DoDelivery(p.OrderId, p.Numero, p.Cliente, itens,
+                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte)) is not null)
                     novos++;
             }
             else
@@ -336,12 +357,14 @@ public static class Kds
                 cx.Execute(
                     @"UPDATE kds_ticket
                          SET itens_json = @j, cliente = @c, numero = @n,
-                             criado_em = coalesce(@em, criado_em)
+                             criado_em = coalesce(@em, criado_em),
+                             preparo_ate = coalesce(@pa, preparo_ate)
                        WHERE origem = 'ifood' AND ref_id = @r
                          AND status IN ('recebido','preparando')",
                     new { j = System.Text.Json.JsonSerializer.Serialize(itens),
                           c = p.Cliente, n = p.Numero, r = p.OrderId,
-                          em = ChegadaLocal(p.RecebidoEm)?.ToString("o") });
+                          em = ChegadaLocal(p.RecebidoEm)?.ToString("o"),
+                          pa = ChegadaLocal(p.PreparoAte)?.ToString("o") });
             }
         }
         return novos;
@@ -361,6 +384,17 @@ public static class Kds
     /// preparo vira cancelado (nunca foi produzido AQUI); PRONTO vira entregue
     /// (produzido e coletado — o tempo de preparo continua valendo).
     /// </summary>
+    /// <summary>Gestor marcou pronto: recebido/preparando pulam pra coluna de
+    /// coleta (a produção aconteceu do outro lado; a coleta ainda vai acontecer).</summary>
+    public static void PromoverProntoDelivery(string orderId)
+    {
+        using var cx = Banco.Abrir();
+        cx.Execute(
+            @"UPDATE kds_ticket SET status = @p, pronto_em = coalesce(pronto_em, @em)
+               WHERE origem = 'ifood' AND ref_id = @r AND status IN ('recebido','preparando')",
+            new { p = Pronto, r = orderId, em = DateTime.Now.ToString("o") });
+    }
+
     public static void DespacharDelivery(string orderId)
     {
         using var cx = Banco.Abrir();
@@ -393,5 +427,6 @@ public static class Kds
         r.cliente as string, (string)r.itens_json, (string)r.status,
         DateTime.Parse((string)r.criado_em),
         r.preparo_em is string p ? DateTime.Parse(p) : null,
-        r.pronto_em  is string q ? DateTime.Parse(q) : null);
+        r.pronto_em  is string q ? DateTime.Parse(q) : null,
+        r.preparo_ate is string pa ? DateTime.Parse(pa) : (DateTime?)null);
 }

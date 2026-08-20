@@ -165,6 +165,75 @@ public static class Promocoes
         return (melhor, nome);
     }
 
+    public sealed record ProdutoPromo(bool AtivaAgora, string Nome, string Quando);
+
+    /// <summary>
+    /// Os produtos que aparecem na categoria PROMOÇÃO do menu: tudo que alguma
+    /// promoção DENTRO DA VIGÊNCIA menciona por id. AtivaAgora diz se o dia e
+    /// a hora batem NESTE momento; Quando descreve a regra ("qui · 18:00–20:00")
+    /// para o card cinza explicar por que não vende agora.
+    /// (Alvo por categoria/todos fica de fora da listagem: enumeraria o cardápio
+    /// inteiro e a vitrine viraria ruído.)
+    /// </summary>
+    public static Dictionary<string, ProdutoPromo> ProdutosEmPromocao(
+        IEnumerable<Promo> promos, DateTime agora)
+    {
+        var r = new Dictionary<string, ProdutoPromo>();
+        var hoje = DateOnly.FromDateTime(agora);
+        var hora = TimeOnly.FromDateTime(agora);
+        var iso = DiaIso(agora);
+
+        foreach (var p in promos)
+        {
+            if (p.Inicio is not null && hoje < p.Inicio) continue;
+            if (p.Fim is not null && hoje > p.Fim) continue;
+
+            var horaOk = DentroDaJanela(p.Janelas, hora);
+            var ids = new HashSet<string>(p.ProdutoIds);
+            foreach (var reg in p.Regras)
+            {
+                foreach (var id in reg.ProdutoIds) ids.Add(id);
+                foreach (var id in reg.PrecosCent.Keys) ids.Add(id);
+            }
+
+            foreach (var id in ids)
+            {
+                bool diaOk = p.Regras.Count > 0
+                    ? p.Regras.Any(reg =>
+                        (reg.DiasIso.Length == 0 || reg.DiasIso.Contains(iso))
+                        && (reg.ProdutoIds.Count == 0 || reg.ProdutoIds.Contains(id)
+                            || reg.PrecosCent.ContainsKey(id)))
+                    : p.DiasSemana is not { Length: > 0 } || p.DiasSemana.Contains(iso);
+
+                var ativa = diaOk && horaOk;
+                if (!r.TryGetValue(id, out var atual) || (ativa && !atual.AtivaAgora))
+                    r[id] = new ProdutoPromo(ativa, p.Nome, DescreveQuando(p, id));
+            }
+        }
+        return r;
+    }
+
+    /// <summary>"qui · 18:00–20:00" — os dias/horários em que a promoção vale.</summary>
+    public static string DescreveQuando(Promo p, string produtoId)
+    {
+        string[] nomes = { "", "seg", "ter", "qua", "qui", "sex", "sáb", "dom" };
+        var dias = new SortedSet<int>();
+        if (p.Regras.Count > 0)
+            foreach (var reg in p.Regras.Where(reg =>
+                reg.ProdutoIds.Count == 0 || reg.ProdutoIds.Contains(produtoId)
+                || reg.PrecosCent.ContainsKey(produtoId)))
+                foreach (var d in reg.DiasIso) dias.Add(d);
+        else if (p.DiasSemana is not null)
+            foreach (var d in p.DiasSemana) dias.Add(d);
+
+        var partes = new List<string>();
+        if (dias.Count > 0)
+            partes.Add(string.Join(" ", dias.Where(d => d is >= 1 and <= 7).Select(d => nomes[d])));
+        if (p.Janelas.Count > 0)
+            partes.Add(string.Join(" e ", p.Janelas.Select(j => $"{j.Das:HH:mm}–{j.Ate:HH:mm}")));
+        return partes.Count == 0 ? "todos os dias" : string.Join(" · ", partes);
+    }
+
     private static bool AlvoBate(Promo p, string produtoId, string categoria) => p.Alvo switch
     {
         "produtos" => p.ProdutoIds.Contains(produtoId),

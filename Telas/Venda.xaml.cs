@@ -315,6 +315,7 @@ public partial class Venda : UserControl
             if (assinatura != _assinaturaPromo)
             {
                 _assinaturaPromo = assinatura;
+                _promoVitrine = Nucleo.Promocoes.ProdutosEmPromocao(_promos, DateTime.Now);
                 PintarProdutos();
             }
 
@@ -446,7 +447,10 @@ public partial class Venda : UserControl
     }
 
     // ── CATÁLOGO ────────────────────────────────────────────────────────────
+    private const string CategoriaPromo = "promoção";
+
     private List<Nucleo.Promocoes.Promo> _promos = new();
+    private Dictionary<string, Nucleo.Promocoes.ProdutoPromo> _promoVitrine = new();
     private string _assinaturaPromo = "";
 
     /// <summary>Preço efetivo AGORA (motor de promoções). Base intacta quando
@@ -465,6 +469,7 @@ public partial class Venda : UserControl
     {
         using var cx = Banco.Abrir();
         _promos = Nucleo.Promocoes.Carregar(cx);
+        _promoVitrine = Nucleo.Promocoes.ProdutosEmPromocao(_promos, DateTime.Now);
         foreach (var r in cx.Query("""
             SELECT id, plu, nome, categoria, preco_cent, unidade, ncm, cest, csosn, origem, foto_local
               FROM produto WHERE ativo = 1 ORDER BY categoria, nome
@@ -478,6 +483,15 @@ public partial class Venda : UserControl
 
         var cats = _catalogo.Select(p => p.Categoria).Distinct().OrderBy(c => c).ToList();
         foreach (var c in cats) _quantosPorCategoria[c] = _catalogo.Count(p => p.Categoria == c);
+
+        // vitrine de PROMOÇÃO no topo: só existe quando alguma promoção vigente
+        // menciona produto do catálogo — categoria vazia é pior que nenhuma
+        var emPromo = _catalogo.Count(pp => _promoVitrine.ContainsKey(pp.Id));
+        if (emPromo > 0)
+        {
+            cats.Insert(0, CategoriaPromo);
+            _quantosPorCategoria[CategoriaPromo] = emPromo;
+        }
         _categoriaAtual = cats.FirstOrDefault() ?? "";
         foreach (var c in cats) ListaCategorias.Items.Add(BotaoCategoria(c));
         RepintarCategorias();
@@ -492,6 +506,7 @@ public partial class Venda : UserControl
     private static (string icone, Color cor) Visual(string categoria)
     {
         var c = categoria.ToLowerInvariant();
+        if (c.Contains("promo")) return ("🏷️", Color.FromRgb(0xF2, 0x76, 0xA5));
         if (c.Contains("donut") || c.Contains("rosquin")) return ("🍩", Color.FromRgb(0xE8, 0x6A, 0x92));
         if (c.Contains("cookie") || c.Contains("biscoit")) return ("🍪", Color.FromRgb(0xC1, 0x8A, 0x4E));
         if (c.Contains("café") || c.Contains("cafe")) return ("☕", Color.FromRgb(0x8D, 0x6E, 0x5C));
@@ -610,7 +625,9 @@ public partial class Venda : UserControl
 
     private void PintarProdutos()
     {
-        var lista = _catalogo.Where(p => p.Categoria == _categoriaAtual).ToList();
+        var lista = _categoriaAtual == CategoriaPromo
+            ? _catalogo.Where(p => _promoVitrine.ContainsKey(p.Id)).ToList()
+            : _catalogo.Where(p => p.Categoria == _categoriaAtual).ToList();
 
         var (icone, cor) = Visual(_categoriaAtual);
         TxtIconeCategoria.Text = icone;
@@ -619,7 +636,42 @@ public partial class Venda : UserControl
         TxtContagem.Text = lista.Count == 1 ? "1 item" : $"{lista.Count} itens";
 
         ListaProdutos.Items.Clear();
-        foreach (var p in lista) ListaProdutos.Items.Add(_modoLista ? LinhaProduto(p) : CartaoProduto(p));
+        foreach (var p in lista)
+        {
+            var el = _modoLista ? LinhaProduto(p) : CartaoProduto(p);
+            // Na vitrine, promoção fora do dia/horário aparece CINZA e não vende:
+            // o cliente vê que existe (qui · 18:00–20:00) sem conseguir levar fora
+            // da regra — pedido do dono, e o que o balcão consegue explicar.
+            if (_categoriaAtual == CategoriaPromo
+                && _promoVitrine.TryGetValue(p.Id, out var vp) && !vp.AtivaAgora)
+            {
+                el.IsEnabled = false;
+                el.ToolTip = $"{vp.Nome} — válida {vp.Quando}";
+                var moldura = new Grid();
+                moldura.Children.Add(el);
+                var faixa = new Border
+                {
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Padding = new Thickness(0, 3, 0, 4),
+                    CornerRadius = new CornerRadius(0, 0, 13, 13),
+                    IsHitTestVisible = false,
+                };
+                faixa.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
+                var aviso = new TextBlock
+                {
+                    Text = $"fora do horário · {vp.Quando}",
+                    FontSize = 11, FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                };
+                aviso.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+                faixa.Child = aviso;
+                moldura.Children.Add(faixa);
+                ListaProdutos.Items.Add(moldura);
+                continue;
+            }
+            ListaProdutos.Items.Add(el);
+        }
         TxtSemProduto.Visibility = ListaProdutos.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 

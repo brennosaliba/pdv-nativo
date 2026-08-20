@@ -75,6 +75,8 @@ public static class Banco
             "ALTER TABLE outbox ADD COLUMN primeiro_erro_em TEXT",
             // 4a etapa do quadro do KDS (pronto -> entregue/coletado)
             "ALTER TABLE kds_ticket ADD COLUMN entregue_em TEXT",
+            // prazo estimado do iFood (dueAt): o relogio que o Gestor mostra
+            "ALTER TABLE kds_ticket ADD COLUMN preparo_ate TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

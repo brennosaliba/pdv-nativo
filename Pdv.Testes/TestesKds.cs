@@ -186,6 +186,31 @@ public static class TestesKds
                     "SELECT status FROM kds_ticket WHERE id=@id", new { id = tPr }) == "entregue",
                     "PRONTO aqui + concluido no Gestor = entregue (nao cancelado: foi produzido)");
 
+            // ── PRONTO no Gestor: o card pula direto pra coluna de coleta ───
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("gestor-pronto", "0500", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "pronto", null, null) });
+            var tg = Nucleo.Kds.Abertos().FirstOrDefault(x => x.RefId == "gestor-pronto");
+            checar(tg is not null && tg.Status == Kds.Pronto,
+                "pedido PRONTO no Gestor entra direto na coluna de coleta, nao em a-preparar");
+
+            // e quem ja estava a-preparar aqui e ficou pronto LA, move
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("gestor-pronto-2", "0501", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "faturado", null, null) });
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("gestor-pronto-2", "0501", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "pronto", null, null) });
+            checar(Nucleo.Kds.Abertos().First(x => x.RefId == "gestor-pronto-2").Status == Kds.Pronto,
+                "a-preparar daqui + pronto no Gestor = move pra coleta");
+
+            // ── prazo do iFood no relogio do card ───────────────────────────
+            var prazoIso = DateTimeOffset.UtcNow.AddMinutes(12).ToString("yyyy-MM-dd'T'HH:mm:sszzz");
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("com-prazo", "0502", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "faturado", null, prazoIso) });
+            var tp2 = Nucleo.Kds.Abertos().First(x => x.RefId == "com-prazo");
+            checar(tp2.PrazoRestante is { } pr && pr.TotalMinutes is > 10 and <= 12,
+                "o card conta o PRAZO do iFood (dueAt), o mesmo relogio do Gestor");
+            checar(Nucleo.Kds.Abertos().First(x => x.RefId == "gestor-pronto-2").PrazoRestante is null,
+                "pedido sem prazo continua no relogio decorrido");
+
             // ── PRONTO do delivery viaja pela OUTBOX (ponte dispara readyToPickup) ──
             var tIf = Kds.DoDelivery("order-ready-1", "7777", null,
                 Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));

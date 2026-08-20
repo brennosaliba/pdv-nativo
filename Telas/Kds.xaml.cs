@@ -145,12 +145,33 @@ public partial class Kds : UserControl
                               t.Origem == "ifood" ? "Ciano" : "Rosa"));
         cab.Children.Add(esq);
 
-        // a espera pinta a urgência: verde <10 min, amarelo <20, vermelho depois
-        var min = (int)t.Espera.TotalMinutes;
-        var corEspera = min < 10 ? "Ok" : min < 20 ? "Amarelo" : "Erro";
+        // O relógio é O MESMO do Gestor do iFood: o PRAZO (dueAt). "12 min"
+        // = falta isso pro prometido; "+3 min" = estourou. Pedido sem prazo
+        // (balcão) volta ao decorrido. Dois painéis, um relógio só.
+        string txtEspera; string corEspera;
+        if (t.PrazoRestante is { } prazo)
+        {
+            var m = (int)prazo.TotalMinutes;
+            if (m >= 0)
+            {
+                txtEspera = $"{m} min";
+                corEspera = m > 5 ? "Ok" : "Amarelo";
+            }
+            else
+            {
+                txtEspera = $"+{-m} min";
+                corEspera = "Erro";
+            }
+        }
+        else
+        {
+            var min = (int)t.Espera.TotalMinutes;
+            txtEspera = min < 1 ? "agora" : $"{min} min";
+            corEspera = min < 10 ? "Ok" : min < 20 ? "Amarelo" : "Erro";
+        }
         var espera = new TextBlock
         {
-            Text = min < 1 ? "agora" : $"{min} min",
+            Text = txtEspera,
             FontSize = 14, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
         };

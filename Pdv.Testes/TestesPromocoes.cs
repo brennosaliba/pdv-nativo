@@ -94,5 +94,26 @@ public static class TestesPromocoes
         (cent, _) = Promocoes.PrecoEfetivoCent(
             new[] { Promocoes.Parsear("""{"id":"x"}""")! }, "X", "c", 1000, quinta);
         checar(cent == 1000, "promocao sem tipo conhecido devolve o preco base");
+
+        // ── vitrine da categoria PROMOÇÃO ───────────────────────────────────
+        var vitrine = Promocoes.ProdutosEmPromocao(promos, quinta);
+        checar(vitrine.TryGetValue(donut, out var vq) && vq.AtivaAgora,
+            "vitrine: donuts do dia ATIVO na quinta");
+        vitrine = Promocoes.ProdutosEmPromocao(promos, quarta);
+        checar(vitrine.TryGetValue(donut, out var vqa) && !vqa.AtivaAgora,
+            "vitrine: na quarta aparece CINZA (fora do dia)");
+        checar(vqa!.Quando.Contains("qui"),
+            $"o card cinza explica QUANDO vale (mediu '{vqa.Quando}')");
+        vitrine = Promocoes.ProdutosEmPromocao(promos, new DateTime(2026, 10, 2, 12, 0, 0));
+        checar(!vitrine.ContainsKey(donut),
+            "fora da vigencia a promocao SOME da vitrine (nem cinza)");
+
+        // leve_x_pague_y tambem aparece na vitrine (produto citado por id)
+        vitrine = Promocoes.ProdutosEmPromocao(new[] { lxpy }, quinta);
+        checar(vitrine.ContainsKey("X"), "produto do leve-2-pague-1 aparece na vitrine");
+
+        // janela de hora controla o cinza
+        vitrine = Promocoes.ProdutosEmPromocao(new[] { happy }, new DateTime(2026, 8, 20, 19, 0, 0));
+        checar(vitrine.Count == 0, "promo de alvo 'todos' nao lista produto (viraria ruido)");
     }
 }
