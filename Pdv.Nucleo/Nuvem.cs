@@ -299,7 +299,9 @@ public sealed class Nuvem
                     e.TryGetProperty("itens", out var it) && it.ValueKind is JsonValueKind.Array or JsonValueKind.Object
                         ? it.GetRawText() : "[]",
                     e.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String
-                        ? st.GetString() ?? "" : ""));
+                        ? st.GetString() ?? "" : "",
+                    e.TryGetProperty("recebido_em", out var rc) && rc.ValueKind == JsonValueKind.String
+                        ? rc.GetString() : null));
             }
             return r;
         }

@@ -163,10 +163,12 @@ public partial class Kds : UserControl
         {
             // Desfazer: pegou o card errado com a cozinha cheia — volta pra fila
             // sem drama. Botão próprio (o Click interno não vaza pro card).
+            // 44px perdia pro dedo: o toque pegava o CARD e abria o pop-up
+            // de PRONTO. Alvo de verdade (76×56) + texto — o padrão da casa é 64px.
             var desfaz = new Button
             {
-                Content = "↩", FontSize = 16, MinHeight = 40, MinWidth = 44,
-                Margin = new Thickness(10, 0, 0, 0), Padding = new Thickness(0),
+                Content = "↩ voltar", FontSize = 13, MinHeight = 56, MinWidth = 76,
+                Margin = new Thickness(10, 0, 0, 0), Padding = new Thickness(8, 0, 8, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Devolver para A PREPARAR",
             };
@@ -234,8 +236,13 @@ public partial class Kds : UserControl
         raiz.Children.Add(rodape);
 
         b.Content = raiz;
-        b.Click += (_, _) =>
+        b.Click += (_, e) =>
         {
+            // CINTO além do e.Handled do botão interno: Click borbulha, e o
+            // Source denuncia de onde o clique nasceu — clique que não nasceu
+            // NO card não avança etapa. (O dono viu o desfazer abrir o pop-up
+            // de PRONTO em tela touch; nunca mais.)
+            if (!ReferenceEquals(e.Source, b)) return;
             switch (t.Status)
             {
                 case Nucleo.Kds.Recebido:

@@ -150,6 +150,42 @@ public static class TestesKds
                    "re-sync atualiza os itens de ticket ainda nao pronto");
             checar(vivo.Cliente == "Cliente B", "re-sync atualiza o cliente");
 
+            // ── o relogio conta da CHEGADA no iFood, nao da importacao ──────
+            var chegada30 = DateTimeOffset.UtcNow.AddMinutes(-30).ToString("yyyy-MM-dd'T'HH:mm:ss.ffffffzzz");
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("nuvem-relogio", "0303", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "faturado", chegada30) });
+            var tRel = Nucleo.Kds.Abertos().First(x => x.RefId == "nuvem-relogio");
+            checar(tRel.Espera.TotalMinutes is >= 29 and <= 31,
+                $"pedido de 30 min atras nasce com espera ~30 min (mediu {(int)tRel.Espera.TotalMinutes})");
+            // e o re-sync CONSERTA o relogio de ticket importado antes do fix
+            using (var cxr = Banco.Abrir())
+                cxr.Execute("UPDATE kds_ticket SET criado_em=@a WHERE ref_id='nuvem-relogio'",
+                    new { a = DateTime.Now.ToString("o") });
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("nuvem-relogio", "0303", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "faturado", chegada30) });
+            tRel = Nucleo.Kds.Abertos().First(x => x.RefId == "nuvem-relogio");
+            checar(tRel.Espera.TotalMinutes >= 29,
+                "re-sync corrige o relogio de card importado com hora errada");
+
+            // ── Gestor despachou/concluiu: o quadro larga o pedido ──────────
+            checar(Nucleo.Kds.Abertos().Any(x => x.RefId == "nuvem-relogio"),
+                "antes do despacho o card esta no quadro");
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("nuvem-relogio", "0303", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "despachado", chegada30) });
+            checar(Nucleo.Kds.Abertos().All(x => x.RefId != "nuvem-relogio"),
+                "pedido DESPACHADO pelo Gestor some do quadro (a preparar -> cancelado)");
+
+            // pronto aqui + concluido la = entregue (o tempo de preparo fica)
+            var tPr = Kds.DoDelivery("nuvem-pronto-la", "0304", null,
+                Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+            Kds.Assumir(tPr!); Kds.Liberar(tPr!);
+            Nucleo.Kds.SincronizarDelivery(new[] { new PedidoDelivery("nuvem-pronto-la", "0304", null,
+                "[{\"qtd\":1,\"descricao\":\"DONUT\"}]", "concluido", null) });
+            using (var cxe = Banco.Abrir())
+                checar(cxe.ExecuteScalar<string>(
+                    "SELECT status FROM kds_ticket WHERE id=@id", new { id = tPr }) == "entregue",
+                    "PRONTO aqui + concluido no Gestor = entregue (nao cancelado: foi produzido)");
+
             // ── PRONTO do delivery viaja pela OUTBOX (ponte dispara readyToPickup) ──
             var tIf = Kds.DoDelivery("order-ready-1", "7777", null,
                 Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
