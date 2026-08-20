@@ -181,6 +181,54 @@ public static class TestesKds
                 "toque de sino e reconhecido");
             checar(!RealtimeKds.EhSino("{\"event\":\"phx_reply\",\"payload\":{}}"),
                 "resposta de join NAO e sino");
+
+            // join confirmado/recusado (o zumbi da revisao adversarial)
+            checar(RealtimeKds.JulgarJoin(
+                "{\"event\":\"phx_reply\",\"ref\":\"7\",\"payload\":{\"status\":\"ok\"}}", "7") == true,
+                "join aceito e reconhecido pelo ref");
+            checar(RealtimeKds.JulgarJoin(
+                "{\"event\":\"phx_reply\",\"ref\":\"7\",\"payload\":{\"status\":\"error\"}}", "7") == false,
+                "join RECUSADO (token vencido) derruba a sessao em vez de virar zumbi");
+            checar(RealtimeKds.JulgarJoin(
+                "{\"event\":\"phx_reply\",\"ref\":\"9\",\"payload\":{\"status\":\"ok\"}}", "7") is null,
+                "reply de OUTRO ref nao conta como confirmacao");
+            checar(RealtimeKds.FechouCanal(
+                "{\"topic\":\"realtime:kds:X\",\"event\":\"phx_close\",\"payload\":{}}", "realtime:kds:X"),
+                "phx_close do nosso canal derruba a sessao (JWT venceu no meio)");
+            checar(!RealtimeKds.FechouCanal(
+                "{\"topic\":\"realtime:kds:OUTRA\",\"event\":\"phx_close\",\"payload\":{}}", "realtime:kds:X"),
+                "phx_close de canal alheio nao derruba o nosso");
+
+            // a fila drena o tipo novo: fonte unica vigia o filtro do SELECT
+            checar(Drenagem.TiposComHandler.Contains("kds_pronto"),
+                "kds_pronto esta no filtro da fila (era o furo: handler sem SELECT)");
+            using (var cxf = Banco.Abrir())
+            {
+                var naFila = cxf.ExecuteScalar<int>(
+                    $"SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL AND ref_id='order-ready-1' " +
+                    $"AND tipo IN ('{string.Join("','", Drenagem.TiposComHandler)}')");
+                checar(naFila == 1, "a linha kds_pronto e SELECIONAVEL pela varredura da fila");
+            }
+
+            // expiracao de 4h poupa quem esta EM PREPARO
+            var tVelho = Kds.DoDelivery("order-velho-preparando", "0405", null,
+                Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+            Kds.Assumir(tVelho!);
+            using (var cxv = Banco.Abrir())
+                cxv.Execute("UPDATE kds_ticket SET criado_em=@v WHERE id=@id",
+                    new { v = DateTime.Now.AddHours(-5).ToString("o"), id = tVelho });
+            Nucleo.Kds.SincronizarDelivery(Array.Empty<PedidoDelivery>());
+            checar(Nucleo.Kds.Abertos().Any(x => x.Id == tVelho),
+                "expiracao de 4h NAO cancela pedido que o cozinheiro ja assumiu");
+            var tVelho2 = Kds.DoDelivery("order-velho-recebido", "0406", null,
+                Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+            using (var cxv = Banco.Abrir())
+                cxv.Execute("UPDATE kds_ticket SET criado_em=@v WHERE id=@id",
+                    new { v = DateTime.Now.AddHours(-5).ToString("o"), id = tVelho2 });
+            Nucleo.Kds.SincronizarDelivery(Array.Empty<PedidoDelivery>());
+            checar(Nucleo.Kds.Abertos().All(x => x.Id != tVelho2),
+                "expiracao de 4h limpa pedido de 5h que NINGUEM tocou");
+            Kds.Liberar(tVelho!); Kds.Entregar(tVelho!);
             checar(!RealtimeKds.EhSino("lixo{{{"), "quadro ilegivel nao derruba o cliente");
         }
         finally

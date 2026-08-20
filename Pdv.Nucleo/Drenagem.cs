@@ -138,12 +138,11 @@ public sealed class Drenagem : IDisposable
             var enviados = 0;
             List<dynamic> fila;
             using (var cx = Banco.Abrir())
-                fila = cx.Query("""
+                fila = cx.Query($"""
                     SELECT id, tipo, ref_id, client_key, payload, tentativas, primeiro_erro_em
                       FROM outbox
                      WHERE enviado_em IS NULL
-                       AND tipo IN ('venda', 'nfce_vinculo', 'venda_cancelada', 'fechamento',
-                                    'movimento', 'caixa_sessao', 'cortesia_resgate')
+                       AND tipo IN ('{string.Join("','", TiposComHandler)}')
                      ORDER BY id
                      LIMIT 50
                     """).ToList();
@@ -647,6 +646,16 @@ public sealed class Drenagem : IDisposable
     /// "recusa permanente" (4xx) — colapsar tudo em null fazia um payload
     /// malformado (400) ou uma RPC renomeada (404) virar retry ETERNO e mudo.
     /// </summary>
+    /// <summary>
+    /// FONTE UNICA do filtro da fila. Tipo novo entra AQUI e ganha um ramo no
+    /// switch — na primeira versao o kds_pronto ganhou handler mas ficou fora
+    /// do SELECT hardcoded: a linha existia, o handler existia, e o aviso
+    /// nunca saiu do lugar. Revisao adversarial pegou; o teste agora vigia.
+    /// </summary>
+    public static readonly string[] TiposComHandler =
+        { "venda", "nfce_vinculo", "venda_cancelada", "fechamento",
+          "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto" };
+
     private async Task<(bool? Ok, string? Erro)> EnviarKdsProntoAsync(string orderId, string token, CancellationToken ct)
     {
         try
@@ -662,9 +671,14 @@ public sealed class Drenagem : IDisposable
                     ? (true, "pedido nao existe na nuvem; nada a marcar")
                     : (true, null);
             }
-            return (false, $"pdv_kds_pronto HTTP {status}: {resp?[..Math.Min(resp.Length, 160)]}");
+            // DesfechoDeStatus, como TODO handler daqui: rede caida/5xx/429 e
+            // transitorio (aguarda), nao recusa. A primeira versao devolvia
+            // false incondicional - 9 min de internet fora mandavam o aviso pro
+            // dead-letter, e o dedup do Liberar impedia re-enfileirar. PRONTO
+            // perdido em definitivo, com a fila existindo exatamente pra isso.
+            return DesfechoDeStatus(status, resp);
         }
-        catch (Exception ex) { return (false, "kds_pronto: " + ex.Message); }
+        catch (Exception ex) { return (null, "kds_pronto: " + ex.Message); }
     }
 
     private async Task<(int Status, string? Corpo)> RpcAsync(string nome, string corpoJson, string token, CancellationToken ct)

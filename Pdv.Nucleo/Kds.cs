@@ -153,24 +153,35 @@ public static class Kds
     /// </summary>
     public static bool Liberar(string ticketId)
     {
-        if (!Avancar(ticketId, de: Preparando, para: Pronto, carimbo: "pronto_em"))
-            return false;
-
+        // UM commit para as duas coisas: virar "pronto" E enfileirar o aviso.
+        // Separado (como na 1a versao), queda de energia entre os dois deixava
+        // o card verde na coluna de coleta com o iFood nunca avisado - e o
+        // segundo toque nao consertava, porque a transicao ja tinha acontecido.
         using var cx = Banco.Abrir();
+        using var tx = cx.BeginTransaction();
+
+        var mudou = cx.Execute("""
+            UPDATE kds_ticket SET status = @para, pronto_em = @em
+             WHERE id = @id AND status = @de
+            """, new { id = ticketId, de = Preparando, para = Pronto,
+                       em = DateTime.Now.ToString("o") }, tx) == 1;
+        if (!mudou) { tx.Rollback(); return false; }
+
         var t = cx.QueryFirstOrDefault(
-            "SELECT origem, ref_id FROM kds_ticket WHERE id = @id", new { id = ticketId });
+            "SELECT origem, ref_id FROM kds_ticket WHERE id = @id", new { id = ticketId }, tx);
         if (t is not null && (string)t.origem == "ifood")
         {
-            // dedup por tipo+ref: liberar de novo (após desfazer manual no banco,
-            // por exemplo) não gera segundo aviso
+            // dedup por tipo+ref: liberar de novo (apos desfazer manual no banco,
+            // por exemplo) nao gera segundo aviso
             cx.Execute("""
                 INSERT INTO outbox (tipo, ref_id, client_key, payload, criado_em)
                 SELECT 'kds_pronto', @r, 'kds_pronto:' || @r,
                        json_object('order_id', @r), @em
                 WHERE NOT EXISTS (
                     SELECT 1 FROM outbox WHERE tipo = 'kds_pronto' AND ref_id = @r)
-                """, new { r = (string)t.ref_id, em = DateTime.Now.ToString("o") });
+                """, new { r = (string)t.ref_id, em = DateTime.Now.ToString("o") }, tx);
         }
+        tx.Commit();
         return true;
     }
 
@@ -274,9 +285,12 @@ public static class Kds
         using (var cxLimpa = Banco.Abrir())
             cxLimpa.Execute(
                 @"UPDATE kds_ticket SET status = @s
-                   WHERE origem = 'ifood' AND status IN ('recebido','preparando')
+                   WHERE origem = 'ifood' AND status = 'recebido'
                      AND criado_em < @limite",
                 new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o") });
+        // SO 'recebido': expirar quem esta 'preparando' cancelaria um pedido
+        // que o cozinheiro ACABOU de assumir (chegou as 3h58 do limite e foi
+        // pego) - o card sumiria da tela no meio da producao.
 
         var novos = 0;
         foreach (var p in pedidos)
