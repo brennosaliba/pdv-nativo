@@ -211,6 +211,28 @@ public static class TestesKds
             checar(Nucleo.Kds.Abertos().First(x => x.RefId == "gestor-pronto-2").PrazoRestante is null,
                 "pedido sem prazo continua no relogio decorrido");
 
+            // ── reconciliacao de ORFAOS (o bug dos 12 cards presos) ─────────
+            // ticket local aberto cujo pedido SAIU da janela do feed: quando a
+            // nuvem diz 'concluido', o card tem que sumir — mesmo sem feed.
+            var tOrfao = Kds.DoDelivery("orfao-1", "0600", null,
+                Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+            checar(Nucleo.Kds.Abertos().Any(x => x.RefId == "orfao-1"), "orfao comeca no quadro");
+            Nucleo.Kds.AplicarStatusDaNuvem("orfao-1", "concluido", null);
+            checar(Nucleo.Kds.Abertos().All(x => x.RefId != "orfao-1"),
+                "nuvem diz CONCLUIDO -> orfao some do quadro (era o furo dos 12 cards)");
+
+            var tOrfao2 = Kds.DoDelivery("orfao-2", "0601", null,
+                Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+            Nucleo.Kds.AplicarStatusDaNuvem("orfao-2", "pronto",
+                DateTime.Now.AddMinutes(8));
+            var o2 = Nucleo.Kds.Abertos().First(x => x.RefId == "orfao-2");
+            checar(o2.Status == Kds.Pronto, "nuvem diz PRONTO -> orfao pula pra coleta");
+            checar(o2.PrazoRestante is { } opz && opz.TotalMinutes is > 6 and <= 8,
+                "a reconciliacao tambem preenche o prazo que faltava");
+            Nucleo.Kds.AplicarStatusDaNuvem("orfao-2", "faturado", null);
+            checar(Nucleo.Kds.Abertos().Any(x => x.RefId == "orfao-2"),
+                "status ainda ativo ('faturado') NAO mexe no ticket");
+
             // ── PRONTO do delivery viaja pela OUTBOX (ponte dispara readyToPickup) ──
             var tIf = Kds.DoDelivery("order-ready-1", "7777", null,
                 Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));

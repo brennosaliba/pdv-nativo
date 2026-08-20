@@ -348,6 +348,39 @@ public sealed class Nuvem
         catch { return -1; }
     }
 
+    /// <summary>Status atual (efetivo) de pedidos ESPECIFICOS - a reconciliacao
+    /// dos tickets que ficaram fora da janela do feed. Falha devolve lista
+    /// vazia: os tickets ficam como estao ate o proximo ciclo.</summary>
+    public async Task<List<(string OrderId, string Status, string? PreparoAte)>> StatusPedidosAsync(
+        IReadOnlyList<string> orderIds)
+    {
+        try
+        {
+            if (orderIds.Count == 0 || !await SessaoOkAsync().ConfigureAwait(false)) return new();
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_status");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _order_ids = orderIds }),
+                Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return new();
+
+            var r = new List<(string, string, string?)>();
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return new();
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                var id = e.TryGetProperty("order_id", out var i) ? i.GetString() : null;
+                var st = e.TryGetProperty("status", out var sv) ? sv.GetString() : null;
+                if (id is null || st is null) continue;
+                r.Add((id, st,
+                    e.TryGetProperty("preparo_ate", out var pa) && pa.ValueKind == JsonValueKind.String
+                        ? pa.GetString() : null));
+            }
+            return r;
+        }
+        catch { return new(); }
+    }
+
     private static Dapper.DynamicParameters BuildParams(List<string> ids, string agora)
     {
         var p = new Dapper.DynamicParameters();

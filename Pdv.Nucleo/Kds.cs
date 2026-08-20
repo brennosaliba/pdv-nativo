@@ -417,10 +417,54 @@ public static class Kds
             new { s = Cancelado, r = orderId });
     }
 
-    /// <summary>Puxa os pedidos do dia e alimenta a fila. Chamado pelo KDS e pelo
-    /// tick da Venda — falha de rede é silenciosa (a fila local continua valendo).</summary>
+    /// <summary>
+    /// Aplica um status vindo da nuvem num ticket local. É o coração da
+    /// reconciliação: o quadro NUNCA pode discordar do Gestor por mais que
+    /// um ciclo, mesmo pra pedido velho.
+    /// </summary>
+    public static void AplicarStatusDaNuvem(string orderId, string status, DateTime? preparoAte)
+    {
+        switch (status.ToLowerInvariant())
+        {
+            case "cancelado": CancelarDelivery(orderId); break;
+            case "despachado" or "concluido": DespacharDelivery(orderId); break;
+            case "pronto": PromoverProntoDelivery(orderId); break;
+        }
+        if (preparoAte is { } pa)
+        {
+            using var cx = Banco.Abrir();
+            cx.Execute(
+                @"UPDATE kds_ticket SET preparo_ate = @p
+                   WHERE origem = 'ifood' AND ref_id = @r AND preparo_ate IS NULL",
+                new { p = pa.ToString("o"), r = orderId });
+        }
+    }
+
+    /// <summary>
+    /// Puxa os pedidos do dia e alimenta a fila; depois RECONCILIA os tickets
+    /// abertos que ficaram FORA da janela do feed (o furo dos "12 cards de
+    /// pedido já entregue": a nuvem sabia, o quadro era surdo pra pedido
+    /// velho). Falha de rede é silenciosa — a fila local continua valendo.
+    /// </summary>
     public static async Task<int> PuxarDaNuvemAsync(Nuvem nuvem, string loja)
-        => SincronizarDelivery(await nuvem.BaixarPedidosDeliveryAsync(loja));
+    {
+        var feed = await nuvem.BaixarPedidosDeliveryAsync(loja).ConfigureAwait(false);
+        var novos = SincronizarDelivery(feed);
+
+        var noFeed = feed.Select(p => p.OrderId).ToHashSet();
+        List<string> orfaos;
+        using (var cx = Banco.Abrir())
+            orfaos = cx.Query<string>(
+                @"SELECT ref_id FROM kds_ticket
+                   WHERE origem = 'ifood' AND status IN ('recebido','preparando','pronto')")
+                .Where(r => !noFeed.Contains(r)).Take(100).ToList();
+
+        if (orfaos.Count > 0)
+            foreach (var (id, status, prazoIso) in await nuvem.StatusPedidosAsync(orfaos).ConfigureAwait(false))
+                AplicarStatusDaNuvem(id, status, ChegadaLocal(prazoIso));
+
+        return novos;
+    }
 
     private static Ticket Ler(dynamic r) => new(
         (string)r.id, (string)r.origem, (string)r.ref_id, (string)r.numero,
