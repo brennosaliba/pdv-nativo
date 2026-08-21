@@ -82,6 +82,32 @@ public static class CodigoTef
     /// é caso de conferência/estorno no balcão, com a transação gravada como órfã.
     /// </summary>
     public const string ValorDivergente = "valor_divergente";
+
+    /// <summary>PayGo: `Resp\intpos.sts` não veio — o PayGo Windows não está rodando ou a pasta está errada.</summary>
+    public const string TefNaoResponde = "tef_nao_responde";
+
+    /// <summary>PayGo: há transação pendente de CNF/NCN; nenhuma cobrança nova sai antes de resolvê-la.</summary>
+    public const string Pendencia = "pendencia";
+
+    /// <summary>PayGo: outra operação de TEF está em andamento neste terminal.</summary>
+    public const string Ocupado = "ocupado";
+}
+
+/// <summary>
+/// O que a tela de pagamento precisa de um TEF — e só isso. Hoje há dois: o da nuvem
+/// (<see cref="ClienteTef"/>, Smart TEF via edge function) e o PayGo Windows
+/// (<c>PayGo.ClientePayGo</c>, troca de arquivos local). A tela não sabe qual está
+/// atrás: cobra, recebe um <see cref="DesfechoTef"/>, grava `tef_transacao` pelos
+/// reports de andamento. Quem escolhe o provedor é <c>Servicos.Tef()</c>, por config.
+/// </summary>
+public interface IProvedorTef
+{
+    /// <summary>`nuvem` ou `paygo` — vai para auditoria e para a tela de configuração.</summary>
+    string Nome { get; }
+
+    /// <inheritdoc cref="ClienteTef.CobrarAsync"/>
+    Task<DesfechoTef> CobrarAsync(TipoTef tipo, Dinheiro valor, string? documento,
+        int parcelas, IProgress<AndamentoTef>? andamento, CancellationToken ct);
 }
 
 /// <summary>
@@ -199,8 +225,10 @@ public sealed record ResultadoLimpeza(LimpezaPos Estado, CartaoTef? Cartao, stri
 /// Renovação de sessão também não mora aqui: o token é de fora (`obterToken`) e quem renova é o
 /// delegate `GarantirSessao`, injetado pela tela. Este tipo só sabe pedir "garanta a sessão".
 /// </summary>
-public sealed class ClienteTef
+public sealed class ClienteTef : IProvedorTef
 {
+    public string Nome => "nuvem";
+
     /// <summary>Cadência do polling. Consultar mais rápido não adianta: quem demora é o cliente na maquininha.</summary>
     public const int IntervaloMs = 2_000;
 

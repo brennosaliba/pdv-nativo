@@ -51,7 +51,7 @@ public static class Servicos
     private static Nuvem? _nuvem;
     private static RealtimeKds? _sino;
     private static IEmissorFiscal? _emissor;
-    private static ClienteTef? _tef;
+    private static IProvedorTef? _tef;
 
     /// <summary>
     /// Sino do KDS (websocket). Um por processo; nasce no primeiro uso e vive
@@ -199,14 +199,58 @@ public static class Servicos
         _ => "nuvem",
     };
 
-    /// <summary>TEF; null quando o caixa ainda não tem maquininha ligada.</summary>
-    public static ClienteTef? Tef()
+    /// <summary>
+    /// TEF; null quando o caixa ainda não tem maquininha ligada.
+    /// `config['tef_provedor']`: `paygo` = PayGo Windows por troca de arquivos (local, offline);
+    /// qualquer outra coisa = Smart TEF pela nuvem (o caminho antigo).
+    /// </summary>
+    public static IProvedorTef? Tef()
     {
         lock (Trava)
         {
             if (_tef is not null) return _tef;
             using var cx = Banco.Abrir();
             if (Vendas.Config(cx, "tef_habilitado") != "1") return null;
+
+            if (Vendas.Config(cx, "tef_provedor") == "paygo")
+            {
+                var versao = typeof(Servicos).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+                var caps = int.TryParse(Vendas.Config(cx, "tef_paygo_capacidades"), out var c)
+                    ? c : ClientePayGo.CapacidadesPadrao;
+                _tef = new ClientePayGo(
+                    Vendas.Config(cx, "tef_paygo_pasta") ?? ClientePayGo.PastaPadrao,
+                    new OpcoesPayGo(
+                        Empresa: Vendas.Config(cx, "tef_paygo_empresa") ?? "American Day",
+                        NomeAutomacao: "PdvNativo",
+                        VersaoAutomacao: versao,
+                        // 738-000: a PayGo entrega na certificação. Vazio no sandbox do kit
+                        // é aceito; em produção sem ele a transação é negada — erro de config.
+                        Registro: Vendas.Config(cx, "tef_paygo_registro") ?? "",
+                        Capacidades: caps,
+                        // Pré-seleção de rede (010-000). Vazio = o PayGo abre o menu de redes.
+                        RedeCartao: Vendas.Config(cx, "tef_paygo_rede"),
+                        RedePix: Vendas.Config(cx, "tef_paygo_rede_pix")))
+                {
+                    Guardar = GuardarPayGo,
+                    CnpjDaRede = rede =>
+                    {
+                        using var c2 = Banco.Abrir();
+                        return Vendas.Config(c2, "tef_cnpj_rede_" + rede.Trim().ToLowerInvariant());
+                    },
+                    // "Transação pendente": só confirma o que ESTE caixa já deu como pago.
+                    ConhecidaConfirmada = ctrl =>
+                    {
+                        using var c3 = Banco.Abrir();
+                        return c3.ExecuteScalar<int>("""
+                            SELECT COUNT(*) FROM tef_transacao
+                             WHERE provedor = 'paygo' AND cod_controle = @C
+                               AND (situacao IN ('pago','cnf_sem_ack') OR payment_status = 'cnf_sem_ack')
+                            """, new { C = ctrl }) > 0;
+                    },
+                };
+                return _tef;
+            }
+
             var nuvem = Nuvem();
             _tef = new ClienteTef(ct => nuvem.TokenAsync(ct), UrlNuvem())
             {
@@ -215,6 +259,90 @@ public static class Servicos
             };
             return _tef;
         }
+    }
+
+    /// <summary>
+    /// A "memória não volátil" do PayGo: grava/atualiza a linha de `tef_transacao` ANTES do
+    /// CNF. False = o cliente desfaz a transação (NCN). Upsert por `id = charge_id`, a mesma
+    /// chave que a tela de pagamento usa — as duas escritas convergem na mesma linha.
+    /// </summary>
+    private static bool GuardarPayGo(TransacaoPayGo t)
+    {
+        try
+        {
+            var r = t.Resposta;
+            using var cx = Banco.Abrir();
+            cx.Execute("""
+                INSERT INTO tef_transacao (id, charge_id, payment_identifier, tipo, valor_cent, parcelas, situacao,
+                                           motivo, aut, cnpj_cred, bandeira, tband, nsu, terminal, provedor,
+                                           identificacao, cod_controle, rede, data_tef, hora_tef, vias_json,
+                                           resposta_txt, criado_em, atualizado_em)
+                VALUES (@Id,@Id,@Ident,@Tipo,@V,@P,@S,@M,@Aut,@Cnpj,@Band,@Tb,@Nsu,@Term,'paygo',
+                        @Ident,@Ctrl,@Rede,@Dt,@Hr,@Vias,@Txt,@Em,@Em)
+                ON CONFLICT(id) DO UPDATE SET
+                    situacao      = excluded.situacao,
+                    motivo        = COALESCE(excluded.motivo, motivo),
+                    aut           = COALESCE(excluded.aut, aut),
+                    cnpj_cred     = COALESCE(excluded.cnpj_cred, cnpj_cred),
+                    bandeira      = COALESCE(excluded.bandeira, bandeira),
+                    tband         = COALESCE(excluded.tband, tband),
+                    nsu           = COALESCE(excluded.nsu, nsu),
+                    terminal      = COALESCE(excluded.terminal, terminal),
+                    provedor      = 'paygo',
+                    identificacao = excluded.identificacao,
+                    cod_controle  = COALESCE(excluded.cod_controle, cod_controle),
+                    rede          = COALESCE(excluded.rede, rede),
+                    data_tef      = COALESCE(excluded.data_tef, data_tef),
+                    hora_tef      = COALESCE(excluded.hora_tef, hora_tef),
+                    vias_json     = COALESCE(excluded.vias_json, vias_json),
+                    resposta_txt  = COALESCE(excluded.resposta_txt, resposta_txt),
+                    atualizado_em = excluded.atualizado_em
+                """,
+                new
+                {
+                    Id = t.ChargeId, Ident = t.Identificacao, Tipo = t.Tipo.Codigo(), V = t.ValorCent,
+                    P = t.Parcelas, S = t.Situacao, M = t.Motivo,
+                    Aut = r?.Autorizacao, Cnpj = r?.Rede is { } rd ? ClientePayGo.CnpjConhecido(rd) : null,
+                    Band = r?.NomeCartao ?? r?.Produto, Tb = r is null ? null : ClientePayGo.TBand(r.Produto ?? r.NomeCartao),
+                    Nsu = r?.Nsu, Term = r?.Terminal, Ctrl = r?.CodigoControle, Rede = r?.Rede,
+                    Dt = r?.Data, Hr = r?.Hora, Vias = r?.ViasJson(), Txt = r?.Texto,
+                    Em = DateTime.Now.ToString("o"),
+                });
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Religamento do PayGo: transações aprovadas que ficaram sem CNF/NCN, e resposta órfã na
+    /// pasta. Venda gravada (`venda_id`) → CNF; sem venda → NCN; CNF sem ack → reenvia.
+    /// Devolve quantas resolveu; 0 quando o provedor não é PayGo.
+    /// </summary>
+    public static async Task<int> ResolverPendenciasTefAsync()
+    {
+        if (Tef() is not ClientePayGo cli) return 0;
+
+        var pendentes = new List<(TransacaoPayGo, bool)>();
+        using (var cx = Banco.Abrir())
+        {
+            var linhas = cx.Query("""
+                SELECT id, identificacao, tipo, valor_cent, parcelas, situacao, payment_status, venda_id, resposta_txt
+                  FROM tef_transacao
+                 WHERE provedor = 'paygo'
+                   AND (situacao IN ('aprovada','cnf_sem_ack') OR payment_status = 'cnf_sem_ack')
+                """).ToList();
+            foreach (var l in linhas)
+            {
+                var tipo = TipoTefExtensoes.Analisar((string?)l.tipo) ?? TipoTef.Credito;
+                var situacao = (string)l.situacao == "pago" && (string?)l.payment_status == "cnf_sem_ack"
+                    ? "cnf_sem_ack" : (string)l.situacao;
+                var tx = new TransacaoPayGo((string)l.id, (string?)l.identificacao ?? "", tipo,
+                    (long)l.valor_cent, (int)(long)l.parcelas, situacao,
+                    RespostaPayGo.Analisar((string?)l.resposta_txt));
+                pendentes.Add((tx, l.venda_id is string v && v.Length > 0));
+            }
+        }
+        return await cli.ResolverPendenciasAsync(pendentes);
     }
 
     /// <summary>

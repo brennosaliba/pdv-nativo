@@ -66,6 +66,11 @@ public partial class App : Application
         // O emissor fiscal local nasce com o PDV e morre com ele. Janela solta de
         // terminal, alguém fecha — e a loja fica sem nota sem ninguém saber por quê.
         Agente.IniciarVigia();
+
+        // TEF PayGo: transação aprovada que ficou sem CNF/NCN (queda de energia, app
+        // fechado) é resolvida AQUI, sozinha — venda gravada → confirma; sem venda →
+        // desfaz. A spec proíbe deixar o operador decidir o status.
+        _ = Task.Run(async () => { try { await Servicos.ResolverPendenciasTefAsync(); } catch { } });
         base.OnStartup(e);
     }
 

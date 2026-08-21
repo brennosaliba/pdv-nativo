@@ -77,6 +77,17 @@ public static class Banco
             "ALTER TABLE kds_ticket ADD COLUMN entregue_em TEXT",
             // prazo estimado do iFood (dueAt): o relogio que o Gestor mostra
             "ALTER TABLE kds_ticket ADD COLUMN preparo_ate TEXT",
+            // TEF PayGo (troca de arquivos): two-phase commit precisa do código de
+            // controle (027) e da identificação (001) para CNF/NCN no religamento; as
+            // vias e a resposta crua ficam para reimpressão e auditoria.
+            "ALTER TABLE tef_transacao ADD COLUMN provedor TEXT",
+            "ALTER TABLE tef_transacao ADD COLUMN identificacao TEXT",
+            "ALTER TABLE tef_transacao ADD COLUMN cod_controle TEXT",
+            "ALTER TABLE tef_transacao ADD COLUMN rede TEXT",
+            "ALTER TABLE tef_transacao ADD COLUMN data_tef TEXT",
+            "ALTER TABLE tef_transacao ADD COLUMN hora_tef TEXT",
+            "ALTER TABLE tef_transacao ADD COLUMN vias_json TEXT",
+            "ALTER TABLE tef_transacao ADD COLUMN resposta_txt TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

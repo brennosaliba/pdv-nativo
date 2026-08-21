@@ -983,6 +983,13 @@ Console.WriteLine();
 Console.WriteLine("--- Promocoes (motor de preco) ---");
 TestesPromocoes.Rodar((cond, nome) => Check("promo: " + nome, cond));
 
+// -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
+// Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
+// religamento. Dinheiro que entra sem passar pela gaveta — de novo.
+Console.WriteLine();
+Console.WriteLine("--- TEF PayGo (troca de arquivos simulada) ---");
+TestesPayGo.Rodar((cond, nome) => Check("paygo: " + nome, cond));
+
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }

@@ -32,7 +32,7 @@ public partial class Pagamento : UserControl
     private readonly IReadOnlyList<LinhaVenda> _itens;
     private readonly Dinheiro _total;
     private readonly IEmissorFiscal _emissor;
-    private readonly ClienteTef? _tef;
+    private readonly IProvedorTef? _tef;
     private readonly string _loja;
     private readonly string? _lojaId;
 
@@ -59,7 +59,7 @@ public partial class Pagamento : UserControl
     public event Action<DesfechoVenda>? Encerrou;
 
     public Pagamento(Operador operador, Sessao sessao, IReadOnlyList<LinhaVenda> itens,
-        IEmissorFiscal emissor, ClienteTef? tef, string loja, string? lojaId)
+        IEmissorFiscal emissor, IProvedorTef? tef, string loja, string? lojaId)
     {
         InitializeComponent();
         _operador = operador;
@@ -466,10 +466,10 @@ public partial class Pagamento : UserControl
             cx.Execute("""
                 UPDATE tef_transacao SET situacao=@S, motivo=@M, payment_identifier=COALESCE(@Pid, payment_identifier),
                                          aut=@Aut, cnpj_cred=@Cnpj, bandeira=@Band, tband=@Tb, nsu=@Nsu,
-                                         terminal=@Term, atualizado_em=@Em
+                                         terminal=@Term, payment_status=COALESCE(@Ps, payment_status), atualizado_em=@Em
                  WHERE charge_id=@Ch
                 """,
-                new { S = situacao, M = d.Motivo, Pid = d.PaymentIdentifier, Ch = d.ChargeId,
+                new { S = situacao, M = d.Motivo, Pid = d.PaymentIdentifier, Ch = d.ChargeId, Ps = d.PaymentStatus,
                       Aut = d.Cartao?.CAut, Cnpj = d.Cartao?.Cnpj, Band = d.Cartao?.Bandeira,
                       Tb = d.Cartao?.TBand, Nsu = d.Cartao?.Nsu, Term = d.Cartao?.Terminal,
                       Em = DateTime.Now.ToString("o") });
