@@ -40,6 +40,23 @@ public partial class Configuracao : UserControl
         BlocoJanelaTema.Visibility = CboTema.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
         _carregandoTema = false;
 
+        // TEF: também é preferência da MÁQUINA (qual maquininha/PayGo este caixa usa) —
+        // carrega sempre e reabre preenchido.
+        CboTef.SelectedIndex = Vendas.Config(cx, "tef_habilitado") != "1" ? 0
+            : Vendas.Config(cx, "tef_provedor") == "paygo" ? 2 : 1;
+        TxtPayGoPasta.Text = Vendas.Config(cx, "tef_paygo_pasta", "");
+        TxtPayGoRegistro.Text = Vendas.Config(cx, "tef_paygo_registro", "");
+        TxtPayGoEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
+        TxtPayGoRede.Text = Vendas.Config(cx, "tef_paygo_rede", "");
+        TxtPayGoRedePix.Text = Vendas.Config(cx, "tef_paygo_rede_pix", "");
+        ChkPayGoVias.IsChecked = Vendas.Config(cx, "tef_paygo_imprimir_vias", "1") != "0";
+        ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
+        TxtTefSerial.Text = Vendas.Config(cx, "tef_serial_pos", "");
+        PintarBlocosTef();
+        // Testar/ADM gravam as chaves para rodar com o que está na tela; se o operador sair
+        // por "Voltar" sem salvar, volta TUDO ao que era (senão "testei e o caixa ligou o PayGo").
+        foreach (var k in ChavesTef) _tefOriginal[k] = Vendas.Config(cx, k);
+
         if (_jaConfigurado)
         {
             var t = cx.QueryFirst("SELECT loja_nome, cnpj, serie_nfce, ambiente, api_base FROM terminal LIMIT 1");
@@ -668,6 +685,8 @@ public partial class Configuracao : UserControl
             else Vendas.GravarConfig(cx, "impressora", impressora);
             Vendas.GravarConfig(cx, "modo_fiscal", modoRecibo ? "recibo" : "nfce");
             Vendas.GravarConfig(cx, "imprimir_automatico", ChkImprimirAuto.IsChecked == false ? "0" : "1");
+            GravarTef(cx);
+            _tefSalvo = true;
 
             // Segredos fora do banco e cifrados pela máquina (DPAPI). Em produção o
             // certificado é obrigatório — sem ele não sai nota.
@@ -697,6 +716,132 @@ public partial class Configuracao : UserControl
         {
             TxtErro.Text = ex.Message;
         }
+    }
+
+    // ── TEF ─────────────────────────────────────────────────────────────────
+
+    private static readonly string[] ChavesTef =
+    {
+        "tef_habilitado", "tef_provedor", "tef_paygo_pasta", "tef_paygo_registro", "tef_paygo_empresa",
+        "tef_paygo_rede", "tef_paygo_rede_pix", "tef_paygo_imprimir_vias", "tef_perguntar_parcelas", "tef_serial_pos",
+    };
+    private readonly Dictionary<string, string?> _tefOriginal = new();
+    private bool _tefGravadoPeloTeste;   // Testar/ADM gravaram sem Salvar
+    private bool _tefSalvo;              // Salvar passou por GravarTef
+
+    /// <summary>Voltar sem salvar depois de Testar/ADM: restaura as chaves TEF como estavam.</summary>
+    private void RestaurarTefSeNaoSalvou()
+    {
+        if (!_tefGravadoPeloTeste || _tefSalvo) return;
+        try
+        {
+            using var cx = Banco.Abrir();
+            foreach (var (k, v) in _tefOriginal)
+            {
+                if (v is null) cx.Execute("DELETE FROM config WHERE chave=@C", new { C = k });
+                else Vendas.GravarConfig(cx, k, v);
+            }
+            Servicos.RecarregarTef();
+        }
+        catch { /* melhor esforço: o pior caso é a config do teste ficar — e ela está na tela */ }
+    }
+
+    /// <summary>Bloqueia Salvar/Voltar/provedor enquanto um comando TEF (ATV/ADM) está em voo — trocar o provedor com o PayGo ocupado deixaria dois clientes na mesma pasta.</summary>
+    private void TravarTef(bool ocupado)
+    {
+        BtnTestarPayGo.IsEnabled = !ocupado;
+        BtnMenuPayGo.IsEnabled = !ocupado;
+        BtnSalvar.IsEnabled = !ocupado;
+        BtnVoltar.IsEnabled = !ocupado;
+        CboTef.IsEnabled = !ocupado;
+    }
+
+    /// <summary>
+    /// Chaves `tef_*` em `config` — é exatamente o que Servicos.Tef() e Caixa.FormasContadas
+    /// leem. Campo em branco APAGA a chave (o cliente usa o padrão dele). No fim, zera o cache
+    /// do provedor: salvar sem isso era "salvou mas não mudou" até reiniciar o PDV.
+    /// </summary>
+    private void GravarTef(SqliteConnection cx)
+    {
+        var modo = CboTef.SelectedIndex;
+        Vendas.GravarConfig(cx, "tef_habilitado", modo <= 0 ? "0" : "1");
+        Vendas.GravarConfig(cx, "tef_provedor", modo == 2 ? "paygo" : "nuvem");
+        void Chave(string chave, string valor)
+        {
+            valor = valor.Trim();
+            if (valor.Length == 0) cx.Execute("DELETE FROM config WHERE chave=@C", new { C = chave });
+            else Vendas.GravarConfig(cx, chave, valor);
+        }
+        Chave("tef_paygo_pasta", TxtPayGoPasta.Text);
+        Chave("tef_paygo_registro", TxtPayGoRegistro.Text);
+        Chave("tef_paygo_empresa", TxtPayGoEmpresa.Text);
+        Chave("tef_paygo_rede", TxtPayGoRede.Text);
+        Chave("tef_paygo_rede_pix", TxtPayGoRedePix.Text);
+        Vendas.GravarConfig(cx, "tef_paygo_imprimir_vias", ChkPayGoVias.IsChecked == false ? "0" : "1");
+        Vendas.GravarConfig(cx, "tef_perguntar_parcelas", ChkTefParcelas.IsChecked == true ? "1" : "0");
+        Chave("tef_serial_pos", TxtTefSerial.Text);
+        Servicos.RecarregarTef();
+    }
+
+    private void TefMudou(object sender, SelectionChangedEventArgs e) => PintarBlocosTef();
+
+    /// <summary>Revelação progressiva do bloco do provedor. Guard de null: o ComboBox dispara no InitializeComponent.</summary>
+    private void PintarBlocosTef()
+    {
+        if (BlocoPayGo is null || BlocoTefNuvem is null || CboTef is null) return;
+        BlocoPayGo.Visibility = CboTef.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        BlocoTefNuvem.Visibility = CboTef.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// ATV contra a pasta digitada. Grava as chaves TEF antes (o teste é do que está NA TELA,
+    /// como o de impressão) — o Salvar exige pareamento/CNPJ e não pode ser pré-requisito de
+    /// um teste de comunicação.
+    /// </summary>
+    private async void TestarPayGo(object sender, RoutedEventArgs e)
+    {
+        TravarTef(true);
+        StatusTef("Chamando o PayGo (ATV)… até 7 s.", null);
+        try
+        {
+            if (CboTef.SelectedIndex != 2) { StatusTef("Selecione \"PayGo Windows\" acima para testar.", "Erro"); return; }
+            using (var cx = Banco.Abrir()) GravarTef(cx);
+            _tefGravadoPeloTeste = true;
+            if (Servicos.PayGo() is not { } cli) { StatusTef("TEF desligado — selecione o PayGo e tente de novo.", "Erro"); return; }
+            var ok = await cli.AtivoAsync(CancellationToken.None);
+            StatusTef(ok
+                ? $"✓ PayGo respondeu em {cli.PastaReq} — pronto para cobrar. (Salve para manter esta configuração.)"
+                : $"✗ {ClientePayGo.MsgTefNaoResponde} Pasta: {cli.PastaReq}. Confira se o PayGo Windows está aberto e se a pasta é a mesma configurada nele.",
+                ok ? "Ok" : "Erro");
+        }
+        catch (Exception ex) { StatusTef("✗ " + ex.Message, "Erro"); }
+        finally { TravarTef(false); }
+    }
+
+    /// <summary>Menu administrativo do PayGo (teste de comunicação, relatórios, cancelamento pelo menu). O operador navega NA TELA DO PAYGO.</summary>
+    private async void MenuPayGo(object sender, RoutedEventArgs e)
+    {
+        TravarTef(true);
+        StatusTef("Menu administrativo aberto no PayGo — siga na tela dele. O PDV espera a operação terminar. " +
+                  "(Cancelamento de VENDA: use TEF → Estornar na tela do caixa, que cancela a venda junto.)", null);
+        try
+        {
+            if (CboTef.SelectedIndex != 2) { StatusTef("Selecione \"PayGo Windows\" acima.", "Erro"); return; }
+            using (var cx = Banco.Abrir()) GravarTef(cx);
+            _tefGravadoPeloTeste = true;
+            if (Servicos.PayGo() is not { } cli) { StatusTef("TEF desligado — selecione o PayGo e tente de novo.", "Erro"); return; }
+            var d = await cli.AdministrativaAsync(CancellationToken.None);
+            StatusTef(d.Pago ? "✓ Operação administrativa concluída. " + (d.Motivo ?? "") : "✗ " + d.MensagemParaTela,
+                d.Pago ? "Ok" : "Erro");
+        }
+        catch (Exception ex) { StatusTef("✗ " + ex.Message, "Erro"); }
+        finally { TravarTef(false); }
+    }
+
+    private void StatusTef(string texto, string? tom)
+    {
+        TxtStatusTef.Text = texto;
+        TxtStatusTef.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[tom ?? "TextoFraco"];
     }
 
     /// <summary>
@@ -732,5 +877,9 @@ public partial class Configuracao : UserControl
         if (CboTema.SelectedIndex == 2) Aparencia.Aplicar(Aparencia.Resolver(cx));
     }
 
-    private void Voltar(object sender, RoutedEventArgs e) => Concluiu?.Invoke();
+    private void Voltar(object sender, RoutedEventArgs e)
+    {
+        RestaurarTefSeNaoSalvou();
+        Concluiu?.Invoke();
+    }
 }

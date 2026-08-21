@@ -208,6 +208,7 @@ public static class Servicos
     {
         lock (Trava)
         {
+            if (_tefVencido && _tef is ClientePayGo { Ocupado: false }) { _tef = null; _tefVencido = false; }
             if (_tef is not null) return _tef;
             using var cx = Banco.Abrir();
             if (Vendas.Config(cx, "tef_habilitado") != "1") return null;
@@ -260,6 +261,9 @@ public static class Servicos
                             """, new { I = ident }) > 0;
                     },
                     // Trilha do two-phase (a PayGo pede log): CNF/NCN enviados/acusados, órfãs desfeitas.
+                    // Comprovante ANTES do CNF: a impressão decide o commit (spec). Falhou e o
+                    // operador desistiu → o cliente manda NCN e a venda não é cobrada.
+                    ImprimirComprovante = ImprimirComprovantePayGoAsync,
                     Auditar = detalhe =>
                     {
                         try
@@ -281,6 +285,148 @@ public static class Servicos
             };
             return _tef;
         }
+    }
+
+    /// <summary>
+    /// Zera o cache do TEF: a Configuração acabou de gravar chaves `tef_*` e o provedor tem
+    /// que ser reconstruído com elas. Só se chama FORA de venda (a tela de Pagamento captura a
+    /// instância no Finalizar e a Configuração só é alcançável do Login) — trocar a instância
+    /// no meio de uma cobrança deixaria dois clientes disputando a pasta do PayGo.
+    /// </summary>
+    public static void RecarregarTef()
+    {
+        lock (Trava)
+        {
+            // Comando em voo (ADM/ATV disparado pela própria Configuração, reenvio do boot):
+            // trocar a instância agora deixaria DUAS disputando a pasta do PayGo — uma
+            // apagaria o .001 que a outra espera. Marca como vencida e troca no próximo Tef()
+            // assim que a atual desocupar.
+            if (_tef is ClientePayGo { Ocupado: true }) { _tefVencido = true; return; }
+            _tef = null;
+            _tefVencido = false;
+        }
+    }
+
+    /// <summary>Config mudou com o provedor ocupado: o próximo Tef() com a instância livre reconstrói.</summary>
+    private static bool _tefVencido;
+
+    /// <summary>O provedor atual, se for o PayGo (estorno/ADM/reimpressão não estão em IProvedorTef).</summary>
+    public static ClientePayGo? PayGo() => Tef() as ClientePayGo;
+
+    /// <summary>
+    /// Garante a linha original como 'estornada' depois de um CNC aprovado. O cliente já grava
+    /// isso no fluxo normal; aqui é cinto e suspensório para a contagem de "restantes" do
+    /// estorno (e para o cancelamento feito pelo menu do PayGo, que o cliente não vê). Só mexe
+    /// em linha paygo 'pago' — nunca regride outro estado.
+    /// </summary>
+    public static void MarcarEstornada(string tefId, string motivo)
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            cx.Execute("""
+                UPDATE tef_transacao SET situacao = 'estornada', payment_status = 'estornada',
+                       motivo = COALESCE(motivo, @M), atualizado_em = @Em
+                 WHERE id = @Id AND provedor = 'paygo' AND situacao = 'pago'
+                """, new { Id = tefId, M = motivo, Em = DateTime.Now.ToString("o") });
+        }
+        catch { /* a auditoria do estorno já registrou; não derrubar a tela */ }
+    }
+
+    /// <summary>
+    /// A operação administrativa `chargeId` (linha `paygo-adm-&lt;id&gt;`) foi um CANCELAMENTO de
+    /// venda pelo menu do PayGo? Heurística sobre a resposta guardada: aprovada, com valor e
+    /// com NSU original (025) ou operação (730) diferente de venda. Devolve (NSU da venda
+    /// original, valor) ou null. A tela usa para cancelar a venda correspondente.
+    /// </summary>
+    public static (string Nsu, long ValorCent)? CancelamentoNoAdm(string? chargeId)
+    {
+        if (string.IsNullOrEmpty(chargeId)) return null;
+        try
+        {
+            using var cx = Banco.Abrir();
+            var txt = cx.ExecuteScalar<string?>("SELECT resposta_txt FROM tef_transacao WHERE id = @Id", new { Id = chargeId });
+            if (txt is null) return null;
+            var r = RespostaPayGo.Analisar(txt);
+            if (!r.Aprovada || (r.ValorCent ?? 0) <= 0) return null;
+            r.Campos.TryGetValue("025-000", out var nsuOriginal);
+            r.Campos.TryGetValue("730-000", out var operacao);
+            var pareceCancelamento = !string.IsNullOrWhiteSpace(nsuOriginal)
+                                     || (!string.IsNullOrWhiteSpace(operacao) && operacao.Trim() != "1" && operacao.Trim() != "01");
+            if (!pareceCancelamento) return null;
+            var nsu = !string.IsNullOrWhiteSpace(nsuOriginal) ? nsuOriginal.Trim() : r.Nsu;
+            return nsu is null ? null : (nsu, r.ValorCent!.Value);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Vias a imprimir, na ordem em que saem: cliente, estabelecimento. `737-000` (1 só cliente,
+    /// 2 só estabelecimento, 3 ambas) manda; sem as diferenciadas, vale a reduzida ou a única.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<string>> ViasParaImprimir(RespostaPayGo r)
+    {
+        var vias = r.Vias ?? 3;
+        var b = new List<IReadOnlyList<string>>();
+        if (vias == 0) return b;   // 737 = 0: "não há comprovante" — nada sai, e o CNF não depende de papel
+        if (vias != 2 && r.ViaCliente.Count > 0) b.Add(r.ViaCliente);
+        if (vias != 1 && r.ViaEstabelecimento.Count > 0) b.Add(r.ViaEstabelecimento);
+        if (b.Count == 0 && r.CupomReduzido.Count > 0) b.Add(r.CupomReduzido);
+        if (b.Count == 0 && r.ViaUnica.Count > 0) b.Add(r.ViaUnica);
+        return b;
+    }
+
+    /// <summary>
+    /// Hook do two-phase do PayGo: imprime as vias do comprovante e diz se SAÍRAM. Falhou →
+    /// pergunta ao operador se tenta de novo; "desistir" devolve false e o cliente manda NCN
+    /// (o cliente não é cobrado; a tela mostra "Transação TEF cancelada: Rede/NSU/Valor").
+    /// `tef_paygo_imprimir_vias = 0` → este terminal não imprime comprovante (devolve true:
+    /// nada pode falhar). Roda FORA da thread de UI (dentro do cliente) — diálogo via Dispatcher.
+    /// </summary>
+    private static async Task<bool> ImprimirComprovantePayGoAsync(TransacaoPayGo t)
+    {
+        bool liga;
+        string? impressora;
+        using (var cx = Banco.Abrir())
+        {
+            liga = Vendas.Config(cx, "tef_paygo_imprimir_vias", "1") != "0";
+            impressora = Vendas.Config(cx, "impressora");
+        }
+        if (!liga || t.Resposta is null) return true;
+        var blocos = ViasParaImprimir(t.Resposta);
+        if (blocos.Count == 0) return true;
+
+        var descricao = $"Comprovante TEF{(t.EhCancelamento ? " (cancelamento)" : "")} {t.Resposta.Nsu ?? t.Identificacao}";
+        // 729 = 2: a impressão DECIDE (desistir = NCN, cliente não cobrado). 729 = 1: a rede já
+        // efetivou — não existe NCN; o diálogo não pode prometer "desfaz": só reimprime ou deixa
+        // para o menu TEF → Reimprimir. Mentir aqui é o operador dizendo ao cliente que foi
+        // desfeito quando foi cobrado.
+        var decide = t.Resposta.RequerConfirmacao;
+        var impressos = 0;
+        while (true)
+        {
+            var (erro, saiu) = await Impressao.ImprimirBlocosAsync(descricao, blocos, impressora, impressos).ConfigureAwait(false);
+            impressos += saiu;   // retentativa continua da via que NÃO saiu (não duplica a via do cliente)
+            if (erro is null) return true;
+            var tentar = await NaUiAsync(() => Dialogo.Confirmar(
+                System.Windows.Application.Current.MainWindow, "Comprovante não saiu",
+                decide
+                    ? $"{erro}\n\nSem o comprovante impresso a transação TEF NÃO é confirmada. Tentar imprimir de novo?"
+                    : $"{erro}\n\nA transação JÁ está efetivada na rede (não dá para desfazer por aqui). Tentar imprimir de novo? " +
+                      "Se desistir, reimprima depois em TEF → Reimprimir o último comprovante.",
+                "Tentar de novo",
+                decide ? "Desistir (desfaz a transação)" : "Deixar para depois",
+                perigo: decide)).ConfigureAwait(false);
+            if (!tentar) return false;
+        }
+    }
+
+    /// <summary>Roda na thread de UI (diálogo modal) a partir de qualquer thread; na própria UI, executa direto.</summary>
+    private static Task<T> NaUiAsync<T>(Func<T> acao)
+    {
+        var disp = System.Windows.Application.Current?.Dispatcher;
+        if (disp is null || disp.CheckAccess()) return Task.FromResult(acao());
+        return disp.InvokeAsync(acao).Task;
     }
 
     /// <summary>

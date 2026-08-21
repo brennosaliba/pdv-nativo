@@ -65,7 +65,7 @@ public static class TestesPayGo
     });
 
     private static ClientePayGo Cliente(FakePayGo f, Func<TransacaoPayGo, bool>? guardar = null, int desistirMs = 600,
-        OpcoesPayGo? opcoes = null, Func<string, bool>? conhecida = null)
+        OpcoesPayGo? opcoes = null, Func<string, bool>? conhecida = null, Func<TransacaoPayGo, Task<bool>>? imprimir = null)
         => new(f.Pasta, opcoes ?? new OpcoesPayGo("Setis", "Teste", "v1", "G45J35G3JH45B435"))
         {
             TempoStsMs = 1500,
@@ -73,6 +73,7 @@ public static class TestesPayGo
             TempoDesistirAposCancelarMs = desistirMs,
             Guardar = guardar ?? (_ => true),
             ConhecidaConfirmada = conhecida,
+            ImprimirComprovante = imprimir,
         };
 
     private static DesfechoTef Cobrar(ClientePayGo c, TipoTef tipo, decimal reais, int parcelas = 1,
@@ -266,6 +267,65 @@ public static class TestesPayGo
             checar(f.Quantos("NCN") == 1 && f.Quantos("CNF") == 0, "não conseguiu gravar → NCN (nunca CNF)");
             checar(f.Comandos("NCN")[0]["027-000"].Length > 10, "NCN leva o 027 da resposta");
             checar((d.Motivo ?? "").Contains("desfeita"), "mensagem diz que foi desfeita: " + d.Motivo);
+        }
+
+        // ── comprovante decide o CNF (spec): saiu → CNF; não saiu → NCN + mensagem literal ──
+        {
+            using var f = new FakePayGo();
+            var vistos = new List<(int vias, int cnfsNaHora, string situacao)>();
+            var c = Cliente(f, imprimir: t =>
+            {
+                vistos.Add((t.Resposta!.ViaCliente.Count + t.Resposta.ViaEstabelecimento.Count, f.Quantos("CNF"), t.Situacao));
+                return Task.FromResult(true);
+            });
+            var d = Cobrar(c, TipoTef.Credito, 30m);
+            checar(d.Pago && f.Quantos("CNF") == 1 && f.Quantos("NCN") == 0, "comprovante saiu → CNF e Pago");
+            checar(vistos.Count == 1 && vistos[0].vias == 30 && vistos[0].cnfsNaHora == 0,
+                   $"hook recebeu as vias (14+16) ANTES do CNF ({vistos.Count} chamada(s))");
+            checar(vistos.Count == 1 && vistos[0].situacao == "aprovada", "hook vê a transação já GRAVADA como aprovada (memória não volátil primeiro)");
+        }
+        {
+            using var f = new FakePayGo();
+            var sits = new List<string>();
+            var c = Cliente(f, t => { sits.Add(t.Situacao); return true; }, imprimir: _ => Task.FromResult(false));
+            var d = Cobrar(c, TipoTef.Credito, 30m);
+            checar(!d.Pago && d.Desfeita && d.Situacao == SituacaoTef.Cancelado, "comprovante não saiu → DESFEITA (não paga), Cancelado");
+            checar(f.Quantos("NCN") == 1 && f.Quantos("CNF") == 0, "comprovante não saiu → NCN, nunca CNF");
+            checar(f.Comandos("NCN")[0]["027-000"].Length > 10, "NCN leva o 027 da resposta");
+            checar((d.Motivo ?? "").StartsWith("Transação TEF cancelada: Rede: DEMO NSU: ") && d.Motivo!.Contains("Valor: ") && d.Motivo.Contains("30,00"),
+                   "mensagem literal da spec (Rede/NSU/Valor): " + d.Motivo);
+            checar(sits.Last() == "desfeita", "guardou desfeita");
+        }
+        {
+            using var f = new FakePayGo();
+            var c = Cliente(f, imprimir: _ => throw new InvalidOperationException("spooler caiu"));
+            var d = Cobrar(c, TipoTef.Credito, 30m);
+            checar(!d.Pago && d.Desfeita && f.Quantos("NCN") == 1 && f.Quantos("CNF") == 0, "hook que LANÇA = não imprimiu = NCN (sem exceção pra tela)");
+        }
+        {
+            using var f = new FakePayGo();
+            f.Roteiro.Enqueue(FakePayGo.Desfecho.AprovarSemConfirmacao);
+            var chamado = 0;
+            var c = Cliente(f, imprimir: _ => { chamado++; return Task.FromResult(false); });
+            var d = Cobrar(c, TipoTef.Credito, 30m);
+            checar(d.Pago && chamado == 1 && f.Quantos("NCN") == 0 && f.Quantos("CNF") == 0,
+                   "729=1: imprime melhor-esforço; falha NÃO desfaz (a rede já efetivou)");
+        }
+        {
+            using var f = new FakePayGo();
+            f.Roteiro.Enqueue(FakePayGo.Desfecho.Recusar);
+            var chamado = 0;
+            var c = Cliente(f, imprimir: _ => { chamado++; return Task.FromResult(true); });
+            Cobrar(c, TipoTef.Credito, 30m);
+            checar(chamado == 0, "negada não imprime nada (nenhum recibo em transação não realizada)");
+        }
+        {
+            using var f = new FakePayGo();
+            var sits = new List<string>();
+            var c = Cliente(f, t => { sits.Add(t.Situacao); return true; });   // sem hook = não imprime comprovante
+            var d = Cobrar(c, TipoTef.Credito, 30m);
+            checar(d.Pago && f.Quantos("CNF") == 1 && sits.SequenceEqual(new[] { "aguardando", "aprovada", "pago" }),
+                   "sem hook de impressão: CNF direto, sequência intacta");
         }
 
         // ── operador cancela DURANTE a espera: TEF não é interrompido; aprovou → NCN ──
@@ -559,6 +619,30 @@ public static class TestesPayGo
                 checar(sits.Any(s => s.id.StartsWith("paygo-cnc-") && s.s == "estornado") && !sits.Any(s => s.s == "pago"),
                        "a linha do CNC termina 'estornado', nunca 'pago'");
                 checar(sits.Any(s => s.id == ultimaPaga.ChargeId && s.s == "estornada"), "a venda original fica 'estornada'");
+            }
+        }
+
+        // ── CNC: comprovante do cancelamento decide o CNF do CNC ──────────
+        {
+            using var f = new FakePayGo();
+            var sits = new List<(string id, string s)>();
+            var c = Cliente(f, t => { sits.Add((t.ChargeId, t.Situacao)); return true; }, imprimir: _ => Task.FromResult(false));
+            if (ultimaPaga is not null)
+            {
+                var d = c.CancelarAsync(ultimaPaga, CancellationToken.None).GetAwaiter().GetResult();
+                checar(!d.Pago && d.Desfeita && f.Quantos("NCN") == 1 && f.Quantos("CNF") == 0, "CNC sem comprovante → NCN do cancelamento, nunca CNF");
+                checar(!sits.Any(s => s.id == ultimaPaga.ChargeId && s.s == "estornada"), "a venda original NÃO vira estornada");
+                checar((d.Motivo ?? "").StartsWith("Transação TEF cancelada: Rede:"), "mensagem da spec também no cancelamento: " + d.Motivo);
+            }
+        }
+        {
+            using var f = new FakePayGo();
+            var impressos = 0;
+            var c = Cliente(f, imprimir: _ => { impressos++; return Task.FromResult(true); });
+            if (ultimaPaga is not null)
+            {
+                var d = c.CancelarAsync(ultimaPaga, CancellationToken.None).GetAwaiter().GetResult();
+                checar(d.Pago && impressos == 1 && f.Quantos("CNF") == 1, "CNC com comprovante impresso → CNF e 'estornado'");
             }
         }
 

@@ -1239,6 +1239,7 @@ public partial class Venda : UserControl
     {
         if (_comanda.Count == 0) return;
         var dono = Window.GetWindow(this)!;
+        if (TefEmAndamento(dono)) return;
 
         // Monta os itens COBRADOS: a quantidade coberta pela cortesia sai (brinde,
         // não venda — não vai pra NFC-e). Item totalmente coberto some da nota.
@@ -1414,6 +1415,343 @@ public partial class Venda : UserControl
         Dialogo.Avisar(dono, "Impressora",
             $"Cupons passam a sair em: {escolhida ?? "impressora padrão do Windows"}.", "ok");
     }
+    // ── TEF (PayGo): estorno, menu administrativo, reimpressão ────────────────
+
+    /// <summary>
+    /// Menu do TEF na barra: estornar o cartão/PIX de uma venda (CNC no PayGo + cancelar a
+    /// venda no MESMO ato), menu administrativo do PayGo (teste de comunicação, relatórios,
+    /// cancelamento pelo menu) e reimpressão do último comprovante. Só PayGo: o Smart TEF da
+    /// nuvem não tem estorno pela tela (estorna-se no portal da adquirente).
+    /// </summary>
+    private async void MenuTef(object sender, RoutedEventArgs e)
+    {
+        var dono = Window.GetWindow(this)!;
+        if (_comanda.Count > 0)
+        {
+            Dialogo.Avisar(dono, "Venda em andamento", "Conclua ou limpe a comanda antes de usar o menu do TEF.", "erro");
+            return;
+        }
+        if (TefEmAndamento(dono)) return;
+        var cli = Servicos.PayGo();
+        if (cli is null)
+        {
+            Dialogo.Avisar(dono, "TEF", "O TEF PayGo não está configurado neste caixa (Configuração → TEF).", "erro");
+            return;
+        }
+        var escolha = EscolherOpcao(dono, "TEF PayGo", "O que você quer fazer?",
+            "Estornar cartão/PIX de uma venda", "Menu administrativo do PayGo", "Reimprimir o último comprovante");
+        if (escolha < 0) return;
+        // Enquanto o PayGo está com a tela/pinpad (CNC/ADM não têm timeout), a venda não pode
+        // seguir por baixo: Finalizar/Fechar caixa/Sair conferem _tefOcupado.
+        BtnTef.IsEnabled = false;
+        _tefOcupado = true;
+        try
+        {
+            switch (escolha)
+            {
+                case 0: await EstornarTefAsync(dono, cli); break;
+                case 1: await AdmTefAsync(dono, cli); break;
+                case 2: await ReimprimirComprovanteAsync(dono); break;
+            }
+        }
+        finally { _tefOcupado = false; BtnTef.IsEnabled = true; }
+    }
+
+    /// <summary>Operação do TEF (estorno/ADM) em curso: nada de vender, fechar caixa ou sair por baixo dela.</summary>
+    private bool _tefOcupado;
+
+    private bool TefEmAndamento(Window dono)
+    {
+        if (!_tefOcupado) return false;
+        Dialogo.Avisar(dono, "TEF em andamento",
+            "Há uma operação do TEF (estorno ou menu administrativo) em curso no PayGo. Conclua-a antes.", "erro");
+        return true;
+    }
+
+    /// <summary>Diálogo de opções (um botão por linha, rolável). Devolve o índice escolhido ou -1.</summary>
+    private static int EscolherOpcao(Window dono, string titulo, string pergunta, params string[] opcoes)
+    {
+        var janela = new Window
+        {
+            Title = titulo,
+            Owner = dono,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            SizeToContent = SizeToContent.Height,
+            Width = 560,
+            ResizeMode = ResizeMode.NoResize,
+            Background = (Brush)Application.Current.Resources["Fundo"],
+        };
+        var painel = new StackPanel { Margin = new Thickness(20) };
+        painel.Children.Add(new TextBlock
+        {
+            Text = pergunta,
+            FontSize = 16,
+            FontWeight = FontWeights.Bold,
+            Foreground = (Brush)Application.Current.Resources["Texto"],
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        var escolhido = -1;
+        for (var i = 0; i < opcoes.Length; i++)
+        {
+            var idx = i;
+            var b = new Button
+            {
+                Content = opcoes[i],
+                Style = (Style)Application.Current.Resources["BotaoBase"],
+                Margin = new Thickness(0, 6, 0, 0),
+                MinHeight = 60,
+                FontSize = 16,
+            };
+            b.Click += (_, _) => { escolhido = idx; janela.DialogResult = true; };
+            painel.Children.Add(b);
+        }
+        var voltar = new Button
+        {
+            Content = "Voltar",
+            Style = (Style)Application.Current.Resources["BotaoBase"],
+            Margin = new Thickness(0, 14, 0, 0),
+            MinHeight = 52,
+            FontSize = 15,
+        };
+        voltar.Click += (_, _) => { janela.DialogResult = false; };
+        painel.Children.Add(voltar);
+        janela.Content = new ScrollViewer { Content = painel, MaxHeight = 680, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        return janela.ShowDialog() == true ? escolhido : -1;
+    }
+
+    /// <summary>
+    /// Estorno = CNC no PayGo E cancelamento da venda no PDV, na mesma ação (regra documentada
+    /// em docs/TEF_PAYGO_homologacao.md): a linha do TEF vira 'estornada' e sai da soma do
+    /// fechamento — se a venda continuasse 'finalizada', o caixa acusaria um cartão que não
+    /// existe mais. Ordem: pré-checar (nota fiscal, turno) → PIN de supervisor → CNC → só com
+    /// o CNC aprovado cancela a venda. Venda com mais de um cartão só é cancelada no último.
+    /// </summary>
+    private async Task EstornarTefAsync(Window dono, ClientePayGo cli)
+    {
+        List<dynamic> linhas;
+        using (var cx = Banco.Abrir())
+            linhas = cx.Query("""
+                SELECT v.id AS venda_id, v.numero_local, v.finalizada_em, v.fiscal_status,
+                       p.forma, p.valor_cent, p.tef_nsu,
+                       t.id AS tef_id, t.identificacao, t.valor_cent AS tef_valor, t.parcelas, t.resposta_txt
+                  FROM venda v
+                  JOIN venda_pagamento p ON p.venda_id = v.id AND p.tef_nsu IS NOT NULL
+                  -- NSU (012) é contador curto e repete entre dias/redes: casar só no turno, pelo
+                  -- mesmo valor e forma — senão o CNC pode sair para a transação ERRADA.
+                  JOIN tef_transacao t ON t.provedor = 'paygo' AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+                                      AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent AND t.tipo = p.forma
+                 WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
+                 ORDER BY v.finalizada_em DESC, t.criado_em DESC LIMIT 12
+                """, new { Ses = _sessao.Id, Desde = _sessao.AberturaEm.ToString("o") }).ToList();
+        if (linhas.Count == 0)
+        {
+            Dialogo.Avisar(dono, "Estorno", "Não há venda deste turno paga com cartão/PIX pelo PayGo.", "erro");
+            return;
+        }
+
+        static string Forma(string f) => f switch { "credito" => "Crédito", "debito" => "Débito", "pix" => "PIX", _ => f };
+        static string Hora(object? fe) => fe is string s && DateTime.TryParse(s, out var dt) ? dt.ToString("HH:mm") : "--:--";
+        var rotulos = linhas.Select(l =>
+            $"Venda #{l.numero_local} · {Hora(l.finalizada_em)} · {Forma((string)l.forma)} {new Dinheiro((long)l.valor_cent).Formatado()} · NSU {l.tef_nsu}")
+            .ToArray();
+        var i = EscolherOpcao(dono, "Estornar cartão", "Qual pagamento vai ser estornado?", rotulos);
+        if (i < 0) return;
+        var l = linhas[i];
+        string vendaId = (string)l.venda_id, nsu = (string)l.tef_nsu;
+        var valor = new Dinheiro((long)l.valor_cent);
+        var numero = (long)l.numero_local;
+
+        // Regra de Vendas.Cancelar: nota autorizada se cancela na SEFAZ antes. Conferir AQUI,
+        // antes do CNC — senão o dinheiro volta e a venda (com nota) continua valendo.
+        if ((string?)l.fiscal_status is "autorizada" or "contingencia")
+        {
+            Dialogo.Avisar(dono, "Nota fiscal emitida",
+                $"A venda #{numero} tem NFC-e autorizada. Cancele a nota no ERP antes de estornar o cartão.", "erro");
+            return;
+        }
+
+        var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do supervisor");
+        if (pin is null) return;
+        Operador? sup;
+        using (var cxa = Banco.Abrir()) sup = Operadores.AutorizarSupervisor(cxa, pin);
+        if (sup is null)
+        {
+            Dialogo.Avisar(dono, "Não autorizado", "O PIN não confere ou não é de um supervisor.", "erro");
+            return;
+        }
+        // Diferente da sangria, o próprio supervisor PODE autorizar (loja de uma pessoa só não
+        // teria como estornar) — o PayGo ainda exige a senha do lojista no CNC, e a auditoria
+        // marca a auto-autorização em destaque.
+        var autoAutorizado = sup.Id == _operador.Id ? " [AUTO-AUTORIZADO]" : "";
+
+        var motivo = PedirTexto.Mostrar(dono, "Estorno", "Motivo (obrigatório)", "cliente desistiu");
+        if (string.IsNullOrWhiteSpace(motivo)) return;
+
+        if (!Dialogo.Confirmar(dono, "Estornar no cartão",
+                $"Venda #{numero}: devolver {valor.Formatado()} no cartão/PIX (NSU {nsu}) e CANCELAR a venda no PDV. " +
+                "O PayGo pode pedir a senha do lojista e o cartão do cliente. Confirma?",
+                "Estornar agora", "Voltar", perigo: true)) return;
+
+        var original = new TransacaoPayGo((string)l.tef_id, (string?)l.identificacao ?? "",
+            TipoTefExtensoes.Analisar((string)l.forma) ?? TipoTef.Credito, (long)l.tef_valor, (int)(long)l.parcelas, "pago",
+            RespostaPayGo.Analisar((string?)l.resposta_txt));
+
+        DesfechoTef d;
+        try { d = await cli.CancelarAsync(original, CancellationToken.None); }
+        catch (Exception ex)
+        {
+            Dialogo.Avisar(dono, "Estorno não realizado", ex.Message, "erro");
+            return;
+        }
+        if (!d.Pago)
+        {
+            using var cxn = Banco.Abrir();
+            Caixa.Auditar(cxn, null, "tef_estorno_negado", _operador.Id, sup.Id, $"venda={numero} nsu={nsu} {d.Motivo}{autoAutorizado}");
+            Dialogo.Avisar(dono, "Estorno não realizado", d.MensagemParaTela, "erro");
+            return;
+        }
+
+        // CNC aprovado = o cartão foi devolvido. O cliente já marca a original 'estornada'; isto é
+        // cinto e suspensório (se aquele Guardar falhou, a contagem abaixo mentiria).
+        Servicos.MarcarEstornada((string)l.tef_id, "estornada por " + d.ChargeId);
+
+        // A venda sai do caixa no MESMO ato. Só cancela quando não sobrou outro cartão/PIX nela
+        // (mesma janela/valor/forma do JOIN da lista, e nunca o que acabou de ser estornado);
+        // dinheiro, o operador devolve em espécie.
+        using (var cx = Banco.Abrir())
+        {
+            var restantes = cx.ExecuteScalar<int>("""
+                SELECT COUNT(*) FROM venda_pagamento p
+                  JOIN tef_transacao t ON t.provedor = 'paygo' AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+                                      AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent AND t.tipo = p.forma
+                 WHERE p.venda_id = @V AND t.id <> @TefId AND p.tef_nsu <> @Nsu
+                """, new { V = vendaId, TefId = (string)l.tef_id, Nsu = nsu, Desde = _sessao.AberturaEm.ToString("o") });
+            var dinheiro = cx.ExecuteScalar<long>(
+                "SELECT COALESCE(SUM(valor_cent - troco_cent), 0) FROM venda_pagamento WHERE venda_id = @V AND forma = 'dinheiro'",
+                new { V = vendaId });
+            var detalhe = $"venda={numero} nsu={nsu} valor={valor.Formatado()} — {motivo}{autoAutorizado}";
+            if (restantes > 0)
+            {
+                Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, sup.Id, detalhe + $" (venda segue: restam {restantes} cartão/PIX)");
+                Dialogo.Avisar(dono, "Cartão estornado",
+                    $"{valor.Formatado()} devolvido no cartão. A venda #{numero} ainda tem {restantes} outro(s) pagamento(s) " +
+                    "em cartão/PIX — estorne-os também para a venda ser cancelada.", "ok");
+                return;
+            }
+            try
+            {
+                Vendas.Cancelar(cx, vendaId, _operador.Id, $"estorno TEF NSU {nsu}: {motivo}", sup.Id);
+            }
+            catch (Exception ex)
+            {
+                Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, sup.Id, detalhe + " — CARTÃO ESTORNADO, venda não cancelada: " + ex.Message);
+                Dialogo.Avisar(dono, "Cartão estornado, venda NÃO cancelada",
+                    ex.Message + $" — cancele a venda #{numero} manualmente.", "erro");
+                return;
+            }
+            Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, sup.Id, detalhe);
+            Dialogo.Avisar(dono, "Estorno concluído",
+                $"Venda #{numero} cancelada e {valor.Formatado()} devolvido no cartão/PIX (NSU {nsu})." +
+                (dinheiro > 0 ? $" Atenção: havia {new Dinheiro(dinheiro).Formatado()} em dinheiro nessa venda — devolva em espécie." : ""),
+                "ok");
+        }
+    }
+
+    /// <summary>
+    /// Menu administrativo do PayGo: o operador navega NA TELA DO PAYGO; o PDV só espera e
+    /// imprime/confirma se vier comprovante. Cancelar VENDA por aqui é possível (o PayGo deixa),
+    /// mas passa por fora do estorno — por isso o aviso antes e, depois, se a resposta parecer um
+    /// cancelamento, o PDV insiste em cancelar a venda correspondente.
+    /// </summary>
+    private async Task AdmTefAsync(Window dono, ClientePayGo cli)
+    {
+        if (!Dialogo.Confirmar(dono, "Menu administrativo do PayGo",
+                "Use este menu para teste de comunicação, relatórios e reimpressão. Para devolver o dinheiro de uma " +
+                "VENDA, prefira \"Estornar cartão/PIX\" — ele cancela a venda no PDV junto. Abrir o menu mesmo assim?",
+                "Abrir o menu", "Voltar")) return;
+
+        DesfechoTef d;
+        try { d = await cli.AdministrativaAsync(CancellationToken.None); }
+        catch (Exception ex)
+        {
+            Dialogo.Avisar(dono, "PayGo", ex.Message, "erro");
+            return;
+        }
+        if (!d.Pago)
+        {
+            Dialogo.Avisar(dono, "Menu administrativo", d.MensagemParaTela, "erro");
+            return;
+        }
+
+        // Cancelamento feito pelo menu: dinheiro voltou ao cliente por fora do fluxo de estorno.
+        // A venda NÃO pode continuar 'finalizada' (o fechamento mostraria como receita um cartão devolvido).
+        var canc = Servicos.CancelamentoNoAdm(d.ChargeId);
+        if (canc is null)
+        {
+            Dialogo.Avisar(dono, "Menu administrativo", "Operação concluída. " + (d.Motivo ?? ""), "ok");
+            return;
+        }
+        var (nsuOrig, valorCent) = canc.Value;
+        using var cx = Banco.Abrir();
+        var v = cx.QueryFirstOrDefault("""
+            SELECT v.id, v.numero_local, t.id AS tef_id
+              FROM venda v
+              JOIN venda_pagamento p ON p.venda_id = v.id AND p.tef_nsu = @Nsu
+              LEFT JOIN tef_transacao t ON t.provedor = 'paygo' AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+                                       AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent
+             WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
+             ORDER BY v.finalizada_em DESC LIMIT 1
+            """, new { Nsu = nsuOrig, Ses = _sessao.Id, Desde = _sessao.AberturaEm.ToString("o") });
+        var valor = new Dinheiro(valorCent);
+        Caixa.Auditar(cx, null, "tef_adm_cancelamento", _operador.Id, null,
+            $"cancelamento pelo menu do PayGo: nsu={nsuOrig} valor={valor.Formatado()} venda={(v is null ? "não localizada" : "#" + v.numero_local)}");
+        if (v is null)
+        {
+            Dialogo.Avisar(dono, "Cancelamento pelo menu do PayGo",
+                $"O PayGo cancelou {valor.Formatado()} (NSU {nsuOrig}), mas não achei uma venda deste turno com esse NSU. " +
+                "Se foi uma venda do PDV, cancele-a manualmente — senão o fechamento vai contar um cartão que foi devolvido.", "erro");
+            return;
+        }
+        if (!Dialogo.Confirmar(dono, "Cancelamento pelo menu do PayGo",
+                $"O PayGo cancelou {valor.Formatado()} (NSU {nsuOrig}), que é da venda #{v.numero_local}. " +
+                "Cancelar essa venda no PDV agora (é o que o estorno faria)?", "Cancelar a venda", "Deixar como está", perigo: true))
+            return;
+        try
+        {
+            if (v.tef_id is string tefId) Servicos.MarcarEstornada(tefId, "estornada pelo menu administrativo do PayGo");
+            Vendas.Cancelar(cx, (string)v.id, _operador.Id, $"estorno TEF pelo menu do PayGo NSU {nsuOrig}", null);
+            Dialogo.Avisar(dono, "Venda cancelada", $"Venda #{v.numero_local} cancelada no PDV.", "ok");
+        }
+        catch (Exception ex)
+        {
+            Dialogo.Avisar(dono, "Venda NÃO cancelada", ex.Message + $" — cancele a venda #{v.numero_local} manualmente.", "erro");
+        }
+    }
+
+    /// <summary>Reimprime as vias do último comprovante do PayGo (venda ou estorno) — a partir do .001 guardado.</summary>
+    private async Task ReimprimirComprovanteAsync(Window dono)
+    {
+        string? txt, impressora;
+        using (var cx = Banco.Abrir())
+        {
+            txt = cx.ExecuteScalar<string?>("""
+                SELECT resposta_txt FROM tef_transacao
+                 WHERE provedor = 'paygo' AND situacao IN ('pago','estornado','cnf_sem_ack') AND resposta_txt IS NOT NULL
+                 ORDER BY atualizado_em DESC LIMIT 1
+                """);
+            impressora = Vendas.Config(cx, "impressora");
+        }
+        if (txt is null)
+        {
+            Dialogo.Avisar(dono, "Reimpressão", "Nenhum comprovante de TEF para reimprimir.", "erro");
+            return;
+        }
+        var blocos = Servicos.ViasParaImprimir(RespostaPayGo.Analisar(txt));
+        var erro = await Impressao.ImprimirTextoAsync("Comprovante TEF (reimpressão)", blocos, impressora);
+        Dialogo.Avisar(dono, "Reimpressão", erro is null ? "Comprovante enviado à impressora." : erro, erro is null ? "ok" : "erro");
+    }
+
     private void Suprimento(object sender, RoutedEventArgs e) => Movimento("suprimento");
 
     private void Movimento(string tipo)
@@ -1475,6 +1813,7 @@ public partial class Venda : UserControl
     private void FecharCaixa(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;
+        if (TefEmAndamento(dono)) return;
         if (_comanda.Count > 0)
         {
             Dialogo.Avisar(dono, "Venda em andamento",
@@ -1577,6 +1916,7 @@ public partial class Venda : UserControl
 
     private void Sair(object sender, RoutedEventArgs e)
     {
+        if (TefEmAndamento(Window.GetWindow(this)!)) return;
         if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Sair do caixa",
                 "Há uma venda em andamento e ela será descartada.", "Sair mesmo assim", "Voltar", perigo: true))
             return;

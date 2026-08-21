@@ -350,11 +350,34 @@ public partial class Pagamento : UserControl
 
         if (rec.Centavos > falta) return;   // cartão não passa do restante
         if (_tef is null) { RegistrarComoPos(_formaEmEdicao, rec, posPodeEstarOcupado: false); return; }
-        _ = CobrarNoTefAsync(_formaEmEdicao, rec);
+        var parcelas = _formaEmEdicao == "credito" ? PerguntarParcelas() : 1;
+        if (parcelas <= 0) return;   // desistiu na pergunta das parcelas
+        _ = CobrarNoTefAsync(_formaEmEdicao, rec, parcelas);
+    }
+
+    /// <summary>
+    /// Parcelas no crédito, SÓ quando a loja ligou `tef_perguntar_parcelas` (padrão: à vista
+    /// direto — donut não se parcela). Ligado, é o que permite o roteiro de homologação do
+    /// PayGo (venda parcelada pelo estabelecimento em 99x). 0 = operador desistiu.
+    /// </summary>
+    private int PerguntarParcelas()
+    {
+        using var cx = Banco.Abrir();
+        if (Vendas.Config(cx, "tef_perguntar_parcelas", "0") != "1") return 1;
+        var dono = Window.GetWindow(this)!;
+        while (true)
+        {
+            var txt = PedirTexto.Mostrar(dono, "Parcelas no crédito", "Número de parcelas (1 = à vista, máx. 99)", "1");
+            if (txt is null) return 0;   // cancelou / em branco = desistiu (nunca cobrar com parcelas adivinhadas)
+            if (int.TryParse(txt.Trim(), out var n) && n >= 1 && n <= 99) return n;
+            // "1O", "100", "abc": perguntar de novo — cair em "à vista" sem avisar cobraria
+            // errado e o operador só descobriria no comprovante.
+            Dialogo.Avisar(dono, "Parcelas", "Informe um número de 1 a 99.", "erro");
+        }
     }
 
     // ── 3. TEF ──────────────────────────────────────────────────────────────
-    private async Task CobrarNoTefAsync(string forma, Dinheiro valor)
+    private async Task CobrarNoTefAsync(string forma, Dinheiro valor, int parcelas = 1)
     {
         var tipo = forma switch
         {
@@ -367,26 +390,30 @@ public partial class Pagamento : UserControl
         _cobranca = new CancellationTokenSource();
         var ct = _cobranca.Token;
 
-        Estado("💳", "Aguardando o cliente", $"Aproxime, insira ou passe o cartão na maquininha ({valor.Formatado()}).",
+        // Parcelas no TÍTULO (os reports de andamento reescrevem o detalhe): o operador precisa
+        // conferir o "3x" enquanto o cliente ainda não passou o cartão.
+        var vezes = parcelas > 1 ? $" em {parcelas}x" : "";
+        Estado("💳", parcelas > 1 ? $"Aguardando o cliente · {parcelas}x" : "Aguardando o cliente",
+            $"Aproxime, insira ou passe o cartão na maquininha ({valor.Formatado()}{vezes}).",
             ("Cancelar cobrança", () => _cobranca?.Cancel()));
         Ir(Fase.Cobrando);
 
         var andamento = new Progress<AndamentoTef>(a =>
         {
-            RegistrarTef(a, forma, valor);
-            if (a.Mensagem.Length > 0) TxtDetalheEstado.Text = a.Mensagem;
+            RegistrarTef(a, forma, valor, parcelas);
+            if (a.Mensagem.Length > 0) TxtDetalheEstado.Text = a.Mensagem + vezes;
         });
 
         DesfechoTef d;
         try
         {
-            d = await _tef!.CobrarAsync(tipo, valor, _documento, 1, andamento, ct);
+            d = await _tef!.CobrarAsync(tipo, valor, _documento, parcelas, andamento, ct);
         }
         catch (Exception ex)
         {
             // TEF caiu antes de armar a maquininha: registrar como POS é seguro.
             Estado("⚠️", "TEF indisponível", ex.Message,
-                ("Tentar de novo", () => _ = CobrarNoTefAsync(forma, valor)),
+                ("Tentar de novo", () => _ = CobrarNoTefAsync(forma, valor, parcelas)),
                 ("Registrar como venda POS", () => RegistrarComoPos(forma, valor, posPodeEstarOcupado: false)),
                 ("Trocar forma", () => { Ir(Fase.Forma); PintarPartes(); }));
             Ir(Fase.Falha);
@@ -408,7 +435,7 @@ public partial class Pagamento : UserControl
         // Recusa NÃO ganha o desvio pra POS: a operadora disse NÃO a este cartão, e
         // registrar na mão viraria o jeito de "passar" cartão recusado. Timeout e erro
         // ganham — aí quem falhou foi a integração, não o cartão.
-        var acoes = new List<(string, Action)> { ("Tentar de novo", () => _ = CobrarNoTefAsync(forma, valor)) };
+        var acoes = new List<(string, Action)> { ("Tentar de novo", () => _ = CobrarNoTefAsync(forma, valor, parcelas)) };
         // Transação DESFEITA (PayGo/NCN) também não ganha o desvio pra POS: o cliente não pagou
         // nada — registrar na mão seria cobrar o que foi desfeito.
         if (d.Situacao != SituacaoTef.Recusado && !d.Desfeita)
@@ -435,7 +462,7 @@ public partial class Pagamento : UserControl
     /// (queda de energia, app fechado), é ela que prova que existe uma cobrança viva
     /// na maquininha — sem isso, ninguém tem como estornar nem sequer saber.
     /// </summary>
-    private void RegistrarTef(AndamentoTef a, string forma, Dinheiro valor)
+    private void RegistrarTef(AndamentoTef a, string forma, Dinheiro valor, int parcelas = 1)
     {
         try
         {
@@ -443,7 +470,7 @@ public partial class Pagamento : UserControl
             cx.Execute("""
                 INSERT INTO tef_transacao (id, charge_id, payment_identifier, tipo, valor_cent,
                                            parcelas, situacao, criado_em, atualizado_em)
-                VALUES (@Id,@Ch,@Pid,@T,@V,1,@S,@Em,@Em)
+                VALUES (@Id,@Ch,@Pid,@T,@V,@P,@S,@Em,@Em)
                 ON CONFLICT(id) DO UPDATE SET payment_identifier = COALESCE(@Pid, payment_identifier),
                                               -- PayGo: quem manda na situação é o cliente (Guardar), que já
                                               -- pode ter passado de 'aguardando' quando este report chega
@@ -452,7 +479,7 @@ public partial class Pagamento : UserControl
                                               atualizado_em = @Em
                 """,
                 new { Id = a.ChargeId, Ch = a.ChargeId, Pid = a.PaymentIdentifier, T = forma,
-                      V = valor.Centavos, S = a.Fase, Em = DateTime.Now.ToString("o") });
+                      V = valor.Centavos, P = Math.Max(1, parcelas), S = a.Fase, Em = DateTime.Now.ToString("o") });
         }
         catch { /* registrar a tentativa não pode derrubar a cobrança em andamento */ }
     }

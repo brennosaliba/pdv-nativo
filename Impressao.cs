@@ -387,6 +387,86 @@ public static class Impressao
     }
 
     private static string? Imprimir(DadosCupom dados, string? nomeImpressora)
+        => ImprimirVisual(() => MontarCupom(dados),
+            // Nomear o trabalho é o que permite reconhecê-lo depois na fila do Windows.
+            // O sufixo torna o nome único POR TENTATIVA e não é enfeite: a fase
+            // ErroImpressao tem botão "Reimprimir", e o nome antigo era IDÊNTICO entre a
+            // impressão e a reimpressão da mesma nota. Como a vigia casa job por nome, ela
+            // ficava olhando o trabalho VELHO (travado/pausado na fila), acusava erro que
+            // não era dela, o operador mandava imprimir de novo — e saíam DOIS ou TRÊS
+            // cupons fiscais da mesma nota. O prefixo continua identificando a nota.
+            $"Cupom NFC-e {dados.Numero}/{dados.Serie} #{Environment.TickCount64:x}", nomeImpressora);
+
+    // ── TEXTO LIVRE (comprovante do TEF e afins) ─────────────────────────────────
+
+    /// <summary>
+    /// Imprime blocos de texto monoespaçado — um trabalho de impressão por bloco, para cada
+    /// via sair destacável. É o comprovante do TEF: as vias vêm prontas da rede (≤ 40 colunas)
+    /// e saem como estão, inclusive os espaços à esquerda que centralizam o texto.
+    ///
+    /// Mesmo contrato do cupom: <c>null</c> = saiu tudo; string = mensagem pronta pra tela
+    /// (do primeiro bloco que não saiu). Nunca lança. NÃO passa por <see cref="Conferir"/> —
+    /// aquilo é regra fiscal do DANFE; aqui o papel é o que a rede mandou.
+    /// </summary>
+    /// <param name="descricao">Nome do trabalho na fila do Windows (a vigia casa por nome; ganha índice e sufixo únicos).</param>
+    public static async Task<string?> ImprimirTextoAsync(string descricao, IReadOnlyList<IReadOnlyList<string>> blocos,
+        string? nomeImpressora)
+        => (await ImprimirBlocosAsync(descricao, blocos, nomeImpressora, 0)).Erro;
+
+    /// <summary>
+    /// Igual a <see cref="ImprimirTextoAsync"/>, mas devolve também QUANTOS blocos saíram e aceita
+    /// pular os primeiros — é o que permite a retentativa continuar da via que faltou em vez de
+    /// imprimir a via do cliente duas vezes. `Sairam` conta só os desta chamada.
+    /// </summary>
+    public static async Task<(string? Erro, int Sairam)> ImprimirBlocosAsync(string descricao,
+        IReadOnlyList<IReadOnlyList<string>> blocos, string? nomeImpressora, int pular)
+    {
+        if (blocos is null || blocos.Count == 0 || blocos.All(b => b is null || b.Count == 0))
+            return ("Não há texto para imprimir.", 0);
+        var n = 0;
+        var sairam = 0;
+        foreach (var bloco in blocos)
+        {
+            if (bloco is null || bloco.Count == 0) continue;
+            n++;
+            if (n <= pular) continue;
+            var linhas = bloco;
+            var nome = $"{descricao} {n}/{blocos.Count} #{Environment.TickCount64:x}";
+            var erro = await ComPrazoAsync(EmThreadStaAsync(() => ImprimirVisual(() => MontarTexto(linhas), nome, nomeImpressora)));
+            if (erro is not null) return (erro, sairam);
+            sairam++;
+        }
+        return (null, sairam);
+    }
+
+    /// <summary>
+    /// Bloco de texto: a MESMA Border/bobina do cupom (fundo branco, margem mecânica), uma
+    /// linha Mono por item. Linha vazia vira " " (StackPanel pula TextBlock vazio e o
+    /// comprovante perderia o espaçamento que a rede desenhou). `quebra: true` protege uma
+    /// linha maior que as 48 colunas — quebra em vez de sumir cortada pela Border.
+    /// </summary>
+    private static FrameworkElement MontarTexto(IReadOnlyList<string> linhas)
+    {
+        var pilha = new StackPanel();
+        foreach (var l in linhas)
+            pilha.Children.Add(Texto(string.IsNullOrEmpty(l) ? " " : l, Corpo, quebra: true));
+        return new Border
+        {
+            Width = LarguraBobinaMm * MM,
+            Background = Brushes.White,
+            Padding = new Thickness(
+                (LarguraBobinaMm - LarguraUtilMm) / 2 * MM, 3 * MM,
+                (LarguraBobinaMm - LarguraUtilMm) / 2 * MM, 3 * MM),
+            Child = pilha,
+        };
+    }
+
+    /// <summary>
+    /// Miolo comum de impressão (roda na thread STA): resolve a fila, monta o visual NESTA
+    /// thread, declara a página do tamanho do conteúdo, nomeia o trabalho e vigia a saída.
+    /// Serve ao cupom fiscal e ao texto livre — o que muda é só o que se desenha.
+    /// </summary>
+    private static string? ImprimirVisual(Func<FrameworkElement> montar, string descricao, string? nomeImpressora)
     {
         LocalPrintServer? servidor = null;
         PrintQueue? fila = null;
@@ -414,7 +494,7 @@ public static class Impressao
                     : $"Impressora '{pedida}' não encontrada.";
             }
 
-            var visual = MontarCupom(dados);
+            var visual = montar();
             var largura = LarguraBobinaMm * MM;
             visual.Measure(new Size(largura, double.PositiveInfinity));
             visual.Arrange(new Rect(new Point(0, 0), visual.DesiredSize));
@@ -426,14 +506,8 @@ public static class Impressao
             ticket.PageMediaSize = new PageMediaSize(largura, visual.DesiredSize.Height + AvancoMm * MM);
             ticket.PageOrientation = PageOrientation.Portrait;
 
-            // Nomear o trabalho é o que permite reconhecê-lo depois na fila do Windows.
-            // O sufixo torna o nome único POR TENTATIVA e não é enfeite: a fase
-            // ErroImpressao tem botão "Reimprimir", e o nome antigo era IDÊNTICO entre a
-            // impressão e a reimpressão da mesma nota. Como a vigia casa job por nome, ela
-            // ficava olhando o trabalho VELHO (travado/pausado na fila), acusava erro que
-            // não era dela, o operador mandava imprimir de novo — e saíam DOIS ou TRÊS
-            // cupons fiscais da mesma nota. O prefixo continua identificando a nota.
-            var descricao = $"Cupom NFC-e {dados.Numero}/{dados.Serie} #{Environment.TickCount64:x}";
+            // O nome do trabalho é único por tentativa (quem chama garante o sufixo) —
+            // é por ele que a vigia reconhece ESTE job na fila, e não um velho travado.
             try { fila.CurrentJobSettings.Description = descricao; }
             catch { /* driver que não aceita descrição: perde-se só o diagnóstico fino */ }
 

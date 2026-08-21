@@ -126,6 +126,13 @@
                             <TextBlock Text="Impressora" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+                    <Button x:Name="BtnTef" Click="MenuTef" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Cartão/PIX: estornar uma venda, menu administrativo do PayGo, reimprimir comprovante">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="💳" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="TEF" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                     <Button Content="Sair" Click="Sair" Style="{StaticResource BotaoBarra}"
                             Background="{DynamicResource RosaDegrade}" Foreground="{DynamicResource SobreMarca}"
                             BorderThickness="0" FontWeight="Bold" Margin="14,0,0,0"/>

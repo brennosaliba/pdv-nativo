@@ -160,6 +160,9 @@ public sealed class RespostaPayGo
     public IReadOnlyList<string> ViaEstabelecimento => ArquivoIntpos.Linhas(Campos, "715");
     public IReadOnlyList<string> ViaUnica => ArquivoIntpos.Linhas(Campos, "029");
 
+    /// <summary>Veio algum comprovante? Sem vias não há o que imprimir — e o CNF não depende de impressora.</summary>
+    public bool TemVias => ViaCliente.Count > 0 || ViaEstabelecimento.Count > 0 || CupomReduzido.Count > 0 || ViaUnica.Count > 0;
+
     /// <summary>As vias num JSON só, para `tef_transacao.vias_json` (reimpressão e auditoria).</summary>
     public string ViasJson() => JsonSerializer.Serialize(new
     {
@@ -257,6 +260,34 @@ public sealed class ClientePayGo : IProvedorTef
     /// </summary>
     public Func<string, bool>? EhNossaIdentificacao { get; init; }
 
+    /// <summary>
+    /// Imprime o comprovante (vias 713/715 — ou 711/029) ANTES do CNF e diz se SAIU. É a regra
+    /// da spec: o comprovante impresso é o gatilho do commit; não saiu e o operador desistiu →
+    /// NCN, com a mensagem literal "Transação TEF cancelada: Rede/NSU/Valor" (o cliente NÃO é
+    /// cobrado). Null = este terminal não imprime comprovante de TEF (nada pode falhar → CNF
+    /// direto). Só é chamado quando a resposta pede confirmação (729 = 2) e traz vias; com
+    /// 729 = 1 a rede já efetivou — imprime em melhor-esforço, sem NCN. Quem implementa decide
+    /// quantas vezes tenta (é ele quem fala com a impressora e com o operador); exceção = false.
+    /// Roda dentro do semáforo da pasta: enquanto imprime, nenhum outro comando TEF sai.
+    /// </summary>
+    public Func<TransacaoPayGo, Task<bool>>? ImprimirComprovante { get; init; }
+
+    /// <summary>Mensagem literal da spec (Mensagens de erro → falha na impressão) quando a transação foi desfeita por falta do comprovante.</summary>
+    public static string MsgCancelada(string? rede, string? nsu, long? valorCent)
+        => $"Transação TEF cancelada: Rede: {rede ?? "-"} NSU: {nsu ?? "-"} Valor: {new Dinheiro(valorCent ?? 0).Formatado()}";
+
+    /// <summary>Hook "seguro": sem delegate ou sem vias = nada a imprimir (true); exceção = não imprimiu (false).</summary>
+    private async Task<bool> ImprimirSeguroAsync(TransacaoPayGo tx)
+    {
+        if (ImprimirComprovante is null || tx.Resposta is null || !tx.Resposta.TemVias) return true;
+        try { return await ImprimirComprovante(tx).ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            Auditar?.Invoke($"paygo: impressão do comprovante {tx.ChargeId} lançou: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>Todo 001 gerado neste processo (CRT/CNC/ADM/ATV/CNF/NCN/pendência).</summary>
     private readonly HashSet<string> _emitidas = new(StringComparer.Ordinal);
 
@@ -297,6 +328,9 @@ public sealed class ClientePayGo : IProvedorTef
 
     public string PastaReq => _req;
     public string PastaResp => _resp;
+
+    /// <summary>Há comando TEF em voo nesta instância (CRT/CNC/ADM/ATV/CNF/NCN)? Quem troca a instância precisa olhar isto antes.</summary>
+    public bool Ocupado => _um.CurrentCount == 0;
 
     // ------------------------------------------------------------------ ATV
 
@@ -485,12 +519,29 @@ public sealed class ClientePayGo : IProvedorTef
 
             var situacao = "pago";
             if (r.RequerConfirmacao)
+            {
+                // COMPROVANTE ANTES DO CNF (spec: a impressão decide o commit). Não saiu e o
+                // operador desistiu → NCN: o cliente NÃO é cobrado, e a mensagem é a literal da spec.
+                if (!await ImprimirSeguroAsync(tx).ConfigureAwait(false))
+                {
+                    await DesfazerAsync(tx with { Motivo = "comprovante não impresso (NCN)" }, "desfeita").ConfigureAwait(false);
+                    Auditar?.Invoke($"paygo: {chargeId} desfeita — comprovante não saiu");
+                    return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, cartao,
+                        MsgCancelada(r.Rede, r.Nsu, r.ValorCent ?? valor.Centavos), false)
+                    { Codigo = CodigoTef.Cancelado, Desfeita = true };
+                }
                 // Sem ack o PayGo pode estar segurando a confirmação: fica 'cnf_sem_ack' e o
                 // próximo comando / o boot reenvia. Para o caixa, está pago: a aprovação veio e
                 // a decisão de confirmar já está em disco.
                 situacao = await ConfirmarAsync(tx, "pago").ConfigureAwait(false) ? "pago" : "cnf_sem_ack";
+            }
             else
+            {
                 Guardar(tx with { Situacao = "pago" });
+                // 729 = 1: a rede já efetivou; o papel é melhor-esforço (não existe NCN aqui).
+                if (!await ImprimirSeguroAsync(tx).ConfigureAwait(false))
+                    Auditar?.Invoke($"paygo: {chargeId} paga (729=1) com comprovante não impresso — reimprimir pelas vias");
+            }
 
             return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, null, false)
             { Codigo = CodigoTef.Pago, PaymentStatus = situacao };
@@ -554,8 +605,23 @@ public sealed class ClientePayGo : IProvedorTef
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "não consegui gravar o cancelamento — desfeito");
             }
             var sit = "estornado";
-            if (r.RequerConfirmacao) sit = await ConfirmarAsync(tx, "estornado").ConfigureAwait(false) ? "estornado" : "cnf_sem_ack";
-            else Guardar(tx with { Situacao = "estornado" });
+            if (r.RequerConfirmacao)
+            {
+                // comprovante do cancelamento antes do CNF — mesma regra da venda
+                if (!await ImprimirSeguroAsync(tx).ConfigureAwait(false))
+                {
+                    await DesfazerAsync(tx with { Motivo = "comprovante do cancelamento não impresso (NCN)" }, "desfeita").ConfigureAwait(false);
+                    return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, Cartao(r),
+                        MsgCancelada(r.Rede, r.Nsu, r.ValorCent ?? original.ValorCent), false)
+                    { Codigo = CodigoTef.Cancelado, Desfeita = true };
+                }
+                sit = await ConfirmarAsync(tx, "estornado").ConfigureAwait(false) ? "estornado" : "cnf_sem_ack";
+            }
+            else
+            {
+                Guardar(tx with { Situacao = "estornado" });
+                await ImprimirSeguroAsync(tx).ConfigureAwait(false);   // melhor-esforço (729=1)
+            }
             Guardar(original with { Situacao = "estornada", Motivo = "estornada por " + chargeId });
             return new DesfechoTef(SituacaoTef.Pago, id, chargeId, Cartao(r), null, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit };
         }
@@ -607,8 +673,17 @@ public sealed class ClientePayGo : IProvedorTef
                     await DesfazerAsync(tx with { Motivo = "não gravou (NCN)" }, "desfeita").ConfigureAwait(false);
                     return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "não consegui gravar a operação — desfeita");
                 }
+                if (!await ImprimirSeguroAsync(tx).ConfigureAwait(false))
+                {
+                    await DesfazerAsync(tx with { Motivo = "comprovante não impresso (NCN)" }, "desfeita").ConfigureAwait(false);
+                    return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, null,
+                        MsgCancelada(r.Rede, r.Nsu, r.ValorCent), false)
+                    { Codigo = CodigoTef.Cancelado, Desfeita = true };
+                }
                 sit = await ConfirmarAsync(tx, "adm").ConfigureAwait(false) ? "adm" : "cnf_sem_ack";
             }
+            else
+                await ImprimirSeguroAsync(tx).ConfigureAwait(false);   // relatório/consulta sem confirmação: só papel
             return new DesfechoTef(SituacaoTef.Pago, id, chargeId, null, r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit };
         }
         finally { _um.Release(); }
