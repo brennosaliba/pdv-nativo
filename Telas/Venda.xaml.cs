@@ -1438,8 +1438,12 @@ public partial class Venda : UserControl
             Dialogo.Avisar(dono, "TEF", "O TEF não está configurado neste caixa (Configuração → TEF: PayGo ou ControlPay).", "erro");
             return;
         }
-        var escolha = EscolherOpcao(dono, "TEF", "O que você quer fazer?",
-            "Estornar cartão/PIX de uma venda", "Menu administrativo do PayGo", "Reimprimir o último comprovante");
+        var homologando = false;
+        using (var cxh = Banco.Abrir()) homologando = Vendas.Homologacao(cxh);
+        var opcoes = homologando
+            ? new[] { "Estornar cartão/PIX de uma venda", "Menu administrativo do PayGo", "Reimprimir o último comprovante", "▶ Roteiro de homologação (executa os passos)" }
+            : new[] { "Estornar cartão/PIX de uma venda", "Menu administrativo do PayGo", "Reimprimir o último comprovante" };
+        var escolha = EscolherOpcao(dono, "TEF", "O que você quer fazer?", opcoes);
         if (escolha < 0) return;
         // Enquanto o PayGo está com a tela/pinpad (CNC/ADM não têm timeout), a venda não pode
         // seguir por baixo: Finalizar/Fechar caixa/Sair conferem _tefOcupado.
@@ -1452,9 +1456,216 @@ public partial class Venda : UserControl
                 case 0: await EstornarTefAsync(dono, cli); break;
                 case 1: await AdmTefAsync(dono, cli); break;
                 case 2: await ReimprimirComprovanteAsync(dono); break;
+                case 3: await RoteiroHomologacaoAsync(dono, cli); break;
             }
         }
         finally { _tefOcupado = false; BtnTef.IsEnabled = true; }
+    }
+
+    // ── Roteiro de homologação (PayGo) ──────────────────────────────────────
+    //
+    // Executa os passos do roteiro USANDO O MESMO CÓDIGO DA VENDA (Servicos.Tef() →
+    // CobrarAsync/CancelarAsync) — a evidência tem que ser da automação de verdade, não de um
+    // script paralelo. O operador só encosta/insere o cartão quando o pinpad pedir.
+    // Só aparece com o modo de homologação ligado.
+    private sealed record PassoRoteiro(string Numero, string Titulo, string Tipo, string Forma,
+        long ValorCent, int Parcelas, bool EsperaAprovada, string? Referencia = null);
+
+    private static readonly PassoRoteiro[] Roteiro =
+    {
+        new("02", "Valor máximo — R$ 100.000,00",        "venda", "credito", 10000000, 1, true),
+        new("03", "À vista — R$ 5,00",                    "venda", "credito",      500, 1, true),
+        new("04", "Negada — R$ 1.000,01",                 "venda", "credito",   100001, 1, false),
+        new("06", "Crédito — R$ 10,00",                   "venda", "credito",     1000, 1, true),
+        new("07", "Débito — R$ 10,00",                    "venda", "debito",      1000, 1, true),
+        new("08", "Crédito 99x pela loja — R$ 990,00",    "venda", "credito",    99000, 99, true),
+        new("10", "Vias diferenciadas — R$ 10,00",        "venda", "credito",     1000, 1, true),
+        new("11", "Pix QR — R$ 10,00",                    "venda", "pix",         1000, 1, true),
+        new("17", "Para cancelar #1 — R$ 1,00",           "venda", "credito",      100, 1, true),
+        new("18", "Para cancelar #2 — R$ 2,00",           "venda", "credito",      200, 1, true),
+        new("19", "Para cancelar #3 — R$ 12.345,67",      "venda", "credito",  1234567, 1, true),
+        new("20", "Estorno da venda do passo 18",        "estorno", "",             0, 1, true,  "18"),
+        new("21", "Estorno da venda do passo 19",        "estorno", "",             0, 1, true,  "19"),
+        new("22", "Estorno da venda do passo 17",        "estorno", "",             0, 1, true,  "17"),
+        new("30", "Mensagem longa — R$ 1.003,00",         "venda", "credito",   100300, 1, true),
+        new("45", "Aproximação — R$ 1.020,00",            "venda", "credito",   102000, 1, true),
+        new("46", "Aproximação sem senha — R$ 999,00",    "venda", "credito",    99900, 1, true),
+        new("53", "Pix — R$ 500,00",                      "venda", "pix",        50000, 1, true),
+        new("54", "Estorno do Pix (deve ser NEGADO)",    "estorno", "",             0, 1, false, "53"),
+    };
+
+    private static void GuardarPasso(string numero, string? intencao, string resultado)
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            cx.Execute("CREATE TABLE IF NOT EXISTS homolog_passo (numero TEXT PRIMARY KEY, intencao TEXT, resultado TEXT, quando TEXT)");
+            cx.Execute("""
+                INSERT INTO homolog_passo (numero, intencao, resultado, quando) VALUES (@N,@I,@R,@Q)
+                ON CONFLICT(numero) DO UPDATE SET intencao=COALESCE(excluded.intencao, intencao), resultado=excluded.resultado, quando=excluded.quando
+                """, new { N = numero, I = intencao, R = resultado, Q = DateTime.Now.ToString("o") });
+        }
+        catch { /* o roteiro não pode cair por causa do registro */ }
+    }
+
+    private static Dictionary<string, (string? Intencao, string Resultado)> PassosFeitos()
+    {
+        var d = new Dictionary<string, (string?, string)>(StringComparer.Ordinal);
+        try
+        {
+            using var cx = Banco.Abrir();
+            cx.Execute("CREATE TABLE IF NOT EXISTS homolog_passo (numero TEXT PRIMARY KEY, intencao TEXT, resultado TEXT, quando TEXT)");
+            foreach (var l in cx.Query("SELECT numero, intencao, resultado FROM homolog_passo"))
+                d[(string)l.numero] = ((string?)l.intencao, (string?)l.resultado ?? "");
+        }
+        catch { }
+        return d;
+    }
+
+    private async Task RoteiroHomologacaoAsync(Window dono, IProvedorTefOperavel cli)
+    {
+        var feitos = PassosFeitos();
+        var janela = new Window
+        {
+            Title = "Roteiro de homologação — PayGo/ControlPay",
+            Owner = dono,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Width = 720, Height = 640,
+            Background = (Brush)Application.Current.Resources["Fundo"],
+        };
+        var raiz = new Grid { Margin = new Thickness(18) };
+        raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        raiz.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var topo = new TextBlock
+        {
+            Text = "O PDV executa cada passo com o mesmo código da venda. Você só encosta ou insere o cartão quando o pinpad pedir.",
+            Foreground = (Brush)Application.Current.Resources["TextoFraco"],
+            FontSize = 13, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
+        };
+        Grid.SetRow(topo, 0); raiz.Children.Add(topo);
+
+        var lista = new ListBox
+        {
+            FontSize = 14, FontFamily = new FontFamily("Consolas"),
+            Background = (Brush)Application.Current.Resources["Painel"],
+            Foreground = (Brush)Application.Current.Resources["Texto"],
+            BorderBrush = (Brush)Application.Current.Resources["Borda"],
+        };
+        Grid.SetRow(lista, 1); raiz.Children.Add(lista);
+
+        var status = new TextBlock
+        {
+            Foreground = (Brush)Application.Current.Resources["TextoFraco"],
+            FontSize = 13, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 8), MinHeight = 40,
+        };
+        Grid.SetRow(status, 2); raiz.Children.Add(status);
+
+        var botoes = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3 };
+        var btnProximo = new Button { Content = "▶ Executar próximo", Style = (Style)Application.Current.Resources["BotaoPrincipal"], Margin = new Thickness(0, 0, 6, 0) };
+        var btnPular = new Button { Content = "Pular este passo", Style = (Style)Application.Current.Resources["BotaoBase"], Margin = new Thickness(0, 0, 6, 0) };
+        var btnFechar = new Button { Content = "Fechar", Style = (Style)Application.Current.Resources["BotaoBase"] };
+        botoes.Children.Add(btnProximo); botoes.Children.Add(btnPular); botoes.Children.Add(btnFechar);
+        Grid.SetRow(botoes, 3); raiz.Children.Add(botoes);
+        janela.Content = raiz;
+
+        PassoRoteiro? Proximo() => Roteiro.FirstOrDefault(p => !feitos.TryGetValue(p.Numero, out var f) || f.Resultado is not ("ok" or "pulado"));
+
+        void Pintar()
+        {
+            lista.Items.Clear();
+            foreach (var p in Roteiro)
+            {
+                feitos.TryGetValue(p.Numero, out var f);
+                var marca = f.Resultado switch { "ok" => "✔", "pulado" => "–", "falhou" => "✗", _ => "·" };
+                var extra = f.Intencao is { Length: > 0 } ? $"  intenção {f.Intencao}" : "";
+                lista.Items.Add($"{marca}  Passo {p.Numero}  {p.Titulo}{extra}");
+            }
+            var prox = Proximo();
+            var i = prox is null ? -1 : Array.FindIndex(Roteiro, x => x.Numero == prox.Numero);
+            if (i >= 0) { lista.SelectedIndex = i; lista.ScrollIntoView(lista.Items[i]); }
+            btnProximo.Content = prox is null ? "Roteiro concluído" : $"▶ Executar passo {prox.Numero}";
+            btnProximo.IsEnabled = prox is not null;
+            btnPular.IsEnabled = prox is not null;
+        }
+        Pintar();
+
+        async Task ExecutarAsync()
+        {
+            var p = Proximo();
+            if (p is null) return;
+            btnProximo.IsEnabled = false; btnPular.IsEnabled = false;
+            status.Text = $"Passo {p.Numero}: {p.Titulo} — siga na janela do PayGo…";
+            try
+            {
+                DesfechoTef d;
+                if (p.Tipo == "estorno")
+                {
+                    if (!feitos.TryGetValue(p.Referencia!, out var origem) || origem.Intencao is not { Length: > 0 })
+                    {
+                        status.Text = $"Passo {p.Numero}: faça antes o passo {p.Referencia} (é a venda que será estornada).";
+                        return;
+                    }
+                    var tx = TransacaoDaIntencao(origem.Intencao!);
+                    if (tx is null)
+                    {
+                        status.Text = $"Passo {p.Numero}: não achei a transação da intenção {origem.Intencao} para estornar.";
+                        return;
+                    }
+                    d = await cli.CancelarAsync(tx, CancellationToken.None);
+                }
+                else
+                {
+                    var tipo = p.Forma switch { "credito" => TipoTef.Credito, "debito" => TipoTef.Debito, _ => TipoTef.Pix };
+                    d = await cli.CobrarAsync(tipo, new Dinheiro(p.ValorCent), null, p.Parcelas, null, CancellationToken.None);
+                }
+                // "esperada negada" (04 e 54) conta como OK quando NÃO aprova — é o que o roteiro pede.
+                var ok = p.EsperaAprovada ? d.Pago : !d.Pago;
+                feitos[p.Numero] = (d.PaymentIdentifier, ok ? "ok" : "falhou");
+                GuardarPasso(p.Numero, d.PaymentIdentifier, ok ? "ok" : "falhou");
+                status.Text = ok
+                    ? $"✔ Passo {p.Numero} OK — intenção {d.PaymentIdentifier}. {(p.EsperaAprovada ? "Aprovada." : "Negada, como o roteiro pede.")} {d.Motivo}"
+                    : $"✗ Passo {p.Numero} saiu diferente do esperado: {d.MensagemParaTela} (intenção {d.PaymentIdentifier}). Refaça ou pule.";
+            }
+            catch (Exception ex)
+            {
+                feitos[p.Numero] = (null, "falhou");
+                GuardarPasso(p.Numero, null, "falhou");
+                status.Text = $"✗ Passo {p.Numero}: {ex.Message}";
+            }
+            finally { Pintar(); }
+        }
+
+        btnProximo.Click += async (_, _) => await ExecutarAsync();
+        btnPular.Click += (_, _) =>
+        {
+            var p = Proximo();
+            if (p is null) return;
+            feitos[p.Numero] = (feitos.TryGetValue(p.Numero, out var f) ? f.Intencao : null, "pulado");
+            GuardarPasso(p.Numero, null, "pulado");
+            status.Text = $"Passo {p.Numero} pulado.";
+            Pintar();
+        };
+        btnFechar.Click += (_, _) => janela.Close();
+        janela.ShowDialog();
+    }
+
+    /// <summary>Reconstrói a transação de uma intenção (para estornar) a partir de `tef_transacao`.</summary>
+    private static TransacaoPayGo? TransacaoDaIntencao(string intencao)
+    {
+        using var cx = Banco.Abrir();
+        var l = cx.QueryFirstOrDefault("""
+            SELECT id, identificacao, tipo, valor_cent, parcelas, resposta_txt
+              FROM tef_transacao
+             WHERE identificacao = @I AND situacao = 'pago'
+             ORDER BY criado_em DESC LIMIT 1
+            """, new { I = intencao });
+        if (l is null) return null;
+        return new TransacaoPayGo((string)l.id, (string)l.identificacao,
+            TipoTefExtensoes.Analisar((string?)l.tipo) ?? TipoTef.Credito,
+            (long)l.valor_cent, (int)(long)l.parcelas, "pago", RespostaPayGo.Analisar((string?)l.resposta_txt));
     }
 
     /// <summary>Operação do TEF (estorno/ADM) em curso: nada de vender, fechar caixa ou sair por baixo dela.</summary>

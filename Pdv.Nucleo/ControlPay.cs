@@ -43,7 +43,9 @@ public sealed record OpcoesControlPay(
     string SenhaTecnica,
     string TerminalId,
     string PessoaId,
-    string UserAgent = "PdvNativo/1.0")
+    string UserAgent = "PdvNativo/1.0",
+    string? Adquirente = null,
+    string? AdquirentePix = null)
 {
     public const string SandboxUrl = "https://sandbox.controlpay.com.br/webapi/";
     public const string ProducaoUrl = "https://api.controlpay.com.br/";
@@ -101,7 +103,13 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// ControlPay/PayGo: a linha fica `orfa` com aviso e o religamento/menu TEF resolvem pelo
     /// status real — nunca se declara pago o que não se sabe.
     /// </summary>
-    public int TempoMaxEmPagamentoMs { get; init; } = 40_000;
+    public int TempoMaxEmPagamentoMs { get; init; } = 60_000;
+
+    /// <summary>
+    /// Teto do Pix/carteira digital. O QR fica na tela esperando o cliente abrir o app, ler e
+    /// confirmar — 60 s derruba a venda no meio da leitura. Por isso o Pix tem prazo próprio.
+    /// </summary>
+    public int TempoMaxPixMs { get; init; } = 180_000;
 
     /// <summary>Teto do acompanhamento de um cancelamento/ADM (o PayGo pede senha lojista, cartão…).</summary>
     public int TempoMaxOperacaoMs { get; init; } = 10 * 60_000;
@@ -205,6 +213,11 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             // financiamento ao operador, e a loja não parcela. Parcelado (>1) vai pela LOJA.
             if (parc > 1) body["parcelamentoAdmin"] = false;
             else if (tipo is TipoTef.Credito or TipoTef.Debito) body["aVista"] = true;
+            // Adquirente pré-selecionada: a doc recomenda deixar o roteamento decidir, mas na
+            // HOMOLOGAÇÃO o roteiro exige um autorizador fixo (C6PAY / PIX C6 BANK) — sem isso o
+            // PayGo abre o menu de redes e a venda cai na rede errada (que nega centavos).
+            var adq = tipo == TipoTef.Pix ? (_op.AdquirentePix ?? _op.Adquirente) : _op.Adquirente;
+            if (!string.IsNullOrWhiteSpace(adq)) body["adquirente"] = adq;
 
             JsonDocument resp;
             try { resp = await ChamarAsync(HttpMethod.Post, "Venda/Vender/", body, CancellationToken.None).ConfigureAwait(false); }
@@ -239,12 +252,13 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 tipo == TipoTef.Pix ? "Siga na janela do PayGo: peça ao cliente para ler o QR…" : "Siga na janela do PayGo: aproxime, insira ou passe o cartão no pinpad…"));
 
             // 2. acompanhar até o final
-            var fim = await AcompanharAsync(ident, chargeId, andamento, ct).ConfigureAwait(false);
+            var teto = tipo == TipoTef.Pix ? TempoMaxPixMs : TempoMaxEmPagamentoMs;
+            var fim = await AcompanharAsync(ident, chargeId, andamento, ct, teto).ConfigureAwait(false);
             if (fim.Desistencia == "tempo")
             {
                 // Passou do teto sem desfecho. A cobrança pode estar viva no pinpad: órfã +
                 // aviso, e o operador decide (conferir no PayGo / estornar / registrar).
-                var msg = $"a cobrança passou de {TempoMaxEmPagamentoMs / 1000} s sem resposta — confira na janela do PayGo. " +
+                var msg = $"a cobrança passou de {teto / 1000} s sem resposta — confira na janela do PayGo. " +
                           "Se o cliente concluiu, NÃO cobre de novo: estorne em TEF → Estornar.";
                 Guardar(new TransacaoPayGo(chargeId, ident, tipo, valor.Centavos, parc, "orfa", null, msg));
                 Auditar?.Invoke($"controlpay: intenção {ident} sem desfecho em {TempoMaxEmPagamentoMs / 1000} s — devolvida ao operador (órfã)");
@@ -310,7 +324,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// null se o operador cancelou e a intenção ficou em pagamento além de <see cref="TempoDesistirAposCancelarMs"/>.
     /// </summary>
     private async Task<(int Status, string Nome, string? Detalhe, string? Desistencia)> AcompanharAsync(string ident, string chargeId,
-        IProgress<AndamentoTef>? andamento, CancellationToken ct)
+        IProgress<AndamentoTef>? andamento, CancellationToken ct, int tetoMs)
     {
         Stopwatch? desdeCancelamento = null;
         var falhasSeguidas = 0;
@@ -346,7 +360,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             }
             if (desdeCancelamento is not null && desdeCancelamento.ElapsedMilliseconds >= TempoDesistirAposCancelarMs)
                 return (0, "", null, "cancelou");
-            if (TempoMaxEmPagamentoMs > 0 && relogio.ElapsedMilliseconds >= TempoMaxEmPagamentoMs)
+            if (tetoMs > 0 && relogio.ElapsedMilliseconds >= tetoMs)
                 return (0, "", null, "tempo");
             await Task.Delay(IntervaloPollMs).ConfigureAwait(false);
         }

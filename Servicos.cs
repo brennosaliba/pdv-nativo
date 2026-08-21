@@ -227,8 +227,14 @@ public static class Servicos
                         SenhaTecnica: seg.GetValueOrDefault("cpaySenhaTecnica", "314159"),
                         TerminalId: Vendas.Config(cx, "tef_cpay_terminal") ?? "",
                         PessoaId: Vendas.Config(cx, "tef_cpay_pessoa") ?? "",
-                        UserAgent: "PdvNativo/" + versao))
+                        UserAgent: "PdvNativo/" + versao,
+                        // Autorizador fixo (homologação): sem isso o PayGo abre o menu de redes e
+                        // a venda pode cair na rede errada. Vazio = roteamento da PayGo decide.
+                        Adquirente: Vendas.Config(cx, "tef_cpay_adquirente"),
+                        AdquirentePix: Vendas.Config(cx, "tef_cpay_adquirente_pix")))
                 {
+                    TempoMaxEmPagamentoMs = int.TryParse(Vendas.Config(cx, "tef_cpay_timeout_s"), out var ts) ? ts * 1000 : 60_000,
+                    TempoMaxPixMs = int.TryParse(Vendas.Config(cx, "tef_cpay_timeout_pix_s"), out var tp) ? tp * 1000 : 180_000,
                     Guardar = t => GuardarTef(t, "controlpay"),
                     CnpjDaRede = rede =>
                     {
