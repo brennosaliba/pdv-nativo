@@ -271,11 +271,13 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                         "o cartão foi APROVADO mas o caixa não conseguiu gravar a transação — NÃO cobre de novo; estorne pelo menu TEF ou registre como POS", true)
                     { Codigo = CodigoTef.Plataforma };
                 }
-                // 'pago' ANTES de imprimir: no ControlPay não há CNF/NCN — a transação já está
-                // efetivada e o comprovante é melhor esforço. Imprimir primeiro deixaria o caixa
-                // preso numa fila de impressora travada com a venda já cobrada.
+                // 'pago' ANTES de imprimir e a impressão FORA do caminho da venda: no ControlPay
+                // não há CNF/NCN — a transação já está efetivada e o comprovante é acessório.
+                // Esperar a impressora (fila travada, sem papel, diálogo de retentativa) deixava
+                // o caixa parado em "aguardando o cliente" com a venda já cobrada. Falhou? Fica
+                // na auditoria e o operador reimprime em TEF → Reimprimir.
                 Guardar(tx with { Situacao = "pago" });
-                await ImprimirSeguroAsync(tx).ConfigureAwait(false);
+                _ = ImprimirSeguroAsync(tx);
                 Auditar?.Invoke($"controlpay: intenção {ident} APROVADA nsu={r.Nsu ?? "-"} aut={r.Autorizacao ?? "-"} rede={r.Rede ?? "-"}");
                 return new DesfechoTef(SituacaoTef.Pago, ident, chargeId, Cartao(r), null, false) { Codigo = CodigoTef.Pago, PaymentStatus = "pago" };
             }
@@ -429,7 +431,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             var r = await RespostaDaIntencaoAsync(ident, original.ValorCent, original.Tipo, 10).ConfigureAwait(false);
             var tx = new TransacaoPayGo(chargeId, ident, original.Tipo, original.ValorCent, original.Parcelas, "aprovada", r, "cancelamento de " + original.ChargeId);
             GuardarSeguro(tx);
-            await ImprimirSeguroAsync(tx).ConfigureAwait(false);
+            _ = ImprimirSeguroAsync(tx);   // comprovante do estorno também não segura a tela
             Guardar(tx with { Situacao = "estornado" });
             Guardar(original with { Situacao = "estornada", Motivo = "estornada por " + chargeId });
             Auditar?.Invoke($"controlpay: intenção {ident} CANCELADA (estorno)");
@@ -483,7 +485,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             {
                 var tx = new TransacaoPayGo(chargeId, peId.ToString(CultureInfo.InvariantCulture), TipoTef.Credito, r.ValorCent ?? 0, 1, "adm", r, "administrativa");
                 GuardarSeguro(tx);
-                await ImprimirSeguroAsync(tx).ConfigureAwait(false);
+                _ = ImprimirSeguroAsync(tx);
             }
             Auditar?.Invoke($"controlpay: operação administrativa {peId} concluída — {msg}");
             return new DesfechoTef(SituacaoTef.Pago, peId.ToString(CultureInfo.InvariantCulture), chargeId, null, msg, false) { Codigo = CodigoTef.Pago, PaymentStatus = "adm" };

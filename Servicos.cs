@@ -442,11 +442,28 @@ public static class Servicos
         // desfeito quando foi cobrado.
         var decide = t.Resposta.RequerConfirmacao;
         var impressos = 0;
+        var tentativas = 0;
         while (true)
         {
+            // Sem two-phase (ControlPay/729=1) a impressão é acessória e roda FORA da venda:
+            // insistir com diálogo aqui só empilharia janelas sobre o caixa. Uma tentativa,
+            // um aviso, e o operador reimprime quando quiser (TEF → Reimprimir).
+            if (!decide && ++tentativas > 1) return false;
             var (erro, saiu) = await Impressao.ImprimirBlocosAsync(descricao, blocos, impressora, impressos).ConfigureAwait(false);
             impressos += saiu;   // retentativa continua da via que NÃO saiu (não duplica a via do cliente)
             if (erro is null) return true;
+            if (!decide)
+            {
+                // Aviso único, sem prender ninguém: a venda já seguiu.
+                await NaUiAsync<object?>(() =>
+                {
+                    Dialogo.Avisar(System.Windows.Application.Current.MainWindow, "Comprovante não saiu",
+                        $"{erro}\n\nA transação está efetivada — a venda seguiu normalmente. " +
+                        "Reimprima em TEF → Reimprimir o último comprovante quando a impressora estiver pronta.", "erro");
+                    return null;
+                }).ConfigureAwait(false);
+                return false;
+            }
             var tentar = await NaUiAsync(() => Dialogo.Confirmar(
                 System.Windows.Application.Current.MainWindow, "Comprovante não saiu",
                 decide
