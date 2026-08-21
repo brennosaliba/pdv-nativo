@@ -43,7 +43,16 @@ public partial class Configuracao : UserControl
         // TEF: também é preferência da MÁQUINA (qual maquininha/PayGo este caixa usa) —
         // carrega sempre e reabre preenchido.
         CboTef.SelectedIndex = Vendas.Config(cx, "tef_habilitado") != "1" ? 0
-            : Vendas.Config(cx, "tef_provedor") == "paygo" ? 2 : 1;
+            : Vendas.Config(cx, "tef_provedor") switch { "paygo" => 2, "controlpay" => 3, _ => 1 };
+        CmbCpayAmbiente.SelectedIndex = Vendas.Config(cx, "tef_cpay_ambiente") == "producao" ? 1 : 0;
+        TxtCpayTerminal.Text = Vendas.Config(cx, "tef_cpay_terminal", "");
+        TxtCpayPessoa.Text = Vendas.Config(cx, "tef_cpay_pessoa", "");
+        {
+            // segredos do ControlPay no cofre DPAPI (reabrir vem preenchido)
+            var segTef = LerSegredos();
+            PwdCpayChave.Password = segTef.GetValueOrDefault("cpayChave", "");
+            PwdCpaySenha.Password = segTef.GetValueOrDefault("cpaySenhaTecnica", "");
+        }
         TxtPayGoPasta.Text = Vendas.Config(cx, "tef_paygo_pasta", "");
         TxtPayGoRegistro.Text = Vendas.Config(cx, "tef_paygo_registro", "");
         TxtPayGoEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
@@ -724,6 +733,7 @@ public partial class Configuracao : UserControl
     {
         "tef_habilitado", "tef_provedor", "tef_paygo_pasta", "tef_paygo_registro", "tef_paygo_empresa",
         "tef_paygo_rede", "tef_paygo_rede_pix", "tef_paygo_imprimir_vias", "tef_perguntar_parcelas", "tef_serial_pos",
+        "tef_cpay_ambiente", "tef_cpay_terminal", "tef_cpay_pessoa",
     };
     private readonly Dictionary<string, string?> _tefOriginal = new();
     private bool _tefGravadoPeloTeste;   // Testar/ADM gravaram sem Salvar
@@ -751,6 +761,8 @@ public partial class Configuracao : UserControl
     {
         BtnTestarPayGo.IsEnabled = !ocupado;
         BtnMenuPayGo.IsEnabled = !ocupado;
+        BtnTestarCpay.IsEnabled = !ocupado;
+        BtnMenuCpay.IsEnabled = !ocupado;
         BtnSalvar.IsEnabled = !ocupado;
         BtnVoltar.IsEnabled = !ocupado;
         CboTef.IsEnabled = !ocupado;
@@ -765,12 +777,26 @@ public partial class Configuracao : UserControl
     {
         var modo = CboTef.SelectedIndex;
         Vendas.GravarConfig(cx, "tef_habilitado", modo <= 0 ? "0" : "1");
-        Vendas.GravarConfig(cx, "tef_provedor", modo == 2 ? "paygo" : "nuvem");
+        Vendas.GravarConfig(cx, "tef_provedor", modo switch { 2 => "paygo", 3 => "controlpay", _ => "nuvem" });
         void Chave(string chave, string valor)
         {
             valor = valor.Trim();
             if (valor.Length == 0) cx.Execute("DELETE FROM config WHERE chave=@C", new { C = chave });
             else Vendas.GravarConfig(cx, chave, valor);
+        }
+        // ControlPay: ambiente/terminal/pessoa em config; chave e senha técnica no cofre DPAPI
+        Vendas.GravarConfig(cx, "tef_cpay_ambiente", CmbCpayAmbiente.SelectedIndex == 1 ? "producao" : "sandbox");
+        Chave("tef_cpay_terminal", TxtCpayTerminal.Text);
+        Chave("tef_cpay_pessoa", TxtCpayPessoa.Text);
+        {
+            var segTef = LerSegredos();
+            var chaveCpay = PwdCpayChave.Password.Trim();
+            // aceita colada URL-encoded (%2f, %2b, %3d) — guardamos decodificada e codificamos ao enviar
+            if (chaveCpay.Contains('%')) { try { chaveCpay = Uri.UnescapeDataString(chaveCpay); } catch { } }
+            if (chaveCpay.Length > 0) segTef["cpayChave"] = chaveCpay; else segTef.Remove("cpayChave");
+            var senhaTec = PwdCpaySenha.Password.Trim();
+            if (senhaTec.Length > 0) segTef["cpaySenhaTecnica"] = senhaTec; else segTef.Remove("cpaySenhaTecnica");
+            GravarSegredos(segTef);
         }
         Chave("tef_paygo_pasta", TxtPayGoPasta.Text);
         Chave("tef_paygo_registro", TxtPayGoRegistro.Text);
@@ -788,9 +814,44 @@ public partial class Configuracao : UserControl
     /// <summary>Revelação progressiva do bloco do provedor. Guard de null: o ComboBox dispara no InitializeComponent.</summary>
     private void PintarBlocosTef()
     {
-        if (BlocoPayGo is null || BlocoTefNuvem is null || CboTef is null) return;
+        if (BlocoPayGo is null || BlocoTefNuvem is null || BlocoControlPay is null || BlocoTefOpcoes is null || CboTef is null) return;
         BlocoPayGo.Visibility = CboTef.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        BlocoControlPay.Visibility = CboTef.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
         BlocoTefNuvem.Visibility = CboTef.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+        BlocoTefOpcoes.Visibility = CboTef.SelectedIndex is 2 or 3 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Testa a chave/terminal do ControlPay com uma instância EFÊMERA montada dos campos da tela
+    /// (não grava nada): lista os terminais da pessoa; se o ID do terminal estiver vazio e só
+    /// houver um com terminal físico, preenche. Nenhuma mensagem carrega a chave.
+    /// </summary>
+    private async void TestarControlPay(object sender, RoutedEventArgs e)
+    {
+        TravarTef(true);
+        StatusTef("Consultando o ControlPay…", null);
+        try
+        {
+            var chave = PwdCpayChave.Password.Trim();
+            if (chave.Contains('%')) { try { chave = Uri.UnescapeDataString(chave); } catch { } }
+            if (chave.Length == 0) { StatusTef("Informe a chave de integração.", "Erro"); return; }
+            if (TxtCpayPessoa.Text.Trim().Length == 0) { StatusTef("Informe o ID da pessoa (está no portal ControlPay / no login do PayGo).", "Erro"); return; }
+            using var cli = new ClienteControlPay(new OpcoesControlPay(
+                OpcoesControlPay.UrlDoAmbiente(CmbCpayAmbiente.SelectedIndex == 1 ? "producao" : "sandbox"),
+                chave, PwdCpaySenha.Password.Trim(), TxtCpayTerminal.Text.Trim(), TxtCpayPessoa.Text.Trim()));
+            var terminais = await cli.ListarTerminaisAsync(CancellationToken.None);
+            if (terminais.Count == 0) { StatusTef("✓ Chave aceita, mas a pessoa não tem terminais — peça à PayGo o vínculo com o terminal físico.", "Erro"); return; }
+            var comFisico = terminais.Where(t => t.TerminalFisico is not null).ToList();
+            if (TxtCpayTerminal.Text.Trim().Length == 0 && comFisico.Count == 1) TxtCpayTerminal.Text = comFisico[0].Id;
+            var escolhido = terminais.FirstOrDefault(t => t.Id == TxtCpayTerminal.Text.Trim());
+            var linhas = terminais.Select(t => $"• {t.Id} — {t.Nome}{(t.TerminalFisico is null ? " (SEM terminal físico — não transaciona)" : $" · físico {t.TerminalFisico} / instalação {t.InstalacaoId}")}{(t.AguardaTef ? "" : " · aguardaTef=false")}{(t.VendaPorValor ? "" : " · venda por valor DESLIGADA")}");
+            StatusTef((escolhido is null
+                    ? "✓ Chave aceita. Escolha um terminal COM terminal físico acima:\n"
+                    : $"✓ Chave aceita · terminal {escolhido.Id} ({escolhido.Nome}) pronto. (Salve para manter.)\n")
+                + string.Join("\n", linhas), escolhido is null || escolhido.TerminalFisico is null ? "Erro" : "Ok");
+        }
+        catch (Exception ex) { StatusTef("✗ " + ex.Message, "Erro"); }
+        finally { TravarTef(false); }
     }
 
     /// <summary>
@@ -826,10 +887,10 @@ public partial class Configuracao : UserControl
                   "(Cancelamento de VENDA: use TEF → Estornar na tela do caixa, que cancela a venda junto.)", null);
         try
         {
-            if (CboTef.SelectedIndex != 2) { StatusTef("Selecione \"PayGo Windows\" acima.", "Erro"); return; }
+            if (CboTef.SelectedIndex is not (2 or 3)) { StatusTef("Selecione \"PayGo Windows\" ou \"ControlPay\" acima.", "Erro"); return; }
             using (var cx = Banco.Abrir()) GravarTef(cx);
             _tefGravadoPeloTeste = true;
-            if (Servicos.PayGo() is not { } cli) { StatusTef("TEF desligado — selecione o PayGo e tente de novo.", "Erro"); return; }
+            if (Servicos.Operavel() is not { } cli) { StatusTef("TEF desligado ou sem chave — confira os campos e tente de novo.", "Erro"); return; }
             var d = await cli.AdministrativaAsync(CancellationToken.None);
             StatusTef(d.Pago ? "✓ Operação administrativa concluída. " + (d.Motivo ?? "") : "✗ " + d.MensagemParaTela,
                 d.Pago ? "Ok" : "Erro");

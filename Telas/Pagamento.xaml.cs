@@ -475,7 +475,7 @@ public partial class Pagamento : UserControl
                                               -- PayGo: quem manda na situação é o cliente (Guardar), que já
                                               -- pode ter passado de 'aguardando' quando este report chega
                                               -- pela fila da UI. Não regredir.
-                                              situacao = CASE WHEN COALESCE(provedor,'') = 'paygo' THEN situacao ELSE @S END,
+                                              situacao = CASE WHEN COALESCE(provedor,'') IN ('paygo','controlpay') THEN situacao ELSE @S END,
                                               atualizado_em = @Em
                 """,
                 new { Id = a.ChargeId, Ch = a.ChargeId, Pid = a.PaymentIdentifier, T = forma,
@@ -502,7 +502,7 @@ public partial class Pagamento : UserControl
                                          terminal=@Term, payment_status=COALESCE(@Ps, payment_status), atualizado_em=@Em
                  -- PayGo: a linha já foi fechada pelo cliente (pago/desfeita/ncn_sem_ack…); reescrever a
                  -- situação pelo desfecho da tela apagaria 'ncn_sem_ack' e o boot não reenviaria o NCN.
-                 WHERE charge_id=@Ch AND COALESCE(provedor,'') <> 'paygo'
+                 WHERE charge_id=@Ch AND COALESCE(provedor,'') NOT IN ('paygo','controlpay')
                 """,
                 new { S = situacao, M = d.Motivo, Pid = d.PaymentIdentifier, Ch = d.ChargeId, Ps = d.PaymentStatus,
                       Aut = d.Cartao?.CAut, Cnpj = d.Cartao?.Cnpj, Band = d.Cartao?.Bandeira,

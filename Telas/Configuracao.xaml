@@ -98,6 +98,7 @@
                     <ComboBoxItem Content="Sem TEF — cartão registrado na mão (maquininha avulsa)"/>
                     <ComboBoxItem Content="Smart TEF pela nuvem (maquininha Rede)"/>
                     <ComboBoxItem Content="PayGo Windows (troca de arquivos, nesta máquina)"/>
+                    <ComboBoxItem Content="ControlPay — WebService da PayGo (PayGo Windows como terminal)"/>
                 </ComboBox>
                 <StackPanel x:Name="BlocoPayGo" Visibility="Collapsed">
                     <TextBlock Text="Pasta do PayGo (a mesma configurada no PayGo Windows)" Style="{StaticResource Rotulo}"/>
@@ -121,10 +122,6 @@
                             <TextBox x:Name="TxtPayGoRedePix" Margin="0,4,0,0" Tag="ex.: PIX C6 BANK"/>
                         </StackPanel>
                     </Grid>
-                    <CheckBox x:Name="ChkPayGoVias" IsChecked="True" FontSize="14" Margin="0,0,0,8"
-                              Content="Imprimir as vias do comprovante (cliente e estabelecimento) — é a impressão que confirma a transação"/>
-                    <CheckBox x:Name="ChkTefParcelas" IsChecked="False" FontSize="14" Margin="0,0,0,8"
-                              Content="Perguntar o número de parcelas no crédito (desligado: crédito sai à vista)"/>
                     <Grid Margin="0,0,0,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -137,9 +134,62 @@
                                 Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
                     </Grid>
                 </StackPanel>
+                <StackPanel x:Name="BlocoControlPay" Visibility="Collapsed">
+                    <TextBlock Text="O PayGo Windows desta máquina precisa estar ativado como terminal ControlPay (é ele quem fala com o pinpad). O PDV cria a venda na API e acompanha o status."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <TextBlock Text="Ambiente" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CmbCpayAmbiente" Margin="0,4,0,8" FontSize="16" Padding="12,10">
+                        <ComboBoxItem Content="Sandbox (homologação) — sandbox.controlpay.com.br"/>
+                        <ComboBoxItem Content="Produção — api.controlpay.com.br"/>
+                    </ComboBox>
+                    <TextBlock Text="Chave de integração (portal ControlPay → Integrações/Config. → Chaves de integração)" Style="{StaticResource Rotulo}"/>
+                    <PasswordBox x:Name="PwdCpayChave" Margin="0,4,0,8" FontSize="18" Padding="12,10"
+                                 Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
+                                 BorderBrush="{DynamicResource Borda}"/>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="ID do terminal" Style="{StaticResource Rotulo}"/>
+                            <TextBox x:Name="TxtCpayTerminal" Margin="0,4,0,0" Tag="ex.: 6408"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="ID da pessoa" Style="{StaticResource Rotulo}"/>
+                            <TextBox x:Name="TxtCpayPessoa" Margin="0,4,0,0" Tag="ex.: 12247"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="4">
+                            <TextBlock Text="Senha técnica" Style="{StaticResource Rotulo}"/>
+                            <PasswordBox x:Name="PwdCpaySenha" Margin="0,4,0,0" FontSize="18" Padding="12,10"
+                                         Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
+                                         BorderBrush="{DynamicResource Borda}"/>
+                        </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" x:Name="BtnTestarCpay" Content="Testar ControlPay (listar terminais)" Click="TestarControlPay"
+                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
+                        <Button Grid.Column="2" x:Name="BtnMenuCpay" Content="Menu administrativo (ADM)" Click="MenuPayGo"
+                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
+                    </Grid>
+                </StackPanel>
                 <StackPanel x:Name="BlocoTefNuvem" Visibility="Collapsed">
                     <TextBlock Text="Serial da maquininha (vazio = terminal padrão da conta)" Style="{StaticResource Rotulo}"/>
                     <TextBox x:Name="TxtTefSerial" Margin="0,4,0,8"/>
+                </StackPanel>
+                <StackPanel x:Name="BlocoTefOpcoes" Visibility="Collapsed">
+                    <CheckBox x:Name="ChkPayGoVias" IsChecked="True" FontSize="14" Margin="0,0,0,8"
+                              Content="Imprimir as vias do comprovante (cliente e estabelecimento) na impressora do cupom"/>
+                    <CheckBox x:Name="ChkTefParcelas" IsChecked="False" FontSize="14" Margin="0,0,0,8"
+                              Content="Perguntar o número de parcelas no crédito (desligado: crédito sai à vista)"/>
                 </StackPanel>
                 <TextBlock x:Name="TxtStatusTef" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                            TextWrapping="Wrap" Margin="0,0,0,12"/>

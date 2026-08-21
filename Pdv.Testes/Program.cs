@@ -10,6 +10,63 @@ using Pdv.Testes;
 // Modo semente: carrega um catálogo de arquivo no banco REAL do caixa. Serve pra
 // preparar uma máquina sem depender de credencial da nuvem (instalação, demo, suporte).
 //   dotnet run -- semear caminho\produtos.json
+// Modo simulador: PayGo Windows DE MENTIRA numa pasta fixa, ao lado do PDV de verdade.
+// Ambiente de teste da tela inteira (venda → comprovante → CNF, estorno/CNC, ADM,
+// pendência…) sem credencial da PayGo. Aprova tudo por padrão; para roteirizar o próximo
+// desfecho, escreva uma palavra por linha em <pasta>\roteiro.txt:
+//   recusar | divergente | 729=1 | sumir | semsts | pendencia | inconsistente | cancelar
+//   dotnet run --project Pdv.Testes -- --fake-paygo C:\PAYGO\SIM
+if (args.Length >= 2 && args[0] == "--fake-paygo")
+{
+    var pasta = args[1];
+    using var fake = new FakePayGo(pasta) { AtrasoRespostaMs = 1500 };
+    fake.Recebeu = c =>
+    {
+        var cmd = c.GetValueOrDefault("000-000") ?? "?";
+        var extra = cmd switch
+        {
+            "CRT" => $" valor={c.GetValueOrDefault("003-000")} tipo731={c.GetValueOrDefault("731-000")} 732={c.GetValueOrDefault("732-000")} 018={c.GetValueOrDefault("018-000") ?? "-"} 749={c.GetValueOrDefault("749-000")} rede={c.GetValueOrDefault("010-000") ?? "(menu)"}",
+            "CNC" => $" valor={c.GetValueOrDefault("003-000")} nsu={c.GetValueOrDefault("012-000")} 027={c.GetValueOrDefault("027-000")}",
+            "CNF" or "NCN" => $" 027={c.GetValueOrDefault("027-000") ?? "-"}",
+            _ => "",
+        };
+        Console.WriteLine($"{DateTime.Now:HH:mm:ss} ◀ {cmd} 001={c.GetValueOrDefault("001-000")}{extra}");
+    };
+    var roteiro = Path.Combine(pasta, "roteiro.txt");
+    Console.WriteLine($"PayGo SIMULADO observando {fake.Req}  (Ctrl+C para parar)");
+    Console.WriteLine($"Próximos desfechos: escreva em {roteiro} (recusar|divergente|729=1|sumir|semsts|pendencia|inconsistente|cancelar)");
+    while (true)
+    {
+        try
+        {
+            if (File.Exists(roteiro))
+            {
+                var linhasRoteiro = File.ReadAllLines(roteiro);
+                File.WriteAllText(roteiro, "");
+                foreach (var l in linhasRoteiro)
+                {
+                    var d = l.Trim().ToLowerInvariant() switch
+                    {
+                        "recusar" => FakePayGo.Desfecho.Recusar,
+                        "divergente" => FakePayGo.Desfecho.AprovarValorDivergente,
+                        "729=1" => FakePayGo.Desfecho.AprovarSemConfirmacao,
+                        "sumir" => FakePayGo.Desfecho.Sumir,
+                        "semsts" => FakePayGo.Desfecho.SemSts,
+                        "pendencia" => FakePayGo.Desfecho.NegarComPendencia,
+                        "inconsistente" => FakePayGo.Desfecho.Inconsistente,
+                        "cancelar" => FakePayGo.Desfecho.CancelarNoPinpad,
+                        "" => (FakePayGo.Desfecho?)null,
+                        _ => FakePayGo.Desfecho.Aprovar,
+                    };
+                    if (d is { } dd) { fake.Roteiro.Enqueue(dd); Console.WriteLine($"{DateTime.Now:HH:mm:ss} ▶ próximo desfecho: {dd}"); }
+                }
+            }
+        }
+        catch { }
+        Thread.Sleep(400);
+    }
+}
+
 if (args.Length >= 2 && args[0] == "semear")
 {
     var caminhoJson = args[1];
@@ -989,6 +1046,8 @@ TestesPromocoes.Rodar((cond, nome) => Check("promo: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- TEF PayGo (troca de arquivos simulada) ---");
 TestesPayGo.Rodar((cond, nome) => Check("paygo: " + nome, cond));
+Console.WriteLine("--- TEF ControlPay (WebService simulado) ---");
+TestesControlPay.Rodar((cond, nome) => Check("controlpay: " + nome, cond));
 
 cx.Dispose();
 SqliteConnection.ClearAllPools();

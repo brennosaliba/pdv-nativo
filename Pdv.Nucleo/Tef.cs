@@ -102,12 +102,35 @@ public static class CodigoTef
 /// </summary>
 public interface IProvedorTef
 {
-    /// <summary>`nuvem` ou `paygo` — vai para auditoria e para a tela de configuração.</summary>
+    /// <summary>`nuvem`, `paygo` ou `controlpay` — vai para auditoria e para a tela de configuração.</summary>
     string Nome { get; }
 
     /// <inheritdoc cref="ClienteTef.CobrarAsync"/>
     Task<DesfechoTef> CobrarAsync(TipoTef tipo, Dinheiro valor, string? documento,
         int parcelas, IProgress<AndamentoTef>? andamento, CancellationToken ct);
+}
+
+/// <summary>
+/// Provedor de TEF que, além de cobrar, sabe estornar, abrir o menu administrativo e dizer se
+/// está de pé — é o que a tela de venda (botão TEF) e a Configuração usam. PayGo (troca de
+/// arquivos) e ControlPay (WebService) implementam; a nuvem antiga não.
+/// </summary>
+public interface IProvedorTefOperavel : IProvedorTef
+{
+    /// <summary>Uma linha para a tela: "PayGo em C:\PAYGO", "ControlPay sandbox · terminal 6408".</summary>
+    string Descricao { get; }
+
+    /// <summary>Há comando em voo (não trocar a instância agora).</summary>
+    bool Ocupado { get; }
+
+    /// <summary>O provedor responde? (ATV no PayGo; consulta de terminais no ControlPay.)</summary>
+    Task<bool> AtivoAsync(CancellationToken ct);
+
+    /// <summary>Estorna uma venda já paga. `original` vem da linha de `tef_transacao` (Identificacao/Resposta).</summary>
+    Task<DesfechoTef> CancelarAsync(TransacaoPayGo original, CancellationToken ct);
+
+    /// <summary>Menu administrativo do TEF (relatórios, reimpressão, cancelamento pelo menu…).</summary>
+    Task<DesfechoTef> AdministrativaAsync(CancellationToken ct);
 }
 
 /// <summary>

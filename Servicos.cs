@@ -208,10 +208,46 @@ public static class Servicos
     {
         lock (Trava)
         {
-            if (_tefVencido && _tef is ClientePayGo { Ocupado: false }) { _tef = null; _tefVencido = false; }
+            if (_tefVencido && _tef is IProvedorTefOperavel { Ocupado: false }) { _tef = null; _tefVencido = false; }
             if (_tef is not null) return _tef;
             using var cx = Banco.Abrir();
             if (Vendas.Config(cx, "tef_habilitado") != "1") return null;
+
+            if (Vendas.Config(cx, "tef_provedor") == "controlpay")
+            {
+                // ControlPay (WebService da PayGo): o PayGo Windows desta máquina é o terminal;
+                // chave de integração e senha técnica vivem no cofre DPAPI, nunca na tabela config.
+                var seg = Configuracao.LerSegredos();
+                var chave = seg.GetValueOrDefault("cpayChave", "");
+                if (string.IsNullOrWhiteSpace(chave)) return null;   // sem chave não existe provedor (a tela avisa)
+                var versao = typeof(Servicos).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+                _tef = new ClienteControlPay(new OpcoesControlPay(
+                        BaseUrl: OpcoesControlPay.UrlDoAmbiente(Vendas.Config(cx, "tef_cpay_ambiente")),
+                        Chave: chave,
+                        SenhaTecnica: seg.GetValueOrDefault("cpaySenhaTecnica", "314159"),
+                        TerminalId: Vendas.Config(cx, "tef_cpay_terminal") ?? "",
+                        PessoaId: Vendas.Config(cx, "tef_cpay_pessoa") ?? "",
+                        UserAgent: "PdvNativo/" + versao))
+                {
+                    Guardar = t => GuardarTef(t, "controlpay"),
+                    CnpjDaRede = rede =>
+                    {
+                        using var c2 = Banco.Abrir();
+                        return Vendas.Config(c2, "tef_cnpj_rede_" + rede.Trim().ToLowerInvariant());
+                    },
+                    ImprimirComprovante = ImprimirComprovantePayGoAsync,
+                    Auditar = detalhe =>
+                    {
+                        try
+                        {
+                            using var c4 = Banco.Abrir();
+                            Caixa.Auditar(c4, null, "tef_controlpay", null, null, detalhe);
+                        }
+                        catch { /* auditoria não derruba cobrança */ }
+                    },
+                };
+                return _tef;
+            }
 
             if (Vendas.Config(cx, "tef_provedor") == "paygo")
             {
@@ -232,7 +268,7 @@ public static class Servicos
                         RedeCartao: Vendas.Config(cx, "tef_paygo_rede"),
                         RedePix: Vendas.Config(cx, "tef_paygo_rede_pix")))
                 {
-                    Guardar = GuardarPayGo,
+                    Guardar = t => GuardarTef(t, "paygo"),
                     CnpjDaRede = rede =>
                     {
                         using var c2 = Banco.Abrir();
@@ -301,7 +337,7 @@ public static class Servicos
             // trocar a instância agora deixaria DUAS disputando a pasta do PayGo — uma
             // apagaria o .001 que a outra espera. Marca como vencida e troca no próximo Tef()
             // assim que a atual desocupar.
-            if (_tef is ClientePayGo { Ocupado: true }) { _tefVencido = true; return; }
+            if (_tef is IProvedorTefOperavel { Ocupado: true }) { _tefVencido = true; return; }
             _tef = null;
             _tefVencido = false;
         }
@@ -310,8 +346,11 @@ public static class Servicos
     /// <summary>Config mudou com o provedor ocupado: o próximo Tef() com a instância livre reconstrói.</summary>
     private static bool _tefVencido;
 
-    /// <summary>O provedor atual, se for o PayGo (estorno/ADM/reimpressão não estão em IProvedorTef).</summary>
+    /// <summary>O provedor atual, se for o PayGo por arquivos.</summary>
     public static ClientePayGo? PayGo() => Tef() as ClientePayGo;
+
+    /// <summary>O provedor atual, se souber estornar/ADM/ativo (PayGo ou ControlPay) — é o que o botão TEF da venda e a Configuração usam.</summary>
+    public static IProvedorTefOperavel? Operavel() => Tef() as IProvedorTefOperavel;
 
     /// <summary>
     /// Garante a linha original como 'estornada' depois de um CNC aprovado. O cliente já grava
@@ -327,7 +366,7 @@ public static class Servicos
             cx.Execute("""
                 UPDATE tef_transacao SET situacao = 'estornada', payment_status = 'estornada',
                        motivo = COALESCE(motivo, @M), atualizado_em = @Em
-                 WHERE id = @Id AND provedor = 'paygo' AND situacao = 'pago'
+                 WHERE id = @Id AND provedor IN ('paygo','controlpay') AND situacao = 'pago'
                 """, new { Id = tefId, M = motivo, Em = DateTime.Now.ToString("o") });
         }
         catch { /* a auditoria do estorno já registrou; não derrubar a tela */ }
@@ -434,7 +473,10 @@ public static class Servicos
     /// CNF. False = o cliente desfaz a transação (NCN). Upsert por `id = charge_id`, a mesma
     /// chave que a tela de pagamento usa — as duas escritas convergem na mesma linha.
     /// </summary>
-    private static bool GuardarPayGo(TransacaoPayGo t)
+    private static bool GuardarPayGo(TransacaoPayGo t) => GuardarTef(t, "paygo");
+
+    /// <summary>Mesma linha para PayGo e ControlPay — só o `provedor` muda (e o charge_id já diz quem é: paygo-/cpay-).</summary>
+    private static bool GuardarTef(TransacaoPayGo t, string provedor)
     {
         try
         {
@@ -445,7 +487,7 @@ public static class Servicos
                                            payment_status, motivo, aut, cnpj_cred, bandeira, tband, nsu, terminal, provedor,
                                            identificacao, cod_controle, rede, data_tef, hora_tef, vias_json,
                                            resposta_txt, criado_em, atualizado_em)
-                VALUES (@Id,@Id,@Ident,@Tipo,@V,@P,@S,@S,@M,@Aut,@Cnpj,@Band,@Tb,@Nsu,@Term,'paygo',
+                VALUES (@Id,@Id,@Ident,@Tipo,@V,@P,@S,@S,@M,@Aut,@Cnpj,@Band,@Tb,@Nsu,@Term,@Prov,
                         @Ident,@Ctrl,@Rede,@Dt,@Hr,@Vias,@Txt,@Em,@Em)
                 ON CONFLICT(id) DO UPDATE SET
                     situacao      = excluded.situacao,
@@ -459,7 +501,7 @@ public static class Servicos
                     tband         = COALESCE(excluded.tband, tband),
                     nsu           = COALESCE(excluded.nsu, nsu),
                     terminal      = COALESCE(excluded.terminal, terminal),
-                    provedor      = 'paygo',
+                    provedor      = @Prov,
                     identificacao = excluded.identificacao,
                     cod_controle  = COALESCE(excluded.cod_controle, cod_controle),
                     rede          = COALESCE(excluded.rede, rede),
@@ -471,7 +513,7 @@ public static class Servicos
                 """,
                 new
                 {
-                    Id = t.ChargeId, Ident = t.Identificacao, Tipo = t.Tipo.Codigo(), V = t.ValorCent,
+                    Id = t.ChargeId, Ident = t.Identificacao, Tipo = t.Tipo.Codigo(), V = t.ValorCent, Prov = provedor,
                     P = t.Parcelas, S = t.Situacao, M = t.Motivo,
                     Aut = r?.Autorizacao,
                     // mesma regra do <card> da NFC-e: config sobrepõe a tabela conhecida
@@ -495,6 +537,7 @@ public static class Servicos
     /// </summary>
     public static async Task<int> ResolverPendenciasTefAsync()
     {
+        if (Tef() is ClienteControlPay cpay) return await ReconciliarControlPayAsync(cpay);
         if (Tef() is not ClientePayGo cli) return 0;
 
         var pendentes = new List<(TransacaoPayGo, bool)>();
@@ -536,6 +579,40 @@ public static class Servicos
                 """, new { Em = DateTime.Now.ToString("o"), Inicio = inicio });
         }
         return n;
+    }
+
+    /// <summary>
+    /// Religamento do ControlPay: linhas 'aguardando'/'orfa' (PDV morreu com a intenção em
+    /// pagamento) são consultadas na API e fechadas pelo status real. Aprovada sem venda vira
+    /// 'pago' marcado como órfã — o fechamento acusa e o estorno sai pelo menu TEF.
+    /// </summary>
+    private static async Task<int> ReconciliarControlPayAsync(ClienteControlPay cli)
+    {
+        var pendentes = new List<TransacaoPayGo>();
+        using (var cx = Banco.Abrir())
+        {
+            var linhas = cx.Query("""
+                SELECT id, identificacao, tipo, valor_cent, parcelas, situacao, resposta_txt
+                  FROM tef_transacao
+                 WHERE provedor = 'controlpay' AND situacao IN ('aguardando','orfa','aprovada')
+                   AND identificacao IS NOT NULL AND identificacao <> ''
+                """).ToList();
+            foreach (var l in linhas)
+            {
+                var tipo = TipoTefExtensoes.Analisar((string?)l.tipo) ?? TipoTef.Credito;
+                pendentes.Add(new TransacaoPayGo((string)l.id, (string)l.identificacao, tipo,
+                    (long)l.valor_cent, (int)(long)l.parcelas, (string)l.situacao,
+                    RespostaPayGo.Analisar((string?)l.resposta_txt)));
+            }
+            // 'criando' (morreu antes de a API responder) não tem intenção para consultar: órfã.
+            var inicio = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToString("o");
+            cx.Execute("""
+                UPDATE tef_transacao
+                   SET situacao = 'orfa', motivo = 'PDV reiniciou antes de o ControlPay responder', atualizado_em = @Em
+                 WHERE charge_id LIKE 'cpay-%' AND situacao = 'criando' AND criado_em < @Inicio
+                """, new { Em = DateTime.Now.ToString("o"), Inicio = inicio });
+        }
+        return pendentes.Count == 0 ? 0 : await cli.ReconciliarAsync(pendentes);
     }
 
     /// <summary>

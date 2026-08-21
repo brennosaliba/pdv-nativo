@@ -210,7 +210,7 @@ public sealed record OpcoesPayGo(string Empresa, string NomeAutomacao, string Ve
 /// serializadas por um semáforo porque a pasta é UMA (dois comandos ao mesmo tempo
 /// sobrescrevem o `intpos.001` um do outro).
 /// </summary>
-public sealed class ClientePayGo : IProvedorTef
+public sealed class ClientePayGo : IProvedorTefOperavel
 {
     public string Nome => "paygo";
 
@@ -331,6 +331,8 @@ public sealed class ClientePayGo : IProvedorTef
 
     /// <summary>Há comando TEF em voo nesta instância (CRT/CNC/ADM/ATV/CNF/NCN)? Quem troca a instância precisa olhar isto antes.</summary>
     public bool Ocupado => _um.CurrentCount == 0;
+
+    public string Descricao => "PayGo Windows (troca de arquivos) em " + Path.GetDirectoryName(_req);
 
     // ------------------------------------------------------------------ ATV
 

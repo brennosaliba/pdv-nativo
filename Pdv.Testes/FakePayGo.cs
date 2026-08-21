@@ -73,13 +73,26 @@ public sealed class FakePayGo : IDisposable
     private readonly Task _laco;
     private static int _nsu = 721554;
 
-    public FakePayGo()
+    public FakePayGo() : this(null) { }
+
+    /// <summary>
+    /// Pasta FIXA (ex.: `C:\PAYGO\SIM`) para rodar como "PayGo de mentira" ao lado do PDV de
+    /// verdade — ambiente de teste da tela sem credencial da PayGo. Nesse modo a pasta não é
+    /// apagada no Dispose. Null = pasta temporária (bateria).
+    /// </summary>
+    public FakePayGo(string? pasta)
     {
-        Pasta = Path.Combine(Path.GetTempPath(), "paygo-fake-" + Guid.NewGuid().ToString("N")[..8]);
+        _apagarNoDispose = pasta is null;
+        Pasta = pasta ?? Path.Combine(Path.GetTempPath(), "paygo-fake-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Req);
         Directory.CreateDirectory(Resp);
         _laco = Task.Run(LacoAsync);
     }
+
+    private readonly bool _apagarNoDispose;
+
+    /// <summary>Chamado a cada comando recebido (modo simulador: log no console).</summary>
+    public Action<Dictionary<string, string>>? Recebeu;
 
     /// <summary>Tudo que a automação mandou, em ordem (campo → valor).</summary>
     public IReadOnlyList<Dictionary<string, string>> Recebidos
@@ -137,6 +150,7 @@ public sealed class FakePayGo : IDisposable
                     var campos = ArquivoIntpos.Analisar(texto);
                     try { File.Delete(req); } catch { }
                     lock (_trava) _recebidos.Add(campos);
+                    try { Recebeu?.Invoke(campos); } catch { }
                     await TratarAsync(campos);
                 }
             }
@@ -313,6 +327,7 @@ public sealed class FakePayGo : IDisposable
     {
         _cts.Cancel();
         try { _laco.Wait(1000); } catch { }
+        if (!_apagarNoDispose) return;
         for (var i = 0; i < 10; i++)
         {
             try { if (Directory.Exists(Pasta)) Directory.Delete(Pasta, true); return; }

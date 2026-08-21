@@ -1432,13 +1432,13 @@ public partial class Venda : UserControl
             return;
         }
         if (TefEmAndamento(dono)) return;
-        var cli = Servicos.PayGo();
+        var cli = Servicos.Operavel();
         if (cli is null)
         {
-            Dialogo.Avisar(dono, "TEF", "O TEF PayGo não está configurado neste caixa (Configuração → TEF).", "erro");
+            Dialogo.Avisar(dono, "TEF", "O TEF não está configurado neste caixa (Configuração → TEF: PayGo ou ControlPay).", "erro");
             return;
         }
-        var escolha = EscolherOpcao(dono, "TEF PayGo", "O que você quer fazer?",
+        var escolha = EscolherOpcao(dono, "TEF", "O que você quer fazer?",
             "Estornar cartão/PIX de uma venda", "Menu administrativo do PayGo", "Reimprimir o último comprovante");
         if (escolha < 0) return;
         // Enquanto o PayGo está com a tela/pinpad (CNC/ADM não têm timeout), a venda não pode
@@ -1527,7 +1527,7 @@ public partial class Venda : UserControl
     /// existe mais. Ordem: pré-checar (nota fiscal, turno) → PIN de supervisor → CNC → só com
     /// o CNC aprovado cancela a venda. Venda com mais de um cartão só é cancelada no último.
     /// </summary>
-    private async Task EstornarTefAsync(Window dono, ClientePayGo cli)
+    private async Task EstornarTefAsync(Window dono, IProvedorTefOperavel cli)
     {
         List<dynamic> linhas;
         using (var cx = Banco.Abrir())
@@ -1539,7 +1539,7 @@ public partial class Venda : UserControl
                   JOIN venda_pagamento p ON p.venda_id = v.id AND p.tef_nsu IS NOT NULL
                   -- NSU (012) é contador curto e repete entre dias/redes: casar só no turno, pelo
                   -- mesmo valor e forma — senão o CNC pode sair para a transação ERRADA.
-                  JOIN tef_transacao t ON t.provedor = 'paygo' AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+                  JOIN tef_transacao t ON t.provedor IN ('paygo','controlpay') AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
                                       AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent AND t.tipo = p.forma
                  WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
                  ORDER BY v.finalizada_em DESC, t.criado_em DESC LIMIT 12
@@ -1623,7 +1623,7 @@ public partial class Venda : UserControl
         {
             var restantes = cx.ExecuteScalar<int>("""
                 SELECT COUNT(*) FROM venda_pagamento p
-                  JOIN tef_transacao t ON t.provedor = 'paygo' AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+                  JOIN tef_transacao t ON t.provedor IN ('paygo','controlpay') AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
                                       AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent AND t.tipo = p.forma
                  WHERE p.venda_id = @V AND t.id <> @TefId AND p.tef_nsu <> @Nsu
                 """, new { V = vendaId, TefId = (string)l.tef_id, Nsu = nsu, Desde = _sessao.AberturaEm.ToString("o") });
@@ -1664,7 +1664,7 @@ public partial class Venda : UserControl
     /// mas passa por fora do estorno — por isso o aviso antes e, depois, se a resposta parecer um
     /// cancelamento, o PDV insiste em cancelar a venda correspondente.
     /// </summary>
-    private async Task AdmTefAsync(Window dono, ClientePayGo cli)
+    private async Task AdmTefAsync(Window dono, IProvedorTefOperavel cli)
     {
         if (!Dialogo.Confirmar(dono, "Menu administrativo do PayGo",
                 "Use este menu para teste de comunicação, relatórios e reimpressão. Para devolver o dinheiro de uma " +
@@ -1698,7 +1698,7 @@ public partial class Venda : UserControl
             SELECT v.id, v.numero_local, t.id AS tef_id
               FROM venda v
               JOIN venda_pagamento p ON p.venda_id = v.id AND p.tef_nsu = @Nsu
-              LEFT JOIN tef_transacao t ON t.provedor = 'paygo' AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+              LEFT JOIN tef_transacao t ON t.provedor IN ('paygo','controlpay') AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
                                        AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent
              WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
              ORDER BY v.finalizada_em DESC LIMIT 1
@@ -1737,7 +1737,7 @@ public partial class Venda : UserControl
         {
             txt = cx.ExecuteScalar<string?>("""
                 SELECT resposta_txt FROM tef_transacao
-                 WHERE provedor = 'paygo' AND situacao IN ('pago','estornado','cnf_sem_ack') AND resposta_txt IS NOT NULL
+                 WHERE provedor IN ('paygo','controlpay') AND situacao IN ('pago','estornado','cnf_sem_ack') AND resposta_txt IS NOT NULL
                  ORDER BY atualizado_em DESC LIMIT 1
                 """);
             impressora = Vendas.Config(cx, "impressora");
