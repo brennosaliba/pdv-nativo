@@ -247,6 +247,16 @@ public static class Servicos
                                AND (situacao IN ('pago','cnf_sem_ack') OR payment_status = 'cnf_sem_ack')
                             """, new { C = ctrl }) > 0;
                     },
+                    // Trilha do two-phase (a PayGo pede log): CNF/NCN enviados/acusados, órfãs desfeitas.
+                    Auditar = detalhe =>
+                    {
+                        try
+                        {
+                            using var c4 = Banco.Abrir();
+                            Caixa.Auditar(c4, null, "tef_paygo", null, null, detalhe);
+                        }
+                        catch { /* auditoria não derruba cobrança */ }
+                    },
                 };
                 return _tef;
             }
@@ -274,13 +284,16 @@ public static class Servicos
             using var cx = Banco.Abrir();
             cx.Execute("""
                 INSERT INTO tef_transacao (id, charge_id, payment_identifier, tipo, valor_cent, parcelas, situacao,
-                                           motivo, aut, cnpj_cred, bandeira, tband, nsu, terminal, provedor,
+                                           payment_status, motivo, aut, cnpj_cred, bandeira, tband, nsu, terminal, provedor,
                                            identificacao, cod_controle, rede, data_tef, hora_tef, vias_json,
                                            resposta_txt, criado_em, atualizado_em)
-                VALUES (@Id,@Id,@Ident,@Tipo,@V,@P,@S,@M,@Aut,@Cnpj,@Band,@Tb,@Nsu,@Term,'paygo',
+                VALUES (@Id,@Id,@Ident,@Tipo,@V,@P,@S,@S,@M,@Aut,@Cnpj,@Band,@Tb,@Nsu,@Term,'paygo',
                         @Ident,@Ctrl,@Rede,@Dt,@Hr,@Vias,@Txt,@Em,@Em)
                 ON CONFLICT(id) DO UPDATE SET
                     situacao      = excluded.situacao,
+                    -- payment_status acompanha a situação: é por ele que o boot acha 'cnf_sem_ack'
+                    -- (a tela grava o dela no fim); sem isto o CNF reenviado casaria para sempre.
+                    payment_status = excluded.payment_status,
                     motivo        = COALESCE(excluded.motivo, motivo),
                     aut           = COALESCE(excluded.aut, aut),
                     cnpj_cred     = COALESCE(excluded.cnpj_cred, cnpj_cred),
@@ -302,7 +315,11 @@ public static class Servicos
                 {
                     Id = t.ChargeId, Ident = t.Identificacao, Tipo = t.Tipo.Codigo(), V = t.ValorCent,
                     P = t.Parcelas, S = t.Situacao, M = t.Motivo,
-                    Aut = r?.Autorizacao, Cnpj = r?.Rede is { } rd ? ClientePayGo.CnpjConhecido(rd) : null,
+                    Aut = r?.Autorizacao,
+                    // mesma regra do <card> da NFC-e: config sobrepõe a tabela conhecida
+                    Cnpj = r?.Rede is { } rd
+                        ? (Vendas.Config(cx, "tef_cnpj_rede_" + rd.Trim().ToLowerInvariant()) ?? ClientePayGo.CnpjConhecido(rd))
+                        : null,
                     Band = r?.NomeCartao ?? r?.Produto, Tb = r is null ? null : ClientePayGo.TBand(r.Produto ?? r.NomeCartao),
                     Nsu = r?.Nsu, Term = r?.Terminal, Ctrl = r?.CodigoControle, Rede = r?.Rede,
                     Dt = r?.Data, Hr = r?.Hora, Vias = r?.ViasJson(), Txt = r?.Texto,
@@ -329,20 +346,34 @@ public static class Servicos
                 SELECT id, identificacao, tipo, valor_cent, parcelas, situacao, payment_status, venda_id, resposta_txt
                   FROM tef_transacao
                  WHERE provedor = 'paygo'
-                   AND (situacao IN ('aprovada','cnf_sem_ack') OR payment_status = 'cnf_sem_ack')
+                   AND (situacao IN ('aprovada','cnf_sem_ack','ncn_sem_ack') OR payment_status IN ('cnf_sem_ack','ncn_sem_ack'))
                 """).ToList();
             foreach (var l in linhas)
             {
                 var tipo = TipoTefExtensoes.Analisar((string?)l.tipo) ?? TipoTef.Credito;
-                var situacao = (string)l.situacao == "pago" && (string?)l.payment_status == "cnf_sem_ack"
-                    ? "cnf_sem_ack" : (string)l.situacao;
+                var ps = (string?)l.payment_status;
+                var situacao = ps is "cnf_sem_ack" or "ncn_sem_ack" && (string)l.situacao is "pago" or "estornado" or "desfeita"
+                    ? ps! : (string)l.situacao;
                 var tx = new TransacaoPayGo((string)l.id, (string?)l.identificacao ?? "", tipo,
                     (long)l.valor_cent, (int)(long)l.parcelas, situacao,
                     RespostaPayGo.Analisar((string?)l.resposta_txt));
                 pendentes.Add((tx, l.venda_id is string v && v.Length > 0));
             }
         }
-        return await cli.ResolverPendenciasAsync(pendentes);
+        var n = await cli.ResolverPendenciasAsync(pendentes);
+
+        // Cobrança que morreu ANTES da resposta (roteiro P24/25): a linha ficou 'criando'/
+        // 'aguardando' e nunca mais muda sozinha. No boot ninguém está cobrando: vira órfã
+        // (se a resposta dela estava na pasta, a varredura acima já a encerrou pela identificação).
+        using (var cx = Banco.Abrir())
+        {
+            cx.Execute("""
+                UPDATE tef_transacao
+                   SET situacao = 'orfa', motivo = 'PDV reiniciou durante a cobrança; confira no PayGo', atualizado_em = @Em
+                 WHERE charge_id LIKE 'paygo-%' AND situacao IN ('criando','aguardando')
+                """, new { Em = DateTime.Now.ToString("o") });
+        }
+        return n;
     }
 
     /// <summary>

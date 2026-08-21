@@ -121,6 +121,13 @@ public sealed record DesfechoTef(SituacaoTef Situacao, string? PaymentIdentifier
     /// <summary>Último `payment_status` visto — vai direto para `tef_transacao.payment_status`.</summary>
     public string? PaymentStatus { get; init; }
 
+    /// <summary>
+    /// A transação chegou a ser aprovada e foi DESFEITA (PayGo: NCN) — não existe cobrança
+    /// nenhuma. A tela não pode oferecer "registrar como POS" para isto: o operador registraria
+    /// um cartão que o cliente não pagou.
+    /// </summary>
+    public bool Desfeita { get; init; }
+
     public bool Pago => Situacao == SituacaoTef.Pago;
     public bool SessaoExpirada => Codigo == CodigoTef.SessaoExpirada;
     public bool SemPermissao => Codigo == CodigoTef.SemPermissao;

@@ -277,7 +277,7 @@ public static class TestesPayGo
             var recados = new List<string>();
             var d = Cobrar(c, TipoTef.Credito, 40m, ct: cts.Token,
                 andamento: new Progress<AndamentoTef>(a => { if (a.Fase == FaseTef.Recado) recados.Add(a.Mensagem); }));
-            checar(d.Situacao == SituacaoTef.Cancelado, "cancelou e o PayGo aprovou depois → Cancelado (não Pago)");
+            checar(d.Situacao == SituacaoTef.Cancelado && d.Desfeita, "cancelou e o PayGo aprovou depois → Cancelado (não Pago), marcado Desfeita");
             checar(f.Quantos("NCN") == 1 && f.Quantos("CNF") == 0, "aprovação depois do cancelamento é DESFEITA (NCN)");
             checar(sits.Last() == "desfeita", "guardou desfeita");
             checar(!d.PosPodeTerFicadoOcupado, "desfeita com ack: maquininha livre, sem aviso");
@@ -480,6 +480,122 @@ public static class TestesPayGo
             f.Pausado = false;
             Thread.Sleep(120);
             checar(f.Quantos("CRT") == 0, "o PayGo 'religado' não vê cobrança nenhuma");
+        }
+
+        // ── resposta TARDIA da venda anterior no meio da venda nova (identidade 001) ──
+        {
+            using var f = new FakePayGo();
+            f.Roteiro.Enqueue(FakePayGo.Desfecho.Sumir);
+            var sits = new List<(string id, string s)>();
+            var c = Cliente(f, t => { sits.Add((t.Identificacao, t.Situacao)); return true; }, desistirMs: 200);
+            using var cts = new CancellationTokenSource(50);
+            var d1 = Cobrar(c, TipoTef.Credito, 25m, ct: cts.Token);
+            var idA = d1.PaymentIdentifier!;
+            checar(d1.Situacao == SituacaoTef.Cancelado && sits.Last() == (idA, "orfa"), "1ª venda abandonada (PayGo mudo) → órfã");
+
+            f.AtrasoRespostaMs = 600;
+            var t2 = c.CobrarAsync(TipoTef.Credito, Dinheiro.DeReais(30m), null, 1, null, CancellationToken.None);
+            checar(f.Esperar(() => f.Quantos("CRT") == 2), "PayGo pegou o 2º CRT");
+            Thread.Sleep(80);
+            f.PlantarRespostaOrfa(idA, "CTRL-TARDIA", 2500);           // a 1ª responde agora, aprovada
+            var d2 = t2.GetAwaiter().GetResult();
+            checar(d2.Pago && d2.Cartao?.Valor == 30m, "a venda NOVA não pega a resposta da antiga (valor e NSU dela): " + d2.Motivo);
+            checar(f.Comandos("NCN").Any(x => x["027-000"] == "CTRL-TARDIA"), "a aprovação tardia da antiga foi DESFEITA");
+            checar(sits.Contains((idA, "desfeita")), "a linha da antiga saiu de 'orfa' para 'desfeita' (pela identificação)");
+            checar(f.Comandos("CNF").Count == 1 && f.Comandos("CNF")[0]["027-000"] != "CTRL-TARDIA", "o único CNF é o da venda nova");
+            checar(!sits.Contains((idA, "pago")), "a antiga nunca vira paga");
+        }
+
+        // ── NCN sem ack: não é esquecido (reenvio no próximo comando) ─────
+        {
+            using var f = new FakePayGo();
+            var sits = new List<string>();
+            var c = Cliente(f, t =>
+            {
+                sits.Add(t.Situacao);
+                if (t.Situacao == "aprovada") { f.SemStsTudo = true; return false; }   // PayGo morre no instante do NCN
+                return true;
+            });
+            var d = Cobrar(c, TipoTef.Credito, 30m);
+            checar(!d.Pago && d.Desfeita, "não gravou → desfeita (mesmo sem ack)");
+            checar(f.Quantos("NCN") == 1 && sits.Last() == "ncn_sem_ack", "NCN sem ack fica 'ncn_sem_ack' (não 'desfeita')");
+            f.SemStsTudo = false;
+            var ok = c.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(ok && f.Quantos("NCN") == 2, "no próximo comando o NCN é REENVIADO");
+            checar(sits.Last(s => s is "desfeita" or "ncn_sem_ack") == "desfeita", "e depois do ack vira 'desfeita'");
+            checar(c.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult() && f.Quantos("NCN") == 2, "acusado não reenvia de novo");
+        }
+        {
+            using var f = new FakePayGo();
+            var sits = new List<string>();
+            var c = Cliente(f, t => { sits.Add(t.Situacao); return true; });
+            var req = new Dictionary<string, string> { ["003-000"] = "1000", ["731-000"] = "1" };
+            var tx = new TransacaoPayGo("paygo-1000000009", "1000000009", TipoTef.Credito, 1000, 1, "ncn_sem_ack",
+                RespostaPayGo.Analisar(FakePayGo.Resposta("CRT", "1000000009", req, FakePayGo.Desfecho.Aprovar, "CTRL-N")));
+            var n = c.ResolverPendenciasAsync(new List<(TransacaoPayGo, bool)> { (tx, false) }).GetAwaiter().GetResult();
+            checar(n == 1 && f.Comandos("NCN").Count == 1 && f.Comandos("NCN")[0]["027-000"] == "CTRL-N" && sits.Last() == "desfeita",
+                   "religamento reenvia 'ncn_sem_ack' e encerra como desfeita");
+        }
+
+        // ── .001 gravado aos poucos (PayGo sem rename) ────────────────────
+        {
+            using var f = new FakePayGo { EscreverAosPoucosMs = 300 };
+            var c = Cliente(f);
+            var d = Cobrar(c, TipoTef.Credito, 10m);
+            checar(d.Pago && d.Cartao?.Valor == 10m, "arquivo pela metade NÃO é lido: espera o 999-999 = 0 — " + d.Motivo);
+            checar(f.Quantos("CNF") == 1, "e confirma a transação inteira");
+        }
+
+        // ── CNC: estorno não vira 'pago' (senão o fechamento soma o estorno como venda) ──
+        {
+            using var f = new FakePayGo();
+            var sits = new List<(string id, string s)>();
+            var c = Cliente(f, t => { sits.Add((t.ChargeId, t.Situacao)); return true; });
+            checar(ultimaPaga is not null, "há venda confirmada para estornar");
+            if (ultimaPaga is not null)
+            {
+                var d = c.CancelarAsync(ultimaPaga, CancellationToken.None).GetAwaiter().GetResult();
+                checar(d.Pago && d.PaymentStatus == "estornado", "CNC concluído com estado 'estornado'");
+                checar(sits.Any(s => s.id.StartsWith("paygo-cnc-") && s.s == "estornado") && !sits.Any(s => s.s == "pago"),
+                       "a linha do CNC termina 'estornado', nunca 'pago'");
+                checar(sits.Any(s => s.id == ultimaPaga.ChargeId && s.s == "estornada"), "a venda original fica 'estornada'");
+            }
+        }
+
+        // ── 738 vazio é omitido; 'OPERACAO CANCELADA' é cancelamento; ADM ──
+        {
+            using var f = new FakePayGo();
+            var c = Cliente(f, opcoes: new OpcoesPayGo("Setis", "Teste", "v1", ""));
+            Cobrar(c, TipoTef.Credito, 10m);
+            checar(!f.Comandos("CRT")[0].ContainsKey("738-000"), "738 vazio não gera linha '738-000 = ' (inconsistência no PayGo)");
+        }
+        {
+            using var f = new FakePayGo();
+            f.Roteiro.Enqueue(FakePayGo.Desfecho.CancelarNoPinpad);
+            var c = Cliente(f);
+            var d = Cobrar(c, TipoTef.Pix, 10m);
+            checar(d.Situacao == SituacaoTef.Cancelado && d.Codigo == CodigoTef.Cancelado && d.Motivo == "OPERACAO CANCELADA",
+                   "P52: Esc no QR/pinpad volta Cancelado (não 'pagamento não aprovado'): " + d.Motivo);
+            checar(f.Quantos("CNF") == 0 && f.Quantos("NCN") == 0 && !d.Desfeita, "cancelado no pinpad: nada a confirmar/desfazer");
+        }
+        {
+            using var f = new FakePayGo();
+            var c = Cliente(f);
+            var d = c.AdministrativaAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(d.Pago, "ADM concluído: " + d.Motivo);
+            var adm = f.Comandos("ADM").Single();
+            checar(!adm.ContainsKey("003-000") && adm["706-000"] == "156" && adm["716-000"] == "Setis", "ADM vai sem valor, com capacidades e empresa");
+            checar(f.Quantos("CNF") == 1, "ADM com comprovante (729=2) é confirmado");
+        }
+
+        // ── Desfeita: a tela não pode oferecer 'registrar como POS' ───────
+        {
+            using var f = new FakePayGo();
+            f.Roteiro.Enqueue(FakePayGo.Desfecho.AprovarValorDivergente);
+            f.Roteiro.Enqueue(FakePayGo.Desfecho.Recusar);
+            var c = Cliente(f);
+            checar(Cobrar(c, TipoTef.Credito, 10m).Desfeita, "valor divergente (NCN) marca Desfeita");
+            checar(!Cobrar(c, TipoTef.Credito, 10m).Desfeita, "recusa normal não é 'desfeita'");
         }
 
         // ── tabelas auxiliares ────────────────────────────────────────────

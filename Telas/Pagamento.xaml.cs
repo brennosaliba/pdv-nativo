@@ -409,7 +409,9 @@ public partial class Pagamento : UserControl
         // registrar na mão viraria o jeito de "passar" cartão recusado. Timeout e erro
         // ganham — aí quem falhou foi a integração, não o cartão.
         var acoes = new List<(string, Action)> { ("Tentar de novo", () => _ = CobrarNoTefAsync(forma, valor)) };
-        if (d.Situacao != SituacaoTef.Recusado)
+        // Transação DESFEITA (PayGo/NCN) também não ganha o desvio pra POS: o cliente não pagou
+        // nada — registrar na mão seria cobrar o que foi desfeito.
+        if (d.Situacao != SituacaoTef.Recusado && !d.Desfeita)
             acoes.Add(("Registrar como venda POS",
                 () => RegistrarComoPos(forma, valor, d.PosPodeTerFicadoOcupado || d.Situacao == SituacaoTef.Timeout)));
         acoes.Add(("Trocar forma", () => { Ir(Fase.Forma); PintarPartes(); }));

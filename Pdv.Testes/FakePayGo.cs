@@ -33,7 +33,12 @@ public sealed class FakePayGo : IDisposable
         NegarComPendencia,
         /// <summary>Resposta sem 009-000 (arquivo inconsistente).</summary>
         Inconsistente,
+        /// <summary>Cliente apertou Esc no pinpad/QR: 009≠0 com 030 "OPERACAO CANCELADA" (roteiro P5/P16/P52).</summary>
+        CancelarNoPinpad,
     }
+
+    /// <summary>Grava o .001 AOS POUCOS (sem rename): metade, pausa, resto — PayGo que não grava atômico.</summary>
+    public int EscreverAosPoucosMs;
 
     /// <summary>Código de controle que <see cref="Desfecho.NegarComPendencia"/> devolve.</summary>
     public string PendenciaControle = "CTRL-PENDENTE";
@@ -153,7 +158,14 @@ public sealed class FakePayGo : IDisposable
 
             var txt = Resposta(cmd, id, req, d, d == Desfecho.NegarComPendencia ? PendenciaControle : null);
             var caminho = Path.Combine(Resp, "intpos.001");
-            if (TravarRespostaMs > 0)
+            if (EscreverAosPoucosMs > 0)
+            {
+                var meio = txt.Length / 2;
+                File.WriteAllText(caminho, txt[..meio], Encoding.ASCII);
+                await Task.Delay(EscreverAosPoucosMs);
+                File.AppendAllText(caminho, txt[meio..], Encoding.ASCII);
+            }
+            else if (TravarRespostaMs > 0)
             {
                 // Grava JÁ segurando o arquivo: é o que o antivírus faz — o PDV vê o arquivo
                 // existir e leva "acesso negado" até ele ser solto.
@@ -200,11 +212,11 @@ public sealed class FakePayGo : IDisposable
             return ArquivoIntpos.Serializar(c);
         }
 
-        if (d == Desfecho.Recusar)
+        if (d is Desfecho.Recusar or Desfecho.CancelarNoPinpad)
         {
-            Add("009-000", "7");
+            Add("009-000", d == Desfecho.Recusar ? "7" : "99");
             Add("010-000", req.GetValueOrDefault("010-000") ?? "DEMO");
-            Add("030-000", "TRANSACAO NAO AUTORIZADA");
+            Add("030-000", d == Desfecho.Recusar ? "TRANSACAO NAO AUTORIZADA" : "OPERACAO CANCELADA");
             Add("729-000", "1");
             Add("730-000", cmd == "CNC" ? "51" : "1");
             return ArquivoIntpos.Serializar(c);
