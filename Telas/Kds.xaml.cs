@@ -106,10 +106,16 @@ public partial class Kds : UserControl
     /// </summary>
     private Button Card(Ticket t)
     {
+        // PRONTO de iFood NAO sai no toque: a coleta e fato do MUNDO — quem
+        // declara e o entregador, e a noticia chega pela API (DISPATCHED ->
+        // espelho -> reconciliacao). Dedo no card nao inventa coleta. O toque
+        // de entrega fica so pro BALCAO, onde nao existe evento externo.
         var (acaoTexto, acaoCor, acaoFundo) = t.Status switch
         {
             Nucleo.Kds.Preparando => ("TOCAR QUANDO FICAR PRONTO", "Ok", "ChipOkFundo"),
-            Nucleo.Kds.Pronto     => ("TOCAR NA COLETA ✓", "Texto", "VeuElevado"),
+            Nucleo.Kds.Pronto when t.Origem == "ifood"
+                                  => ("AGUARDANDO ENTREGADOR · sai na coleta", "TextoFraco", "VeuElevado"),
+            Nucleo.Kds.Pronto     => ("TOCAR NA RETIRADA ✓", "Texto", "VeuElevado"),
             _                     => ("TOCAR PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
         };
 
@@ -286,7 +292,8 @@ public partial class Kds : UserControl
                     break;
 
                 case Nucleo.Kds.Pronto:
-                    Nucleo.Kds.Entregar(t.Id);
+                    // balcao: cliente retirou no caixa. iFood: nada — a API manda.
+                    if (t.Origem != "ifood") Nucleo.Kds.Entregar(t.Id);
                     break;
             }
             Pintar();
