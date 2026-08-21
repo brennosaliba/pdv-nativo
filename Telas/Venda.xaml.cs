@@ -441,10 +441,15 @@ public partial class Venda : UserControl
         // Cartão menor = mais linha por tela = menos rolagem, que é o que trava a fila.
         // Na lista o item é uma faixa larga, então 2 colunas só a partir de tela grande.
         var util = _larguraGrade - 20;
-        Colunas = _modoLista
+        _colunasProdutos = _modoLista
             ? Math.Clamp((int)(util / 420), 1, 3)
             : Math.Clamp((int)(util / 178), 2, 8);
+        // aba PROMOCAO: cada promocao e uma SECAO de largura inteira (cabecalho
+        // + grade interna) — o UniformGrid de fora vira coluna unica
+        Colunas = _categoriaAtual == CategoriaPromo ? 1 : _colunasProdutos;
     }
+
+    private int _colunasProdutos = 3;
 
     // ── CATÁLOGO ────────────────────────────────────────────────────────────
     private const string CategoriaPromo = "promoção";
@@ -532,7 +537,7 @@ public partial class Venda : UserControl
         var b = new Button
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
-            Margin = new Thickness(4), MinHeight = 116, Height = 116,
+            Margin = new Thickness(4), MinHeight = 124, Height = 124,
             Padding = new Thickness(4, 8, 4, 8), Tag = categoria,
         };
         var sp = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -558,10 +563,12 @@ public partial class Venda : UserControl
         // claro deixava o nome BRANCO sobre véu claro, ilegível. Bug real de balcão.
         var nome = new TextBlock
         {
-            Text = Capitalizar(categoria), FontSize = 13, FontWeight = FontWeights.Bold,
+            // 16 e nao caixa alta: maiuscula "parece" maior mas le pior e come
+            // largura — corpo maior e o que aumenta a leitura de verdade
+            Text = Capitalizar(categoria), FontSize = 16, FontWeight = FontWeights.Bold,
             TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 7, 0, 0), MaxHeight = 36,
-            TextTrimming = TextTrimming.CharacterEllipsis, LineHeight = 15,
+            Margin = new Thickness(0, 7, 0, 0), MaxHeight = 44,
+            TextTrimming = TextTrimming.CharacterEllipsis, LineHeight = 19,
         };
         nome.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
         sp.Children.Add(nome);
@@ -569,7 +576,7 @@ public partial class Venda : UserControl
         var contador = new TextBlock
         {
             Text = _quantosPorCategoria.GetValueOrDefault(categoria).ToString(),
-            FontSize = 11, FontWeight = FontWeights.Bold,
+            FontSize = 12, FontWeight = FontWeights.Bold,
         };
         contador.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
         var selo = new Border
@@ -625,6 +632,7 @@ public partial class Venda : UserControl
 
     private void PintarProdutos()
     {
+        AjustarColunas();
         var lista = _categoriaAtual == CategoriaPromo
             ? _catalogo.Where(p => _promoVitrine.ContainsKey(p.Id)).ToList()
             : _catalogo.Where(p => p.Categoria == _categoriaAtual).ToList();
@@ -636,43 +644,102 @@ public partial class Venda : UserControl
         TxtContagem.Text = lista.Count == 1 ? "1 item" : $"{lista.Count} itens";
 
         ListaProdutos.Items.Clear();
-        foreach (var p in lista)
+        if (_categoriaAtual == CategoriaPromo)
         {
-            var el = _modoLista ? LinhaProduto(p) : CartaoProduto(p);
-            // Na vitrine, promoção fora do dia/horário aparece CINZA e não vende:
-            // o cliente vê que existe (qui · 18:00–20:00) sem conseguir levar fora
-            // da regra — pedido do dono, e o que o balcão consegue explicar.
-            if (_categoriaAtual == CategoriaPromo
-                && _promoVitrine.TryGetValue(p.Id, out var vp) && !vp.AtivaAgora)
+            // SEGMENTADO por promoção (pedido do dono): cabeçalho com nome e
+            // regra, itens da promoção embaixo — nada de misturar vitrines.
+            // Ativas primeiro; as fora de dia/horário descem, em cinza.
+            var grupos = lista
+                .GroupBy(p => _promoVitrine[p.Id].Nome)
+                .OrderByDescending(g => g.Any(p => _promoVitrine[p.Id].AtivaAgora))
+                .ThenBy(g => g.Key);
+            foreach (var g in grupos)
             {
-                el.IsEnabled = false;
-                el.ToolTip = $"{vp.Nome} — válida {vp.Quando}";
-                var moldura = new Grid();
-                moldura.Children.Add(el);
-                var faixa = new Border
-                {
-                    VerticalAlignment = VerticalAlignment.Bottom,
-                    Padding = new Thickness(0, 3, 0, 4),
-                    CornerRadius = new CornerRadius(0, 0, 13, 13),
-                    IsHitTestVisible = false,
-                };
-                faixa.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
-                var aviso = new TextBlock
-                {
-                    Text = $"fora do horário · {vp.Quando}",
-                    FontSize = 11, FontWeight = FontWeights.Bold,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                };
-                aviso.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-                faixa.Child = aviso;
-                moldura.Children.Add(faixa);
-                ListaProdutos.Items.Add(moldura);
-                continue;
+                var info = _promoVitrine[g.First().Id];
+                ListaProdutos.Items.Add(SecaoPromo(g.Key, info, g.ToList()));
             }
-            ListaProdutos.Items.Add(el);
+        }
+        else
+        {
+            foreach (var p in lista)
+                ListaProdutos.Items.Add(_modoLista ? LinhaProduto(p) : CartaoProduto(p));
         }
         TxtSemProduto.Visibility = ListaProdutos.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Uma promoção = uma seção: cabeçalho (nome + quando + estado) e a grade
+    /// dos produtos dela embaixo. Fora do dia/horário: tudo em cinza, sem vender.
+    /// </summary>
+    private StackPanel SecaoPromo(string nomePromo, Nucleo.Promocoes.ProdutoPromo info,
+                                  List<Produto> produtos)
+    {
+        var sec = new StackPanel { Margin = new Thickness(2, 6, 2, 10) };
+
+        var cab = new Border
+        {
+            CornerRadius = new CornerRadius(12), Padding = new Thickness(14, 8, 14, 9),
+            Margin = new Thickness(2, 0, 2, 6), BorderThickness = new Thickness(1),
+        };
+        cab.SetResourceReference(Border.BackgroundProperty,
+            info.AtivaAgora ? "ChipErroFundo" : "VeuElevado");
+        cab.SetResourceReference(Border.BorderBrushProperty,
+            info.AtivaAgora ? "ChipErroBorda" : "Borda");
+        var linhaCab = new StackPanel { Orientation = Orientation.Horizontal };
+        var titulo = new TextBlock
+        {
+            Text = "🏷️ " + Capitalizar(nomePromo), FontSize = 17, FontWeight = FontWeights.Bold,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        titulo.SetResourceReference(TextBlock.ForegroundProperty,
+            info.AtivaAgora ? "Rosa" : "TextoFraco");
+        linhaCab.Children.Add(titulo);
+        var detalhe = new TextBlock
+        {
+            Text = info.AtivaAgora ? $"  ·  {info.Quando}" : $"  ·  fora do dia/horário — vale {info.Quando}",
+            FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
+        };
+        detalhe.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+        linhaCab.Children.Add(detalhe);
+        cab.Child = linhaCab;
+        sec.Children.Add(cab);
+
+        var grade = new System.Windows.Controls.Primitives.UniformGrid { Columns = Math.Max(1, _colunasProdutos) };
+        foreach (var p in produtos) grade.Children.Add(ItemVitrine(p, info.AtivaAgora, info));
+        sec.Children.Add(grade);
+        return sec;
+    }
+
+    /// <summary>Card da vitrine: normal quando a promoção vale AGORA; cinza,
+    /// desabilitado e com a regra escrita quando fora do dia/horário.</summary>
+    private UIElement ItemVitrine(Produto p, bool ativa, Nucleo.Promocoes.ProdutoPromo info)
+    {
+        var el = _modoLista ? LinhaProduto(p) : CartaoProduto(p);
+        if (ativa) return el;
+
+        el.IsEnabled = false;
+        el.ToolTip = $"{info.Nome} — válida {info.Quando}";
+        var moldura = new Grid();
+        moldura.Children.Add(el);
+        var faixa = new Border
+        {
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Padding = new Thickness(0, 3, 0, 4),
+            CornerRadius = new CornerRadius(0, 0, 13, 13),
+            IsHitTestVisible = false,
+        };
+        faixa.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
+        var aviso = new TextBlock
+        {
+            Text = $"fora do horário · {info.Quando}",
+            FontSize = 11, FontWeight = FontWeights.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        aviso.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+        faixa.Child = aviso;
+        moldura.Children.Add(faixa);
+        return moldura;
     }
 
     // ── GRADE x LISTA ───────────────────────────────────────────────────────

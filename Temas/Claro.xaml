@@ -94,10 +94,13 @@
     <sys:Double x:Key="SombraDialogoOpacidade">0.25</sys:Double>
     <sys:Double x:Key="FatorDegradeClaro">0.95</sys:Double>
     <sys:Double x:Key="FatorDegradeEscuro">0.65</sys:Double>
-    <sys:Byte x:Key="AlfaCatAtivaTopo">140</sys:Byte>
-    <sys:Byte x:Key="AlfaCatAtivaBase">64</sys:Byte>
-    <sys:Byte x:Key="AlfaCatInativaTopo">64</sys:Byte>
-    <sys:Byte x:Key="AlfaCatInativaBase">24</sys:Byte>
+    <!-- Véus SUAVES de propósito: texto grafite sobre véu colorido forte
+         ficava lamacento (reclamação real do dono). A cor marca a categoria
+         pela BORDA e por um fundo leve; quem carrega a leitura é o texto. -->
+    <sys:Byte x:Key="AlfaCatAtivaTopo">96</sys:Byte>
+    <sys:Byte x:Key="AlfaCatAtivaBase">40</sys:Byte>
+    <sys:Byte x:Key="AlfaCatInativaTopo">36</sys:Byte>
+    <sys:Byte x:Key="AlfaCatInativaBase">14</sys:Byte>
     <sys:Byte x:Key="AlfaCatBordaAtiva">255</sys:Byte>
     <sys:Byte x:Key="AlfaCatBordaInativa">102</sys:Byte>
 
