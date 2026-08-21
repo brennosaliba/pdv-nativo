@@ -709,10 +709,12 @@ public partial class Venda : UserControl
             CornerRadius = new CornerRadius(12), Padding = new Thickness(14, 8, 14, 9),
             Margin = new Thickness(2, 0, 2, 6), BorderThickness = new Thickness(1),
         };
+        // VERDE quando valendo: o vermelho da 1a versao lia como "negativo/
+        // erro" (reclamacao do dono) - promocao ativa e coisa BOA acontecendo
         cab.SetResourceReference(Border.BackgroundProperty,
-            info.AtivaAgora ? "ChipErroFundo" : "VeuElevado");
+            info.AtivaAgora ? "ChipOkFundo" : "VeuElevado");
         cab.SetResourceReference(Border.BorderBrushProperty,
-            info.AtivaAgora ? "ChipErroBorda" : "Borda");
+            info.AtivaAgora ? "ChipOkBorda" : "Borda");
         var linhaCab = new StackPanel { Orientation = Orientation.Horizontal };
         var titulo = new TextBlock
         {
@@ -720,7 +722,7 @@ public partial class Venda : UserControl
             VerticalAlignment = VerticalAlignment.Center,
         };
         titulo.SetResourceReference(TextBlock.ForegroundProperty,
-            info.AtivaAgora ? "Rosa" : "TextoFraco");
+            info.AtivaAgora ? "Ok" : "TextoFraco");
         linhaCab.Children.Add(titulo);
         var detalhe = new TextBlock
         {
