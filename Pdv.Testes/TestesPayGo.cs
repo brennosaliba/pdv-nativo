@@ -656,6 +656,63 @@ public static class TestesPayGo
             checar(f.Quantos("NCN") == 1, "e o NCN saiu");
         }
 
+        // ── P51: a resposta é gravada ANTES de o arquivo ser apagado ──────
+        {
+            using var f = new FakePayGo();
+            var arquivoAindaLa = false;
+            var c = Cliente(f, t =>
+            {
+                if (t.Situacao == "aprovada") arquivoAindaLa = File.Exists(Path.Combine(f.Resp, "intpos.001"));
+                return true;
+            });
+            var d = Cobrar(c, TipoTef.Credito, 10m);
+            checar(d.Pago && arquivoAindaLa, "a linha 'aprovada' (com 027) já está em disco quando o Resp\\intpos.001 ainda existe — sem janela sem arquivo e sem linha");
+        }
+        {
+            using var f = new FakePayGo();
+            var arquivoAindaLa = false;
+            var c = Cliente(f, t =>
+            {
+                if (t.Situacao == "aprovada" && t.ChargeId.StartsWith("paygo-cnc-")) arquivoAindaLa = File.Exists(Path.Combine(f.Resp, "intpos.001"));
+                return true;
+            });
+            if (ultimaPaga is not null)
+            {
+                c.CancelarAsync(ultimaPaga, CancellationToken.None).GetAwaiter().GetResult();
+                checar(arquivoAindaLa, "CNC: idem — grava antes de apagar");
+            }
+        }
+
+        // ── .sts tardio de um comando NOSSO não serve de ack para outro ──
+        {
+            using var f = new FakePayGo();
+            var trilha = new List<string>();
+            var c = new ClientePayGo(f.Pasta, new OpcoesPayGo("Setis", "Teste", "v1", "G45J35G3JH45B435"))
+            { TempoStsMs = 1500, IntervaloPollMs = 20, Auditar = trilha.Add };
+            Cobrar(c, TipoTef.Credito, 10m);
+            var idAntigo = f.Comandos("CNF")[0]["001-000"];          // um 001 que NÓS emitimos
+
+            f.Pausado = true;
+            var t = c.AtivoAsync(CancellationToken.None);
+            checar(f.Esperar(() => File.Exists(Path.Combine(f.Req, "intpos.001"))), "ATV foi gravado (PayGo pausado)");
+            File.WriteAllText(Path.Combine(f.Resp, "intpos.sts"), $"000-000 = CNF\r\n001-000 = {idAntigo}\r\n999-999 = 0\r\n");
+            Thread.Sleep(150);
+            checar(!t.IsCompleted, ".sts tardio com 001 nosso NÃO é aceito como ack do ATV (segue esperando)");
+            f.Pausado = false;
+            checar(t.GetAwaiter().GetResult(), "quando o PayGo responde de verdade, o ATV conclui");
+            checar(trilha.Any(x => x.Contains("outro comando nosso ignorado")) && !trilha.Any(x => x.Contains("ALARME")), "trilha: ignorado, sem alarme");
+        }
+        {
+            using var f = new FakePayGo { Pausado = true };
+            var trilha = new List<string>();
+            var c = new ClientePayGo(f.Pasta, new OpcoesPayGo("Setis", "Teste", "v1", "G45J35G3JH45B435"))
+            { TempoStsMs = 1500, IntervaloPollMs = 20, Auditar = trilha.Add };
+            var t = c.AtivoAsync(CancellationToken.None);
+            f.Esperar(() => File.Exists(Path.Combine(f.Req, "intpos.001")));
+            File.WriteAllText(Path.Combine(f.Resp, "intpos.sts"), "000-000 = ATV\r\n001-000 = 5555555555\r\n999-999 = 0\r\n");
+            checar(t.GetAwaiter().GetResult() && trilha.Any(x => x.Contains("ALARME")), ".sts com 001 DESCONHECIDO é aceito (PayGo que não ecoa) + alarme");
+        }
+
         // ── Desfeita: a tela não pode oferecer 'registrar como POS' ───────
         {
             using var f = new FakePayGo();

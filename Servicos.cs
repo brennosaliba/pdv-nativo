@@ -247,15 +247,16 @@ public static class Servicos
                                AND (situacao IN ('pago','cnf_sem_ack') OR payment_status = 'cnf_sem_ack')
                             """, new { C = ctrl }) > 0;
                     },
-                    // Resposta com 001 de uma cobrança NOSSA que ficou sem desfecho (restart no meio)
-                    // é alheia; 001 desconhecido é aceito como da venda em curso.
-                    EhNossaAbandonada = ident =>
+                    // Resposta/ack com 001 que NÓS emitimos em outro processo (qualquer linha paygo:
+                    // identificacao ou o 001 embutido no charge_id — a de 'criando' não tem
+                    // identificacao) é alheia; 001 desconhecido é aceito como da venda em curso.
+                    EhNossaIdentificacao = ident =>
                     {
                         using var c5 = Banco.Abrir();
                         return c5.ExecuteScalar<int>("""
                             SELECT COUNT(*) FROM tef_transacao
-                             WHERE charge_id LIKE 'paygo-%' AND identificacao = @I
-                               AND situacao IN ('criando','aguardando','orfa')
+                             WHERE identificacao = @I
+                                OR charge_id IN ('paygo-' || @I, 'paygo-cnc-' || @I, 'paygo-adm-' || @I)
                             """, new { I = ident }) > 0;
                     },
                     // Trilha do two-phase (a PayGo pede log): CNF/NCN enviados/acusados, órfãs desfeitas.
