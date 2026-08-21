@@ -40,6 +40,9 @@ public sealed class FakePayGo : IDisposable
     /// <summary>Grava o .001 AOS POUCOS (sem rename): metade, pausa, resto — PayGo que não grava atômico.</summary>
     public int EscreverAosPoucosMs;
 
+    /// <summary>false = PayGo que NÃO ecoa o 001-000 (responde com identificação própria, como o Passo 19 do kit sugere).</summary>
+    public bool EcoIdentificacao = true;
+
     /// <summary>Código de controle que <see cref="Desfecho.NegarComPendencia"/> devolve.</summary>
     public string PendenciaControle = "CTRL-PENDENTE";
 
@@ -104,10 +107,10 @@ public sealed class FakePayGo : IDisposable
     /// Planta uma resposta APROVADA "esquecida" em `Resp\intpos.001` — o que sobra quando a
     /// resposta chega depois de o PDV desistir, ou o caixa morre entre o .001 e o CNF.
     /// </summary>
-    public void PlantarRespostaOrfa(string id, string controle, long valorCent = 100)
+    public void PlantarRespostaOrfa(string id, string controle, long valorCent = 100, bool semConfirmacao = false)
     {
         var req = new Dictionary<string, string> { ["003-000"] = valorCent.ToString(CultureInfo.InvariantCulture), ["731-000"] = "1" };
-        var txt = Resposta("CRT", id, req, Desfecho.Aprovar, controle);
+        var txt = Resposta("CRT", id, req, semConfirmacao ? Desfecho.AprovarSemConfirmacao : Desfecho.Aprovar, controle);
         Escrever(Path.Combine(Resp, "intpos.001"), txt);
     }
 
@@ -146,7 +149,7 @@ public sealed class FakePayGo : IDisposable
     {
         if (SemStsTudo) return;
         var cmd = req.GetValueOrDefault("000-000") ?? "";
-        var id = req.GetValueOrDefault("001-000") ?? "0";
+        var id = EcoIdentificacao ? (req.GetValueOrDefault("001-000") ?? "0") : "7777777777";
 
         if (cmd is "CRT" or "CNC" or "ADM")
         {

@@ -247,6 +247,17 @@ public static class Servicos
                                AND (situacao IN ('pago','cnf_sem_ack') OR payment_status = 'cnf_sem_ack')
                             """, new { C = ctrl }) > 0;
                     },
+                    // Resposta com 001 de uma cobrança NOSSA que ficou sem desfecho (restart no meio)
+                    // é alheia; 001 desconhecido é aceito como da venda em curso.
+                    EhNossaAbandonada = ident =>
+                    {
+                        using var c5 = Banco.Abrir();
+                        return c5.ExecuteScalar<int>("""
+                            SELECT COUNT(*) FROM tef_transacao
+                             WHERE charge_id LIKE 'paygo-%' AND identificacao = @I
+                               AND situacao IN ('criando','aguardando','orfa')
+                            """, new { I = ident }) > 0;
+                    },
                     // Trilha do two-phase (a PayGo pede log): CNF/NCN enviados/acusados, órfãs desfeitas.
                     Auditar = detalhe =>
                     {
@@ -351,9 +362,10 @@ public static class Servicos
             foreach (var l in linhas)
             {
                 var tipo = TipoTefExtensoes.Analisar((string?)l.tipo) ?? TipoTef.Credito;
+                // payment_status manda quando diz 'sem ack' — seja qual for a situacao (a tela
+                // pode ter escrito 'cancelado'/'erro' por cima antes da guarda de provedor).
                 var ps = (string?)l.payment_status;
-                var situacao = ps is "cnf_sem_ack" or "ncn_sem_ack" && (string)l.situacao is "pago" or "estornado" or "desfeita"
-                    ? ps! : (string)l.situacao;
+                var situacao = ps is "cnf_sem_ack" or "ncn_sem_ack" ? ps! : (string)l.situacao;
                 var tx = new TransacaoPayGo((string)l.id, (string?)l.identificacao ?? "", tipo,
                     (long)l.valor_cent, (int)(long)l.parcelas, situacao,
                     RespostaPayGo.Analisar((string?)l.resposta_txt));
@@ -367,11 +379,14 @@ public static class Servicos
         // (se a resposta dela estava na pasta, a varredura acima já a encerrou pela identificação).
         using (var cx = Banco.Abrir())
         {
+            // criado_em < início do processo: a 1ª venda pós-boot pode já estar em 'criando'
+            // enquanto esta varredura roda — essa é VIVA, não órfã.
+            var inicio = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToString("o");
             cx.Execute("""
                 UPDATE tef_transacao
                    SET situacao = 'orfa', motivo = 'PDV reiniciou durante a cobrança; confira no PayGo', atualizado_em = @Em
-                 WHERE charge_id LIKE 'paygo-%' AND situacao IN ('criando','aguardando')
-                """, new { Em = DateTime.Now.ToString("o") });
+                 WHERE charge_id LIKE 'paygo-%' AND situacao IN ('criando','aguardando') AND criado_em < @Inicio
+                """, new { Em = DateTime.Now.ToString("o"), Inicio = inicio });
         }
         return n;
     }

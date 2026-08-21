@@ -585,7 +585,75 @@ public static class TestesPayGo
             checar(d.Pago, "ADM concluído: " + d.Motivo);
             var adm = f.Comandos("ADM").Single();
             checar(!adm.ContainsKey("003-000") && adm["706-000"] == "156" && adm["716-000"] == "Setis", "ADM vai sem valor, com capacidades e empresa");
-            checar(f.Quantos("CNF") == 1, "ADM com comprovante (729=2) é confirmado");
+            checar(f.Quantos("CNF") == 1 && d.PaymentStatus == "adm", "ADM com comprovante (729=2) é confirmado, estado 'adm'");
+        }
+
+        // ── PayGo que NÃO ecoa o 001: aceita como nossa (não derruba a loja) ──
+        {
+            using var f = new FakePayGo { EcoIdentificacao = false };
+            var alarmes = new List<string>();
+            var c = new ClientePayGo(f.Pasta, new OpcoesPayGo("Setis", "Teste", "v1", "G45J35G3JH45B435"))
+            { TempoStsMs = 1500, IntervaloPollMs = 20, Auditar = alarmes.Add };
+            var d = Cobrar(c, TipoTef.Credito, 10m);
+            checar(d.Pago && d.Cartao?.Valor == 10m, "001 desconhecido (não abandonado) é aceito como nosso → Pago: " + d.Motivo);
+            checar(f.Quantos("CNF") == 1 && f.Quantos("NCN") == 0, "confirma normalmente, não desfaz");
+            checar(alarmes.Any(a => a.Contains("ALARME")), "e deixa alarme na auditoria (conferir eco na homologação)");
+        }
+
+        // ── alheia aprovada com 729=1 → ÓRFÃ (não 'desfeita'); sem 027 → órfã, sem NCN ──
+        {
+            using var f = new FakePayGo();
+            var sits = new List<(string id, string s)>();
+            var c = Cliente(f, t => { sits.Add((t.Identificacao, t.Situacao)); return true; });
+            f.PlantarRespostaOrfa("1000000020", "CTRL-JA-EFETIVADA", 500, semConfirmacao: true);
+            c.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(f.Quantos("NCN") == 0, "órfã com 729=1 não é desfeita (já efetivada na rede)");
+            checar(sits.Contains(("1000000020", "orfa")), "órfã já efetivada fica 'orfa' (dinheiro entrou sem venda → estornar)");
+
+            f.PlantarRespostaOrfa("1000000021", "", 500);    // aprovada, 729=2, SEM 027
+            c.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(f.Quantos("NCN") == 0, "órfã sem 027 NÃO recebe NCN às cegas (seria 'a última transação')");
+            checar(sits.Contains(("1000000021", "orfa")), "órfã sem 027 fica 'orfa' para conferência");
+        }
+        {
+            using var f = new FakePayGo();
+            var sits = new List<string>();
+            var c = Cliente(f, t => { sits.Add(t.Situacao); return true; });
+            var req = new Dictionary<string, string> { ["003-000"] = "1000", ["731-000"] = "1" };
+            var semCtrl = RespostaPayGo.Analisar(FakePayGo.Resposta("CRT", "1000000022", req, FakePayGo.Desfecho.Aprovar, ""));
+            var tx = new TransacaoPayGo("paygo-1000000022", "1000000022", TipoTef.Credito, 1000, 1, "aprovada", semCtrl);
+            c.ResolverPendenciasAsync(new List<(TransacaoPayGo, bool)> { (tx, false) }).GetAwaiter().GetResult();
+            checar(f.Quantos("NCN") == 0 && f.Quantos("CNF") == 0 && sits.Last() == "orfa", "religamento: aprovada sem 027 vira órfã, sem CNF/NCN");
+        }
+
+        // ── pendência confirmada e ADM não viram 'pago' (fechamento só soma venda) ──
+        {
+            using var f = new FakePayGo();
+            f.Roteiro.Enqueue(FakePayGo.Desfecho.NegarComPendencia);
+            var sits = new List<(string id, string s)>();
+            var c = Cliente(f, t => { sits.Add((t.ChargeId, t.Situacao)); return true; }, conhecida: _ => true);
+            Cobrar(c, TipoTef.Credito, 1005.51m);
+            checar(sits.Any(s => s.id == "paygo-pend-CTRL-PENDENTE" && s.s == "confirmada") && !sits.Any(s => s.s == "pago"),
+                   "P32: a pendência confirmada fica 'confirmada', nunca 'pago'");
+            c.AdministrativaAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(sits.Any(s => s.id.StartsWith("paygo-adm-") && s.s == "adm") && !sits.Any(s => s.s == "pago"),
+                   "ADM com comprovante fica 'adm', nunca 'pago'");
+        }
+
+        // ── Guardar que LANÇA dentro do NCN não derruba a cobrança ────────
+        {
+            using var f = new FakePayGo();
+            var c = Cliente(f, t =>
+            {
+                if (t.Situacao == "aprovada") return false;
+                if (t.Situacao == "desfeita") throw new InvalidOperationException("disco cheio");
+                return true;
+            });
+            DesfechoTef? d = null;
+            Exception? ex = null;
+            try { d = Cobrar(c, TipoTef.Credito, 10m); } catch (Exception e) { ex = e; }
+            checar(ex is null && d is { Desfeita: true } && !d.Pago, "Guardar lançando no NCN vira desfecho (Erro/Desfeita), não exceção na tela");
+            checar(f.Quantos("NCN") == 1, "e o NCN saiu");
         }
 
         // ── Desfeita: a tela não pode oferecer 'registrar como POS' ───────

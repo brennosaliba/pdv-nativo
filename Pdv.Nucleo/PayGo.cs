@@ -183,8 +183,15 @@ public sealed record TransacaoPayGo(string ChargeId, string Identificacao, TipoT
     /// <summary>É um cancelamento (CNC)? Decide o estado final: `estornado`, nunca `pago`.</summary>
     public bool EhCancelamento => Resposta?.Comando == "CNC" || ChargeId.StartsWith("paygo-cnc-", StringComparison.Ordinal);
 
-    /// <summary>Estado final quando o CNF é acusado.</summary>
-    public string AposConfirmar => EhCancelamento ? "estornado" : "pago";
+    /// <summary>
+    /// Estado final quando o CNF é acusado. Só VENDA vira `pago` — é `pago` que o fechamento
+    /// de caixa soma (Caixa.DivergenciasTef); estorno, pendência devolvida pela rede e
+    /// administrativa têm estado próprio para não virar "venda fantasma".
+    /// </summary>
+    public string AposConfirmar => EhCancelamento ? "estornado"
+        : ChargeId.StartsWith("paygo-pend-", StringComparison.Ordinal) ? "confirmada"
+        : ChargeId.StartsWith("paygo-adm-", StringComparison.Ordinal) ? "adm"
+        : "pago";
 }
 
 /// <summary>Identidade da automação nos arquivos (campos 716/733/735/736/738) e as capacidades (706).</summary>
@@ -240,6 +247,23 @@ public sealed class ClientePayGo : IProvedorTef
 
     /// <summary>Trilha: CNF/NCN enviados e acusados, órfãs desfeitas, respostas de outra transação ignoradas. A PayGo pede log.</summary>
     public Action<string>? Auditar { get; init; }
+
+    /// <summary>
+    /// A identificação é de uma cobrança NOSSA que ficou sem desfecho (restart no meio:
+    /// 'criando'/'aguardando'/'orfa' em `tef_transacao`)? Complementa a lista em memória.
+    /// Só resposta de identificação ABANDONADA é tratada como alheia; 001 desconhecido no meio
+    /// da nossa espera é aceito como nosso (um PayGo que não ecoe o 001 não pode derrubar a
+    /// loja na primeira venda) — com alarme na auditoria.
+    /// </summary>
+    public Func<string, bool>? EhNossaAbandonada { get; init; }
+
+    private readonly HashSet<string> _abandonadas = new(StringComparer.Ordinal);
+
+    private bool Abandonada(string id)
+    {
+        if (_abandonadas.Contains(id)) return true;
+        try { return EhNossaAbandonada?.Invoke(id) == true; } catch { return false; }
+    }
 
     public const string MsgTefNaoResponde = "TEF não responde — abra o PayGo Windows e tente de novo";
 
@@ -344,6 +368,7 @@ public sealed class ClientePayGo : IProvedorTef
                 // o Req no último instante, a resposta chega com ESTA identificação e é tratada
                 // como órfã (desfeita) pela conferência de identidade.
                 ApagarReq();
+                _abandonadas.Add(id);
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.TefNaoResponde, MsgTefNaoResponde);
             }
 
@@ -356,6 +381,7 @@ public sealed class ClientePayGo : IProvedorTef
             {
                 // Operador cancelou e o PayGo ficou mudo: órfã (a resposta tardia é reconhecida
                 // pela identificação e desfeita). O aviso da maquininha aqui é INFORMAÇÃO.
+                _abandonadas.Add(id);
                 Guardar(new TransacaoPayGo(chargeId, id, tipo, valor.Centavos, parc, "orfa", null, "PayGo não respondeu após o cancelamento"));
                 return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, null,
                     "cobrança cancelada pelo operador — confira no PayGo se o cliente concluiu", true)
@@ -386,7 +412,9 @@ public sealed class ClientePayGo : IProvedorTef
                 var conhecida = ConhecidaSegura(ctrl);
                 var pend = new TransacaoPayGo("paygo-pend-" + ctrl, NovaIdentificacao(), tipo, r.ValorCent ?? 0, 1,
                     "aprovada", r, "pendência devolvida pela rede");
-                if (conhecida) await ConfirmarAsync(pend, "pago").ConfigureAwait(false);
+                // 'confirmada', não 'pago': a venda original já tem a linha 'pago' dela; esta é só
+                // o registro da confirmação (o 003 aqui é o da venda ATUAL, negada).
+                if (conhecida) await ConfirmarAsync(pend, "confirmada").ConfigureAwait(false);
                 else await DesfazerAsync(pend, "desfeita").ConfigureAwait(false);
                 var motivo = r.Mensagem + (conhecida
                     ? " — pendência anterior confirmada; cobre de novo"
@@ -487,6 +515,7 @@ public sealed class ClientePayGo : IProvedorTef
             if (!await EsperarStsAsync(id).ConfigureAwait(false))
             {
                 ApagarReq();
+                _abandonadas.Add(id);
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.TefNaoResponde, MsgTefNaoResponde);
             }
             var texto = await EsperarRespostaAsync(chargeId, id, null, CancellationToken.None).ConfigureAwait(false);
@@ -535,6 +564,7 @@ public sealed class ClientePayGo : IProvedorTef
             if (!await EsperarStsAsync(id).ConfigureAwait(false))
             {
                 ApagarReq();
+                _abandonadas.Add(id);
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.TefNaoResponde, MsgTefNaoResponde);
             }
             var texto = await EsperarRespostaAsync(chargeId, id, null, CancellationToken.None).ConfigureAwait(false);
@@ -546,7 +576,8 @@ public sealed class ClientePayGo : IProvedorTef
                 return new DesfechoTef(r.Cancelada ? SituacaoTef.Cancelado : SituacaoTef.Recusado, id, chargeId, null, r.Mensagem, false)
                 { Codigo = r.Cancelada ? CodigoTef.Cancelado : CodigoTef.Recusado };
 
-            var sit = "pago";
+            // 'adm', nunca 'pago': o 003 de uma administrativa (ex.: cancelamento pelo menu) não é venda.
+            var sit = "adm";
             if (r.RequerConfirmacao)
             {
                 var tx = new TransacaoPayGo(chargeId, id, TipoTef.Credito, r.ValorCent ?? 0, 1, "aprovada", r, "administrativa");
@@ -555,7 +586,7 @@ public sealed class ClientePayGo : IProvedorTef
                     await DesfazerAsync(tx with { Motivo = "não gravou (NCN)" }, "desfeita").ConfigureAwait(false);
                     return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "não consegui gravar a operação — desfeita");
                 }
-                sit = await ConfirmarAsync(tx, "pago").ConfigureAwait(false) ? "pago" : "cnf_sem_ack";
+                sit = await ConfirmarAsync(tx, "adm").ConfigureAwait(false) ? "adm" : "cnf_sem_ack";
             }
             return new DesfechoTef(SituacaoTef.Pago, id, chargeId, null, r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit };
         }
@@ -580,9 +611,20 @@ public sealed class ClientePayGo : IProvedorTef
             // em outra venda. No boot ninguém está cobrando — apagar é sempre certo.
             ApagarReq();
             await AntesDoComandoAsync().ConfigureAwait(false);
+            var vistas = new HashSet<string>(StringComparer.Ordinal);
             foreach (var (tx, concluida) in pendentes)
             {
-                if (tx.Resposta is null) continue;
+                if (tx.Resposta is null || !vistas.Add(tx.ChargeId)) continue;
+                if (tx.Situacao is not ("aprovada" or "cnf_sem_ack" or "ncn_sem_ack")) continue;
+                if (string.IsNullOrWhiteSpace(tx.CodigoControle))
+                {
+                    // Sem 027 o PayGo entende CNF/NCN como "a ÚLTIMA transação" — que pode ser
+                    // outra. Nunca enviar às cegas: fica órfã para estorno/conferência manual.
+                    Auditar?.Invoke($"paygo: pendência {tx.ChargeId} sem 027 — não dá para CNF/NCN; marcada órfã");
+                    GuardarSeguro(tx with { Situacao = "orfa", Motivo = "aprovada sem código de controle (027); confira no PayGo" });
+                    n++;
+                    continue;
+                }
                 switch (tx.Situacao)
                 {
                     case "aprovada" when concluida:
@@ -623,15 +665,26 @@ public sealed class ClientePayGo : IProvedorTef
     {
         var caminho = Path.Combine(_resp, "intpos.001");
         if (!File.Exists(caminho)) return false;
-        var texto = LerComRetentativa(caminho);
+        // A órfã pode estar sendo ESCRITA agora (tardia chegando no início do próximo comando):
+        // ler pela metade daria "recusado" + apagar uma aprovação. Espera inteira/estável.
+        string? texto;
+        var relogio = Stopwatch.StartNew();
+        while ((texto = LerResposta(caminho)) is null)
+        {
+            if (!File.Exists(caminho)) return false;
+            if (relogio.ElapsedMilliseconds > TempoEstavelMs + 2_000) { texto = LerComRetentativa(caminho); break; }
+            await Task.Delay(IntervaloPollMs).ConfigureAwait(false);
+        }
         LimparResp();
         return await TratarRespostaAlheiaAsync(RespostaPayGo.Analisar(texto), "órfã na pasta").ConfigureAwait(false);
     }
 
     /// <summary>
     /// Resposta que não é da transação em curso (órfã, tardia, de outro processo). Aprovada e
-    /// pedindo confirmação → NCN (não há venda para ela); negada → só registra. A linha
-    /// gravada usa a identificação DELA, para encerrar um 'aguardando' deixado pelo crash.
+    /// pedindo confirmação → NCN (não há venda para ela); aprovada SEM pedir (729=1, já
+    /// efetivada na rede) → ÓRFÃ (dinheiro entrou sem venda: estornar); sem 027 → órfã (não dá
+    /// para desfazer às cegas); negada → só registra. A linha gravada usa a identificação DELA,
+    /// para encerrar um 'aguardando' deixado pelo crash.
     /// </summary>
     private async Task<bool> TratarRespostaAlheiaAsync(RespostaPayGo r, string origem)
     {
@@ -640,14 +693,24 @@ public sealed class ClientePayGo : IProvedorTef
         var chargeId = (r.Comando == "CNC" ? "paygo-cnc-" : "paygo-") + id;
         var tipo = r.TipoCartao switch { 2 => TipoTef.Debito, 0 => TipoTef.Pix, _ => TipoTef.Credito };
         var tx = new TransacaoPayGo(chargeId, id, tipo, r.ValorCent ?? 0, r.Parcelas ?? 1, "aprovada", r, "resposta " + origem);
-        Auditar?.Invoke($"paygo: resposta {origem} (001={id}, 009={r.Status}, 027={r.CodigoControle ?? "-"})");
-        if (r.Aprovada && r.RequerConfirmacao)
+        Auditar?.Invoke($"paygo: resposta {origem} (001={id}, 009={r.Status}, 027={r.CodigoControle ?? "-"}, 729={(r.RequerConfirmacao ? 2 : 1)})");
+        if (!r.Aprovada)
         {
-            await DesfazerAsync(tx with { Motivo = $"resposta {origem} sem venda (NCN)" }, "desfeita").ConfigureAwait(false);
-            return true;
+            GuardarSeguro(tx with { Situacao = r.Cancelada ? "cancelado" : "recusado", Motivo = $"resposta {origem}: {r.Mensagem}" });
+            return false;
         }
-        Guardar(tx with { Situacao = r.Aprovada ? "desfeita" : "recusado", Motivo = $"resposta {origem}: {r.Mensagem}" });
-        return false;
+        if (!r.RequerConfirmacao)
+        {
+            GuardarSeguro(tx with { Situacao = "orfa", Motivo = $"resposta {origem} aprovada sem confirmação pendente — dinheiro entrou sem venda; estornar" });
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(r.CodigoControle))
+        {
+            GuardarSeguro(tx with { Situacao = "orfa", Motivo = $"resposta {origem} aprovada sem 027 — não dá para desfazer às cegas; confira no PayGo" });
+            return false;
+        }
+        await DesfazerAsync(tx with { Motivo = $"resposta {origem} sem venda (NCN)" }, "desfeita").ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>Antes de todo comando: reenvia CNF/NCN sem ack e desfaz resposta órfã. Roda DENTRO do semáforo.</summary>
@@ -674,10 +737,10 @@ public sealed class ClientePayGo : IProvedorTef
     {
         var ok = await EnviarSimplesAsync("CNF", tx.Identificacao, tx.CodigoControle, tx.Resposta?.Rede).ConfigureAwait(false);
         Auditar?.Invoke($"paygo: CNF {tx.ChargeId} 027={tx.CodigoControle ?? "-"} {(ok ? "acusado" : "SEM ACK")}");
-        if (ok) Guardar(tx with { Situacao = depois });
+        if (ok) GuardarSeguro(tx with { Situacao = depois });
         else
         {
-            Guardar(tx with { Situacao = "cnf_sem_ack" });
+            GuardarSeguro(tx with { Situacao = "cnf_sem_ack" });
             _reenvios.Add((tx, "CNF", depois));
         }
         return ok;
@@ -688,10 +751,10 @@ public sealed class ClientePayGo : IProvedorTef
     {
         var ok = await EnviarSimplesAsync("NCN", tx.Identificacao, tx.CodigoControle, tx.Resposta?.Rede).ConfigureAwait(false);
         Auditar?.Invoke($"paygo: NCN {tx.ChargeId} 027={tx.CodigoControle ?? "-"} {(ok ? "acusado" : "SEM ACK")}");
-        if (ok) Guardar(tx with { Situacao = depois });
+        if (ok) GuardarSeguro(tx with { Situacao = depois });
         else
         {
-            Guardar(tx with { Situacao = "ncn_sem_ack" });
+            GuardarSeguro(tx with { Situacao = "ncn_sem_ack" });
             _reenvios.Add((tx, "NCN", depois));
         }
         return ok;
@@ -734,7 +797,14 @@ public sealed class ClientePayGo : IProvedorTef
                 {
                     var eco = ArquivoIntpos.Analisar(t).GetValueOrDefault("001-000");
                     if (string.IsNullOrWhiteSpace(eco) || eco == id) return true;
-                    Auditar?.Invoke($"paygo: .sts de outra transação ignorado (001={eco}, esperava {id})");
+                    if (!Abandonada(eco!))
+                    {
+                        // 001 desconhecido: PayGo que não ecoa? Aceitar como nosso — travar a
+                        // venda por isso seria pior. Fica o alarme para a homologação.
+                        Auditar?.Invoke($"paygo: ALARME .sts com 001={eco} (esperava {id}) aceito como nosso");
+                        return true;
+                    }
+                    Auditar?.Invoke($"paygo: .sts de transação abandonada ignorado (001={eco}, esperava {id})");
                     ApagarSts();
                 }
             }
@@ -760,8 +830,15 @@ public sealed class ClientePayGo : IProvedorTef
             {
                 var eco = ArquivoIntpos.Analisar(t).GetValueOrDefault("001-000");
                 if (string.IsNullOrWhiteSpace(eco) || eco == id) return t;
-                // Não é nossa: a venda anterior (abandonada) respondeu tarde. Desfazer se
-                // aprovada e seguir esperando a nossa — sem isso ela viraria "pago" aqui.
+                if (!Abandonada(eco!))
+                {
+                    // 001 desconhecido (não é nenhuma cobrança nossa abandonada): só pode ser a
+                    // nossa com um PayGo que não ecoa. Aceitar — e alarmar na auditoria.
+                    Auditar?.Invoke($"paygo: ALARME .001 com 001={eco} (esperava {id}) aceito como nosso");
+                    return t;
+                }
+                // É a venda anterior (abandonada) respondendo tarde. Desfazer se aprovada e
+                // seguir esperando a nossa — sem isso ela viraria "pago" aqui.
                 LimparResp();
                 await TratarRespostaAlheiaAsync(RespostaPayGo.Analisar(t), $"tardia (001={eco}) durante {id}").ConfigureAwait(false);
                 continue;

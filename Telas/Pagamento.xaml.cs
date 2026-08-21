@@ -445,7 +445,11 @@ public partial class Pagamento : UserControl
                                            parcelas, situacao, criado_em, atualizado_em)
                 VALUES (@Id,@Ch,@Pid,@T,@V,1,@S,@Em,@Em)
                 ON CONFLICT(id) DO UPDATE SET payment_identifier = COALESCE(@Pid, payment_identifier),
-                                              situacao = @S, atualizado_em = @Em
+                                              -- PayGo: quem manda na situação é o cliente (Guardar), que já
+                                              -- pode ter passado de 'aguardando' quando este report chega
+                                              -- pela fila da UI. Não regredir.
+                                              situacao = CASE WHEN COALESCE(provedor,'') = 'paygo' THEN situacao ELSE @S END,
+                                              atualizado_em = @Em
                 """,
                 new { Id = a.ChargeId, Ch = a.ChargeId, Pid = a.PaymentIdentifier, T = forma,
                       V = valor.Centavos, S = a.Fase, Em = DateTime.Now.ToString("o") });
@@ -469,7 +473,9 @@ public partial class Pagamento : UserControl
                 UPDATE tef_transacao SET situacao=@S, motivo=@M, payment_identifier=COALESCE(@Pid, payment_identifier),
                                          aut=@Aut, cnpj_cred=@Cnpj, bandeira=@Band, tband=@Tb, nsu=@Nsu,
                                          terminal=@Term, payment_status=COALESCE(@Ps, payment_status), atualizado_em=@Em
-                 WHERE charge_id=@Ch
+                 -- PayGo: a linha já foi fechada pelo cliente (pago/desfeita/ncn_sem_ack…); reescrever a
+                 -- situação pelo desfecho da tela apagaria 'ncn_sem_ack' e o boot não reenviaria o NCN.
+                 WHERE charge_id=@Ch AND COALESCE(provedor,'') <> 'paygo'
                 """,
                 new { S = situacao, M = d.Motivo, Pid = d.PaymentIdentifier, Ch = d.ChargeId, Ps = d.PaymentStatus,
                       Aut = d.Cartao?.CAut, Cnpj = d.Cartao?.Cnpj, Band = d.Cartao?.Bandeira,
