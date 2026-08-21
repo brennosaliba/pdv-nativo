@@ -42,6 +42,22 @@ public partial class Login : UserControl
         Teclado.Limpou += () => { Buffer = ""; Pintar(); };
         Loaded += (_, _) => Focus();
         Pintar();
+
+        // Modo de homologação: entra direto como o primeiro operador ativo (gerente/supervisor
+        // primeiro) — sem CPF/PIN. Só vale com a config 'homologacao' ligada.
+        Loaded += (_, _) =>
+        {
+            try
+            {
+                using var cx = Banco.Abrir();
+                if (!Vendas.Homologacao(cx)) return;
+                var op = Operadores.PrimeiroAtivo(cx);
+                if (op is null) return;
+                Caixa.Auditar(cx, null, "login", op.Id, null, $"{op.Nome} (homologação, sem senha)");
+                Dispatcher.BeginInvoke(() => Entrou?.Invoke(op));
+            }
+            catch { /* sem modo homologação, login normal */ }
+        };
     }
 
     private int Maximo => _etapa == Etapa.Cpf ? 11 : 6;

@@ -95,6 +95,14 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// </summary>
     public int TempoDesistirAposCancelarMs { get; init; } = 90_000;
 
+    /// <summary>
+    /// Teto da cobrança: se em <see cref="TempoMaxEmPagamentoMs"/> a intenção não chegou a um
+    /// desfecho, o PDV DEVOLVE A TELA ao operador (não fica preso). A intenção continua viva no
+    /// ControlPay/PayGo: a linha fica `orfa` com aviso e o religamento/menu TEF resolvem pelo
+    /// status real — nunca se declara pago o que não se sabe.
+    /// </summary>
+    public int TempoMaxEmPagamentoMs { get; init; } = 40_000;
+
     /// <summary>Teto do acompanhamento de um cancelamento/ADM (o PayGo pede senha lojista, cartão…).</summary>
     public int TempoMaxOperacaoMs { get; init; } = 10 * 60_000;
 
@@ -189,11 +197,14 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 ["referencia"] = referencia,
                 ["iniciarTransacaoAutomaticamente"] = true,
                 ["aguardarTefIniciarTransacao"] = true,       // a doc usa os dois nomes; mandar ambos é inócuo
-                ["parcelamentoAdmin"] = false,                 // parcelado pela LOJA (roteiro P8); só vale se > 1 parcela
                 ["quantidadeParcelas"] = parc,
                 ["valorTotalVendido"] = ValorComVirgula(valor.Centavos),
                 ["observacao"] = "PDV " + referencia + (string.IsNullOrEmpty(documento) ? "" : " doc " + documento),
             };
+            // 1 parcela = À VISTA declarado (aVista): sem isso o pinpad ainda pergunta o
+            // financiamento ao operador, e a loja não parcela. Parcelado (>1) vai pela LOJA.
+            if (parc > 1) body["parcelamentoAdmin"] = false;
+            else if (tipo is TipoTef.Credito or TipoTef.Debito) body["aVista"] = true;
 
             JsonDocument resp;
             try { resp = await ChamarAsync(HttpMethod.Post, "Venda/Vender/", body, CancellationToken.None).ConfigureAwait(false); }
@@ -229,13 +240,23 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
 
             // 2. acompanhar até o final
             var fim = await AcompanharAsync(ident, chargeId, andamento, ct).ConfigureAwait(false);
-            if (fim is null)
+            if (fim.Desistencia == "tempo")
+            {
+                // Passou do teto sem desfecho. A cobrança pode estar viva no pinpad: órfã +
+                // aviso, e o operador decide (conferir no PayGo / estornar / registrar).
+                var msg = $"a cobrança passou de {TempoMaxEmPagamentoMs / 1000} s sem resposta — confira na janela do PayGo. " +
+                          "Se o cliente concluiu, NÃO cobre de novo: estorne em TEF → Estornar.";
+                Guardar(new TransacaoPayGo(chargeId, ident, tipo, valor.Centavos, parc, "orfa", null, msg));
+                Auditar?.Invoke($"controlpay: intenção {ident} sem desfecho em {TempoMaxEmPagamentoMs / 1000} s — devolvida ao operador (órfã)");
+                return new DesfechoTef(SituacaoTef.Timeout, ident, chargeId, null, msg, true) { Codigo = CodigoTef.Timeout };
+            }
+            if (fim.Desistencia is not null)
             {
                 Guardar(new TransacaoPayGo(chargeId, ident, tipo, valor.Centavos, parc, "orfa", null, "operador cancelou e a intenção continua em pagamento no PayGo"));
                 return new DesfechoTef(SituacaoTef.Cancelado, ident, chargeId, null,
                     "cobrança cancelada pelo operador — confira na janela do PayGo se o cliente concluiu", true) { Codigo = CodigoTef.Cancelado };
             }
-            var (st, stNome, detalhe) = fim.Value;
+            var (st, stNome, detalhe, _) = fim;
 
             if (st == StatusIntencao.Creditado)
             {
@@ -250,8 +271,11 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                         "o cartão foi APROVADO mas o caixa não conseguiu gravar a transação — NÃO cobre de novo; estorne pelo menu TEF ou registre como POS", true)
                     { Codigo = CodigoTef.Plataforma };
                 }
-                await ImprimirSeguroAsync(tx).ConfigureAwait(false);
+                // 'pago' ANTES de imprimir: no ControlPay não há CNF/NCN — a transação já está
+                // efetivada e o comprovante é melhor esforço. Imprimir primeiro deixaria o caixa
+                // preso numa fila de impressora travada com a venda já cobrada.
                 Guardar(tx with { Situacao = "pago" });
+                await ImprimirSeguroAsync(tx).ConfigureAwait(false);
                 Auditar?.Invoke($"controlpay: intenção {ident} APROVADA nsu={r.Nsu ?? "-"} aut={r.Autorizacao ?? "-"} rede={r.Rede ?? "-"}");
                 return new DesfechoTef(SituacaoTef.Pago, ident, chargeId, Cartao(r), null, false) { Codigo = CodigoTef.Pago, PaymentStatus = "pago" };
             }
@@ -283,11 +307,12 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// Consulta a intenção até um status final. Devolve (status, nome, mensagem da adquirente) ou
     /// null se o operador cancelou e a intenção ficou em pagamento além de <see cref="TempoDesistirAposCancelarMs"/>.
     /// </summary>
-    private async Task<(int Status, string Nome, string? Detalhe)?> AcompanharAsync(string ident, string chargeId,
+    private async Task<(int Status, string Nome, string? Detalhe, string? Desistencia)> AcompanharAsync(string ident, string chargeId,
         IProgress<AndamentoTef>? andamento, CancellationToken ct)
     {
         Stopwatch? desdeCancelamento = null;
         var falhasSeguidas = 0;
+        var relogio = Stopwatch.StartNew();
         while (true)
         {
             try
@@ -301,7 +326,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                     {
                         string? detalhe = null;
                         if (st == StatusIntencao.Recusado) detalhe = await MensagemAdquirenteAsync(ident).ConfigureAwait(false);
-                        return (st, nome, detalhe);
+                        return (st, nome, detalhe, null);
                     }
                 }
             }
@@ -318,7 +343,9 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                     "Cancelamento pedido — cancele na janela do PayGo (Esc). O PDV aguarda o resultado…"));
             }
             if (desdeCancelamento is not null && desdeCancelamento.ElapsedMilliseconds >= TempoDesistirAposCancelarMs)
-                return null;
+                return (0, "", null, "cancelou");
+            if (TempoMaxEmPagamentoMs > 0 && relogio.ElapsedMilliseconds >= TempoMaxEmPagamentoMs)
+                return (0, "", null, "tempo");
             await Task.Delay(IntervaloPollMs).ConfigureAwait(false);
         }
     }

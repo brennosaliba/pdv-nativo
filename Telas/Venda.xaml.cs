@@ -1571,10 +1571,17 @@ public partial class Venda : UserControl
             return;
         }
 
-        var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do supervisor");
-        if (pin is null) return;
         Operador? sup;
-        using (var cxa = Banco.Abrir()) sup = Operadores.AutorizarSupervisor(cxa, pin);
+        using (var cxa = Banco.Abrir())
+        {
+            if (Vendas.Homologacao(cxa)) sup = Operadores.PrimeiroSupervisor(cxa) ?? _operador;   // modo de teste: sem PIN
+            else
+            {
+                var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do supervisor");
+                if (pin is null) return;
+                sup = Operadores.AutorizarSupervisor(cxa, pin);
+            }
+        }
         if (sup is null)
         {
             Dialogo.Avisar(dono, "Não autorizado", "O PIN não confere ou não é de um supervisor.", "erro");
@@ -1770,10 +1777,16 @@ public partial class Venda : UserControl
         {
             // Supervisor autoriza com o PIN DELE — e o nome fica no registro.
             // Autorização sem nome não serve de nada numa auditoria.
-            var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do supervisor");
-            if (pin is null) return;
             using var cxa = Banco.Abrir();
-            var sup = Operadores.AutorizarSupervisor(cxa, pin);
+            var homologacao = Vendas.Homologacao(cxa);
+            Operador? sup;
+            if (homologacao) sup = Operadores.PrimeiroSupervisor(cxa) ?? _operador;   // modo de teste: sem PIN
+            else
+            {
+                var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do supervisor");
+                if (pin is null) return;
+                sup = Operadores.AutorizarSupervisor(cxa, pin);
+            }
             if (sup is null)
             {
                 Dialogo.Avisar(dono, "Não autorizado", "O PIN não confere ou não é de um supervisor.", "erro");
@@ -1782,7 +1795,7 @@ public partial class Venda : UserControl
             // Segundo par de olhos NÃO pode ser o próprio: um gerente que opera o
             // caixa não autoriza a própria sangria — isso é sangria fantasma com
             // aval de si mesmo, o furto que a autorização existe pra impedir.
-            if (sup.Id == _operador.Id)
+            if (!homologacao && sup.Id == _operador.Id)
             {
                 Dialogo.Avisar(dono, "Não autorizado",
                     "A sangria precisa ser autorizada por OUTRO supervisor — você não pode autorizar a sua própria.", "erro");

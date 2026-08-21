@@ -26,11 +26,24 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Banco.Migrar();
+        // Modo de homologação/teste (config 'homologacao'): janela comum, com borda e
+        // redimensionável (o dono testa ao lado do PayGo Windows), sem o quiosque.
+        bool homologacao;
+        using (var cxh = Banco.Abrir()) homologacao = Vendas.Homologacao(cxh);
+        if (homologacao)
+        {
+            WindowStyle = WindowStyle.SingleBorderWindow;
+            ResizeMode = ResizeMode.CanResize;
+            WindowState = WindowState.Normal;
+            Width = 1280; Height = 860;
+            Title = "PDV — modo de homologação (sem senhas)";
+            BotoesJanela.Visibility = Visibility.Collapsed;
+        }
         // Alt+F4 não pode fechar um caixa por acidente no meio da venda.
         // Ctrl+M minimiza — a janela quiosque não tem barra de título.
         PreviewKeyDown += (_, e) =>
         {
-            if (e.SystemKey == Key.F4 && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) e.Handled = true;
+            if (!homologacao && e.SystemKey == Key.F4 && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) e.Handled = true;
             if (e.Key == Key.M && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
                 WindowState = WindowState.Minimized;
@@ -161,6 +174,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void AbrirConfigProtegida()
     {
+        using (var cxh = Banco.Abrir())
+            if (Vendas.Homologacao(cxh)) { Caixa.Auditar(cxh, null, "config_aberta", null, null, "modo homologação (sem senha)"); MostrarConfiguracao(); return; }
         var senha = PedirSenha.Mostrar(this, "Configuração do PDV", "Senha de administrador");
         if (senha is null) return;
         using var cx = Banco.Abrir();

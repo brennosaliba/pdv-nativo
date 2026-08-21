@@ -250,6 +250,13 @@ public static class Vendas
     }
 
     /// <summary>Config solta do terminal (impressora, limites). Ausente devolve o padrão.</summary>
+    /// <summary>
+    /// MODO DE HOMOLOGAÇÃO/TESTE (config `homologacao` = 1): login sem senha, autorizações
+    /// sem PIN, janela com borda. Existe para o dono rodar o roteiro da PayGo com agilidade;
+    /// em operação real fica desligado (a Configuração avisa em maiúsculas).
+    /// </summary>
+    public static bool Homologacao(SqliteConnection cx) => Config(cx, "homologacao") == "1";
+
     public static string? Config(SqliteConnection cx, string chave, string? padrao = null)
         => cx.ExecuteScalar<string?>("SELECT valor FROM config WHERE chave = @C", new { C = chave }) ?? padrao;
 

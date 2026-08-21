@@ -87,7 +87,8 @@ public static class TestesControlPay
             var vender = f.Rota("Venda/Vender").Single();
             var b = Body(vender);
             checar(b.GetProperty("formaPagamentoId").GetInt32() == 21 && b.GetProperty("terminalId").GetString() == "6408", "Vender: formaPagamentoId 21 (TEF crédito) e terminalId");
-            checar(b.GetProperty("quantidadeParcelas").GetInt32() == 3 && b.GetProperty("parcelamentoAdmin").GetBoolean() == false, "Vender: 3 parcelas pela LOJA (parcelamentoAdmin=false)");
+            checar(b.GetProperty("quantidadeParcelas").GetInt32() == 3 && b.GetProperty("parcelamentoAdmin").GetBoolean() == false && !b.TryGetProperty("aVista", out _),
+                   "Vender: 3 parcelas pela LOJA (parcelamentoAdmin=false, sem aVista)");
             checar(b.GetProperty("valorTotalVendido").GetString() == "150,00", "Vender: valorTotalVendido \"150,00\"");
             checar(b.GetProperty("iniciarTransacaoAutomaticamente").GetBoolean() && b.GetProperty("aguardarTefIniciarTransacao").GetBoolean(), "Vender: modo ATIVO (os dois nomes do flag)");
             checar(!string.IsNullOrEmpty(b.GetProperty("referencia").GetString()) && d.ChargeId == "cpay-" + b.GetProperty("referencia").GetString(), "referencia = a do charge_id");
@@ -97,8 +98,11 @@ public static class TestesControlPay
 
             checar(guardadas.Select(g => g.situacao).SequenceEqual(new[] { "aguardando", "aprovada", "pago" }),
                    "guardou aguardando → aprovada → pago: " + string.Join(",", guardadas.Select(g => g.situacao)));
-            checar(guardadas.First(g => g.situacao == "aprovada").impressoes == 0 && guardadas.First(g => g.situacao == "pago").impressoes == 1,
-                   "gravou 'aprovada' ANTES de imprimir e 'pago' DEPOIS do comprovante");
+            // No ControlPay não há CNF/NCN: a transação já está efetivada quando o status vira 10.
+            // Por isso 'pago' é gravado ANTES de imprimir — impressora travada não pode segurar o
+            // caixa com a venda já cobrada (aconteceu na homologação: fila da térmica em erro).
+            checar(guardadas.First(g => g.situacao == "aprovada").impressoes == 0 && guardadas.First(g => g.situacao == "pago").impressoes == 0,
+                   "gravou 'aprovada' e 'pago' ANTES de imprimir (comprovante é melhor esforço, não decide o commit)");
             checar(impressoes == 1, "comprovante impresso uma vez");
             checar(fases.Count >= 2 && fases[0].StartsWith("criando:") && fases.Any(x => x.StartsWith("aguardando:" + d.PaymentIdentifier)), "andamento criando → aguardando(com id)");
             checar(ultimaPaga?.Identificacao == d.PaymentIdentifier && ultimaPaga.Resposta?.Nsu == "16175123815", "linha guardada: identificacao = id da intenção, NSU da resposta");
@@ -113,7 +117,10 @@ public static class TestesControlPay
             checar(Cobrar(c, TipoTef.Pix, 10m).Pago, "pix aprovado");
             var vs = f.Rota("Venda/Vender");
             checar(Body(vs[0]).GetProperty("formaPagamentoId").GetInt32() == 22 && Body(vs[0]).GetProperty("quantidadeParcelas").GetInt32() == 1, "débito: forma 22, 1 parcela mesmo pedindo 5");
-            checar(Body(vs[1]).GetProperty("formaPagamentoId").GetInt32() == 25, "pix: forma 25 (TEF carteira digital)");
+            checar(Body(vs[0]).GetProperty("aVista").GetBoolean() && !Body(vs[0]).TryGetProperty("parcelamentoAdmin", out _),
+                   "1 parcela vai como À VISTA declarado (o pinpad não pergunta financiamento) e sem parcelamentoAdmin");
+            checar(Body(vs[1]).GetProperty("formaPagamentoId").GetInt32() == 25 && !Body(vs[1]).TryGetProperty("aVista", out _),
+                   "pix: forma 25 (TEF carteira digital), sem aVista");
         }
 
         // ── recusada / cancelada no pinpad ────────────────────────────────
@@ -163,6 +170,27 @@ public static class TestesControlPay
             checar(sw.ElapsedMilliseconds >= 200 && sw.ElapsedMilliseconds < 3000, $"desistiu só após o prazo pós-cancelamento ({sw.ElapsedMilliseconds} ms)");
             checar(sits.Last() == "orfa", "guardou órfã");
             checar(recados.Any(r => r.Contains("janela do PayGo")), "recado manda cancelar na janela do PayGo");
+        }
+
+        // ── teto de 40 s: devolve a tela ao operador, sem declarar pago ───
+        {
+            using var f = new FakeControlPay();
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.NuncaTermina);
+            var sits = new List<string>();
+            using var c = new ClienteControlPay(new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159", f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 10,
+                TempoMaxEmPagamentoMs = 300,
+                Guardar = t => { sits.Add(t.Situacao); return true; },
+            };
+            var sw = Stopwatch.StartNew();
+            var d = Cobrar(c, TipoTef.Credito, 10m);
+            checar(d.Situacao == SituacaoTef.Timeout && d.Codigo == CodigoTef.Timeout && d.PosPodeTerFicadoOcupado,
+                   "intenção sem desfecho no teto → Timeout com aviso de maquininha (tela volta pro operador)");
+            checar(sw.ElapsedMilliseconds >= 300 && sw.ElapsedMilliseconds < 3000, $"devolveu no teto ({sw.ElapsedMilliseconds} ms)");
+            checar(sits.Last() == "orfa" && !sits.Contains("pago"), "guardou órfã, NUNCA pago (o dinheiro pode ter entrado — o boot reconcilia)");
+            checar((d.Motivo ?? "").Contains("NÃO cobre de novo") && d.PaymentIdentifier == f.UltimaIntencao.ToString(),
+                   "mensagem proíbe recobrar e leva o id da intenção para o estorno: " + d.Motivo);
         }
 
         // ── erro HTTP: mensagem sem chave; 401 = chave recusada ───────────

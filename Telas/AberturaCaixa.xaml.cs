@@ -175,10 +175,15 @@ public partial class AberturaCaixa : UserControl
                     return;
                 }
 
-                var pin = PedirSenha.Mostrar(dono, "Autorização do gerente",
-                    $"PIN do gerente para pular o fechamento de {DataBr(presa.BusinessDate)}");
-                if (pin is null) return;
-                var sup = Operadores.AutorizarSupervisor(cx, pin);
+                Operador? sup;
+                if (Vendas.Homologacao(cx)) sup = Operadores.PrimeiroSupervisor(cx) ?? _operador;   // modo de teste: sem PIN
+                else
+                {
+                    var pin = PedirSenha.Mostrar(dono, "Autorização do gerente",
+                        $"PIN do gerente para pular o fechamento de {DataBr(presa.BusinessDate)}");
+                    if (pin is null) return;
+                    sup = Operadores.AutorizarSupervisor(cx, pin);
+                }
                 if (sup is null)
                 {
                     Dialogo.Avisar(dono, "Não autorizado", "O PIN não confere ou não é de um supervisor.", "erro");

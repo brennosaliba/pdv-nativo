@@ -170,4 +170,26 @@ public static class Operadores
 
     public static bool ExisteAlgum(SqliteConnection cx) =>
         cx.ExecuteScalar<int>("SELECT COUNT(*) FROM operador WHERE ativo = 1") > 0;
+
+    /// <summary>
+    /// MODO DE HOMOLOGAÇÃO (config `homologacao` = 1): o primeiro operador ativo, gerente/
+    /// supervisor primeiro — é quem "entra" sem senha e quem autoriza sem PIN. Fora desse modo
+    /// ninguém chama isto: em operação real não existe atalho de senha.
+    /// </summary>
+    public static Operador? PrimeiroAtivo(SqliteConnection cx)
+        => cx.QueryFirstOrDefault<Operador>("""
+            SELECT id AS Id, nome AS Nome, perfil AS Perfil FROM operador
+             WHERE ativo = 1 AND id <> '_admin_'
+             ORDER BY CASE perfil WHEN 'gerente' THEN 0 WHEN 'supervisor' THEN 1 ELSE 2 END, nome
+             LIMIT 1
+            """);
+
+    /// <summary>Idem, só supervisor/gerente (autorização sem PIN no modo de homologação).</summary>
+    public static Operador? PrimeiroSupervisor(SqliteConnection cx)
+        => cx.QueryFirstOrDefault<Operador>("""
+            SELECT id AS Id, nome AS Nome, perfil AS Perfil FROM operador
+             WHERE ativo = 1 AND id <> '_admin_' AND perfil IN ('gerente','supervisor')
+             ORDER BY CASE perfil WHEN 'gerente' THEN 0 ELSE 1 END, nome
+             LIMIT 1
+            """);
 }

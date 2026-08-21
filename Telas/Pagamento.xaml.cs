@@ -442,7 +442,10 @@ public partial class Pagamento : UserControl
             acoes.Add(("Registrar como venda POS",
                 () => RegistrarComoPos(forma, valor, d.PosPodeTerFicadoOcupado || d.Situacao == SituacaoTef.Timeout)));
         acoes.Add(("Trocar forma", () => { Ir(Fase.Forma); PintarPartes(); }));
-        acoes.Add(("Cancelar venda", ConfirmarAbandono));
+        // "Cancelar venda" só enquanto NADA foi aprovado. Com pagamento aprovado na venda,
+        // cancelar aqui deixaria dinheiro cobrado sem venda: o caminho é concluir e estornar
+        // em TEF → Estornar (com autorização do gerente), que devolve o dinheiro de verdade.
+        if (_partes.Count == 0) acoes.Add(("Cancelar venda", ConfirmarAbandono));
 
         Estado(d.Situacao == SituacaoTef.Cancelado ? "↩️" : "⚠️",
             d.Situacao switch
@@ -524,6 +527,17 @@ public partial class Pagamento : UserControl
             .Sum(p => p.Valor.Centavos - p.Troco.Centavos);
         var dinheiro = _partes.Where(p => p.Forma == "dinheiro")
             .Sum(p => p.Valor.Centavos - p.Troco.Centavos);
+        // Cartão/PIX JÁ APROVADO não se resolve cancelando a tela: o dinheiro só volta com
+        // estorno na rede. Então a venda é concluída e o estorno sai por TEF → Estornar (com
+        // autorização do gerente), que cancela a venda no mesmo ato.
+        if (cartoes > 0 && _partes.Any(p => p.Forma != "dinheiro" && (p.Nsu is not null || p.Aut is not null)))
+        {
+            Dialogo.Avisar(Window.GetWindow(this)!, "Pagamento já aprovado",
+                $"Esta venda tem {new Dinheiro(cartoes).Formatado()} aprovado no cartão/PIX — o dinheiro já saiu da conta do cliente.\n\n" +
+                "Conclua a venda e, se precisar devolver, use TEF → Estornar (autorização do gerente): ele estorna na rede E cancela a venda.", "erro");
+            return;
+        }
+
         var aviso = "Esta venda já tem pagamento recebido:";
         if (cartoes > 0) aviso += $"\n• {new Dinheiro(cartoes).Formatado()} no cartão/PIX — ESTORNE na maquininha";
         if (dinheiro > 0) aviso += $"\n• {new Dinheiro(dinheiro).Formatado()} em dinheiro — devolva ao cliente";
