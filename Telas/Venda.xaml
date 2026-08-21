@@ -145,7 +145,11 @@
                 <ScrollViewer VerticalScrollBarVisibility="Hidden">
                     <ItemsControl x:Name="ListaCategorias" Margin="10,10,10,14" VerticalAlignment="Top">
                         <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><UniformGrid Columns="2"/></ItemsPanelTemplate>
+                            <ItemsPanelTemplate>
+                                <!-- 2 por linha ate 12 categorias; acima disso 3 por
+                                     linha com card mini (rede SaaS chega a 20+) -->
+                                <UniformGrid Columns="{Binding ColunasCategorias, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+                            </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                     </ItemsControl>
                 </ScrollViewer>

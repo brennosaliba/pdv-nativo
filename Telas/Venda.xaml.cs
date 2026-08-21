@@ -69,6 +69,16 @@ public partial class Venda : UserControl
 
     public int Colunas { get => (int)GetValue(ColunasProperty); set => SetValue(ColunasProperty, value); }
 
+    /// <summary>2 por linha no dia a dia; 3 por linha (card mini) quando a rede
+    /// tem categoria demais — o dono viu 23 no teste SaaS e pediu densidade.</summary>
+    public static readonly DependencyProperty ColunasCategoriasProperty =
+        DependencyProperty.Register(nameof(ColunasCategorias), typeof(int), typeof(Venda), new PropertyMetadata(2));
+
+    public int ColunasCategorias
+    { get => (int)GetValue(ColunasCategoriasProperty); set => SetValue(ColunasCategoriasProperty, value); }
+
+    private bool _categoriaMini;
+
     public Venda(Operador operador, Sessao sessao)
     {
         InitializeComponent();
@@ -444,10 +454,20 @@ public partial class Venda : UserControl
         _colunasProdutos = _modoLista
             ? Math.Clamp((int)(util / 420), 1, 3)
             : Math.Clamp((int)(util / 178), 2, 8);
-        // aba PROMOCAO: cada promocao e uma SECAO de largura inteira (cabecalho
-        // + grade interna) — o UniformGrid de fora vira coluna unica
-        Colunas = _categoriaAtual == CategoriaPromo ? 1 : _colunasProdutos;
+        // aba PROMOCAO: secoes lado a lado (1-3 pela largura, pedido do dono
+        // no teste SaaS com 13 promocoes); a grade interna reparte o que sobra
+        if (_categoriaAtual == CategoriaPromo)
+        {
+            Colunas = Math.Clamp((int)(util / 520), 1, 3);
+            _colunasProdutosSecao = Math.Clamp((int)((util / Colunas - 28) / 178), 1, 4);
+        }
+        else
+        {
+            Colunas = _colunasProdutos;
+        }
     }
+
+    private int _colunasProdutosSecao = 2;
 
     private int _colunasProdutos = 3;
 
@@ -497,6 +517,8 @@ public partial class Venda : UserControl
             cats.Insert(0, CategoriaPromo);
             _quantosPorCategoria[CategoriaPromo] = emPromo;
         }
+        _categoriaMini = cats.Count > 12;
+        ColunasCategorias = _categoriaMini ? 3 : 2;
         _categoriaAtual = cats.FirstOrDefault() ?? "";
         foreach (var c in cats) ListaCategorias.Items.Add(BotaoCategoria(c));
         RepintarCategorias();
@@ -537,13 +559,16 @@ public partial class Venda : UserControl
         var b = new Button
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
-            Margin = new Thickness(4), MinHeight = 124, Height = 124,
-            Padding = new Thickness(4, 8, 4, 8), Tag = categoria,
+            Margin = new Thickness(_categoriaMini ? 3 : 4),
+            MinHeight = _categoriaMini ? 88 : 124, Height = _categoriaMini ? 88 : 124,
+            Padding = new Thickness(4, _categoriaMini ? 5 : 8, 4, _categoriaMini ? 5 : 8),
+            Tag = categoria,
         };
         var sp = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         sp.Children.Add(new Border
         {
-            Width = 34, Height = 34, CornerRadius = new CornerRadius(17),
+            Width = _categoriaMini ? 24 : 34, Height = _categoriaMini ? 24 : 34,
+            CornerRadius = new CornerRadius(17),
             Background = Degrade(cor, RD("FatorDegradeClaro"), RD("FatorDegradeEscuro")),
             HorizontalAlignment = HorizontalAlignment.Center,
             Effect = new System.Windows.Media.Effects.DropShadowEffect
@@ -552,7 +577,7 @@ public partial class Venda : UserControl
             },
             Child = new TextBlock
             {
-                Text = icone, FontSize = 17,
+                Text = icone, FontSize = _categoriaMini ? 12 : 17,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
             },
@@ -565,10 +590,13 @@ public partial class Venda : UserControl
         {
             // 16 e nao caixa alta: maiuscula "parece" maior mas le pior e come
             // largura — corpo maior e o que aumenta a leitura de verdade
-            Text = Capitalizar(categoria), FontSize = 16, FontWeight = FontWeights.Bold,
+            Text = Capitalizar(categoria),
+            FontSize = _categoriaMini ? 11.5 : 16, FontWeight = FontWeights.Bold,
             TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 7, 0, 0), MaxHeight = 44,
-            TextTrimming = TextTrimming.CharacterEllipsis, LineHeight = 19,
+            Margin = new Thickness(0, _categoriaMini ? 4 : 7, 0, 0),
+            MaxHeight = _categoriaMini ? 30 : 44,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            LineHeight = _categoriaMini ? 14 : 19,
         };
         nome.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
         sp.Children.Add(nome);
@@ -586,7 +614,7 @@ public partial class Venda : UserControl
             Child = contador,
         };
         selo.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
-        sp.Children.Add(selo);
+        if (!_categoriaMini) sp.Children.Add(selo);
         b.Content = sp;
         AutomationProperties.SetName(b, categoria);
         b.Click += (_, _) => { _categoriaAtual = categoria; RepintarCategorias(); PintarProdutos(); };
@@ -704,7 +732,7 @@ public partial class Venda : UserControl
         cab.Child = linhaCab;
         sec.Children.Add(cab);
 
-        var grade = new System.Windows.Controls.Primitives.UniformGrid { Columns = Math.Max(1, _colunasProdutos) };
+        var grade = new System.Windows.Controls.Primitives.UniformGrid { Columns = Math.Max(1, _colunasProdutosSecao) };
         foreach (var p in produtos) grade.Children.Add(ItemVitrine(p, info.AtivaAgora, info));
         sec.Children.Add(grade);
         return sec;
