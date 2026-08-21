@@ -125,6 +125,16 @@
     </Style>
 
 
+    <!-- TOQUE: o WPF já sabe rolar com o dedo (panning), mas vem DESLIGADO.
+         VerticalFirst = dedo pra cima/baixo rola; se o conteúdo for mais largo
+         que a tela, pro lado também. Vale pra todo ScrollViewer do app —
+         categorias, produtos, quadro do KDS, configuração. -->
+    <Style TargetType="ScrollViewer">
+        <Setter Property="PanningMode" Value="VerticalFirst"/>
+        <Setter Property="PanningDeceleration" Value="0.003"/>
+        <Setter Property="PanningRatio" Value="1"/>
+    </Style>
+
     <!-- ScrollBar moderna: o padrão do WPF é a barra cinza 3D dos anos 90
          ("parece Windows 3.11" — o dono). Aqui: trilho invisível, polegar fino
          e arredondado na cor do tema, sem setinhas. Em tela touch a barra é
