@@ -16,6 +16,17 @@ public static class TestesPromocoes
         var quarta = new DateTime(2026, 8, 19, 15, 0, 0);
         const string donut = "79af65dd-425f-4994-b30e-383cad3fa6f5";
 
+        // ── o payload VERBATIM do banco (com os nulls que derrubaram o parser) ──
+        // "valor_desconto_cent": null fazia TryGetInt64 LANÇAR e a promoção era
+        // descartada em silêncio — a aba PROMOÇÃO não nascia com dado real.
+        var verbatim = Promocoes.Parsear("""
+            {"id": "dd658ac8-a3a5-437e-89dd-7c05e98a30ca", "fim": "2026-09-30", "alvo": "produtos", "leve": null, "nome": "donuts do dia", "tipo": "percentual", "ativa": true, "combo": null, "lojas": ["American Day Savassi"], "pague": null, "store": "American Day Savassi", "config": null, "inicio": "2026-08-06", "hora_fim": null, "categorias": null, "percentual": null, "dias_semana": null, "hora_inicio": null, "produto_ids": ["79af65dd-425f-4994-b30e-383cad3fa6f5"], "regras_semana": [{"dias": [4], "precos_cent": {"79af65dd-425f-4994-b30e-383cad3fa6f5": 1450}, "produto_ids": ["79af65dd-425f-4994-b30e-383cad3fa6f5"]}], "valor_desconto_cent": null}
+            """);
+        checar(verbatim is not null,
+            "o payload VERBATIM do banco da loja (com nulls) parseia");
+        checar(verbatim is not null && verbatim.Regras.Count == 1,
+            "as regras_semana do payload verbatim sobrevivem");
+
         // ── o payload REAL do "donuts do dia" (producao, 20/08/2026) ────────
         var real = Promocoes.Parsear("""
             {"id":"dd658ac8","nome":"donuts do dia","tipo":"percentual","percentual":null,

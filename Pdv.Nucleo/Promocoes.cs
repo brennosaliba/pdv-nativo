@@ -81,7 +81,8 @@ public static class Promocoes
                     var precos = new Dictionary<string, long>();
                     if (reg.TryGetProperty("precos_cent", out var pc) && pc.ValueKind == JsonValueKind.Object)
                         foreach (var kv in pc.EnumerateObject())
-                            if (kv.Value.TryGetInt64(out var cent)) precos[kv.Name] = cent;
+                            if (kv.Value.ValueKind == JsonValueKind.Number
+                                && kv.Value.TryGetInt64(out var cent)) precos[kv.Name] = cent;
                     regras.Add(new Regra(
                         Ints(reg, "dias"),
                         Strs(reg, "produto_ids"),
@@ -95,7 +96,12 @@ public static class Promocoes
                 Str(e, "tipo") ?? "",
                 Str(e, "alvo"),
                 Num(e, "percentual"),
-                e.TryGetProperty("valor_desconto_cent", out var v) && v.TryGetInt64(out var vc) ? vc : null,
+                // ValueKind PRIMEIRO: TryGetInt64 em Null LANÇA (não devolve false).
+                // Os payloads reais têm "valor_desconto_cent": null — a 1ª versão
+                // descartava as TRÊS promoções da loja por causa disto, e a aba
+                // PROMOÇÃO simplesmente não nascia.
+                e.TryGetProperty("valor_desconto_cent", out var v)
+                    && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var vc) ? vc : null,
                 Strs(e, "produto_ids"),
                 Strs(e, "categorias"),
                 e.TryGetProperty("dias_semana", out var ds) && ds.ValueKind == JsonValueKind.Array
@@ -261,7 +267,8 @@ public static class Promocoes
         => Str(e, k) is { Length: >= 5 } s && TimeOnly.TryParse(s[..5], out var t) ? t : null;
     private static int[] Ints(JsonElement e, string k)
         => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array
-            ? v.EnumerateArray().Where(x => x.TryGetInt32(out _)).Select(x => x.GetInt32()).ToArray()
+            ? v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Number && x.TryGetInt32(out _))
+               .Select(x => x.GetInt32()).ToArray()
             : Array.Empty<int>();
     private static HashSet<string> Strs(JsonElement e, string k)
         => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array
