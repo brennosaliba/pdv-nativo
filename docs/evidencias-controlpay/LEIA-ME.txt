@@ -27,6 +27,10 @@ O que tem neste pacote
   p48-intencao-167656.json    consulta da venda do passo 2
   p49-intencao-167658.json    consulta da venda do passo 6
   p50-callback-insert.json    cadastro da URL de callback
+  p54-cancelamento-negado-167560.json
+      consulta da intencao do passo 53, mostrando os dois pagamentos externos:
+      TRANSACAO AUTORIZADA na venda e TRANSACAO NEGADA PELO HOST no cancelamento
+      do passo 54, que e o resultado esperado para Pix.
 
 
 Os passos que nao se aplicam

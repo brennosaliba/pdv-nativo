@@ -1,0 +1,110 @@
+﻿{
+    "data":  "24/08/2026 17:38:16.4651",
+    "intencoesVendas":  [
+                            {
+                                "id":  167560,
+                                "referencia":  "1787580673982",
+                                "token":  "691692",
+                                "data":  "24/08/2026 11:11",
+                                "hora":  "11:11:21",
+                                "dataAtualizacao":  "24/08/2026 11:33",
+                                "valorOriginal":  500.0000,
+                                "valorOriginalFormat":  "500,00",
+                                "valorAcrescimo":  0.0000,
+                                "valorAcrescimoFormat":  "0,00",
+                                "valorDesconto":  0.0000,
+                                "valorDescontoFormat":  "0,00",
+                                "valorFinal":  500.0000,
+                                "valorFinalFormat":  "500,00",
+                                "quantidade":  0,
+                                "urlPagamento":  null,
+                                "latitude":  "0",
+                                "longitude":  "0",
+                                "quantidadeParcelas":  1,
+                                "formaPagamento":  {
+                                                       "id":  25,
+                                                       "nome":  "TEF",
+                                                       "modalidade":  "Carteira Digital",
+                                                       "fluxoPagamento":  {
+                                                                              "id":  21,
+                                                                              "nome":  "TEF"
+                                                                          }
+                                                   },
+                                "terminal":  {
+                                                 "id":  6408,
+                                                 "nome":  "Terminal Virtual 114975"
+                                             },
+                                "intencaoVendaStatus":  {
+                                                            "id":  10,
+                                                            "nome":  "Creditado"
+                                                        },
+                                "cliente":  null,
+                                "pedido":  null,
+                                "vendedor":  {
+                                                 "id":  12247,
+                                                 "nomeRazaoSocial":  "Mm Food Service Produtos Alimenticios Ltda",
+                                                 "sobrenomeNomeFantasia":  "Prime Active",
+                                                 "fotoThumbnail":  "https://sandbox.controlpay.com.br/webapi//ImagensPessoas/_PessoaDefault.png",
+                                                 "parceiro":  null
+                                             },
+                                "pagamentosExternos":  [
+                                                           {
+                                                               "id":  159890,
+                                                               "tipo":  5,
+                                                               "origem":  10,
+                                                               "idPagamento":  "7798623",
+                                                               "nsuTid":  "E19283746202608241411Pmggfpq7Cbr",
+                                                               "trnNsu":  "20",
+                                                               "autorizacao":  "",
+                                                               "adquirente":  "PIX C6 BANK",
+                                                               "bandeira":  null,
+                                                               "codigoRespostaAdquirente":  "6",
+                                                               "codigoRespostaExecTransac":  "0",
+                                                               "mensagemRespostaAdquirente":  "TRANSACAO AUTORIZADA",
+                                                               "idConfirmacao":  "",
+                                                               "dataAdquirente":  "24/08/2026 11:11",
+                                                               "dataAtualizacao":  "24/08/2026 11:12",
+                                                               "respostaAdquirente":  "PWINFO_OPERATION = 33\r\nPWINFO_POSID = 114975\r\nPWINFO_DESTTCPIP = pos-transac-sb.tpgweb.io:31735\r\nPWINFO_MERCHCNPJCPF = 62177839000157\r\nPWINFO_TOTAMNT = 000000050000\r\nPWINFO_CURRENCY = 986\r\nPWINFO_DATETIME = 20260824111157\r\nPWINFO_REQNUM = 0000626220\r\nPWINFO_AUTHSYST = PIX C6 BANK\r\nPWINFO_VIRTMERCH = 9292\r\nPWINFO_AUTMERCHID = 62177839000157\r\nPWINFO_FINTYPE = 1\r\nPWINFO_INSTALLMENTS = 1\r\nPWINFO_RESULTMSG =  TRANSACAO AUTORIZADA\r\nPWINFO_CNFREQ = 1\r\nPWINFO_AUTLOCREF = 20\r\nPWINFO_AUTEXTREF = E19283746202608241411Pmggfpq7Cbr\r\nPWINFO_AUTRESPCODE = 6\r\nPWINFO_RCPTFULL =    *** PAYGO - AMBIENTE SANDBOX ***   \r\nVIA UNICA                24/AGO/26 11:11\r\nPRIME ACTIVE\r\nCNPJ:62.177.839/0001-57       PDC:114975\r\nREF:20                           EC:9292\r\nPIX C6 BANK\r\n                 VENDA                  \r\nVALOR FINAL:                   R$ 500,00\r\n\r\n--------------------------------------\r\n114975 EC:0000009292 REF:0000000020\r\n\r TRANSACAO TESTE SEM VALOR FINANCEIRO!  \r\nPWINFO_RCPTMERCH =    *** PAYGO - AMBIENTE SANDBOX ***   \r\nVIA ESTABELECIMENTO      24/AGO/26 11:11\r\nPRIME ACTIVE\r\nCNPJ:62.177.839/0001-57       PDC:114975\r\nREF:20                           EC:9292\r\nPIX C6 BANK\r\n                 VENDA                  \r\nVALOR FINAL:                   R$ 500,00\r\n\r\n--------------------------------------\r\n114975 EC:0000009292 REF:0000000020\r\n\r TRANSACAO TESTE SEM VALOR FINANCEIRO!  \r\nPWINFO_RCPTCHOLDER =    *** PAYGO - AMBIENTE SANDBOX ***   \r\nVIA CLIENTE              24/AGO/26 11:11\r\nPRIME ACTIVE\r\nCNPJ:62.177.839/0001-57       PDC:114975\r\nREF:20                           EC:9292\r\nPIX C6 BANK\r\n                 VENDA                  \r\nVALOR FINAL:                   R$ 500,00\r\n\r\n--------------------------------------\r\n114975 EC:0000009292 REF:0000000020\r\n\r TRANSACAO TESTE SEM VALOR FINANCEIRO!  \r\nPWINFO_LANGUAGE = 0\r\nPWINFO_PROCESSMSG = \rREALIZE A LEITURA DO\r     QR CODE 26     \r\nPWINFO_CNCDSPMSG = \r      OPERACAO\r      CANCELADA\r\nPWINFO_CNCPPMSG =     OPERACAO        CANCELADA   \r\nPWINFO_RCPTPRN = 3\r\nPWINFO_MERCHNAMERCPT = Prime Active\r\nPWINFO_PRODESTABRCPT = PIX C6 BANK\r\nPWINFO_PRODCLIRCPT = PIX C6 BANK\r\nPWINFO_PAYMNTTYPE = 8\r\nPWINFO_GRAPHICRCPHEADER = *** PAYGO - AMBIENTE SANDBOX ***\r\nPWINFO_GRAPHICRCPFOOTER = TRANSACAO TESTE SEM VALOR FINANCEIRO!\r\nPWINFO_TRANSACDESCRIPT = VENDA\r\nPWINFO_SOFTDESCRIPTOR = Prime Active*Prime Act\r\nPWINFO_AUTHPOSQRCODE = 00020101021226990014br.gov.bcb.pix2577qrcode-h.c6pix.com/qrs1/v2/01htxQ522aO3hf72wBRpG3NhpEKBTirZpyCIZGUmomg4zKX6oZ5204000053039865406500.005802BR5916REGRESSIVO TESTE6009Sao Paulo62070503***630436F5\r\nPWINFO_WALLETUSERIDTYPE = 4\r\nPWINFO_RCPTECVID = 9292\r\nPWINFO_USINGPINPAD = 1\r\nPWINFO_PPCOMMPORT = 05\r\nPWINFO_IDLEPROCTIME = 260824121151\r\nPWINFO_SERVERPND = 0\r\nPWINFO_RESULTID = 1\r\nPWINFO_LIBVERSION = 0004.0001.0050.0024\r\nPWINFO_OSVERSION = SO:Win 10 , 64bits\r\nPWINFO_EXPORTLOGNEEDED = 0\r\nPWINFO_GRAPHICRCP = 1\r\nPWINFO_OPERATIONORIG = 33\r\nPWINFO_DATETIMERCPT = 20260824111123\r\nPWINFO_UNIQUEID = 00000000000007798623\r\nPWINFO_TRNRESULT = 0\r\nPWINFO_RMCCAUSE = 0\r\nPWINFO_TRNNSU = 20\r\nPWINFO_CPEXECTRANSACRESP = 0",
+                                                               "comprovanteAdquirente":  "*** PAYGO - AMBIENTE SANDBOX ***   \r\nVIA UNICA                24/AGO/26 11:11\r\nPRIME ACTIVE\r\nCNPJ:62.177.839/0001-57       PDC:114975\r\nREF:20                           EC:9292\r\nPIX C6 BANK\r\n                 VENDA                  \r\nVALOR FINAL:                   R$ 500,00\r\n\r\n--------------------------------------\r\n114975 EC:0000009292 REF:0000000020\r\n TRANSACAO TESTE SEM VALOR FINANCEIRO!",
+                                                               "tipoParcelamento":  2,
+                                                               "orderLIO":  null,
+                                                               "pagamentoExternoStatus":  {
+                                                                                              "id":  15,
+                                                                                              "nome":  "Finalizado"
+                                                                                          },
+                                                               "nomeTitularCartao":  null
+                                                           },
+                                                           {
+                                                               "id":  159912,
+                                                               "tipo":  10,
+                                                               "origem":  10,
+                                                               "idPagamento":  "7798707",
+                                                               "nsuTid":  "",
+                                                               "trnNsu":  "",
+                                                               "autorizacao":  "",
+                                                               "adquirente":  "PIX C6 BANK",
+                                                               "bandeira":  null,
+                                                               "codigoRespostaAdquirente":  "",
+                                                               "codigoRespostaExecTransac":  "-2596",
+                                                               "mensagemRespostaAdquirente":  "TRANSACAO NEGADA PELO HOST",
+                                                               "idConfirmacao":  "",
+                                                               "dataAdquirente":  null,
+                                                               "dataAtualizacao":  "24/08/2026 11:33",
+                                                               "respostaAdquirente":  "PWINFO_OPERATION = 34\r\nPWINFO_POSID = 114975\r\nPWINFO_DESTTCPIP = pos-transac-sb.tpgweb.io:31735\r\nPWINFO_TOTAMNT = 000000050000\r\nPWINFO_DATETIME = 20260824113300\r\nPWINFO_REQNUM = 0000626264\r\nPWINFO_AUTHSYST = PIX C6 BANK\r\nPWINFO_VIRTMERCH = 9292\r\nPWINFO_AUTMERCHID = 62177839000157\r\nPWINFO_FINTYPE = 1\r\nPWINFO_INSTALLMENTS = 1\r\nPWINFO_RESULTMSG =  TRANSACAO NEGADA PELO HOST \r\nPWINFO_CNFREQ = 0\r\nPWINFO_AUTLOCREF = 23\r\nPWINFO_CARDNAME = CANCELAMENTO\r\nPWINFO_TRNORIGDATE = 240826\r\nPWINFO_TRNORIGAMNT = 000000050000\r\nPWINFO_LANGUAGE = 0\r\nPWINFO_PROCESSMSG = \r   PROCESSANDO...\r\nPWINFO_TRNORIGREQNUM = 0000626220\r\nPWINFO_TRNORIGTIME = 111123\r\nPWINFO_CNCDSPMSG = \r      OPERACAO\r      CANCELADA\r\nPWINFO_CNCPPMSG =     OPERACAO        CANCELADA   \r\nPWINFO_TRNORIGLOCREF = 20\r\nPWINFO_PAYMNTTYPE = 8\r\nPWINFO_WALLETUSERIDTYPE = 1\r\nPWINFO_USINGPINPAD = 1\r\nPWINFO_PPCOMMPORT = 05\r\nPWINFO_IDLEPROCTIME = 260824123258\r\nPWINFO_SERVERPND = 0\r\nPWINFO_RESULTID = 201\r\nPWINFO_LIBVERSION = 0004.0001.0050.0024\r\nPWINFO_OSVERSION = SO:Win 10 , 64bits\r\nPWINFO_EXPORTLOGNEEDED = 0\r\nPWINFO_UNIQUEID = 00000000000007798707\r\nPWINFO_TRNRESULT = -2596\r\nPWINFO_RMCCAUSE = 0\r\nPWINFO_TRNNSU = 23\r\nPWINFO_CPEXECTRANSACRESP = -2596",
+                                                               "comprovanteAdquirente":  "",
+                                                               "tipoParcelamento":  null,
+                                                               "orderLIO":  null,
+                                                               "pagamentoExternoStatus":  {
+                                                                                              "id":  15,
+                                                                                              "nome":  "Finalizado"
+                                                                                          },
+                                                               "nomeTitularCartao":  null
+                                                           }
+                                                       ],
+                                "operador":  null
+                            }
+                        ],
+    "draw":  "",
+    "recordsTotal":  null,
+    "recordsFiltered":  null
+}

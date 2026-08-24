@@ -1214,6 +1214,13 @@ Console.WriteLine();
 Console.WriteLine("--- Instancia unica (2o Pdv.exe na mesma maquina) ---");
 TestesInstanciaUnica.Rodar((cond, nome) => Check("instancia: " + nome, cond));
 
+// -- AUTORIZACAO DE ESTORNO: token de WhatsApp, PIN como saida ----------------
+// Estorno e o unico ponto onde dinheiro VOLTA sem venda. Ate hoje bastava o PIN
+// guardado no banco do proprio caixa; agora quem autoriza esta fora da loja.
+Console.WriteLine();
+Console.WriteLine("--- Autorizacao de estorno (token por WhatsApp) ---");
+await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome, cond));
+
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }

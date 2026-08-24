@@ -183,6 +183,13 @@ public sealed class Drenagem : IDisposable
                     // PRONTO do KDS: carimba kds_pronto_em na nuvem; a ponte no
                     // servidor ve o carimbo e dispara o readyToPickup no iFood.
                     "kds_pronto" => await EnviarKdsProntoAsync(refId, token, ct).ConfigureAwait(false),
+                    // Estorno de cartao/PIX que saiu SEM aprovacao remota (caiu para o
+                    // PIN do supervisor). E' o unico caminho pelo qual esse fato sai do
+                    // disco daquele caixa: a tabela `auditoria` nao sobe e nenhuma tela
+                    // do PDV a le. Sem esta linha, "o dono lista depois" so acontece indo
+                    // ate a loja com o SQLite na mao.
+                    Autorizacao.TipoNaFila => await EnviarEstornoSemAprovacaoAsync(
+                        (string)item.payload, (string)item.client_key, token, ct).ConfigureAwait(false),
                     // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
                     // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
                     // para o dead-letter abaixo depois de poucas tentativas.
@@ -665,7 +672,51 @@ public sealed class Drenagem : IDisposable
     /// </summary>
     public static readonly string[] TiposComHandler =
         { "venda", "nfce_vinculo", "venda_cancelada", "fechamento",
-          "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto" };
+          "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
+          Autorizacao.TipoNaFila };
+
+    /// <summary>
+    /// Sobe o estorno que ESCAPOU do token de WhatsApp (saiu pelo PIN do supervisor,
+    /// ou pelo modo de homologacao) para pdv_estornos_sem_aprovacao. E' a lista que o
+    /// dono pediu — e ate aqui ela existia so no SQLite do caixa, que ninguem le.
+    ///
+    /// O payload ja vem completo do nucleo (Autorizacao.AuditarSemAprovacaoRemota);
+    /// aqui so entram os dois campos que sao do TERMINAL e nao do estorno, e que
+    /// podem ter mudado entre o estorno e o envio (a fila espera a rede voltar).
+    ///
+    /// client_key = referencia do estorno: replay da fila nao vira linha dobrada.
+    /// </summary>
+    private async Task<(bool? Ok, string? Erro)> EnviarEstornoSemAprovacaoAsync(
+        string payload, string clientKey, string token, CancellationToken ct)
+    {
+        try
+        {
+            string? loja, terminalUuid;
+            using (var cx = Banco.Abrir())
+            {
+                var t = cx.QueryFirstOrDefault("SELECT terminal_uuid, loja_nome FROM terminal LIMIT 1");
+                loja = t?.loja_nome as string;
+                terminalUuid = t?.terminal_uuid as string;
+            }
+
+            var corpo = System.Text.Json.Nodes.JsonNode.Parse(payload)?.AsObject();
+            if (corpo is null) return (false, "payload do estorno sem aprovacao nao e' JSON: nao insiste");
+
+            static string? Texto(System.Text.Json.Nodes.JsonObject o, string chave)
+                => o.TryGetPropertyValue(chave, out var v)
+                   && v is System.Text.Json.Nodes.JsonValue jv
+                   && jv.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
+
+            // A client_key da FILA e' a verdade (e' por ela que o replay deduplica).
+            corpo["client_key"] = clientKey;
+            corpo["terminal_uuid"] = terminalUuid;
+            corpo["store"] = Texto(corpo, "store") ?? loja;
+
+            return await PostRestAsync("/rest/v1/pdv_estornos_sem_aprovacao?on_conflict=client_key",
+                corpo.ToJsonString(), token, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) { return (null, Corta(ex.Message)); }
+    }
 
     private async Task<(bool? Ok, string? Erro)> EnviarKdsProntoAsync(string orderId, string token, CancellationToken ct)
     {

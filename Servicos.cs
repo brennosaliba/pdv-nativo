@@ -358,6 +358,25 @@ public static class Servicos
     /// <summary>O provedor atual, se souber estornar/ADM/ativo (PayGo ou ControlPay) — é o que o botão TEF da venda e a Configuração usam.</summary>
     public static IProvedorTefOperavel? Operavel() => Tef() as IProvedorTefOperavel;
 
+    private static ClienteAutorizacao? _autorizador;
+
+    /// <summary>
+    /// Quem pede o código de autorização de estorno à nuvem.
+    ///
+    /// Vai com a CHAVE PÚBLICA e sem sessão de usuário, de propósito: a edge é
+    /// deployada com --no-verify-jwt e se defende sozinha. Exigir login aqui
+    /// tornaria a autorização refém do token de 1 h do terminal — e o momento em
+    /// que ela é chamada (cliente no balcão pedindo o dinheiro de volta) é o pior
+    /// possível para descobrir que a sessão venceu.
+    ///
+    /// Um por processo: o HttpClient de baixo é o do <see cref="Pdv.Nucleo.Fiscal"/>,
+    /// único do PDV inteiro.
+    /// </summary>
+    public static ClienteAutorizacao Autorizador()
+    {
+        lock (Trava) return _autorizador ??= new ClienteAutorizacao(UrlNuvem());
+    }
+
     /// <summary>
     /// Garante a linha original como 'estornada' depois de um CNC aprovado. O cliente já grava
     /// isso no fluxo normal; aqui é cinto e suspensório para a contagem de "restantes" do
