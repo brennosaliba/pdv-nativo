@@ -98,7 +98,7 @@ public partial class Venda : UserControl
         // 30 s continua embaixo como rede de segurança
         Servicos.Sino(_loja ?? "").Ping += SinoTocou;
         Servicos.Sino(_loja ?? "").CatalogoMudou += CatalogoTocou;
-        Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); };
+        Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); OferecerRascunho(); };
         Unloaded += (_, _) =>
         {
             _relogio?.Stop(); _relogio = null;
@@ -395,8 +395,9 @@ public partial class Venda : UserControl
                 if (r.NotasPendentes > 0)
                     linhas.Add($"\n⚠ {r.NotasPendentes} nota(s) ainda não subiram" +
                         (Servicos.TemContaDeNuvem() ? "." : " — este caixa ainda não foi pareado ao servidor."));
-                if (r.VendasPendentes > 0)
-                    linhas.Add($"⚠ {r.VendasPendentes} venda(s) na fila para o servidor.");
+                // O valor vem junto de propósito: "3 venda(s) na fila" não distingue
+                // R$ 12,00 de R$ 2.493,00, e é o número em reais que faz alguém agir.
+                if (r.Vendas.Resumo is string avisoVendas) linhas.Add("⚠ " + avisoVendas);
 
                 Dialogo.Relatorio(dono, "Sincronizado", string.Join("\n", linhas), null);
                 RecarregarCatalogo();
@@ -411,15 +412,21 @@ public partial class Venda : UserControl
         }
     }
 
-    /// <summary>Pendência invisível vira pendência eterna: o número fica no botão.</summary>
+    /// <summary>
+    /// Pendência invisível vira pendência eterna: o número fica no botão.
+    ///
+    /// A venda que o envio DESISTIU entra na conta e é dita com todas as letras: ela
+    /// não sobe sozinha na próxima varredura, precisa de gente. Chamá-la de "esperando
+    /// para subir" seria trocar o silêncio antigo por uma mentira mais tranquila.
+    /// </summary>
     private void PintarPendencias()
     {
         var (notas, vendas) = Sincronizacao.Pendencias();
-        var total = notas + vendas;
+        var total = notas + vendas.Total;
         ChipPendencia.Visibility = total == 0 ? Visibility.Collapsed : Visibility.Visible;
         TxtPendencia.Text = total.ToString();
         BtnSync.ToolTip = total == 0 ? "Tudo sincronizado"
-            : $"{notas} nota(s) e {vendas} venda(s) esperando para subir";
+            : $"{notas} nota(s) esperando para subir\n{vendas.Resumo}";
     }
 
     /// <summary>Recarrega a grade depois de baixar catálogo novo, mantendo a categoria aberta.</summary>
@@ -1021,6 +1028,142 @@ public partial class Venda : UserControl
         BtnLimpar.IsEnabled = _comanda.Count > 0;
         BtnCortesia.IsEnabled = _comanda.Count > 0 && _cortesiaCodigo is null;
         BtnCortesia.Visibility = _cortesiaCodigo is null ? Visibility.Visible : Visibility.Collapsed;
+        SalvarRascunho();
+    }
+
+    // ── RASCUNHO DA COMANDA (sobreviver à queda de energia) ──────────────────
+
+    /// <summary>
+    /// Só depois que o rascunho guardado foi oferecido é que esta tela pode gravar
+    /// por cima dele. Sem esta trava, a primeira pintura (catálogo carregando, comanda
+    /// ainda vazia) apagaria a comanda que o religamento tinha para devolver.
+    /// </summary>
+    private bool _rascunhoOferecido;
+
+    /// <summary>
+    /// Encosta a comanda no disco a cada mudança — bipe, +/−, lixeira, cortesia.
+    /// Medido em 1,7 ms por bipe (uma linha, sobrescrita no lugar), então não há
+    /// debounce: o que está na tela está no disco, sem janela de perda.
+    ///
+    /// Nunca derruba a venda: disco cheio ou banco travado no máximo custa o rascunho,
+    /// e perder o rascunho é voltar ao que já era — nunca perder o bipe.
+    ///
+    /// COM O PAGAMENTO NO AR, NÃO GRAVA. Depois do commit da venda a tela ainda vive
+    /// dezenas de segundos (NFC-e, impressão, e o "Reimprimir" parado até alguém tocar
+    /// se a bobina entalou), e `_comanda` só é esvaziada no fim disso, no `Encerrou`.
+    /// Nessa janela um repintar de fundo — push de catálogo do painel, troca de tema —
+    /// regravaria a comanda de uma venda JÁ PAGA, e a queda de energia ali devolveria
+    /// no religamento um rascunho que o operador cobraria de novo. Nada se perde: o
+    /// painel de pagamento cobre a tela inteira, então a comanda não muda enquanto ele
+    /// está visível.
+    /// </summary>
+    private void SalvarRascunho()
+    {
+        if (!_rascunhoOferecido) return;
+        if (PainelPagamento.Visibility == Visibility.Visible) return;
+        try
+        {
+            using var cx = Banco.Abrir();
+            Rascunho.Gravar(cx, _sessao, _operador,
+                _comanda.Select(i => new ItemRascunho(
+                    i.Produto.Id, i.Produto.Plu, i.Produto.Nome, i.Produto.Categoria,
+                    i.Produto.Preco.Centavos, i.Qtd.Milesimos, i.Produto.Unidade,
+                    i.Produto.Ncm, i.Produto.Cest, i.Produto.Csosn, i.Produto.Origem,
+                    i.Produto.Foto)).ToList(),
+                Dinheiro.Zero, _cortesiaCodigo, _cortesiaCobertura);
+        }
+        catch { /* rascunho é conforto, não dinheiro: nunca atrapalha a venda */ }
+    }
+
+    /// <summary>
+    /// O caixa desligou com comanda em andamento: devolve os ITENS, com o operador
+    /// decidindo. Restaurar não é realizar a venda — nenhuma linha em `venda` nasce
+    /// aqui, e o cartão que porventura ficou armado na maquininha segue o destino
+    /// dele (órfão, pela reconciliação do TEF), sem vir junto.
+    ///
+    /// O que o diálogo NÃO pode fazer é jurar que nada foi cobrado: a cobrança nasce
+    /// antes da venda, então o aviso só sai depois de <see cref="Caixa.CobrancaSemVenda"/>.
+    ///
+    /// Roda uma vez por tela: voltar do KDS ou do chat não recria a Venda, e
+    /// perguntar de novo com a comanda viva na mão seria só atrapalhar.
+    /// </summary>
+    private void OferecerRascunho()
+    {
+        if (_rascunhoOferecido) return;
+        _rascunhoOferecido = true;
+
+        ComandaRascunho? r = null;
+        Dinheiro? cobrado = null;   // null = não deu para conferir a maquininha
+        try
+        {
+            using var cx = Banco.Abrir();
+            r = Rascunho.Ler(cx, _sessao.Id);
+            if (r is not null) cobrado = Caixa.CobrancaSemVenda(cx, _sessao);
+        }
+        catch { if (r is null) return; }
+        if (r is null || r.Itens.Count == 0) return;
+
+        var unidades = r.Itens.Sum(i => i.QtdMilesimos) / 1000m;
+        var total = new Dinheiro(r.Itens.Sum(i => new Dinheiro(i.PrecoCent).VezesQtd(i.QtdMilesimos).Centavos));
+        var quando = r.AtualizadoEm.ToString("HH:mm");
+
+        // A COBRANÇA NASCE ANTES DA VENDA: existe a janela em que o cartão JÁ PASSOU e
+        // não há venda — e ela é exatamente esta, a da queda de energia que deixou o
+        // rascunho. O que se pode afirmar sobre o dinheiro sai de Rascunho.AvisoDeCobranca,
+        // que é testado; a tela só mostra.
+        var aviso = Rascunho.AvisoDeCobranca(cobrado);
+
+        var recuperar = Dialogo.Confirmar(Window.GetWindow(this)!, "Recuperar comanda",
+            $"O caixa parou às {quando} com uma comanda em andamento:\n\n" +
+            $"{unidades:0.###} item(ns) · {total.Formatado()}\n\n" +
+            aviso + "\n\nOs itens voltam para a tela para você conferir com o cliente " +
+            "antes de finalizar.",
+            $"Recuperar {r.Itens.Count} linha(s)", "Descartar");
+
+        if (!recuperar)
+        {
+            try
+            {
+                using var cx = Banco.Abrir();
+                Rascunho.Apagar(cx);
+                Caixa.Auditar(cx, null, "rascunho_descartado", _operador.Id, null,
+                    $"{r.Itens.Count} linha(s) · {total.Formatado()} · parada às {quando}");
+            }
+            catch { }
+            return;
+        }
+
+        _comanda.Clear();
+        foreach (var i in r.Itens)
+            _comanda.Add(new ItemComanda
+            {
+                Produto = new Produto(i.ProdutoId, i.Plu, i.Nome, i.Categoria,
+                    new Dinheiro(i.PrecoCent), i.Unidade, i.Ncm, i.Cest, i.Csosn, i.Origem, i.Foto),
+                Qtd = new Quantidade(i.QtdMilesimos),
+            });
+
+        // A cortesia volta junto: sem ela o operador cobraria o que já tinha sido
+        // dado de graça, e o cupom continuaria queimando na próxima tentativa.
+        _cortesiaCodigo = r.CortesiaCodigo;
+        _cortesiaCobertura.Clear();
+        foreach (var kv in r.CortesiaCobertura) _cortesiaCobertura[kv.Key] = kv.Value;
+        if (_cortesiaCodigo is not null)
+        {
+            TxtCortesiaTitulo.Text = $"Cortesia {_cortesiaCodigo} aplicada";
+            TxtCortesiaItens.Text = string.Join(", ",
+                _comanda.Where(i => CoberturaDe(i) > 0)
+                        .Select(i => $"{CoberturaDe(i)}× {i.Produto.Nome} grátis"));
+            CaixaCortesia.Visibility = Visibility.Visible;
+        }
+
+        PintarComanda();
+        try
+        {
+            using var cx = Banco.Abrir();
+            Caixa.Auditar(cx, null, "rascunho_restaurado", _operador.Id, null,
+                $"{r.Itens.Count} linha(s) · {total.Formatado()} · parada às {quando}");
+        }
+        catch { }
     }
 
     /// <summary>
@@ -1281,9 +1424,12 @@ public partial class Venda : UserControl
                 // Cupom só morre com a venda concluída (dinheiro entrou). Falha no
                 // resgate não desfaz a venda — a cortesia já foi dada; loga e segue.
                 if (cortesiaAplicada is not null) _ = ResgatarSilenciosoAsync(cortesiaAplicada);
-                RemoverCortesia(this, new RoutedEventArgs());
+                // Esvazia ANTES de tirar a cortesia: RemoverCortesia repinta, e repintar
+                // grava o rascunho. Na ordem inversa a comanda já vendida era regravada
+                // por um instante — e uma queda ali deixaria um rascunho órfão de venda
+                // PAGA, que o operador restauraria e cobraria de novo.
                 _comanda.Clear();
-                PintarComanda();
+                RemoverCortesia(this, new RoutedEventArgs());
             }
         };
         PainelPagamento.Content = tela;
@@ -1330,9 +1476,8 @@ public partial class Venda : UserControl
         }
         Caixa.Auditar(Banco.Abrir(), null, "cortesia_entregue", _operador.Id, null,
             $"cupom={_cortesiaCodigo} (comanda inteira em cortesia)");
+        _comanda.Clear();                                   // esvazia antes de repintar (ver Finalizar)
         RemoverCortesia(this, new RoutedEventArgs());
-        _comanda.Clear();
-        PintarComanda();
         Dialogo.Avisar(dono, "Cortesia entregue", "Cupom queimado. Bom atendimento!", "ok");
     }
 
@@ -2068,7 +2213,8 @@ public partial class Venda : UserControl
         {
             using var cx = Banco.Abrir();
             var divergencias = Caixa.DivergenciasTef(cx, _sessao);
-            MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia), null, divergencias);
+            var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
+            MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia), null, divergencias, resumoTeste);
             FechouCaixa?.Invoke();
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
@@ -2079,7 +2225,8 @@ public partial class Venda : UserControl
             {
                 using var cx = Banco.Abrir();
                 var divergencias = Caixa.DivergenciasTef(cx, _sessao);
-                MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just), just, divergencias);
+                var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
+                MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just), just, divergencias, resumoTeste);
                 FechouCaixa?.Invoke();
             }
             catch (Exception e2)
@@ -2094,7 +2241,7 @@ public partial class Venda : UserControl
     }
 
     private static void MostrarResultado(Window dono, List<LinhaFechamento> linhas, string? justificativa,
-        List<DivergenciaTef> divergencias)
+        List<DivergenciaTef> divergencias, string? resumoTeste = null)
     {
         var texto = string.Join("\n", linhas.Select(l =>
         {
@@ -2116,6 +2263,11 @@ public partial class Venda : UserControl
         if (linhas.Any(l => l.Situacao == "sobra"))
             corpo += "\n\nSobrou dinheiro na gaveta. Isso costuma ser venda que não passou\n" +
                      "pelo PDV — e venda assim também não baixou estoque nem gerou nota.";
+
+        // O turno teve venda de TESTE: ela ficou fora dos totais acima, e o operador
+        // precisa ler isso aqui. Número que some sem explicação é número que vira
+        // desconfiança do fechamento inteiro.
+        if (resumoTeste is not null) corpo += "\n\n" + resumoTeste;
 
         if (divergencias.Count > 0)
             corpo += "\n\nTEF x PDV:\n" + string.Join("\n", divergencias.Select(d =>
@@ -2144,6 +2296,10 @@ public partial class Venda : UserControl
         if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Sair do caixa",
                 "Há uma venda em andamento e ela será descartada.", "Sair mesmo assim", "Voltar", perigo: true))
             return;
+        // Descartar é descartar: o rascunho não pode voltar oferecendo esta comanda
+        // no próximo login do turno, quando o cliente já foi embora.
+        _comanda.Clear();
+        PintarComanda();
         Deslogou?.Invoke();
     }
 }

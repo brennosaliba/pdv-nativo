@@ -151,6 +151,14 @@ public static class Caixa
     /// <summary>
     /// O que o sistema espera encontrar, por forma de pagamento.
     /// ⚠️ NÃO mostrar isso ao operador antes de ele declarar a contagem.
+    ///
+    /// Venda de TESTE (modo homologação) fica de fora — e é isso que mantém o
+    /// fechamento consistente, não o contrário. O apurado é o que tem que ESTAR na
+    /// gaveta/na maquininha: a venda do roteiro da PayGo não pôs dinheiro na gaveta
+    /// (ninguém pagou) nem cobrou no extrato da adquirente (a cobrança é do ambiente
+    /// de teste). Mantê-la no total faria a contagem cega acusar uma falta do tamanho
+    /// exato do roteiro — R$ 2.493,00 no caso de hoje. Ela não some: sai do total e
+    /// volta rotulada em <see cref="ApuradoDeTeste"/> / <see cref="ResumoDeTeste"/>.
     /// </summary>
     public static Dictionary<string, Dinheiro> Apurado(SqliteConnection cx, Sessao sessao)
     {
@@ -158,7 +166,7 @@ public static class Caixa
         var pagos = cx.Query("""
             SELECT p.forma, SUM(p.valor_cent - p.troco_cent) AS total
               FROM venda_pagamento p JOIN venda v ON v.id = p.venda_id
-             WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
+             WHERE v.sessao_id = @Ses AND v.status = 'finalizada' AND v.homologacao = 0
              GROUP BY p.forma
             """, new { Ses = sessao.Id });
         foreach (var p in pagos) r[(string)p.forma] = new Dinheiro((long)p.total);
@@ -169,6 +177,41 @@ public static class Caixa
         var emDinheiro = r.TryGetValue("dinheiro", out var d) ? d : Dinheiro.Zero;
         r["dinheiro"] = emDinheiro + sessao.FundoTroco + new Dinheiro(supr) - new Dinheiro(sang);
         return r;
+    }
+
+    /// <summary>
+    /// O que as vendas de TESTE (modo homologação) movimentaram no turno, por forma.
+    ///
+    /// Vive fora de <see cref="Apurado"/> de propósito, mas EXISTE: some do total e
+    /// aparece rotulado. Aqui não entram fundo, sangria nem suprimento — esses são
+    /// dinheiro de verdade na gaveta, e venda de teste não mexe em gaveta.
+    /// </summary>
+    public static Dictionary<string, Dinheiro> ApuradoDeTeste(SqliteConnection cx, Sessao sessao)
+    {
+        var r = new Dictionary<string, Dinheiro>();
+        var pagos = cx.Query("""
+            SELECT p.forma, SUM(p.valor_cent - p.troco_cent) AS total
+              FROM venda_pagamento p JOIN venda v ON v.id = p.venda_id
+             WHERE v.sessao_id = @Ses AND v.status = 'finalizada' AND v.homologacao = 1
+             GROUP BY p.forma
+            """, new { Ses = sessao.Id });
+        foreach (var p in pagos) r[(string)p.forma] = new Dinheiro((long)p.total);
+        return r;
+    }
+
+    /// <summary>
+    /// Linha do relatório de fechamento para o turno que teve venda de TESTE — null
+    /// quando não teve. O número aparece rotulado e fora do total: omiti-lo faria o
+    /// operador procurar na gaveta uma diferença que nunca esteve lá.
+    /// </summary>
+    public static string? ResumoDeTeste(SqliteConnection cx, Sessao sessao)
+    {
+        var teste = ApuradoDeTeste(cx, sessao);
+        if (teste.Count == 0) return null;
+        var total = new Dinheiro(teste.Sum(kv => kv.Value.Centavos));
+        return $"TESTE (modo homologação): {total.Formatado()} em " +
+               string.Join(", ", teste.Select(kv => $"{kv.Key} {kv.Value.Formatado()}")) + ".\n" +
+               "Não é faturamento: não subiu para a nuvem e não está nos totais acima.";
     }
 
     /// <summary>
@@ -222,14 +265,53 @@ public static class Caixa
         var basicas = FormasContadas(cx);
         if (basicas.Length > 1) return basicas;            // sem TEF: já conta tudo
 
+        // Venda de teste não conta aqui pelo mesmo motivo de Apurado: ela não está no
+        // fechamento da maquininha, então não pode puxar uma forma de volta para a
+        // contagem — o operador digitaria o total da máquina e sobraria a diferença.
         var manuais = cx.Query<string>("""
             SELECT DISTINCT p.forma
               FROM venda_pagamento p JOIN venda v ON v.id = p.venda_id
-             WHERE v.sessao_id = @S AND v.status = 'finalizada'
+             WHERE v.sessao_id = @S AND v.status = 'finalizada' AND v.homologacao = 0
                AND p.forma <> 'dinheiro' AND p.tef_aut IS NULL
             """, new { S = sessao.Id }).ToList();
         return manuais.Count == 0 ? basicas : manuais.Prepend("dinheiro").Distinct().ToArray();
     }
+
+    /// <summary>
+    /// QUANTO A MAQUININHA COBROU NESTE TURNO SEM QUE EXISTA VENDA GRAVADA.
+    ///
+    /// A linha do TEF nasce ANTES da venda (a tela cobra e só depois grava), então
+    /// existe uma janela em que o cartão já passou e a venda ainda não existe. Quem
+    /// for afirmar ao operador que "nada foi cobrado" — o diálogo do rascunho, depois
+    /// de uma queda de energia — tem que fazer ESTA conta antes: no meio dessa janela
+    /// a frase é mentira, e mentira que faz o operador cobrar o cliente duas vezes.
+    ///
+    /// O vínculo com a venda é o NSU, NUNCA `venda_id`: essa coluna nasce NULL e
+    /// nenhum caminho de produção a preenche (mesma razão explicada em
+    /// <see cref="DivergenciasTef"/>). Contar por `venda_id IS NULL` transformaria
+    /// toda venda de cartão do turno em alarme, e o aviso morreria de gritar à toa.
+    ///
+    /// Entram só as situações em que pode haver dinheiro VIVO na maquininha; recusado,
+    /// cancelado, desfeito e estornado ficam de fora — ali o cliente não pagou (ou já
+    /// foi devolvido). Na dúvida ('criando', 'aguardando', 'orfa', 'cnf_sem_ack',
+    /// 'ncn_sem_ack') o valor ENTRA: mandar conferir à toa custa um olhar no PayGo,
+    /// e calar custa uma cobrança em dobro.
+    /// </summary>
+    public static Dinheiro CobrancaSemVenda(SqliteConnection cx, Sessao sessao) =>
+        new(cx.ExecuteScalar<long>("""
+            SELECT COALESCE(SUM(t.valor_cent), 0)
+              FROM tef_transacao t
+             WHERE t.situacao IN ('criando','aguardando','aprovada','pago','cnf_sem_ack','ncn_sem_ack','orfa')
+               AND t.criado_em >= @Desde
+               AND NOT EXISTS (SELECT 1 FROM venda v WHERE v.id = t.venda_id)
+               AND NOT EXISTS (
+                     SELECT 1
+                       FROM venda_pagamento p
+                       JOIN venda v2 ON v2.id = p.venda_id
+                      WHERE v2.sessao_id = @Ses
+                        AND p.tef_nsu IS NOT NULL AND t.nsu IS NOT NULL
+                        AND p.tef_nsu = t.nsu)
+            """, new { Ses = sessao.Id, Desde = sessao.AberturaEm.ToString("o") }));
 
     /// <summary>
     /// O que o TEF diz que foi cobrado no turno, por forma — inclusive cobranças que
@@ -249,12 +331,29 @@ public static class Caixa
     /// </summary>
     public static List<DivergenciaTef> DivergenciasTef(SqliteConnection cx, Sessao sessao)
     {
+        // Os dois lados da comparação têm que enxergar o MESMO conjunto de vendas. Como
+        // Apurado deixa a venda de teste de fora, a cobrança dela sai daqui também —
+        // senão o roteiro da PayGo inventaria uma divergência ("maquininha R$ 500, no
+        // PDV R$ 0") a cada fechamento. Cobrança ÓRFÃ (sem venda) continua aparecendo:
+        // é o alarme de dinheiro cobrado sem venda gravada, e vale no teste também.
+        //
+        // A exclusão da venda de teste NÃO pode passar por `t.venda_id`: essa coluna
+        // nasce NULL e nenhum caminho de produção a preenche (a linha do TEF é gravada
+        // ANTES de a venda existir e nunca mais é amarrada a ela). Quem amarra venda e
+        // TEF na loja é o NSU — é por ele que a cobrança de teste sai daqui.
         var noTef = cx.Query("""
             SELECT t.tipo AS forma, SUM(t.valor_cent) AS total
               FROM tef_transacao t
               LEFT JOIN venda v ON v.id = t.venda_id
              WHERE t.situacao = 'pago'
-               AND (v.sessao_id = @Ses OR (t.venda_id IS NULL AND t.criado_em >= @Desde))
+               AND ((v.sessao_id = @Ses AND v.homologacao = 0)
+                    OR (t.venda_id IS NULL AND t.criado_em >= @Desde
+                        AND NOT EXISTS (
+                            SELECT 1
+                              FROM venda_pagamento p
+                              JOIN venda v2 ON v2.id = p.venda_id
+                             WHERE v2.sessao_id = @Ses AND v2.homologacao = 1
+                               AND p.tef_nsu IS NOT NULL AND p.tef_nsu = t.nsu)))
              GROUP BY t.tipo
             """, new { Ses = sessao.Id, Desde = sessao.AberturaEm.ToString("o") })
             .ToDictionary(x => (string)x.forma, x => new Dinheiro((long)x.total));

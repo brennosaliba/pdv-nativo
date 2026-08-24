@@ -142,6 +142,7 @@ public sealed class Drenagem : IDisposable
                     SELECT id, tipo, ref_id, client_key, payload, tentativas, primeiro_erro_em
                       FROM outbox
                      WHERE enviado_em IS NULL
+                       AND desistido_em IS NULL
                        AND tipo IN ('{string.Join("','", TiposComHandler)}')
                      ORDER BY id
                      LIMIT 50
@@ -207,10 +208,12 @@ public sealed class Drenagem : IDisposable
                         break;
                     // DEAD-LETTER: recusa que se repete não pode ficar eterna nem entupir
                     // a janela de 50 (starvation: a fila só devolve linhas mortas e nada
-                    // novo sobe). Depois de MaxTentativas, tira da fila com o motivo
-                    // gravado — some do badge, some do caminho, mas fica auditável.
+                    // novo sobe). Depois de MaxTentativas, sai da JANELA DE DRENAGEM com
+                    // o motivo gravado — mas em desistido_em, NUNCA em enviado_em: a
+                    // nuvem não recebeu nada. Marcar as duas coisas na mesma coluna foi o
+                    // que fez R$ 102.626,50 sumirem do contador de pendentes.
                     case AcaoFila.DeadLetter:
-                        cx.Execute("UPDATE outbox SET enviado_em = @Em, tentativas = tentativas + 1, ultimo_erro = @E WHERE id = @Id",
+                        cx.Execute("UPDATE outbox SET desistido_em = @Em, tentativas = tentativas + 1, ultimo_erro = @E WHERE id = @Id",
                             new { Em = agora.ToString("o"),
                                   E = $"desistido após {tentativas + 1} tentativas — {erro ?? "recusado pelo servidor"}",
                                   Id = (long)item.id });
@@ -222,7 +225,7 @@ public sealed class Drenagem : IDisposable
                     // Transitório que já falha há DiasParaDesistir (contados da primeira
                     // falha real): desiste para não starvar a janela para sempre.
                     case AcaoFila.ExpiraVelho:
-                        cx.Execute("UPDATE outbox SET enviado_em = @Em, ultimo_erro = @E WHERE id = @Id",
+                        cx.Execute("UPDATE outbox SET desistido_em = @Em, ultimo_erro = @E WHERE id = @Id",
                             new { Em = agora.ToString("o"),
                                   E = $"desistido: dias falhando sem conseguir enviar — {erro ?? "sem resposta"}",
                                   Id = (long)item.id });
@@ -601,14 +604,22 @@ public sealed class Drenagem : IDisposable
         catch { return (null, "resposta ilegível do resgate"); }
     }
 
-    /// <summary>A linha 'venda' desta client_key ainda espera envio? (dependência viva)</summary>
+    /// <summary>
+    /// A linha 'venda' desta client_key ainda espera envio? (dependência viva)
+    ///
+    /// "Ainda na fila" é ter FUTURO, não apenas não ter sido entregue: a venda que
+    /// DESISTIU nunca vai subir, e um dependente esperando por ela esperaria para
+    /// sempre. Por isso desistido_em sai daqui junto com enviado_em — foi exatamente
+    /// esse "espera eterna" que travava a janela de 50 com órfãos de id baixo.
+    /// </summary>
     private static bool VendaAindaNaFila(string clientKey)
     {
         try
         {
             using var cx = Banco.Abrir();
             return cx.ExecuteScalar<long>(
-                "SELECT COUNT(*) FROM outbox WHERE tipo = 'venda' AND client_key = @K AND enviado_em IS NULL",
+                "SELECT COUNT(*) FROM outbox WHERE tipo = 'venda' AND client_key = @K "
+                + "AND enviado_em IS NULL AND desistido_em IS NULL",
                 new { K = clientKey }) > 0;
         }
         catch { return true; }   // na dúvida, espera — desistir é o irreversível

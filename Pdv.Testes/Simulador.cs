@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 
@@ -310,7 +310,7 @@ public static class Simulador
 
         Console.WriteLine($"dias={dias} vendas={cx.ExecuteScalar<long>("SELECT COUNT(*) FROM venda")} " +
             $"canceladas={cx.ExecuteScalar<long>("SELECT COUNT(*) FROM venda WHERE status='cancelada'")} " +
-            $"outbox={cx.ExecuteScalar<long>("SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL")} pendentes");
+            $"outbox={cx.ExecuteScalar<long>("SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL AND desistido_em IS NULL")} pendentes");
 
         // ── recusas que o núcleo TEM que dar (testadas no fim, com caixa aberto) ──
         var sTeste = Caixa.Abrir(cx, ana, Caixa.FundoEsperado(cx) ?? Dinheiro.DeReais(300));
@@ -367,7 +367,7 @@ public static class Simulador
         {
             varreduras++;
             await dren.DrenarAsync();
-            var pendentes = cx.ExecuteScalar<long>("SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL");
+            var pendentes = cx.ExecuteScalar<long>("SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL AND desistido_em IS NULL");
             if (pendentes == 0) break;
         }
         Console.WriteLine($"fila convergiu em {varreduras} varreduras pós-caos");
@@ -381,9 +381,13 @@ public static class Simulador
                 "SELECT COUNT(*) FROM outbox WHERE tipo='cortesia_resgate' AND enviado_em IS NULL") == 0);
 
         // ════ INVARIANTES ═══════════════════════════════════════════════════
-        // I6 — convergência: nada pendente; nada preso mudo
+        // I6 — convergência: nada pendente; nada preso mudo.
+        // "Preso" é o que a varredura AINDA devolve: enviado_em IS NULL (não entregue)
+        // E desistido_em IS NULL (o dreno não desistiu). O dead-letter deixou de
+        // carimbar enviado_em — ele não foi entregue, e dizer que foi era o bug —,
+        // então quem separa starvation de dead-letter aqui é o desistido_em.
         var presos = cx.Query<(string Tipo, string? Erro)>(
-            "SELECT tipo, ultimo_erro FROM outbox WHERE enviado_em IS NULL LIMIT 10").ToList();
+            "SELECT tipo, ultimo_erro FROM outbox WHERE enviado_em IS NULL AND desistido_em IS NULL LIMIT 10").ToList();
         Check("I6a fila convergiu (0 pendentes) sem starvation",
             presos.Count == 0,
             $"após {varreduras} varreduras; presos: {string.Join(" | ", presos.Select(p => $"{p.Tipo}:{p.Erro ?? "(mudo)"}"))}");

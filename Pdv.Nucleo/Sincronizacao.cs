@@ -2,6 +2,30 @@ using Dapper;
 
 namespace Pdv.Nucleo;
 
+/// <summary>
+/// Vendas gravadas no caixa que a nuvem NÃO confirmou. Em duas situações bem
+/// diferentes, e por isso separadas:
+///  · <paramref name="Aguardando"/> — o dreno ainda vai tentar. Some sozinho.
+///  · <paramref name="Desistidas"/> — o dreno PAROU de tentar (dead-letter). NÃO some
+///    sozinho: alguém precisa reconciliar à mão.
+/// </summary>
+/// <param name="Valor">
+/// Quanto está parado. Existe porque contagem sozinha não dimensiona nada: "3 vendas"
+/// tanto pode ser R$ 12,00 de café quanto os R$ 2.493,00 do roteiro de hoje, e é o
+/// valor que decide se isso é recado de fim de expediente ou telefonema agora.
+/// </param>
+public sealed record VendasParadas(int Aguardando, int Desistidas, Dinheiro Valor)
+{
+    public int Total => Aguardando + Desistidas;
+
+    /// <summary>A linha que vai para a tela. null quando não há nada parado.</summary>
+    public string? Resumo => Total == 0 ? null
+        : Desistidas == 0
+            ? $"{Aguardando} venda(s) na fila para o servidor — {Valor.Formatado()}."
+            : $"{Total} venda(s) que o servidor não tem — {Valor.Formatado()}. "
+              + $"Em {Desistidas} delas o envio DESISTIU: confira antes de fechar o mês.";
+}
+
 /// <summary>O que a sincronização fez, para mostrar ao operador em uma tela só.</summary>
 /// <param name="CatalogoMudou">
 /// true quando produtos OU operadores mudaram DE VERDADE nesta passada. A baixada
@@ -10,13 +34,13 @@ namespace Pdv.Nucleo;
 /// </param>
 public sealed record ResultadoSync(
     int ProdutosBaixados, int FotosBaixadas, int NotasSubidas, int NotasPendentes,
-    int VendasPendentes, bool CatalogoMudou, string? Erro)
+    VendasParadas Vendas, bool CatalogoMudou, string? Erro)
 {
     public bool Ok => Erro is null;
 
     /// <summary>Nada desceu, nada subiu, nada pendente: a resposta certa é "tudo em dia".</summary>
     public bool SemNovidade => Ok && !CatalogoMudou && FotosBaixadas == 0 && NotasSubidas == 0
-        && NotasPendentes == 0 && VendasPendentes == 0;
+        && NotasPendentes == 0 && Vendas.Total == 0;
 }
 
 /// <summary>
@@ -124,35 +148,59 @@ public static class Sincronizacao
     }
 
     /// <summary>O que ainda não subiu. Vai na tela porque pendência invisível vira pendência eterna.</summary>
-    public static (int notas, int vendas) Pendencias()
+    public static (int notas, VendasParadas vendas) Pendencias()
     {
+        var vendas = VendasNaoEntregues();
         try
         {
             using var cx = Banco.Abrir();
             var notas = cx.ExecuteScalar<int>(
                 "SELECT COUNT(*) FROM nfce_emissao WHERE chave IS NOT NULL AND sincronizada = 0");
-            var vendas = cx.ExecuteScalar<int>(
-                "SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL AND tipo = 'venda'");
             return (notas, vendas);
         }
-        catch { return (0, 0); }
+        catch { return (0, vendas); }
     }
 
     /// <summary>
-    /// Vendas que a nuvem NUNCA recebeu e que o dreno desistiu de enviar
-    /// (dead-letter). Elas somem de Pendencias() porque o dead-letter carimba
-    /// enviado_em — então sem este contador o caixa mostrava "tudo em dia"
-    /// enquanto o SQLite local guardava venda que a nuvem não tem. Precisa de
-    /// reconciliação manual: aparece aqui em vez de sumir em silêncio.
+    /// Vendas que a nuvem NÃO confirmou — quantas E QUANTO.
+    ///
+    /// Só venda FINALIZADA entra. Venda cancelada que a nuvem nunca recebeu não é
+    /// divergência: sem venda lá não há faturamento para neutralizar, o estado já é
+    /// consistente. Contá-la inventaria um alarme — e alarme falso é o caminho mais
+    /// curto para o operador parar de olhar o número.
     /// </summary>
-    public static int Desistidos()
+    public static VendasParadas VendasNaoEntregues()
     {
         try
         {
             using var cx = Banco.Abrir();
-            return cx.ExecuteScalar<int>(
-                "SELECT COUNT(*) FROM outbox WHERE tipo = 'venda' AND ultimo_erro LIKE 'desistido%'");
+            var r = cx.QuerySingle($"""
+                SELECT COALESCE(SUM(CASE WHEN {SqlDesistiu} THEN 0 ELSE 1 END), 0) AS aguardando,
+                       COALESCE(SUM(CASE WHEN {SqlDesistiu} THEN 1 ELSE 0 END), 0) AS desistidas,
+                       COALESCE(SUM(v.total_cent), 0)                              AS valor
+                  FROM outbox o
+                  JOIN venda  v ON v.id = o.ref_id
+                 WHERE o.tipo = 'venda'
+                   AND v.status = 'finalizada'
+                   AND (o.enviado_em IS NULL OR {SqlDesistiu})
+                """);
+            return new VendasParadas((int)r.aguardando, (int)r.desistidas, new Dinheiro((long)r.valor));
         }
-        catch { return 0; }
+        catch { return new VendasParadas(0, 0, Dinheiro.Zero); }
     }
+
+    /// <summary>
+    /// SQL de "a nuvem DESISTIU desta linha". <c>desistido_em</c> é o estado explícito
+    /// de hoje; o <c>ultimo_erro</c> é o que desmascara a linha ANTIGA, gravada quando
+    /// a desistência era carimbada em <c>enviado_em</c> — sem esta metade, as 16 vendas
+    /// já perdidas no caixa da loja continuariam invisíveis para sempre.
+    /// </summary>
+    private const string SqlDesistiu =
+        "(o.desistido_em IS NOT NULL OR COALESCE(o.ultimo_erro,'') LIKE 'desistido%')";
+
+    /// <summary>
+    /// Vendas que a nuvem NUNCA recebeu e que o dreno desistiu de enviar (dead-letter).
+    /// Não voltam sozinhas: precisam de reconciliação manual.
+    /// </summary>
+    public static int Desistidos() => VendasNaoEntregues().Desistidas;
 }

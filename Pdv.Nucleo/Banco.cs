@@ -88,11 +88,40 @@ public static class Banco
             "ALTER TABLE tef_transacao ADD COLUMN hora_tef TEXT",
             "ALTER TABLE tef_transacao ADD COLUMN vias_json TEXT",
             "ALTER TABLE tef_transacao ADD COLUMN resposta_txt TEXT",
+            // Venda feita com o MODO DE HOMOLOGAÇÃO ligado (roteiro da PayGo rodado no
+            // PDV de verdade, com caixa aberto). Não sobe para a nuvem e não entra no
+            // faturamento do turno. A marca é da VENDA, não da config: a config muda
+            // depois, e a venda tem que continuar sabendo o que ela foi.
+            "ALTER TABLE venda ADD COLUMN homologacao INTEGER NOT NULL DEFAULT 0",
+            // DESISTIR NÃO É ENTREGAR. O dead-letter carimbava enviado_em só para sair
+            // da janela de drenagem — e enviado_em quer dizer "a nuvem recebeu". Com o
+            // mesmo carimbo para os dois desfechos, 16 vendas recusadas por 409
+            // (R$ 102.626,50) sumiram do contador de pendentes e a tela ficou toda
+            // verde. Agora cada desfecho tem a sua coluna: enviado_em = a nuvem
+            // confirmou; desistido_em = o dreno parou de tentar e ela NUNCA vai ter.
+            "ALTER TABLE outbox ADD COLUMN desistido_em TEXT",
+            // QUEM escreveu a comanda em andamento (processo, não turno). Dois Pdv.exe
+            // na mesma máquina attacham no mesmo turno, então `sessao_id` não os separa:
+            // sem esta coluna o segundo grava por cima do primeiro e a leitura com a
+            // sessão velha APAGA a comanda do caixa que está de fato aberto.
+            "ALTER TABLE comanda_rascunho ADD COLUMN dono TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }
             catch { /* coluna já existe */ }
         }
+
+        // Depende da coluna acrescentada logo acima, então NÃO pode viver no Esquema:
+        // ele roda antes dos ALTER e, num banco que já existe, um índice sobre coluna
+        // inexistente derrubaria a migração inteira (e com ela o boot do caixa).
+        try
+        {
+            using var c = cx.CreateCommand();
+            c.CommandText = "CREATE INDEX IF NOT EXISTS ix_outbox_a_drenar ON outbox(id) "
+                          + "WHERE enviado_em IS NULL AND desistido_em IS NULL";
+            c.ExecuteNonQuery();
+        }
+        catch { /* índice já existe */ }
     }
 
     private const string Esquema = """
@@ -282,9 +311,43 @@ public static class Banco
           criado_em    TEXT NOT NULL,
           -- primeira falha REAL (sessão de pé): a expiração conta daqui, não do criado_em
           primeiro_erro_em TEXT,
+          -- o dreno DESISTIU: parou de tentar e a nuvem NUNCA recebeu. Coluna própria
+          -- porque desistir não é entregar (ver o ALTER, em Migrar, para o porquê).
+          desistido_em TEXT,
           enviado_em   TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_outbox_pendente ON outbox(id) WHERE enviado_em IS NULL;
+
+        -- ── COMANDA EM ANDAMENTO (rascunho) ───────────────────────────────────
+        -- A comanda que ainda NÃO virou venda vivia só na memória da tela, e queda de
+        -- energia no meio do atendimento mandava o operador rebipar tudo com o cliente
+        -- esperando. Aqui ela encosta no disco a cada mudança.
+        --
+        -- NÃO é dinheiro: nada aqui prova venda, então a linha é sobrescrita no lugar
+        -- (append-only vale para venda/movimento) e some assim que a venda se realiza.
+        -- Uma linha por CAIXA — o terminal atende um cliente por vez.
+        --
+        -- `dono` é QUEM escreveu (processo, não turno). A sessão não separa dois Pdv.exe
+        -- abertos na mesma máquina: os dois attacham no MESMO turno, e sem o dono o
+        -- segundo come a comanda do primeiro — ou `Ler` vê sessão alheia e APAGA comanda
+        -- viva. A trava de instância única fecha o caso comum, mas desiste em silêncio
+        -- quando o SO não deixa criar o mutex, e comanda destruída não pode depender disso.
+        --
+        -- E não guarda pagamento de propósito: o cartão que ficou armado na maquininha
+        -- tem destino próprio (a reconciliação o declara órfão). Rascunho que herdasse
+        -- aquele pagamento faria a venda nova nascer "paga" por dinheiro que ninguém
+        -- sabe se entrou.
+        CREATE TABLE IF NOT EXISTS comanda_rascunho (
+          id               INTEGER PRIMARY KEY CHECK (id = 1),
+          sessao_id        TEXT NOT NULL REFERENCES caixa_sessao(id),
+          operador_id      TEXT NOT NULL,
+          itens_json       TEXT NOT NULL,
+          desconto_cent    INTEGER NOT NULL DEFAULT 0,
+          cortesia_codigo  TEXT,
+          cortesia_json    TEXT,
+          atualizado_em    TEXT NOT NULL,
+          dono             TEXT
+        );
 
         -- ── PROMOÇÕES (espelho de pdv_promocoes, payload jsonb cru) ───────────
         -- O motor (Promocoes.cs) parseia na carga; JSON estranho é ignorado.

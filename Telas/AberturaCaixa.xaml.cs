@@ -134,6 +134,8 @@ public partial class AberturaCaixa : UserControl
                 };
                 return $"{l.Forma,-9} contou {l.Declarado.Formatado(),11}  sistema {l.Apurado.Formatado(),11}  {dif}";
             }));
+            // Venda de teste fica fora dos totais — mas aparece rotulada, aqui também.
+            if (Caixa.ResumoDeTeste(cx, sessao) is string teste) texto += "\n\n" + teste;
             Dialogo.Relatorio(dono, $"Caixa de {DataBr(sessao.BusinessDate)} fechado", texto,
                 justificativa is null ? null : $"Justificativa: {justificativa}");
             Avisar();   // some o botão; a abertura de hoje fica livre

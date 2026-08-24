@@ -304,6 +304,47 @@ public static class TestesControlPay
             checar(guardadas.Any(g => g.ChargeId == "cpay-2" && g.Situacao == "recusado"), "recusada → 'recusado'");
         }
 
+        // ── religamento: intenção ainda EM PAGAMENTO (status 6, não-final) ─
+        // Passo 24 da homologação: desligar o PC no meio da cobrança. O PayGo Windows morre e o
+        // ControlPay deixa a intenção em 6 "Em Pagamento" — para sempre. A linha ficava
+        // 'aguardando' eternamente (aconteceu no caixa: intenção de R$ 500,00 presa desde as
+        // 13:31). Tem de virar ÓRFÃ no religamento, NUNCA 'pago'.
+        // E o inverso decide a corretude: cobrança criada DEPOIS do boot pode estar com o
+        // pinpad na mão do operador agora — nessa não se encosta.
+        {
+            using var f = new FakeControlPay();
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.NuncaTermina);
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.NuncaTermina);
+            using var c0 = new ClienteControlPay(new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159", f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 10,
+                TempoMaxEmPagamentoMs = 120,
+            };
+            var presa = Cobrar(c0, TipoTef.Credito, 500m).PaymentIdentifier!;   // a do passo 24 (o PDV caiu aqui)
+            var emVoo = Cobrar(c0, TipoTef.Credito, 30m).PaymentIdentifier!;    // esta nasceu depois do boot
+
+            var guardadas = new List<TransacaoPayGo>();
+            var auditoria = new List<string>();
+            using var c = Cliente(f, guardar: t => { guardadas.Add(t); return true; }, auditoria: auditoria);
+            var antesDoBoot = Process.GetCurrentProcess().StartTime.AddMinutes(-5);
+            var n = c.ReconciliarAsync(
+                new[]
+                {
+                    new TransacaoPayGo("cpay-presa", presa, TipoTef.Credito, 50000, 1, "aguardando", null),
+                    new TransacaoPayGo("cpay-voo", emVoo, TipoTef.Credito, 3000, 1, "aguardando", null),
+                },
+                new Dictionary<string, DateTime> { ["cpay-presa"] = antesDoBoot, ["cpay-voo"] = DateTime.Now })
+                .GetAwaiter().GetResult();
+
+            var orfa = guardadas.FirstOrDefault(g => g.ChargeId == "cpay-presa");
+            checar(orfa?.Situacao == "orfa", "'Em Pagamento' anterior ao boot → órfã (P24: nunca fica 'aguardando' para sempre): " + (orfa?.Situacao ?? "não mexeu"));
+            checar((orfa?.Motivo ?? "").Contains("em pagamento") && (orfa?.Motivo ?? "").Contains("estorne"), "motivo manda conferir no PayGo e estornar: " + orfa?.Motivo);
+            checar(!guardadas.Any(g => g.Situacao == "pago"), "NUNCA 'pago' — status não é final, ninguém sabe se o dinheiro entrou");
+            checar(!guardadas.Any(g => g.ChargeId == "cpay-voo"), "cobrança criada DEPOIS do boot fica intacta (o operador pode estar no pinpad agora)");
+            checar(n == 1, $"conta só a que mudou ({n})");
+            checar(auditoria.Any(a => a.Contains(presa) && a.Contains("órfã")), "auditoria registra a órfã do religamento");
+        }
+
         // ── resposta sintética ────────────────────────────────────────────
         {
             using var doc = JsonDocument.Parse("""{"id":1,"nsuTid":"123","autorizacao":"ABC","adquirente":"REDE","bandeira":"MASTERCARD","mensagemRespostaAdquirente":"OK","comprovanteCliente":" \r\nLINHA 1\r\nLINHA 2\r\n \r\n","comprovanteEstabelecimento":null}""");

@@ -61,6 +61,12 @@ public static class Vendas
         var clientKey = Guid.NewGuid().ToString();
         var agora = Agora;
 
+        // Lido ANTES de abrir a transação: o SQLite recusa comando sem transação numa
+        // conexão que já tem uma pendente. A marca é gravada NA VENDA, não consultada
+        // depois — a config muda quando o roteiro acaba, e a venda tem que continuar
+        // sabendo que nasceu de um teste.
+        var homologacao = Homologacao(cx);
+
         using var tx = cx.BeginTransaction();
 
         // Numeração dentro da transação, senão duas vendas quase simultâneas pegam o
@@ -72,11 +78,12 @@ public static class Vendas
         cx.Execute("""
             INSERT INTO venda (id, client_key, sessao_id, business_date, numero_local, operador_id,
                                subtotal_cent, desconto_cent, total_cent, documento, status,
-                               fiscal_status, criada_em, finalizada_em)
-            VALUES (@Id,@Key,@Ses,@Bd,@Num,@Op,@Tot,0,@Tot,@Doc,'finalizada','pendente',@Em,@Em)
+                               fiscal_status, criada_em, finalizada_em, homologacao)
+            VALUES (@Id,@Key,@Ses,@Bd,@Num,@Op,@Tot,0,@Tot,@Doc,'finalizada','pendente',@Em,@Em,@Homolog)
             """,
             new { Id = vendaId, Key = clientKey, Ses = sessao.Id, Bd = sessao.BusinessDate,
-                  Num = numero, Op = operador.Id, Tot = total.Centavos, Doc = documento, Em = agora }, tx);
+                  Num = numero, Op = operador.Id, Tot = total.Centavos, Doc = documento, Em = agora,
+                  Homolog = homologacao ? 1 : 0 }, tx);
 
         var seq = 1;
         foreach (var i in itens)
@@ -105,10 +112,20 @@ public static class Vendas
         Caixa.Auditar(cx, tx, "venda_finalizada", operador.Id, null,
             $"venda={numero} total={total.Formatado()} formas={string.Join('+', pagamentos.Select(p => p.Forma))}");
 
-        // O payload da fila é literalmente o corpo da RPC da nuvem, para o dreno ser um
-        // POST direto, sem transformação. Transformar na hora do envio é onde se erra
-        // nome de campo — e o erro só aparece dias depois, na venda que não subiu.
-        Caixa.Enfileirar(cx, tx, "venda", vendaId, clientKey, new
+        // VENDA DE TESTE NÃO ENTRA NA FILA. Não enfileirar é diferente de filtrar na
+        // drenagem: o que está na fila sobe no primeiro reenvio em que o filtro falhar,
+        // e a venda de teste vira receita na DRE. O que nunca foi enfileirado não sobe
+        // por acidente. Hoje ela só não subiu porque o operador de homologação não
+        // existe na nuvem (409) — instalada na loja, com operador cadastrado, subiria.
+        //
+        // Fora do teste vale o de sempre: o payload da fila é literalmente o corpo da RPC
+        // da nuvem, para o dreno ser um POST direto, sem transformação. Transformar na
+        // hora do envio é onde se erra nome de campo — e o erro só aparece dias depois,
+        // na venda que não subiu.
+        if (homologacao)
+            Caixa.Auditar(cx, tx, "venda_homologacao", operador.Id, null,
+                $"venda={numero} total={total.Formatado()} ficou SÓ no caixa — modo de homologação ligado");
+        else Caixa.Enfileirar(cx, tx, "venda", vendaId, clientKey, new
         {
             p_itens = itens.Select(i => new
             {
@@ -140,6 +157,13 @@ public static class Vendas
             p_client_key = clientKey,
             p_business_date = sessao.BusinessDate,
         });
+
+        // A COMANDA VIROU VENDA: o rascunho morre AQUI, na mesma transação. Fora dela
+        // (na tela, depois do commit) uma queda entre gravar e limpar deixaria um
+        // rascunho órfão de uma venda já paga — e o operador restauraria os mesmos
+        // itens e cobraria o cliente de novo. Se a venda não for gravada, a comanda
+        // continua de pé: rollback leva o DELETE junto.
+        Rascunho.Apagar(cx, tx);
 
         tx.Commit();
 
@@ -193,9 +217,13 @@ public static class Vendas
 
         // Vincular a nota à venda na nuvem é um fato separado da venda: a venda pode ter
         // subido antes de a nota existir (contingência), e a nuvem precisa dos dois.
+        // Venda de teste não subiu; o vínculo da nota dela não tem a que se vincular lá
+        // em cima, e subir sozinho só criaria lixo na nuvem.
         if (r.Chave is { Length: > 0 })
         {
-            var chave = cx.ExecuteScalar<string>("SELECT client_key FROM venda WHERE id = @Id", new { Id = vendaId }) ?? vendaId;
+            var v = cx.QueryFirstOrDefault("SELECT client_key, homologacao FROM venda WHERE id = @Id", new { Id = vendaId });
+            if ((long?)v?.homologacao == 1) return;
+            var chave = (string?)v?.client_key ?? vendaId;
             Caixa.Enfileirar(cx, null, "nfce_vinculo", vendaId, chave, new
             {
                 p_chave = r.Chave,
@@ -221,7 +249,7 @@ public static class Vendas
         if (string.IsNullOrWhiteSpace(motivo))
             throw new InvalidOperationException("Cancelamento exige motivo.");
 
-        var v = cx.QueryFirstOrDefault("SELECT status, fiscal_status, numero_local, total_cent, nfce_chave FROM venda WHERE id = @Id",
+        var v = cx.QueryFirstOrDefault("SELECT status, fiscal_status, numero_local, total_cent, nfce_chave, homologacao FROM venda WHERE id = @Id",
             new { Id = vendaId })
             ?? throw new InvalidOperationException("Venda não encontrada.");
 
@@ -243,9 +271,13 @@ public static class Vendas
         Caixa.Auditar(cx, tx, "venda_cancelada", quemCancelou, autorizadoPor,
             $"venda={v.numero_local} total={new Dinheiro((long)v.total_cent).Formatado()} — {motivo}");
 
-        var clientKey = cx.ExecuteScalar<string>("SELECT client_key FROM venda WHERE id=@Id", new { Id = vendaId }, tx) ?? vendaId;
-        Caixa.Enfileirar(cx, tx, "venda_cancelada", vendaId, clientKey,
-            new { venda = vendaId, motivo, por = quemCancelou });
+        // Cancelamento de venda que a nuvem nunca recebeu não tem o que cancelar lá.
+        if ((long)v.homologacao != 1)
+        {
+            var clientKey = cx.ExecuteScalar<string>("SELECT client_key FROM venda WHERE id=@Id", new { Id = vendaId }, tx) ?? vendaId;
+            Caixa.Enfileirar(cx, tx, "venda_cancelada", vendaId, clientKey,
+                new { venda = vendaId, motivo, por = quemCancelou });
+        }
         tx.Commit();
     }
 

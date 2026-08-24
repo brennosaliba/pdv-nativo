@@ -612,10 +612,11 @@ public static class Servicos
     private static async Task<int> ReconciliarControlPayAsync(ClienteControlPay cli)
     {
         var pendentes = new List<TransacaoPayGo>();
+        var criadaEm = new Dictionary<string, DateTime>();
         using (var cx = Banco.Abrir())
         {
             var linhas = cx.Query("""
-                SELECT id, identificacao, tipo, valor_cent, parcelas, situacao, resposta_txt
+                SELECT id, identificacao, tipo, valor_cent, parcelas, situacao, resposta_txt, criado_em
                   FROM tef_transacao
                  WHERE provedor = 'controlpay' AND situacao IN ('aguardando','orfa','aprovada')
                    AND identificacao IS NOT NULL AND identificacao <> ''
@@ -626,6 +627,11 @@ public static class Servicos
                 pendentes.Add(new TransacaoPayGo((string)l.id, (string)l.identificacao, tipo,
                     (long)l.valor_cent, (int)(long)l.parcelas, (string)l.situacao,
                     RespostaPayGo.Analisar((string?)l.resposta_txt)));
+                // Nascimento da linha: é o que diz se a intenção sem status final ficou para trás
+                // (vira órfã) ou está sendo cobrada agora (não se encosta).
+                if (DateTime.TryParse((string?)l.criado_em, System.Globalization.CultureInfo.InvariantCulture,
+                                      System.Globalization.DateTimeStyles.RoundtripKind, out DateTime em))
+                    criadaEm[(string)l.id] = em.Kind == DateTimeKind.Utc ? em.ToLocalTime() : em;
             }
             // 'criando' (morreu antes de a API responder) não tem intenção para consultar: órfã.
             var inicio = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToString("o");
@@ -635,7 +641,7 @@ public static class Servicos
                  WHERE charge_id LIKE 'cpay-%' AND situacao = 'criando' AND criado_em < @Inicio
                 """, new { Em = DateTime.Now.ToString("o"), Inicio = inicio });
         }
-        return pendentes.Count == 0 ? 0 : await cli.ReconciliarAsync(pendentes);
+        return pendentes.Count == 0 ? 0 : await cli.ReconciliarAsync(pendentes, criadaEm);
     }
 
     /// <summary>

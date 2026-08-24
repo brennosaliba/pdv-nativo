@@ -514,9 +514,15 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// e fecha a linha. Aprovada sem venda vira 'pago' com motivo de órfã — o fechamento de caixa
     /// acusa (TEF sem venda) e o estorno sai pelo menu TEF. Devolve quantas mudaram.
     /// </summary>
-    public async Task<int> ReconciliarAsync(IReadOnlyList<TransacaoPayGo> pendentes)
+    /// <param name="criadaEm">
+    /// Quando cada linha nasceu (chave = ChargeId), para separar o que é de ANTES do boot do que
+    /// está em voo agora. Sem isto, intenção sem status final é deixada como está.
+    /// </param>
+    public async Task<int> ReconciliarAsync(IReadOnlyList<TransacaoPayGo> pendentes,
+                                            IReadOnlyDictionary<string, DateTime>? criadaEm = null)
     {
         var n = 0;
+        var boot = Process.GetCurrentProcess().StartTime;
         await _um.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -528,7 +534,25 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                     using var doc = await ChamarAsync(HttpMethod.Post, "IntencaoVenda/GetById/?intencaoVendaId=" + tx.Identificacao, null, CancellationToken.None).ConfigureAwait(false);
                     if (!doc.RootElement.TryGetProperty("intencaoVenda", out var iv) || iv.ValueKind != JsonValueKind.Object) continue;
                     var (st, nome) = StatusDe(iv);
-                    if (!StatusIntencao.Final(st)) continue;
+                    if (!StatusIntencao.Final(st))
+                    {
+                        // Status não-final no religamento (tipicamente 6 "Em Pagamento"): o PayGo
+                        // Windows morreu no meio da cobrança e o ControlPay vai manter a intenção
+                        // assim para sempre. Desistir aqui era deixar a linha 'aguardando' até o fim
+                        // dos tempos — foi exatamente o que o passo 24 da homologação pegou. Vira
+                        // ÓRFÃ (o fechamento acusa e o estorno sai pelo menu TEF); NUNCA 'pago',
+                        // porque ninguém sabe se o dinheiro entrou.
+                        //
+                        // Só entra o que é ANTERIOR ao boot: uma cobrança criada depois pode estar
+                        // com o pinpad na mão do operador NESTE instante, e declará-la órfã seria
+                        // arrancar uma venda viva das mãos dele.
+                        if (tx.Situacao == "orfa") continue;
+                        if (criadaEm is null || !criadaEm.TryGetValue(tx.ChargeId, out var em) || em >= boot) continue;
+                        GuardarSeguro(tx with { Situacao = "orfa", Motivo = "religamento: intenção ainda em pagamento no ControlPay — confira no PayGo e estorne se aprovou" });
+                        Auditar?.Invoke($"controlpay: religamento — intenção {tx.Identificacao} continua '{nome}'; devolvida ao operador (órfã)");
+                        n++;
+                        continue;
+                    }
                     if (st == StatusIntencao.Creditado)
                     {
                         var r = await RespostaDaIntencaoAsync(tx.Identificacao, tx.ValorCent, tx.Tipo, 5).ConfigureAwait(false);

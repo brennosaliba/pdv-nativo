@@ -16,6 +16,55 @@ using Pdv.Testes;
 // desfecho, escreva uma palavra por linha em <pasta>\roteiro.txt:
 //   recusar | divergente | 729=1 | sumir | semsts | pendencia | inconsistente | cancelar
 //   dotnet run --project Pdv.Testes -- --fake-paygo C:\PAYGO\SIM
+// Modo SONDA da 2ª instância (usado por TestesInstanciaUnica): este processo se
+// comporta como um Pdv.exe que acabou de subir — pega a trava de instância única e,
+// se conseguir, roda o religamento do TEF do boot (o mesmo SQL de
+// Servicos.ResolverPendenciasTefAsync, com a mesma referência de tempo: o START
+// DESTE PROCESSO). Recusado pela trava, sai sem encostar no banco.
+//   Pdv.Testes.exe --sonda-2a-instancia <banco.db> <nome-da-trava>
+if (args.Length >= 3 && args[0] == "--sonda-2a-instancia")
+{
+    using var trava = InstanciaUnica.Tentar(args[2]);
+    if (trava is null) return Pdv.Testes.TestesInstanciaUnica.Recusada;
+
+    using var cxSonda = Banco.Abrir(args[1]);
+    var agoraSonda = DateTime.Now.ToString("o");
+    var bootSonda = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToString("o");
+    cxSonda.Execute("""
+        UPDATE tef_transacao
+           SET situacao = 'orfa', motivo = 'PDV reiniciou durante a cobrança; confira no PayGo', atualizado_em = @Em
+         WHERE charge_id LIKE 'paygo-%' AND situacao IN ('criando','aguardando') AND criado_em < @Inicio
+        """, new { Em = agoraSonda, Inicio = bootSonda });
+    cxSonda.Execute("""
+        UPDATE tef_transacao
+           SET situacao = 'orfa', motivo = 'PDV reiniciou antes de o ControlPay responder', atualizado_em = @Em
+         WHERE charge_id LIKE 'cpay-%' AND situacao = 'criando' AND criado_em < @Inicio
+        """, new { Em = agoraSonda, Inicio = bootSonda });
+    Console.WriteLine($"sonda: bootei com a trava '{args[2]}' e rodei o religamento");
+    return 0;
+}
+
+// Modo SONDA do 2º PDV COM COMANDA (usado por TestesRascunho): este processo grava um
+// rascunho no banco do caixa e FICA VIVO segurando a comanda, exatamente como faria a
+// 2ª tela de venda que a trava de instância única deveria ter impedido. Fica esperando
+// no stdin; o pai o mata quando quer simular a queda de energia daquele processo.
+//   Pdv.Testes.exe --sonda-rascunho <banco.db> <sessaoId> <operadorId> <nome do item>
+if (args.Length >= 5 && args[0] == "--sonda-rascunho")
+{
+    using var cxRas = Banco.Abrir(args[1]);
+    // Gravar só usa Id da sessão e Id do operador; o resto do registro é enfeite aqui.
+    var sesRas = new Sessao(args[2], "", args[3], "", DateTime.Now, Dinheiro.Zero);
+    var opRas = new Operador(args[3], "sonda", "operador");
+    Rascunho.Gravar(cxRas, sesRas, opRas,
+        new[] { new ItemRascunho("p-sonda", "999", args[4], "Cat", 1000, 1000,
+                                 "UN", "19053100", null, "102", 0, null) },
+        Dinheiro.Zero);
+    Console.WriteLine("ok");
+    Console.Out.Flush();
+    Console.ReadLine();   // segura a comanda até o pai fechar o stdin (ou matar o processo)
+    return 0;
+}
+
 if (args.Length >= 2 && args[0] == "--fake-paygo")
 {
     var pasta = args[1];
@@ -328,7 +377,8 @@ if (args.Length >= 1 && args[0] == "sincronizar")
 {
     Banco.Migrar();
     var (nAntes, vAntes) = Sincronizacao.Pendencias();
-    Console.WriteLine($"antes : {nAntes} nota(s) e {vAntes} venda(s) pendentes");
+    Console.WriteLine($"antes : {nAntes} nota(s) e {vAntes.Total} venda(s) não entregues "
+        + $"({vAntes.Desistidas} desistida(s)) — {vAntes.Valor.Formatado()}");
 
     Dictionary<string, string> LerSeg()
     {
@@ -362,7 +412,8 @@ if (args.Length >= 1 && args[0] == "sincronizar")
         ? $"sync  : {r.ProdutosBaixados} produtos, {r.FotosBaixadas} fotos, {r.NotasSubidas} nota(s) subidas"
         : $"ERRO  : {r.Erro}");
     var (nDepois, vDepois) = Sincronizacao.Pendencias();
-    Console.WriteLine($"depois: {nDepois} nota(s) e {vDepois} venda(s) pendentes");
+    Console.WriteLine($"depois: {nDepois} nota(s) e {vDepois.Total} venda(s) não entregues "
+        + $"({vDepois.Desistidas} desistida(s)) — {vDepois.Valor.Formatado()}");
     return r.Ok ? 0 : 1;
 }
 
@@ -901,6 +952,100 @@ Check("o cancelamento foi auditado com motivo",
     cx.ExecuteScalar<string>("SELECT detalhe FROM auditoria WHERE evento='venda_cancelada' ORDER BY id DESC LIMIT 1")!
       .Contains("cliente desistiu"));
 
+// ── MODO DE HOMOLOGAÇÃO: venda de teste NÃO é faturamento ───────────────────
+// O roteiro da PayGo é rodado no PDV de verdade, com caixa aberto e operador de
+// verdade. Sem marca, a venda de teste é uma venda comum: sobe para a nuvem (vira
+// receita na DRE) e infla o apurado do turno — e aí o operador conta a gaveta e
+// encontra uma falta que nunca existiu.
+var apuradoAntesTeste = Caixa.Apurado(cx, sessao2)["dinheiro"];
+var filaAntesTeste = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo='venda'");
+
+Vendas.GravarConfig(cx, "homologacao", "1");
+var vTeste = Vendas.Finalizar(cx, sessao2, op, itensV,
+    new[] { new PagamentoVenda("dinheiro", totalV, Dinheiro.Zero) }, null, "Loja", null);
+
+Check("homologação: a venda nasce marcada como de teste",
+    cx.ExecuteScalar<int>("SELECT homologacao FROM venda WHERE id=@v", new { v = vTeste.Id }) == 1);
+Check("homologação: a venda de teste NÃO entra na fila da nuvem",
+    cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo='venda' AND ref_id=@v", new { v = vTeste.Id }) == 0);
+Check("homologação: a fila não cresceu com a venda de teste",
+    cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo='venda'") == filaAntesTeste);
+Check("homologação: a auditoria registra que a venda ficou local",
+    cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento='venda_homologacao'") == 1);
+Check("homologação: a venda de teste não infla o apurado do turno",
+    Caixa.Apurado(cx, sessao2)["dinheiro"].Centavos == apuradoAntesTeste.Centavos);
+Check("homologação: o total de teste aparece à parte, com rótulo",
+    Caixa.ApuradoDeTeste(cx, sessao2).TryGetValue("dinheiro", out var soTeste) && soTeste.Centavos == totalV.Centavos);
+Check("homologação: o fechamento avisa que houve venda de teste no turno",
+    Caixa.ResumoDeTeste(cx, sessao2) is string resumoTeste
+    && resumoTeste.Contains("TESTE") && resumoTeste.Contains(totalV.Formatado()));
+
+// A maquininha do roteiro cobra no ambiente de teste da PayGo. Tirar a venda do
+// apurado sem tirar a cobrança do lado do TEF faria o fechamento acusar uma
+// divergência inventada: "maquininha R$ 25,50, no PDV R$ 0,00".
+//
+// O estado montado aqui é O QUE O PDV GRAVA DE VERDADE: `tef_transacao.venda_id`
+// nasce NULL e NUNCA é preenchido (nenhum INSERT/UPDATE de produção escreve essa
+// coluna — Servicos.GuardarTef e Pagamento.RegistrarTef/AtualizarTef a omitem).
+// Quem amarra venda e TEF na loja é o NSU. Montar a linha com venda_id preenchido
+// carimbaria verde num banco que não existe.
+const string sqlTefPago = """
+    INSERT INTO tef_transacao (id, venda_id, charge_id, provedor, tipo, valor_cent, nsu,
+                               situacao, criado_em, atualizado_em)
+    VALUES (@Id, NULL, @Id, 'paygo', 'debito', @Val, @Nsu, 'pago', @Em, @Em)
+    """;
+
+// CONTROLE, na mesma execução: mesma montagem, mesma forma, mesmo NSU-como-vínculo.
+// A ÚNICA variável entre este bloco e o de baixo é a config `homologacao`.
+Vendas.GravarConfig(cx, "homologacao", "0");
+var vRealCartao = Vendas.Finalizar(cx, sessao2, op, itensV,
+    new[] { new PagamentoVenda("debito", totalV, Dinheiro.Zero, Aut: "770010", Nsu: "900010") }, null, "Loja", null);
+cx.Execute(sqlTefPago,
+    new { Id = "tef-real", Val = totalV.Centavos, Nsu = "900010", Em = DateTime.Now.ToString("o") });
+Check("CONTROLE: venda REAL de cartão fecha sem divergência TEF x PDV",
+    Caixa.DivergenciasTef(cx, sessao2).All(d => d.Forma != "debito"));
+
+Vendas.GravarConfig(cx, "homologacao", "1");
+var vTesteCartao = Vendas.Finalizar(cx, sessao2, op, itensV,
+    new[] { new PagamentoVenda("debito", totalV, Dinheiro.Zero, Aut: "770011", Nsu: "900011") }, null, "Loja", null);
+cx.Execute(sqlTefPago,
+    new { Id = "tef-homolog", Val = totalV.Centavos, Nsu = "900011", Em = DateTime.Now.ToString("o") });
+Check("homologação: cobrança de teste não vira divergência TEF x PDV no fechamento",
+    Caixa.DivergenciasTef(cx, sessao2).All(d => d.Forma != "debito"));
+
+// E o alarme que não pode ser desligado junto: cobrança ÓRFÃ (aprovada na maquininha
+// sem venda nenhuma no PDV) continua aparecendo — inclusive durante o roteiro.
+cx.Execute(sqlTefPago,
+    new { Id = "tef-orfa", Val = 12345L, Nsu = "900099", Em = DateTime.Now.ToString("o") });
+Check("cobrança ÓRFÃ continua acusando divergência (dinheiro cobrado sem venda)",
+    Caixa.DivergenciasTef(cx, sessao2)
+        .Any(d => d.Forma == "debito" && d.Diferenca.Centavos == 12345));
+
+// O vínculo da nota é outra linha para a nuvem — de uma venda que a nuvem não tem.
+Vendas.RegistrarEmissao(cx, vTeste.Id, new ResultadoEmissao
+{
+    Caminho = "agente", Autorizado = true, Modo = "online", Chave = new string('3', 44),
+    Numero = 8, Serie = 2, TpAmb = 2, Protocolo = "131260000737193", CStat = "100", VNF = 25.50m,
+});
+Check("homologação: o vínculo da nota de teste também não vai para a nuvem",
+    cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo='nfce_vinculo' AND ref_id=@v", new { v = vTeste.Id }) == 0);
+
+var vTeste2 = Vendas.Finalizar(cx, sessao2, op, itensV,
+    new[] { new PagamentoVenda("dinheiro", totalV, Dinheiro.Zero) }, null, "Loja", null);
+Vendas.Cancelar(cx, vTeste2.Id, op.Id, "fim do roteiro de homologação");
+Check("homologação: o cancelamento da venda de teste também não vai para a nuvem",
+    cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo='venda_cancelada' AND ref_id=@v", new { v = vTeste2.Id }) == 0);
+
+Vendas.GravarConfig(cx, "homologacao", "0");
+var vReal = Vendas.Finalizar(cx, sessao2, op, itensV,
+    new[] { new PagamentoVenda("dinheiro", totalV, Dinheiro.Zero) }, null, "Loja", null);
+Check("sem homologação: a venda nasce como venda de verdade (homologacao=0)",
+    cx.ExecuteScalar<int>("SELECT homologacao FROM venda WHERE id=@v", new { v = vReal.Id }) == 0);
+Check("sem homologação: a venda volta a subir para a nuvem",
+    cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo='venda' AND ref_id=@v", new { v = vReal.Id }) == 1);
+Check("sem homologação: a venda volta a contar no apurado do turno",
+    Caixa.Apurado(cx, sessao2)["dinheiro"].Centavos == apuradoAntesTeste.Centavos + totalV.Centavos);
+
 Vendas.GravarConfig(cx, "impressora", "Elgin i9");
 Check("config do terminal grava e lê", Vendas.Config(cx, "impressora") == "Elgin i9");
 Check("config ausente devolve o padrão", Vendas.Config(cx, "nao_existe", "padrao") == "padrao");
@@ -1048,6 +1193,26 @@ Console.WriteLine("--- TEF PayGo (troca de arquivos simulada) ---");
 TestesPayGo.Rodar((cond, nome) => Check("paygo: " + nome, cond));
 Console.WriteLine("--- TEF ControlPay (WebService simulado) ---");
 TestesControlPay.Rodar((cond, nome) => Check("controlpay: " + nome, cond));
+
+// -- FILA: o que a nuvem RECUSA para sempre ----------------------------------
+// Dead-letter carimbava enviado_em: R$ 102.626,50 sumiram do contador com tudo verde.
+Console.WriteLine();
+Console.WriteLine("--- Fila de sincronizacao (dead-letter) ---");
+await TestesFila.RodarAsync((cond, nome) => Check("fila: " + nome, cond));
+
+// -- RASCUNHO: a comanda em andamento contra a queda de energia ---------------
+// Os itens viviam so na memoria da tela: religar = rebipar tudo com o cliente
+// no balcao. Restaurar os ITENS nao e realizar a venda (passo 24 da homologacao).
+Console.WriteLine();
+Console.WriteLine("--- Comanda em andamento (rascunho) ---");
+TestesRascunho.Rodar((cond, nome) => Check("rascunho: " + nome, cond));
+
+// -- INSTANCIA UNICA: o operador que clica duas vezes no icone -----------------
+// A 2a instancia attacha no turno aberto e roda o religamento do TEF usando o
+// PROPRIO boot como referencia: a cobranca viva da 1a instancia vira 'orfa'.
+Console.WriteLine();
+Console.WriteLine("--- Instancia unica (2o Pdv.exe na mesma maquina) ---");
+TestesInstanciaUnica.Rodar((cond, nome) => Check("instancia: " + nome, cond));
 
 cx.Dispose();
 SqliteConnection.ClearAllPools();
