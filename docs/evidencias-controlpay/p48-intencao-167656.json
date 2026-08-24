@@ -1,0 +1,66 @@
+﻿{
+    "data":  "24/08/2026 17:18:07.5534",
+    "intencaoVenda":  {
+                          "id":  167656,
+                          "referencia":  "1787602234244",
+                          "token":  "719231",
+                          "data":  "24/08/2026 17:10",
+                          "hora":  "17:10:40",
+                          "dataAtualizacao":  "24/08/2026 17:11",
+                          "quantidade":  0,
+                          "valorOriginal":  100000.0000,
+                          "valorOriginalFormat":  "100000,00",
+                          "valorAcrescimo":  0.0000,
+                          "valorAcrescimoFormat":  "0,00",
+                          "valorDesconto":  0.0000,
+                          "valorDescontoFormat":  "0,00",
+                          "valorFinal":  100000.0000,
+                          "valorFinalFormat":  "100000,00",
+                          "gate2allToken":  null,
+                          "latitude":  "0",
+                          "longitude":  "0",
+                          "quantidadeParcelas":  1,
+                          "urlPagamento":  null,
+                          "formaPagamento":  {
+                                                 "id":  21,
+                                                 "nome":  "TEF",
+                                                 "modalidade":  "Crédito",
+                                                 "fluxoPagamento":  {
+                                                                        "id":  21,
+                                                                        "nome":  "TEF"
+                                                                    }
+                                             },
+                          "intencaoVendaStatus":  {
+                                                      "id":  10,
+                                                      "nome":  "Creditado"
+                                                  },
+                          "pedido":  null,
+                          "vendedor":  {
+                                           "id":  12247,
+                                           "nomeRazaoSocial":  "Mm Food Service Produtos Alimenticios Ltda",
+                                           "sobrenomeNomeFantasia":  "Prime Active",
+                                           "fotoThumbnail":  "https://sandbox.controlpay.com.br/webapi//ImagensPessoas/_PessoaDefault.png"
+                                       },
+                          "cliente":  null,
+                          "produtos":  [
+
+                                       ],
+                          "pagamentosExternos":  [
+                                                     {
+                                                         "id":  159991,
+                                                         "tipo":  5,
+                                                         "idPagamento":  "7799586",
+                                                         "dataAdquirente":  "24/08/2026 17:10",
+                                                         "dataAtualizacao":  "24/08/2026 17:11",
+                                                         "origem":  10,
+                                                         "autorizacao":  "094787",
+                                                         "pagamentoExternoStatus":  {
+                                                                                        "id":  15,
+                                                                                        "nome":  "Finalizado"
+                                                                                    },
+                                                         "nomeTitularCartao":  ""
+                                                     }
+                                                 ],
+                          "operador":  null
+                      }
+}

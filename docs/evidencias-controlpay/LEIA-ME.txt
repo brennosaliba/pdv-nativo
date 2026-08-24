@@ -1,33 +1,51 @@
-HOMOLOGACAO PayGo — integracao Pagamento via WebService (ControlPay)
-American Day · PdC 114975 · terminal 6408 (fisico 7027) · pessoa 12247
-Pacote gerado em 24/08/2026
+Homologacao da integracao PayGo - Pagamento via WebService (ControlPay)
+American Day Donuts & Cookies
 
-CONTEUDO
+Ambiente dos testes: sandbox da ControlPay, PdC 114975, terminal 6408 (fisico 7027),
+pessoa 12247. PayGo Windows 5.1.50.24 em modo Demonstracao, pinpad na COM5 e
+impressora ELGIN L42PRO. Os testes foram feitos entre 21 e 24 de agosto de 2026.
+
+Na planilha, a coluna "Retorno do teste" traz o id da intencao de venda, como pede o
+cabecalho dela para quem integra via WebService.
+
+
+O que tem neste pacote
+
   Planilha de testes v20260703 - PREENCHIDA.xlsx
-      Coluna "Retorno do teste" = id da intencao de venda, conforme a instrucao
-      do cabecalho da planilha para Pagamento WebService (Controlpay).
-  PGLogs_001.zip        logs do PayGo Windows, 21/08 a 24/08 (PGLogCollector)
+      A planilha do roteiro, preenchida.
+
+  PGLogs_001.zip
+      Logs do PayGo Windows, gerados pelo PGLogCollector. Cobrem de 21 a 24 de agosto.
+
   p50-callbacks-recebidos.log
-      Log do nginx do endpoint https://erp.americandaybrasil.com.br/paygo-callback
-      33 POSTs recebidos da PayGo em 24/08 (origem 191.232.70.197).
-  p47-terminais.json    Terminal/GetByPessoaId
-  p48-intencao-167517.json  IntencaoVenda/GetById da venda do passo 02
-  p49-intencao-167513.json  IntencaoVenda/GetById da venda do passo 06
-  p50-callback-insert.json  Callback/Insert
+      Log do servidor no endereco que cadastramos para receber as notificacoes
+      (https://erp.americandaybrasil.com.br/paygo-callback). Sao 38 POSTs recebidos,
+      cada um com o intencaoVendaId na query. A venda do passo 6 aparece ali as
+      17:12:15 do dia 24.
 
-PASSOS EXECUTADOS (21)
-  02 03 04 06 07 08 10 11 17 18 19 20 21 22 24 30 45 46 52 53 54
+  p47-terminais.json          resposta do Terminal/GetByPessoaId
+  p48-intencao-167656.json    consulta da venda do passo 2
+  p49-intencao-167658.json    consulta da venda do passo 6
+  p50-callback-insert.json    cadastro da URL de callback
 
-NAO SE APLICAM a esta integracao (marcados na planilha)
-  12, 16, 25 a 29, 31 a 44, 51, 55 — sao de troca de arquivos TXT, DLL ou Android.
-  No ControlPay a confirmacao/desfazimento e do PayGo Windows, nao da automacao,
-  e nao ha captura de dado generico nem transacao pendente exposta por API.
 
-OBSERVACOES DE TRANSPARENCIA
-  - Passo 50: a venda do passo 06 (intencao 167513, 21/08 19:05) e ANTERIOR ao
-    cadastro da URL de callback (21/08 19:16), por isso nao gerou notificacao.
-    O callback esta comprovado por 33 POSTs de outras vendas, listados no log.
-  - Os valores magicos do roteiro (R$ 1.000,01 negada, R$ 1.003,00 mensagem de 80
-    caracteres) so ocorrem no autorizador de testes C6 PAY. Na rede REDE os
-    centavos do valor determinam o codigo de resposta, entao passos com centavos
-    foram executados no C6 PAY.
+Os passos que nao se aplicam
+
+  Marcamos como nao aplicaveis os passos 12, 16, 25 a 29, 31 a 44, 51 e 55. Todos
+  tratam de troca de arquivos TXT, da DLL do Windows ou da integracao Android. No
+  Pagamento via WebService quem confirma e quem desfaz a transacao e o proprio PayGo
+  Windows, nao a automacao, e nao existe captura de dado generico nem transacao
+  pendente exposta pela API.
+
+
+Uma observacao sobre os valores
+
+  Nos testes com centavos, o simulador usa os proprios centavos para escolher o codigo
+  de resposta: R$ 1.000,01 volta NEGADA 01 e R$ 12.345,67 volta NEGADA 67. Ja as
+  mensagens estendidas, como a do passo 30 (R$ 1.003,00), so aparecem no autorizador de
+  testes C6 PAY. Por isso os passos foram distribuidos entre C6 PAY e REDE conforme o
+  comportamento que cada um precisava demonstrar.
+
+
+Se ficar duvida em algum passo, o id da intencao que esta na planilha permite achar a
+transacao tanto no painel da ControlPay quanto no log do PayGo Windows.
