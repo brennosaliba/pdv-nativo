@@ -1,12 +1,12 @@
 ﻿{
-    "data":  "24/08/2026 17:18:07.7253",
+    "data":  "25/08/2026 10:32:44.5085",
     "intencaoVenda":  {
-                          "id":  167658,
-                          "referencia":  "1787602308877",
-                          "token":  "474397",
-                          "data":  "24/08/2026 17:11",
-                          "hora":  "17:11:54",
-                          "dataAtualizacao":  "24/08/2026 17:12",
+                          "id":  167726,
+                          "referencia":  "1787664278693",
+                          "token":  "183748",
+                          "data":  "25/08/2026 10:24",
+                          "hora":  "10:24:44",
+                          "dataAtualizacao":  "25/08/2026 10:25",
                           "quantidade":  0,
                           "valorOriginal":  10.0000,
                           "valorOriginalFormat":  "10,00",
@@ -47,18 +47,18 @@
                                        ],
                           "pagamentosExternos":  [
                                                      {
-                                                         "id":  159993,
+                                                         "id":  160063,
                                                          "tipo":  5,
-                                                         "idPagamento":  "7799591",
-                                                         "dataAdquirente":  "24/08/2026 17:12",
-                                                         "dataAtualizacao":  "24/08/2026 17:12",
+                                                         "idPagamento":  "7800315",
+                                                         "dataAdquirente":  "25/08/2026 10:25",
+                                                         "dataAtualizacao":  "25/08/2026 10:25",
                                                          "origem":  10,
-                                                         "autorizacao":  "094787",
+                                                         "autorizacao":  "915496",
                                                          "pagamentoExternoStatus":  {
                                                                                         "id":  15,
                                                                                         "nome":  "Finalizado"
                                                                                     },
-                                                         "nomeTitularCartao":  ""
+                                                         "nomeTitularCartao":  null
                                                      }
                                                  ],
                           "operador":  null

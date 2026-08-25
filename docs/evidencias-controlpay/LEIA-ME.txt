@@ -1,9 +1,23 @@
 Homologacao da integracao PayGo - Pagamento via WebService (ControlPay)
 American Day Donuts & Cookies
 
+REENVIO de 25/08/2026, atendendo ao retorno da analise:
+
+  Passos 6 e 7  - refeitos com o cartao INSERIDO no chip, nao por aproximacao.
+                  A prova esta em dois lugares: o comprovante traz o prefixo "C-"
+                  na linha do cartao (a aproximacao imprime "L-"), e no log do
+                  PayGo aparece PW_iPPGoOnChip() com PWRET_OK logo apos o inicio
+                  de cada uma - 10:24:49 para o passo 6 e 10:31:48 para o passo 7.
+
+  Passos 17, 18, 20 e 22 - refeitos na adquirente C6 PAY, nao mais na REDE.
+
+  Passos 49 e 50 - trocados junto, sem terem sido pedidos: os dois referenciam a
+                  venda do passo 6, que mudou de numero no reteste. Se ficassem
+                  como estavam, apontariam para uma venda que nao e mais a do passo.
+
 Ambiente dos testes: sandbox da ControlPay, PdC 114975, terminal 6408 (fisico 7027),
 pessoa 12247. PayGo Windows 5.1.50.24 em modo Demonstracao, pinpad na COM5 e
-impressora ELGIN L42PRO. Os testes foram feitos entre 21 e 24 de agosto de 2026.
+impressora ELGIN L42PRO. Os testes foram feitos entre 21 e 25 de agosto de 2026.
 
 Na planilha, a coluna "Retorno do teste" traz o id da intencao de venda, como pede o
 cabecalho dela para quem integra via WebService.
@@ -15,17 +29,17 @@ O que tem neste pacote
       A planilha do roteiro, preenchida.
 
   PGLogs_001.zip
-      Logs do PayGo Windows, gerados pelo PGLogCollector. Cobrem de 21 a 24 de agosto.
+      Logs do PayGo Windows, gerados pelo PGLogCollector. Cobrem de 21 a 25 de agosto, incluindo os retestes.
 
   p50-callbacks-recebidos.log
       Log do servidor no endereco que cadastramos para receber as notificacoes
-      (https://erp.americandaybrasil.com.br/paygo-callback). Sao 38 POSTs recebidos,
+      (https://erp.americandaybrasil.com.br/paygo-callback). Sao 49 POSTs recebidos,
       cada um com o intencaoVendaId na query. A venda do passo 6 aparece ali as
-      17:12:15 do dia 24.
+      10:25:18 do dia 25.
 
   p47-terminais.json          resposta do Terminal/GetByPessoaId
   p48-intencao-167656.json    consulta da venda do passo 2
-  p49-intencao-167658.json    consulta da venda do passo 6
+  p49-intencao-167726.json    consulta da venda do passo 6
   p50-callback-insert.json    cadastro da URL de callback
   p54-cancelamento-negado-167560.json
       consulta da intencao do passo 53, mostrando os dois pagamentos externos:
