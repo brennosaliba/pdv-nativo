@@ -43,7 +43,7 @@ public sealed record OpcoesControlPay(
     string SenhaTecnica,
     string TerminalId,
     string PessoaId,
-    string UserAgent = "PdvNativo/1.0",
+    string UserAgent = "Pdv.AmericanDay/1.0",
     string? Adquirente = null,
     string? AdquirentePix = null)
 {
