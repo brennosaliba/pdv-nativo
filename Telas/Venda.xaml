@@ -348,6 +348,11 @@
                     <!-- Atalho do turno: a loja muda de luz às 18h e ninguém vai abrir
                          configuração no meio da fila. Texto puro, sem competir com os
                          alvos de toque da barra de cima. -->
+                    <!-- Configuração também aqui: antes ela só existia no rodapé do login,
+                         e para trocar uma impressora ou mexer no TEF o operador tinha que
+                         sair do caixa. Continua pedindo a senha de administrador. -->
+                    <Button x:Name="BtnConfigRodape" Style="{StaticResource BotaoTexto}" Click="AbrirConfiguracao"
+                            Padding="6,2" Margin="0,0,16,0" Content="⚙ configuração"/>
                     <Button x:Name="BtnTema" Style="{StaticResource BotaoTexto}" Click="AlternarTema"
                             Padding="6,2" Margin="0,0,16,0" Content="☀ modo claro"/>
                     <TextBlock x:Name="TxtRelogio" Foreground="{DynamicResource TextoFraco}" FontSize="11.5"

@@ -58,6 +58,7 @@ public partial class Venda : UserControl
     public event Action? FechouCaixa;
     public event Action? PediuKds;
     public event Action? PediuChat;
+    public event Action? PediuConfig;
 
     /// <summary>
     /// Quantas colunas a grade de produtos usa. Calculado pela largura real da área,
@@ -1021,7 +1022,7 @@ public partial class Venda : UserControl
         TxtTotal.Text = total.Formatado();
 
         var qtd = _comanda.Sum(i => i.Qtd.Milesimos) / 1000m;
-        TxtQtdItens.Text = $"{qtd:0.###} {(qtd == 1 ? "item" : "itens")}";
+        TxtQtdItens.Text = Rascunho.TextoItens(qtd);
         ChipItens.Visibility = _comanda.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         PainelVazio.Visibility = _comanda.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         BtnFinalizar.IsEnabled = _comanda.Count > 0;
@@ -1113,12 +1114,13 @@ public partial class Venda : UserControl
         // que é testado; a tela só mostra.
         var aviso = Rascunho.AvisoDeCobranca(cobrado);
 
-        var recuperar = Dialogo.Confirmar(Window.GetWindow(this)!, "Recuperar comanda",
-            $"O caixa parou às {quando} com uma comanda em andamento:\n\n" +
-            $"{unidades:0.###} item(ns) · {total.Formatado()}\n\n" +
-            aviso + "\n\nOs itens voltam para a tela para você conferir com o cliente " +
-            "antes de finalizar.",
-            $"Recuperar {r.Itens.Count} linha(s)", "Descartar");
+        var recuperar = Dialogo.Confirmar(Window.GetWindow(this)!, "Continuar comanda?",
+            $"O caixa foi interrompido às {quando}, mas esta comanda ainda estava aberta:\n\n" +
+            $"{Rascunho.TextoItens(unidades)} · {total.Formatado()}\n\n" +
+            aviso + "\n\n" +
+            (unidades == 1m ? "Ao continuar, o item volta" : "Ao continuar, os itens voltam") +
+            " para a tela. Confira o pedido com o cliente antes de finalizar.",
+            "Continuar comanda", "Descartar comanda");
 
         if (!recuperar)
         {
@@ -1127,7 +1129,7 @@ public partial class Venda : UserControl
                 using var cx = Banco.Abrir();
                 Rascunho.Apagar(cx);
                 Caixa.Auditar(cx, null, "rascunho_descartado", _operador.Id, null,
-                    $"{r.Itens.Count} linha(s) · {total.Formatado()} · parada às {quando}");
+                    $"{Rascunho.TextoItens(unidades)} · {total.Formatado()} · parada às {quando}");
             }
             catch { }
             return;
@@ -1161,7 +1163,7 @@ public partial class Venda : UserControl
         {
             using var cx = Banco.Abrir();
             Caixa.Auditar(cx, null, "rascunho_restaurado", _operador.Id, null,
-                $"{r.Itens.Count} linha(s) · {total.Formatado()} · parada às {quando}");
+                $"{Rascunho.TextoItens(unidades)} · {total.Formatado()} · parada às {quando}");
         }
         catch { }
     }
@@ -2358,6 +2360,22 @@ public partial class Venda : UserControl
         "pix" => "PIX",
         _ => forma,
     };
+
+    /// <summary>
+    /// Configuração sem sair do caixa. A senha de administrador continua sendo pedida
+    /// (quem trata é a MainWindow); a comanda em andamento não se perde porque o
+    /// rascunho é gravado a cada mudança — ao voltar, o caixa oferece continuar.
+    /// </summary>
+    private void AbrirConfiguracao(object sender, RoutedEventArgs e)
+    {
+        if (TefEmAndamento(Window.GetWindow(this)!)) return;
+        if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Abrir configuração",
+                "A comanda em andamento fica guardada. Quando você voltar da configuração, " +
+                "o caixa pergunta se quer continuar com ela.",
+                "Abrir configuração", "Voltar"))
+            return;
+        PediuConfig?.Invoke();
+    }
 
     private void Sair(object sender, RoutedEventArgs e)
     {

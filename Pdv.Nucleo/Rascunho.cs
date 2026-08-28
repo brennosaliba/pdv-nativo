@@ -193,13 +193,20 @@ public static class Rascunho
     /// </summary>
     public static string AvisoDeCobranca(Dinheiro? cobrado) =>
         cobrado is null
-            ? "NÃO CONSEGUI CONFERIR a maquininha agora — veja no PayGo se esta compra já "
-            + "foi paga ANTES de cobrar de novo."
+            ? "Não consegui conferir a maquininha agora. Antes de cobrar de novo, "
+            + "veja no PayGo se esta compra já foi paga."
             : cobrado.Value.Positivo
-                ? $"⚠️ ATENÇÃO: o TEF tem {cobrado.Value.Formatado()} cobrado NESTE TURNO sem venda gravada. "
-                + "Confira no PayGo antes de finalizar: se o cliente já pagou, NÃO cobre de novo — "
-                + "estorne em TEF → Estornar."
-                : "Nada foi cobrado e nenhuma venda foi gravada.";
+                ? $"⚠️ Atenção: passou {cobrado.Value.Formatado()} na maquininha neste turno, "
+                + "e essa venda não chegou a ser finalizada. Confira no PayGo antes de continuar: "
+                + "se o cliente já pagou, NÃO cobre de novo — estorne em TEF → Estornar."
+                : "Fique tranquilo: nenhum valor foi cobrado e a venda não foi finalizada.";
+
+    /// <summary>
+    /// "1 item" / "2 itens" — a tela nunca mostra "item(ns)". Aceita fração porque
+    /// item pesado entra em quilos (1,5 já é plural).
+    /// </summary>
+    public static string TextoItens(decimal unidades) =>
+        unidades == 1m ? "1 item" : $"{unidades:0.###} itens";
 
     /// <summary>
     /// Apaga o rascunho. Chamado quando a comanda é limpa e, dentro da MESMA transação,

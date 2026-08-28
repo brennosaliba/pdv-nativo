@@ -113,6 +113,7 @@ public partial class MainWindow : Window
         t.FechouCaixa += () => { _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
         t.PediuKds += MostrarKds;
         t.PediuChat += MostrarChat;
+        t.PediuConfig += AbrirConfigProtegida;
         _telaVenda = t;
         Conteudo.Content = t;
     }

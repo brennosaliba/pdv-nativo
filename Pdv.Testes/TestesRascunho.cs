@@ -224,26 +224,49 @@ public static class TestesRascunho
                 var corpo = i < 0 ? "" : (fim > i ? fonte![i..fim] : fonte![i..]);
                 checar(corpo.Contains("CobrancaSemVenda", StringComparison.Ordinal),
                     "o diálogo do rascunho confere a cobrança sem venda do turno antes de falar");
-                checar(!corpo.Contains("Nada foi cobrado", StringComparison.Ordinal),
-                    "a frase \"Nada foi cobrado\" não é escrita solta na tela: sai de Rascunho.AvisoDeCobranca");
+                checar(!corpo.Contains("nenhum valor foi cobrado", StringComparison.Ordinal),
+                    "a frase do dinheiro não é escrita solta na tela: sai de Rascunho.AvisoDeCobranca");
+
+                // ── LINGUAGEM DA TELA (pedido do dono 28/08) ──────────────────
+                // O atendente lê isto no meio do atendimento: nada de jargão nem de
+                // plural entre parênteses.
+                checar(!corpo.Contains("item(ns)", StringComparison.Ordinal)
+                       && !corpo.Contains("linha(s)", StringComparison.Ordinal),
+                    "o diálogo não mostra plural automático entre parênteses");
+                foreach (var jargao in new[] { "venda gravada", "registro", "persistência", "transação" })
+                    checar(!corpo.Contains(jargao, StringComparison.OrdinalIgnoreCase),
+                        $"o diálogo não usa o termo técnico \"{jargao}\"");
+                checar(corpo.Contains("Continuar comanda", StringComparison.Ordinal)
+                       && corpo.Contains("Descartar comanda", StringComparison.Ordinal),
+                    "os botões dizem a ação: Continuar comanda / Descartar comanda");
 
                 // E a frase, agora que dá para testá-la, é testada pelo valor.
                 var quieto = Rascunho.AvisoDeCobranca(Dinheiro.Zero);
-                checar(quieto.Contains("Nada foi cobrado", StringComparison.Ordinal),
-                    "sem cobrança viva no turno o aviso continua o de sempre");
+                checar(quieto.Contains("nenhum valor foi cobrado", StringComparison.Ordinal),
+                    "sem cobrança viva no turno o aviso tranquiliza: nenhum valor foi cobrado");
 
                 var cincoCentos = Dinheiro.DeReais(500m);
                 var alarme = Rascunho.AvisoDeCobranca(cincoCentos);
-                checar(!alarme.Contains("Nada foi cobrado", StringComparison.Ordinal),
-                    "com cartão passado e venda não gravada o aviso NÃO diz que nada foi cobrado");
+                checar(!alarme.Contains("nenhum valor foi cobrado", StringComparison.Ordinal),
+                    "com cartão passado e venda não finalizada o aviso NÃO diz que nada foi cobrado");
                 checar(alarme.Contains(cincoCentos.Formatado(), StringComparison.Ordinal),
                     $"o aviso mostra QUANTO está cobrado sem venda ({cincoCentos.Formatado()})");
                 checar(alarme.Contains("NÃO cobre de novo", StringComparison.Ordinal),
                     "o aviso manda NÃO cobrar de novo — é a cobrança em dobro que se quer evitar");
 
                 var cego = Rascunho.AvisoDeCobranca(null);
-                checar(!cego.Contains("Nada foi cobrado", StringComparison.Ordinal),
+                checar(!cego.Contains("nenhum valor foi cobrado", StringComparison.Ordinal),
                     "sem conseguir conferir a maquininha, o aviso não afirma que nada foi cobrado");
+
+                // ── PLURAL: "1 item" / "2 itens", nunca "item(ns)" ────────────
+                checar(Rascunho.TextoItens(1m) == "1 item", "uma unidade fica no singular");
+                checar(Rascunho.TextoItens(2m) == "2 itens", "duas unidades vão pro plural");
+                checar(Rascunho.TextoItens(0m) == "0 itens", "zero é plural em português");
+                checar(Rascunho.TextoItens(1.5m) == "1,5 itens" || Rascunho.TextoItens(1.5m) == "1.5 itens",
+                    "item pesado (fração de quilo) também é plural");
+                foreach (var q in new[] { 0m, 1m, 2m, 1.5m, 10m })
+                    checar(!Rascunho.TextoItens(q).Contains("(", StringComparison.Ordinal),
+                        $"o texto de {q} unidades não tem parênteses de plural");
             }
 
             // ── VENDA FINALIZADA MATA O RASCUNHO ─────────────────────────────
