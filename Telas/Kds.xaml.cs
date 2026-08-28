@@ -94,40 +94,17 @@ public partial class Kds : UserControl
     // pode ser outra bobina, não a do caixa). Opt-in: nasce desligado.
     private bool _imprimindo;
 
+    /// <summary>
+    /// Delega para <see cref="Servicos.ImprimirComandasPendentesAsync"/> — a
+    /// impressao nao mora mais aqui porque nao pode depender do quadro aberto.
+    /// A tela so mostra o aviso quando o papel nao sai.
+    /// </summary>
     private async Task ImprimirComandasAsync()
     {
-        if (_imprimindo) return;
-        _imprimindo = true;
-        try
-        {
-            string? impressora; bool auto;
-            using (var cx = Banco.Abrir())
-            {
-                auto = Vendas.Config(cx, "kds_comanda_auto") == "1";
-                impressora = Vendas.Config(cx, "kds_comanda_impressora");
-                if (impressora is { Length: 0 }) impressora = null; // "" = padrão do Windows
-            }
-            if (!auto) return;
-
-            foreach (var t in Nucleo.Kds.ParaImprimir())
-            {
-                // claim ANTES do papel: sino + timer se sobrepõem, e comanda
-                // dupla é donut duplo. Falhou depois do claim → status avisa e
-                // o botão 🖨 do card reimprime (impressora morta não pode virar
-                // metralhadora de tentativas a cada 10 s).
-                if (!Nucleo.Kds.ReivindicarImpressao(t.Id)) continue;
-                var erro = await Impressao.ImprimirTextoAsync(
-                    $"Comanda cozinha #{t.Numero}",
-                    new[] { Nucleo.Kds.ComandaLinhas(t) }, impressora);
-                if (erro is not null)
-                {
-                    TxtStatus.Text = $"comanda #{t.Numero} NÃO imprimiu — use 🖨 no card";
-                    Alerta.PedidoNovo(); // chama atenção: papel não saiu
-                }
-            }
-        }
-        catch { /* imprimir é conforto; o quadro na tela é a fonte de verdade */ }
-        finally { _imprimindo = false; }
+        var falha = await Servicos.ImprimirComandasPendentesAsync();
+        if (falha is null) return;
+        TxtStatus.Text = falha + " — use o botao de imprimir no card";
+        Alerta.PedidoNovo();   // chama atencao: papel nao saiu
     }
 
     // ── pintura do quadro ───────────────────────────────────────────────────
@@ -149,14 +126,23 @@ public partial class Kds : UserControl
     /// largura real da coluna (nao ha "3 colunas" no WrapPanel): assim o quadro
     /// se adapta ao monitor da cozinha, que varia de loja pra loja.
     /// </summary>
-    private const int CardsPorLinha = 3;
+    private const int CardsPorLinha = 2;
+
+    /// <summary>
+    /// Altura fixa do card. Com ItemWidth E ItemHeight o WrapPanel entrega cards
+    /// IGUAIS — foi o pedido do balcao: quadro harmonico, tudo alinhado. O preco
+    /// e que pedido comprido corta a lista de itens, entao a altura precisa caber
+    /// o caso comum (o card abre no toque com tudo).
+    /// </summary>
+    private const double AlturaDoCard = 132;
 
     private static void LarguraDosCards(WrapPanel p)
     {
         // -1 para nao empatar com a largura disponivel por arredondamento e
-        // jogar o terceiro card pra linha de baixo.
-        var w = Math.Max(140, (p.ActualWidth / CardsPorLinha) - 1);
+        // jogar o ultimo card pra linha de baixo.
+        var w = Math.Max(180, (p.ActualWidth / CardsPorLinha) - 1);
         if (Math.Abs(p.ItemWidth - w) > 0.5) p.ItemWidth = w;
+        if (Math.Abs(p.ItemHeight - AlturaDoCard) > 0.5) p.ItemHeight = AlturaDoCard;
     }
 
     private void Encher(Panel coluna, IEnumerable<Ticket> tickets)
@@ -187,7 +173,7 @@ public partial class Kds : UserControl
         var b = new Button
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
-            MinHeight = 104, Margin = new Thickness(3, 3, 3, 4),
+            MinHeight = 0, Margin = new Thickness(3, 3, 3, 4),
             Padding = new Thickness(0), Tag = t.Id,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Stretch,

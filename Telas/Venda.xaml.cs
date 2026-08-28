@@ -158,6 +158,8 @@ public partial class Venda : UserControl
             .ContinueWith(tt =>
             {
                 _puxandoKds = false;
+                // A comanda sai com o pedido, mesmo com o KDS fechado.
+                _ = Servicos.ImprimirComandasPendentesAsync();
                 if (tt.Status == TaskStatus.RanToCompletion && tt.Result > 0)
                     Dispatcher.Invoke(() => NotificarPedidoNovo(tt.Result));
             });
@@ -313,6 +315,8 @@ public partial class Venda : UserControl
                     .ContinueWith(tt =>
                     {
                         _puxandoKds = false;
+                        // A comanda sai com o pedido, mesmo com o KDS fechado.
+                        _ = Servicos.ImprimirComandasPendentesAsync();
                         // Pedido novo com o CAIXA aberto: toast + som. Ninguém fica
                         // olhando badge pequeno com fila no balcão.
                         if (tt.Status == TaskStatus.RanToCompletion && tt.Result > 0)

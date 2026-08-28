@@ -428,6 +428,52 @@ public static class Servicos
     /// Vias a imprimir, na ordem em que saem: cliente, estabelecimento. `737-000` (1 só cliente,
     /// 2 só estabelecimento, 3 ambas) manda; sem as diferenciadas, vale a reduzida ou a única.
     /// </summary>
+    private static readonly SemaphoreSlim UmaComandaPorVez = new(1, 1);
+
+    /// <summary>
+    /// Imprime a comanda dos pedidos de delivery que ainda nao sairam no papel.
+    ///
+    /// Mora AQUI, e nao na tela do KDS, porque a cozinha nao pode depender de
+    /// alguem ter deixado o quadro aberto: o pedido chega, a comanda sai. Roda
+    /// depois de toda puxada da nuvem (sino e timer), com o caixa na tela de
+    /// venda ou no KDS.
+    ///
+    /// Devolve a mensagem do primeiro erro (para quem quiser avisar na tela) ou
+    /// null quando tudo saiu. Nunca lanca: imprimir e conforto, o quadro na tela
+    /// continua sendo a fonte de verdade.
+    /// </summary>
+    public static async Task<string?> ImprimirComandasPendentesAsync()
+    {
+        if (!await UmaComandaPorVez.WaitAsync(0).ConfigureAwait(false)) return null;
+        try
+        {
+            string? impressora; bool auto;
+            using (var cx = Banco.Abrir())
+            {
+                auto = Vendas.Config(cx, "kds_comanda_auto") == "1";
+                impressora = Vendas.Config(cx, "kds_comanda_impressora");
+                if (impressora is { Length: 0 }) impressora = null;   // "" = padrao do Windows
+            }
+            if (!auto) return null;
+
+            string? falha = null;
+            foreach (var t in Pdv.Nucleo.Kds.ParaImprimir())
+            {
+                // claim ANTES do papel: sino + timer se sobrepoem, e comanda dupla
+                // e donut duplo. Falhou depois do claim -> o botao imprimir do card
+                // reimprime (impressora morta nao pode virar metralhadora).
+                if (!Pdv.Nucleo.Kds.ReivindicarImpressao(t.Id)) continue;
+                var erro = await Impressao.ImprimirTextoAsync(
+                    $"Comanda cozinha #{t.Numero}",
+                    new[] { Pdv.Nucleo.Kds.ComandaLinhas(t) }, impressora).ConfigureAwait(false);
+                falha ??= erro is null ? null : $"comanda #{t.Numero} NAO imprimiu";
+            }
+            return falha;
+        }
+        catch { return null; }
+        finally { UmaComandaPorVez.Release(); }
+    }
+
     public static IReadOnlyList<IReadOnlyList<string>> ViasParaImprimir(RespostaPayGo r)
     {
         var vias = r.Vias ?? 3;

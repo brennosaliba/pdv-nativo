@@ -188,7 +188,7 @@ public partial class MainWindow : Window
                     Operador: _operador?.Nome ?? "(sem login)")
                 { Tipo = "configuracao" };
 
-                var tela = new TelaAutorizacao(this);
+                var tela = new TelaAutorizacao(this, configuracao: true);
                 // Sem login (config aberta pela tela de login) o pedido ainda precisa
                 // de um operador para a auditoria: o primeiro ativo serve de rótulo,
                 // e quem de fato liberou é quem aprovou pelo WhatsApp.
@@ -207,12 +207,19 @@ public partial class MainWindow : Window
                 }
                 if (d.Autorizado)
                 {
+                    // A trilha diz por qual porta entrou: código da gerência ou a
+                    // saída pela senha (que a própria tela já ofereceu quando a
+                    // nuvem não respondeu). Não perguntar a senha de novo aqui.
                     Caixa.Auditar(cxT, null, "config_aberta", _operador?.Id, d.AprovadoPor,
-                        "liberada por código no WhatsApp" + Autorizacao.Trilha(d));
+                        (d.SemAprovacaoRemota
+                            ? "senha de administrador (SEM aprovação remota)"
+                            : "código no WhatsApp da gerência") + Autorizacao.Trilha(d));
                     MostrarConfiguracao();
                     return;
                 }
-                if (d.Avisado) return;   // a tela já explicou (cancelou / código errado)
+                // A tela já explicou (cancelou, código errado, senha errada) — um
+                // segundo pedido de senha aqui seria a mesma pergunta duas vezes.
+                return;
             }
         }
 
