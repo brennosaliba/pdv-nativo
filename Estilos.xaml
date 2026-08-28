@@ -125,6 +125,124 @@
     </Style>
 
 
+    <!-- OPÇÃO EM CARTÃO: escolha exclusiva sem dropdown. Tudo visível de uma vez,
+         alvo grande para o dedo, e o escolhido se anuncia pela cor da marca —
+         numa tela de balcão isso vale mais que economizar espaço. -->
+    <Style x:Key="BotaoOpcao" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource Texto}"/>
+        <Setter Property="Margin" Value="0,0,8,8"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="b" CornerRadius="12" Padding="14,11" MinHeight="58"
+                            Background="{DynamicResource Painel}"
+                            BorderBrush="{DynamicResource Borda}" BorderThickness="1">
+                        <ContentPresenter VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource Marca}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource Marca}"/>
+                            <Setter TargetName="b" Property="BorderThickness" Value="2"/>
+                            <Setter TargetName="b" Property="Background" Value="{DynamicResource Fundo}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- COMBOBOX: sem template próprio o WPF desenha o chrome cinza do sistema, que
+         no meio das telas escuras parece caixa de diálogo antiga. Mesma linguagem do
+         TextBox acima: painel, borda hairline, canto 12, marca no foco. -->
+    <Style TargetType="ComboBox">
+        <Setter Property="Background" Value="{DynamicResource Painel}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Texto}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Borda}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="14,12"/>
+        <Setter Property="FontSize" Value="16"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <ToggleButton x:Name="alvo" Focusable="False" ClickMode="Press"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border x:Name="b" CornerRadius="12" Background="{DynamicResource Painel}"
+                                            BorderBrush="{DynamicResource Borda}" BorderThickness="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ContentPresenter Grid.Column="0"/>
+                                            <Path Grid.Column="1" Margin="0,0,14,0" VerticalAlignment="Center"
+                                                  Data="M0,0 L10,0 L5,6 Z" Fill="{DynamicResource TextoFraco}"/>
+                                        </Grid>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="b" Property="BorderBrush" Value="{DynamicResource Marca}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter x:Name="texto" IsHitTestVisible="False"
+                                          Margin="{TemplateBinding Padding}" VerticalAlignment="Center"
+                                          Content="{TemplateBinding SelectionBoxItem}"
+                                          ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+                        <Popup x:Name="PART_Popup" AllowsTransparency="True" Placement="Bottom"
+                               IsOpen="{TemplateBinding IsDropDownOpen}" Focusable="False" PopupAnimation="Fade">
+                            <Border Background="{DynamicResource Painel}" BorderBrush="{DynamicResource Borda}"
+                                    BorderThickness="1" CornerRadius="12" Margin="0,4,0,0"
+                                    MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                <ScrollViewer>
+                                    <ItemsPresenter/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="alvo" Property="BorderBrush" Value="{DynamicResource Marca}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="ComboBoxItem">
+        <Setter Property="Foreground" Value="{DynamicResource Texto}"/>
+        <Setter Property="Padding" Value="14,11"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBoxItem">
+                    <Border x:Name="b" Background="Transparent" CornerRadius="8" Margin="4,2" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="b" Property="Background" Value="{DynamicResource Fundo}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="b" Property="Background" Value="{DynamicResource Fundo}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- TOQUE: o WPF já sabe rolar com o dedo (panning), mas vem DESLIGADO.
          VerticalFirst = dedo pra cima/baixo rola; se o conteúdo for mais largo
          que a tela, pro lado também. Vale pra todo ScrollViewer do app —

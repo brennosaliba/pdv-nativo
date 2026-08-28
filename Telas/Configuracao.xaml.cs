@@ -44,7 +44,7 @@ public partial class Configuracao : UserControl
 
         // TEF: também é preferência da MÁQUINA (qual maquininha/PayGo este caixa usa) —
         // carrega sempre e reabre preenchido.
-        CboTef.SelectedIndex = Vendas.Config(cx, "tef_habilitado") != "1" ? 0
+        TefModo = Vendas.Config(cx, "tef_habilitado") != "1" ? 0
             : Vendas.Config(cx, "tef_provedor") switch { "paygo" => 2, "controlpay" => 3, _ => 1 };
         ChkHomologacao.IsChecked = Vendas.Homologacao(cx);
         CmbCpayAmbiente.SelectedIndex = Vendas.Config(cx, "tef_cpay_ambiente") == "producao" ? 1 : 0;
@@ -798,10 +798,9 @@ public partial class Configuracao : UserControl
         BtnTestarPayGo.IsEnabled = !ocupado;
         BtnMenuPayGo.IsEnabled = !ocupado;
         BtnTestarCpay.IsEnabled = !ocupado;
-        BtnMenuCpay.IsEnabled = !ocupado;
         BtnSalvar.IsEnabled = !ocupado;
         BtnVoltar.IsEnabled = !ocupado;
-        CboTef.IsEnabled = !ocupado;
+        foreach (var op in OpcoesTef) op.IsEnabled = !ocupado;
     }
 
     /// <summary>
@@ -811,7 +810,7 @@ public partial class Configuracao : UserControl
     /// </summary>
     private void GravarTef(SqliteConnection cx)
     {
-        var modo = CboTef.SelectedIndex;
+        var modo = TefModo;
         Vendas.GravarConfig(cx, "tef_habilitado", modo <= 0 ? "0" : "1");
         Vendas.GravarConfig(cx, "tef_provedor", modo switch { 2 => "paygo", 3 => "controlpay", _ => "nuvem" });
         void Chave(string chave, string valor)
@@ -846,16 +845,39 @@ public partial class Configuracao : UserControl
         Servicos.RecarregarTef();
     }
 
-    private void TefMudou(object sender, SelectionChangedEventArgs e) => PintarBlocosTef();
+    private void TefMudou(object sender, RoutedEventArgs e) => PintarBlocosTef();
+
+    private RadioButton[] OpcoesTef => new[] { OpTefNenhum, OpTefNuvem, OpTefPayGo, OpTefControlPay };
+
+    /// <summary>
+    /// Qual TEF este caixa usa, no mesmo código que a config já gravava
+    /// (0 nenhum · 1 nuvem · 2 PayGo · 3 ControlPay). Virou botão em vez de
+    /// dropdown a pedido do dono: no balcão, ver as opções vale mais que escondê-las.
+    /// </summary>
+    private int TefModo
+    {
+        get => OpTefControlPay?.IsChecked == true ? 3
+             : OpTefPayGo?.IsChecked == true ? 2
+             : OpTefNuvem?.IsChecked == true ? 1 : 0;
+        set
+        {
+            OpTefNenhum.IsChecked = value == 0;
+            OpTefNuvem.IsChecked = value == 1;
+            OpTefPayGo.IsChecked = value == 2;
+            OpTefControlPay.IsChecked = value == 3;
+        }
+    }
 
     /// <summary>Revelação progressiva do bloco do provedor. Guard de null: o ComboBox dispara no InitializeComponent.</summary>
     private void PintarBlocosTef()
     {
-        if (BlocoPayGo is null || BlocoTefNuvem is null || BlocoControlPay is null || BlocoTefOpcoes is null || CboTef is null) return;
-        BlocoPayGo.Visibility = CboTef.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
-        BlocoControlPay.Visibility = CboTef.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
-        BlocoTefNuvem.Visibility = CboTef.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
-        BlocoTefOpcoes.Visibility = CboTef.SelectedIndex is 2 or 3 ? Visibility.Visible : Visibility.Collapsed;
+        if (BlocoPayGo is null || BlocoTefNuvem is null || BlocoControlPay is null
+            || BlocoTefOpcoes is null || OpTefControlPay is null) return;
+        var modo = TefModo;
+        BlocoPayGo.Visibility = modo == 2 ? Visibility.Visible : Visibility.Collapsed;
+        BlocoControlPay.Visibility = modo == 3 ? Visibility.Visible : Visibility.Collapsed;
+        BlocoTefNuvem.Visibility = modo == 1 ? Visibility.Visible : Visibility.Collapsed;
+        BlocoTefOpcoes.Visibility = modo is 2 or 3 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
@@ -902,7 +924,7 @@ public partial class Configuracao : UserControl
         StatusTef("Chamando o PayGo (ATV)… até 7 s.", null);
         try
         {
-            if (CboTef.SelectedIndex != 2) { StatusTef("Selecione \"PayGo Windows\" acima para testar.", "Erro"); return; }
+            if (TefModo != 2) { StatusTef("Selecione \"PayGo Windows\" acima para testar.", "Erro"); return; }
             using (var cx = Banco.Abrir()) GravarTef(cx);
             _tefGravadoPeloTeste = true;
             if (Servicos.PayGo() is not { } cli) { StatusTef("TEF desligado — selecione o PayGo e tente de novo.", "Erro"); return; }
@@ -924,7 +946,7 @@ public partial class Configuracao : UserControl
                   "(Cancelamento de VENDA: use TEF → Estornar na tela do caixa, que cancela a venda junto.)", null);
         try
         {
-            if (CboTef.SelectedIndex is not (2 or 3)) { StatusTef("Selecione \"PayGo Windows\" ou \"ControlPay\" acima.", "Erro"); return; }
+            if (TefModo != 2) { StatusTef("Selecione \"PayGo Windows\" acima. No ControlPay o menu administrativo é o painel web da PayGo.", "Erro"); return; }
             using (var cx = Banco.Abrir()) GravarTef(cx);
             _tefGravadoPeloTeste = true;
             if (Servicos.Operavel() is not { } cli) { StatusTef("TEF desligado ou sem chave — confira os campos e tente de novo.", "Erro"); return; }

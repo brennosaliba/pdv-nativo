@@ -102,12 +102,32 @@
                      no PayGo; o registro 738 a PayGo entrega na certificação. -->
                 <TextBlock Text="TEF (CARTÃO / PIX)" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
                 <TextBlock Text="Como o caixa cobra cartão e PIX" Style="{StaticResource Rotulo}"/>
-                <ComboBox x:Name="CboTef" Margin="0,4,0,6" FontSize="16" Padding="12,10" SelectionChanged="TefMudou">
-                    <ComboBoxItem Content="Sem TEF — cartão registrado na mão (maquininha avulsa)"/>
-                    <ComboBoxItem Content="Smart TEF pela nuvem (maquininha Rede)"/>
-                    <ComboBoxItem Content="PayGo Windows (troca de arquivos, nesta máquina)"/>
-                    <ComboBoxItem Content="ControlPay — WebService da PayGo (PayGo Windows como terminal)"/>
-                </ComboBox>
+                <UniformGrid Columns="2" Margin="0,4,-8,-2">
+                    <RadioButton x:Name="OpTefControlPay" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
+                        <StackPanel>
+                            <TextBlock Text="ControlPay" FontWeight="Bold" FontSize="15"/>
+                            <TextBlock Text="WebService da PayGo" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="OpTefPayGo" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
+                        <StackPanel>
+                            <TextBlock Text="PayGo Windows" FontWeight="Bold" FontSize="15"/>
+                            <TextBlock Text="troca de arquivos, nesta máquina" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="OpTefNuvem" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
+                        <StackPanel>
+                            <TextBlock Text="Smart TEF" FontWeight="Bold" FontSize="15"/>
+                            <TextBlock Text="maquininha Rede pela nuvem" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="OpTefNenhum" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
+                        <StackPanel>
+                            <TextBlock Text="Sem TEF" FontWeight="Bold" FontSize="15"/>
+                            <TextBlock Text="cartão registrado na mão" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
+                        </StackPanel>
+                    </RadioButton>
+                </UniformGrid>
                 <CheckBox x:Name="ChkHomologacao" IsChecked="False" FontSize="14" Margin="0,0,0,8"
                           Content="MODO DE HOMOLOGAÇÃO / TESTE: entra sem CPF/senha, autoriza sem PIN, janela com borda e ajustável (reinicie o PDV). DESLIGUE antes de operar de verdade."/>
                 <StackPanel x:Name="BlocoPayGo" Visibility="Collapsed">
@@ -179,17 +199,11 @@
                                          BorderBrush="{DynamicResource Borda}"/>
                         </StackPanel>
                     </Grid>
-                    <Grid Margin="0,0,0,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Button Grid.Column="0" x:Name="BtnTestarCpay" Content="Testar ControlPay (listar terminais)" Click="TestarControlPay"
-                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
-                        <Button Grid.Column="2" x:Name="BtnMenuCpay" Content="Menu administrativo (ADM)" Click="MenuPayGo"
-                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
-                    </Grid>
+                    <!-- Só o teste de vínculo. O menu administrativo saiu daqui (28/08): o
+                         ControlPay tem o painel web para isso, e no WebService a chamada
+                         voltava 404 — botão que não funciona é pior que botão que não existe. -->
+                    <Button x:Name="BtnTestarCpay" Content="Conferir vínculo com a PayGo" Click="TestarControlPay"
+                            Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
                 </StackPanel>
                 <StackPanel x:Name="BlocoTefNuvem" Visibility="Collapsed">
                     <TextBlock Text="Serial da maquininha (vazio = terminal padrão da conta)" Style="{StaticResource Rotulo}"/>
