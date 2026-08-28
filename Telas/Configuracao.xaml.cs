@@ -800,7 +800,6 @@ public partial class Configuracao : UserControl
     private void TravarTef(bool ocupado)
     {
         BtnTestarPayGo.IsEnabled = !ocupado;
-        BtnMenuPayGo.IsEnabled = !ocupado;
         BtnTestarCpay.IsEnabled = !ocupado;
         BtnSalvar.IsEnabled = !ocupado;
         BtnVoltar.IsEnabled = !ocupado;
@@ -997,26 +996,6 @@ public partial class Configuracao : UserControl
                 ? $"✓ PayGo respondeu em {cli.PastaReq} — pronto para cobrar. (Salve para manter esta configuração.)"
                 : $"✗ {ClientePayGo.MsgTefNaoResponde} Pasta: {cli.PastaReq}. Confira se o PayGo Windows está aberto e se a pasta é a mesma configurada nele.",
                 ok ? "Ok" : "Erro");
-        }
-        catch (Exception ex) { StatusTef("✗ " + ex.Message, "Erro"); }
-        finally { TravarTef(false); }
-    }
-
-    /// <summary>Menu administrativo do PayGo (teste de comunicação, relatórios, cancelamento pelo menu). O operador navega NA TELA DO PAYGO.</summary>
-    private async void MenuPayGo(object sender, RoutedEventArgs e)
-    {
-        TravarTef(true);
-        StatusTef("Menu administrativo aberto no PayGo — siga na tela dele. O PDV espera a operação terminar. " +
-                  "(Cancelamento de VENDA: use TEF → Estornar na tela do caixa, que cancela a venda junto.)", null);
-        try
-        {
-            if (TefModo != 2) { StatusTef("Selecione \"PayGo Windows\" acima. No ControlPay o menu administrativo é o painel web da PayGo.", "Erro"); return; }
-            using (var cx = Banco.Abrir()) GravarTef(cx);
-            _tefGravadoPeloTeste = true;
-            if (Servicos.Operavel() is not { } cli) { StatusTef("TEF desligado ou sem chave — confira os campos e tente de novo.", "Erro"); return; }
-            var d = await cli.AdministrativaAsync(CancellationToken.None);
-            StatusTef(d.Pago ? "✓ Operação administrativa concluída. " + (d.Motivo ?? "") : "✗ " + d.MensagemParaTela,
-                d.Pago ? "Ok" : "Erro");
         }
         catch (Exception ex) { StatusTef("✗ " + ex.Message, "Erro"); }
         finally { TravarTef(false); }

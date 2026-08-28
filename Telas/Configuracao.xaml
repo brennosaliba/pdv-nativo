@@ -160,8 +160,7 @@
                         </Grid.ColumnDefinitions>
                         <Button Grid.Column="0" x:Name="BtnTestarPayGo" Content="Testar PayGo (ATV)" Click="TestarPayGo"
                                 Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
-                        <Button Grid.Column="2" x:Name="BtnMenuPayGo" Content="Menu administrativo (ADM)" Click="MenuPayGo"
-                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
+
                     </Grid>
                 </StackPanel>
                 <StackPanel x:Name="BlocoControlPay" Visibility="Collapsed">
