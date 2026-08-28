@@ -69,7 +69,7 @@
                         </StackPanel>
                     </Border>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="8,8">
-                        <StackPanel x:Name="ColPreparar"/>
+                        <WrapPanel x:Name="ColPreparar" Orientation="Horizontal"/>
                     </ScrollViewer>
                 </Grid>
             </Border>
@@ -93,7 +93,7 @@
                         </StackPanel>
                     </Border>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="8,8">
-                        <StackPanel x:Name="ColPreparo"/>
+                        <WrapPanel x:Name="ColPreparo" Orientation="Horizontal"/>
                     </ScrollViewer>
                 </Grid>
             </Border>
@@ -117,7 +117,7 @@
                         </StackPanel>
                     </Border>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="8,8">
-                        <StackPanel x:Name="ColPronto"/>
+                        <WrapPanel x:Name="ColPronto" Orientation="Horizontal"/>
                     </ScrollViewer>
                 </Grid>
             </Border>

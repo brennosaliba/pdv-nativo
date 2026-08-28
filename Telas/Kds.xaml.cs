@@ -30,6 +30,13 @@ public partial class Kds : UserControl
     public Kds(string loja)
     {
         InitializeComponent();
+        // A largura do card acompanha a coluna: monitor girado, janela
+        // redimensionada ou tela cheia recalculam sozinhos.
+        foreach (var col in new[] { ColPreparar, ColPreparo, ColPronto })
+        {
+            col.SizeChanged += (s, _) => LarguraDosCards((WrapPanel)s);
+            LarguraDosCards(col);
+        }
         _loja = loja;
         Pintar();
         _ = PuxarAsync();
@@ -137,7 +144,22 @@ public partial class Kds : UserControl
         TxtQtdPronto.Text   = ColPronto.Children.Count.ToString();
     }
 
-    private void Encher(StackPanel coluna, IEnumerable<Ticket> tickets)
+    /// <summary>
+    /// Cards em 3 por linha DENTRO da coluna de status. A largura e calculada da
+    /// largura real da coluna (nao ha "3 colunas" no WrapPanel): assim o quadro
+    /// se adapta ao monitor da cozinha, que varia de loja pra loja.
+    /// </summary>
+    private const int CardsPorLinha = 3;
+
+    private static void LarguraDosCards(WrapPanel p)
+    {
+        // -1 para nao empatar com a largura disponivel por arredondamento e
+        // jogar o terceiro card pra linha de baixo.
+        var w = Math.Max(140, (p.ActualWidth / CardsPorLinha) - 1);
+        if (Math.Abs(p.ItemWidth - w) > 0.5) p.ItemWidth = w;
+    }
+
+    private void Encher(Panel coluna, IEnumerable<Ticket> tickets)
     {
         coluna.Children.Clear();
         foreach (var t in tickets) coluna.Children.Add(Card(t));
@@ -165,7 +187,7 @@ public partial class Kds : UserControl
         var b = new Button
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
-            MinHeight = 150, Margin = new Thickness(4, 4, 4, 6),
+            MinHeight = 104, Margin = new Thickness(3, 3, 3, 4),
             Padding = new Thickness(0), Tag = t.Id,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Stretch,
@@ -178,14 +200,14 @@ public partial class Kds : UserControl
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         // ── cabeçalho: número + origem + espera ─────────────────────────────
-        var cab = new Grid { Margin = new Thickness(12, 8, 12, 4) };
+        var cab = new Grid { Margin = new Thickness(8, 6, 8, 2) };
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var esq = new StackPanel { Orientation = Orientation.Horizontal };
         var numero = new TextBlock
         {
-            Text = "#" + t.Numero, FontSize = 24, FontWeight = FontWeights.Bold,
+            Text = "#" + t.Numero, FontSize = 18, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
         };
         numero.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
@@ -237,7 +259,7 @@ public partial class Kds : UserControl
             // de PRONTO. Alvo de verdade (76×56) + texto — o padrão da casa é 64px.
             var desfaz = new Button
             {
-                Content = "↩ voltar", FontSize = 13, MinHeight = 56, MinWidth = 76,
+                Content = "↩", FontSize = 13, MinHeight = 40, MinWidth = 40,
                 Margin = new Thickness(10, 0, 0, 0), Padding = new Thickness(8, 0, 8, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Devolver para A PREPARAR",
@@ -258,7 +280,7 @@ public partial class Kds : UserControl
             // Imprime DIRETO (sem claim — reimpressão é decisão de gente).
             var imprime = new Button
             {
-                Content = "🖨", FontSize = 16, MinHeight = 56, MinWidth = 56,
+                Content = "🖨", FontSize = 14, MinHeight = 40, MinWidth = 40,
                 Margin = new Thickness(10, 0, 0, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Imprimir a comanda deste pedido",
@@ -286,7 +308,7 @@ public partial class Kds : UserControl
         raiz.Children.Add(cab);
 
         // ── corpo: cliente + itens ──────────────────────────────────────────
-        var corpo = new StackPanel { Margin = new Thickness(12, 0, 12, 4) };
+        var corpo = new StackPanel { Margin = new Thickness(8, 0, 8, 3) };
         if (t.Cliente is { Length: > 0 })
         {
             var cli = new TextBlock
@@ -302,7 +324,7 @@ public partial class Kds : UserControl
             var qtd = i.Qtd % 1000 == 0 ? (i.Qtd / 1000).ToString() : (i.Qtd / 1000m).ToString("0.###");
             var linha = new TextBlock
             {
-                Text = $"{qtd}× {i.Descricao}", FontSize = 15,
+                Text = $"{qtd}× {i.Descricao}", FontSize = 13,
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1),
             };
             linha.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
