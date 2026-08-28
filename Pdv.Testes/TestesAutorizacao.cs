@@ -354,15 +354,18 @@ public static class TestesAutorizacao
             // solicitações do fake (o do rate limit é o AT-18, que baixa de novo).
             fake.MaxSolicitacoes = 99;
 
+            // AT-1 guarda o que foi REMOVIDO: existia um modo de homologação que
+            // autorizava estorno sem PIN, sem token e sem tocar na nuvem. Era porta
+            // dos fundos num caixa de verdade — quem ligasse a config estornava
+            // sozinho. Saiu quando a operação começou, e este teste existe para que
+            // ninguém o traga de volta sem perceber.
             var tela = new TelaFalsa { PinDevolve = sup };
             Vendas.GravarConfig(cx, "homologacao", "1");
             var chamadasAntes = fake.Chamadas.Count;
             var dHom = await Autorizacao.ResolverAsync(cx, cli, pedido, op, tela, CancellationToken.None);
             Vendas.GravarConfig(cx, "homologacao", "0");
-            checar(dHom.Via == ViaAutorizacao.Homologacao && dHom.Autorizado
-                   && tela.VezesPediuPin == 0 && tela.VezesPediuCodigo == 0
-                   && fake.Chamadas.Count == chamadasAntes,
-                "AT-1 homologação autoriza sem PIN, sem token e sem tocar na nuvem");
+            checar(dHom.Via != ViaAutorizacao.Homologacao && fake.Chamadas.Count > chamadasAntes,
+                "AT-1 a config 'homologacao' NÃO autoriza mais nada: a autorização é pedida igual");
 
             // ── 3. NUVEM CAÍDA ⇒ PIN, E A AUDITORIA DENUNCIA ────────────────
             tela = new TelaFalsa { PinDevolve = sup };

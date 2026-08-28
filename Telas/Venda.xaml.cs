@@ -1998,10 +1998,7 @@ public partial class Venda : UserControl
             // Supervisor autoriza com o PIN DELE — e o nome fica no registro.
             // Autorização sem nome não serve de nada numa auditoria.
             using var cxa = Banco.Abrir();
-            var homologacao = Vendas.Homologacao(cxa);
             Operador? sup;
-            if (homologacao) sup = Operadores.PrimeiroSupervisor(cxa) ?? _operador;   // modo de teste: sem PIN
-            else
             {
                 var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do supervisor");
                 if (pin is null) return;
@@ -2015,7 +2012,7 @@ public partial class Venda : UserControl
             // Segundo par de olhos NÃO pode ser o próprio: um gerente que opera o
             // caixa não autoriza a própria sangria — isso é sangria fantasma com
             // aval de si mesmo, o furto que a autorização existe pra impedir.
-            if (!homologacao && sup.Id == _operador.Id)
+            if (sup.Id == _operador.Id)
             {
                 Dialogo.Avisar(dono, "Não autorizado",
                     "A sangria precisa ser autorizada por OUTRO supervisor — você não pode autorizar a sua própria.", "erro");

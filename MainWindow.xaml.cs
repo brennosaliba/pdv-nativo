@@ -26,24 +26,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Banco.Migrar();
-        // Modo de homologação/teste (config 'homologacao'): janela comum, com borda e
-        // redimensionável (o dono testa ao lado do PayGo Windows), sem o quiosque.
-        bool homologacao;
-        using (var cxh = Banco.Abrir()) homologacao = Vendas.Homologacao(cxh);
-        if (homologacao)
-        {
-            WindowStyle = WindowStyle.SingleBorderWindow;
-            ResizeMode = ResizeMode.CanResize;
-            WindowState = WindowState.Normal;
-            Width = 1280; Height = 860;
-            Title = "PDV — modo de homologação (sem senhas)";
-            BotoesJanela.Visibility = Visibility.Collapsed;
-        }
+        // Quiosque em tela cheia, sempre (o XAML já nasce Maximized/WindowStyle=None).
+        // O modo de homologação saiu quando a operação começou: ele abria a janela comum
+        // E desligava as senhas, e num caixa de verdade isso é porta dos fundos.
         // Alt+F4 não pode fechar um caixa por acidente no meio da venda.
-        // Ctrl+M minimiza — a janela quiosque não tem barra de título.
+        // Ctrl+M minimiza — a janela quiosque não tem barra de título (o ─ da barra
+        // própria faz o mesmo).
         PreviewKeyDown += (_, e) =>
         {
-            if (!homologacao && e.SystemKey == Key.F4 && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) e.Handled = true;
+            if (e.SystemKey == Key.F4 && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) e.Handled = true;
             if (e.Key == Key.M && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
                 WindowState = WindowState.Minimized;
@@ -70,14 +61,10 @@ public partial class MainWindow : Window
         MostrarVenda();
     }
 
-    /// <summary>Saiu no botão (não é o arranque do PDV): segura o auto-login da homologação.</summary>
-    private bool _saiuDeProposito;
-
     private void MostrarLogin(Microsoft.Data.Sqlite.SqliteConnection cx)
     {
         var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
-        var t = new Login(loja) { AutoEntrar = !_saiuDeProposito };
-        _saiuDeProposito = false;
+        var t = new Login(loja);
         t.Entrou += op => { _operador = op; Roteia(); };
         t.PediuConfig += AbrirConfigProtegida;
         Conteudo.Content = t;
@@ -87,7 +74,7 @@ public partial class MainWindow : Window
     {
         var t = new AberturaCaixa(_operador!);
         t.Abriu += s => { _sessao = s; Roteia(); };
-        t.Saiu += () => { _saiuDeProposito = true; _operador = null; Roteia(); };
+        t.Saiu += () => { _operador = null; Roteia(); };
         Conteudo.Content = t;
     }
 
@@ -113,8 +100,8 @@ public partial class MainWindow : Window
         }
 
         var t = new Venda(_operador!, _sessao!);
-        t.Deslogou += () => { _saiuDeProposito = true; _operador = null; _telaVenda = null; Roteia(); };
-        t.FechouCaixa += () => { _saiuDeProposito = true; _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
+        t.Deslogou += () => { _operador = null; _telaVenda = null; Roteia(); };
+        t.FechouCaixa += () => { _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
         t.PediuKds += MostrarKds;
         t.PediuChat += MostrarChat;
         t.PediuConfig += AbrirConfigProtegida;
@@ -179,8 +166,6 @@ public partial class MainWindow : Window
     /// </summary>
     private void AbrirConfigProtegida()
     {
-        using (var cxh = Banco.Abrir())
-            if (Vendas.Homologacao(cxh)) { Caixa.Auditar(cxh, null, "config_aberta", null, null, "modo homologação (sem senha)"); MostrarConfiguracao(); return; }
         var senha = PedirSenha.Mostrar(this, "Configuração do PDV", "Senha de administrador");
         if (senha is null) return;
         using var cx = Banco.Abrir();

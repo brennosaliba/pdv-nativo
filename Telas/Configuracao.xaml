@@ -128,8 +128,6 @@
                         </StackPanel>
                     </RadioButton>
                 </UniformGrid>
-                <CheckBox x:Name="ChkHomologacao" IsChecked="False" FontSize="14" Margin="0,0,0,8"
-                          Content="MODO DE HOMOLOGAÇÃO / TESTE: entra sem CPF/senha, autoriza sem PIN, janela com borda e ajustável (reinicie o PDV). DESLIGUE antes de operar de verdade."/>
                 <StackPanel x:Name="BlocoPayGo" Visibility="Collapsed">
                     <TextBlock Text="Pasta do PayGo (a mesma configurada no PayGo Windows)" Style="{StaticResource Rotulo}"/>
                     <TextBox x:Name="TxtPayGoPasta" Margin="0,4,0,8" Tag="C:\PAYGO"/>

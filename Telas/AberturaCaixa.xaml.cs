@@ -177,9 +177,9 @@ public partial class AberturaCaixa : UserControl
                     return;
                 }
 
+                // Pular o fechamento de um caixa antigo SEMPRE exige o PIN do gerente
+                // (o modo de homologacao, que dispensava, saiu com a operacao no ar).
                 Operador? sup;
-                if (Vendas.Homologacao(cx)) sup = Operadores.PrimeiroSupervisor(cx) ?? _operador;   // modo de teste: sem PIN
-                else
                 {
                     var pin = PedirSenha.Mostrar(dono, "Autorização do gerente",
                         $"PIN do gerente para pular o fechamento de {DataBr(presa.BusinessDate)}");

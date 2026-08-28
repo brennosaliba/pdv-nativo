@@ -336,10 +336,7 @@ public static class Autorizacao
         // passarem a depender de WhatsApp, o dono não termina a homologação —
         // e o roteiro é rodado com a loja fechada, sem gerente para aprovar.
         // Aqui continua exatamente o comportamento de antes: libera sem PIN.
-        if (Vendas.Homologacao(cx))
-            return new DesfechoAutorizacao(ViaAutorizacao.Homologacao,
-                Operadores.PrimeiroSupervisor(cx) ?? operador, null, null,
-                "modo homologação (sem PIN e sem token)");
+
 
         // A SAÍDA. Fica aqui dentro porque todo caminho de falha desemboca nela.
         async Task<DesfechoAutorizacao> PelaSaidaDoPin(string motivo)

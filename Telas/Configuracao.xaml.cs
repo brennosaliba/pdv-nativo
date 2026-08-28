@@ -46,7 +46,6 @@ public partial class Configuracao : UserControl
         // carrega sempre e reabre preenchido.
         TefModo = Vendas.Config(cx, "tef_habilitado") != "1" ? 0
             : Vendas.Config(cx, "tef_provedor") switch { "paygo" => 2, "controlpay" => 3, _ => 1 };
-        ChkHomologacao.IsChecked = Vendas.Homologacao(cx);
         CmbCpayAmbiente.SelectedIndex = Vendas.Config(cx, "tef_cpay_ambiente") == "producao" ? 1 : 0;
         TxtCpayTerminal.Text = Vendas.Config(cx, "tef_cpay_terminal", "");
         TxtCpayPessoa.Text = Vendas.Config(cx, "tef_cpay_pessoa", "");
@@ -773,7 +772,7 @@ public partial class Configuracao : UserControl
     {
         "tef_habilitado", "tef_provedor", "tef_paygo_pasta", "tef_paygo_registro", "tef_paygo_empresa",
         "tef_paygo_rede", "tef_paygo_rede_pix", "tef_paygo_imprimir_vias", "tef_perguntar_parcelas", "tef_serial_pos",
-        "tef_cpay_ambiente", "tef_cpay_terminal", "tef_cpay_pessoa", "homologacao",
+        "tef_cpay_ambiente", "tef_cpay_terminal", "tef_cpay_pessoa",
     };
     private readonly Dictionary<string, string?> _tefOriginal = new();
     private bool _tefGravadoPeloTeste;   // Testar/ADM gravaram sem Salvar
@@ -822,7 +821,6 @@ public partial class Configuracao : UserControl
             if (valor.Length == 0) cx.Execute("DELETE FROM config WHERE chave=@C", new { C = chave });
             else Vendas.GravarConfig(cx, chave, valor);
         }
-        Vendas.GravarConfig(cx, "homologacao", ChkHomologacao.IsChecked == true ? "1" : "0");
         // ControlPay: ambiente/terminal/pessoa em config; chave e senha técnica no cofre DPAPI
         Vendas.GravarConfig(cx, "tef_cpay_ambiente", CmbCpayAmbiente.SelectedIndex == 1 ? "producao" : "sandbox");
         Chave("tef_cpay_terminal", TxtCpayTerminal.Text);
