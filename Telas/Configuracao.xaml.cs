@@ -581,7 +581,9 @@ public partial class Configuracao : UserControl
             if (modoRecibo) { /* recibo não usa emissor */ }
             else if (!File.Exists(@"C:\kiosk\agent\pdv-agent.cjs"))
             {
-                Add(1, "⚠ Emissor local não instalado NESTA máquina (normal fora do caixa da loja; no caixa ele vem com a instalação)");
+                Add(1, "⚠ O programa que emite a nota não está instalado nesta máquina. É normal num PC "
+                     + "que não é o caixa da loja. Se as vendas forem sair DAQUI, ele precisa ser instalado "
+                     + "antes de ligar a emissão — senão a venda grava e a nota não sai.");
             }
             else
             {
@@ -881,35 +883,93 @@ public partial class Configuracao : UserControl
     }
 
     /// <summary>
-    /// Testa a chave/terminal do ControlPay com uma instância EFÊMERA montada dos campos da tela
-    /// (não grava nada): lista os terminais da pessoa; se o ID do terminal estiver vazio e só
-    /// houver um com terminal físico, preenche. Nenhuma mensagem carrega a chave.
+    /// Testa a conexão com a PayGo usando os campos DA TELA (instância efêmera, não grava
+    /// nada) e explica o resultado em português de gente: quem vai cobrar, em qual
+    /// maquininha, e o que pedir a eles se faltar algo. Nenhuma mensagem carrega a chave.
     /// </summary>
     private async void TestarControlPay(object sender, RoutedEventArgs e)
     {
         TravarTef(true);
-        StatusTef("Consultando o ControlPay…", null);
+        StatusTef("Falando com a PayGo…", null);
         try
         {
             var chave = PwdCpayChave.Password.Trim();
             if (chave.Contains('%')) { try { chave = Uri.UnescapeDataString(chave); } catch { } }
-            if (chave.Length == 0) { StatusTef("Informe a chave de integração.", "Erro"); return; }
-            if (TxtCpayPessoa.Text.Trim().Length == 0) { StatusTef("Informe o ID da pessoa (está no portal ControlPay / no login do PayGo).", "Erro"); return; }
+            if (chave.Length == 0) { StatusTef("Falta a chave de integração — pegue no portal do ControlPay, em Integrações.", "Erro"); return; }
+            if (TxtCpayPessoa.Text.Trim().Length == 0) { StatusTef("Falta o ID da pessoa. Ele fica no portal do ControlPay, junto do seu login.", "Erro"); return; }
+
+            var producao = CmbCpayAmbiente.SelectedIndex == 1;
+            var ondeEstou = producao ? "produção" : "teste (sandbox)";
             using var cli = new ClienteControlPay(new OpcoesControlPay(
-                OpcoesControlPay.UrlDoAmbiente(CmbCpayAmbiente.SelectedIndex == 1 ? "producao" : "sandbox"),
+                OpcoesControlPay.UrlDoAmbiente(producao ? "producao" : "sandbox"),
                 chave, PwdCpaySenha.Password.Trim(), TxtCpayTerminal.Text.Trim(), TxtCpayPessoa.Text.Trim()));
             var terminais = await cli.ListarTerminaisAsync(CancellationToken.None);
-            if (terminais.Count == 0) { StatusTef("✓ Chave aceita, mas a pessoa não tem terminais — peça à PayGo o vínculo com o terminal físico.", "Erro"); return; }
-            var comFisico = terminais.Where(t => t.TerminalFisico is not null).ToList();
-            if (TxtCpayTerminal.Text.Trim().Length == 0 && comFisico.Count == 1) TxtCpayTerminal.Text = comFisico[0].Id;
+
+            if (terminais.Count == 0)
+            {
+                StatusTef($"A PayGo aceitou a chave, mas esta conta não tem nenhuma maquininha em {ondeEstou}." +
+                    "\n\nO que fazer: peça à PayGo para vincular a maquininha da loja a esta conta.", "Erro");
+                return;
+            }
+
+            // O campo pode ter sobrado de outra conta (o número do sandbox, por exemplo).
+            // Nesse caso o certo é corrigir sozinho, e DIZER que corrigiu — deixar o número
+            // velho ali só produz um "escolha um terminal" que ninguém entende.
+            var digitado = TxtCpayTerminal.Text.Trim();
+            var comMaquininha = terminais.Where(t => t.TerminalFisico is not null).ToList();
+            var trocou = false;
+            if (terminais.All(t => t.Id != digitado) && comMaquininha.Count == 1)
+            {
+                TxtCpayTerminal.Text = comMaquininha[0].Id;
+                trocou = digitado.Length > 0;
+            }
             var escolhido = terminais.FirstOrDefault(t => t.Id == TxtCpayTerminal.Text.Trim());
-            var linhas = terminais.Select(t => $"• {t.Id} — {t.Nome}{(t.TerminalFisico is null ? " (SEM terminal físico — não transaciona)" : $" · físico {t.TerminalFisico} / instalação {t.InstalacaoId}")}{(t.AguardaTef ? "" : " · aguardaTef=false")}{(t.VendaPorValor ? "" : " · venda por valor DESLIGADA")}");
-            StatusTef((escolhido is null
-                    ? "✓ Chave aceita. Escolha um terminal COM terminal físico acima:\n"
-                    : $"✓ Chave aceita · terminal {escolhido.Id} ({escolhido.Nome}) pronto. (Salve para manter.)\n")
-                + string.Join("\n", linhas), escolhido is null || escolhido.TerminalFisico is null ? "Erro" : "Ok");
+
+            var lista = string.Join("\n", terminais.Select(t =>
+                $"   • {t.Id} — {t.Nome}" + (t.TerminalFisico is null
+                    ? "  (sem maquininha vinculada)"
+                    : $"  ·  maquininha {t.TerminalFisico}  ·  instalação {t.InstalacaoId}")));
+
+            if (escolhido is null)
+            {
+                StatusTef($"Conectado à PayGo em {ondeEstou}. Encontrei {(terminais.Count == 1 ? "1 caixa" : terminais.Count + " caixas")} nesta conta:\n\n" +
+                    lista + "\n\nO que fazer: escreva um desses números no campo \"ID do terminal\" aqui em cima e salve.", "Erro");
+                return;
+            }
+
+            // Pendências que só a PayGo resolve no cadastro dela — o PDV não contorna
+            // nenhuma, então o texto tem que dizer exatamente o que pedir a eles.
+            var pendencias = new List<string>();
+            if (escolhido.TerminalFisico is null)
+                pendencias.Add("• Este caixa não tem maquininha vinculada, então a cobrança não tem para onde ir.\n" +
+                               "  Peça à PayGo para vincular a maquininha da loja a este terminal.");
+            if (!escolhido.AguardaTef)
+                pendencias.Add("• A PayGo não ligou o \"aguarda TEF\" neste caixa. Sem isso a cobrança sai daqui\n" +
+                               "  mas não acende na maquininha: a venda fica esperando e acaba expirando.\n" +
+                               "  Peça à PayGo para ligar o \"aguarda TEF\".");
+            if (!escolhido.VendaPorValor)
+                pendencias.Add("• A \"venda por valor\" está desligada neste caixa. É ela que deixa o PDV mandar\n" +
+                               "  o valor da compra. Peça à PayGo para ligar.");
+
+            var cabeca = $"Conectado à PayGo em {ondeEstou}.\n\n" +
+                $"Este caixa vai cobrar pelo terminal {escolhido.Id} ({escolhido.Nome})" +
+                (escolhido.TerminalFisico is null
+                    ? ".\n"
+                    : $",\nna maquininha {escolhido.TerminalFisico}, da instalação {escolhido.InstalacaoId}.\n") +
+                (trocou ? $"\nObs.: o campo estava com o número {digitado}, que não existe nesta conta — troquei pelo certo.\n" : "");
+
+            if (pendencias.Count == 0)
+            {
+                StatusTef(cabeca + "\nEstá tudo pronto para cobrar no cartão. Clique em Salvar para manter." +
+                    (producao ? "" : "\n\nAtenção: você ainda está no ambiente de TESTE. Nenhuma cobrança aqui é de verdade."), "Ok");
+                return;
+            }
+
+            StatusTef(cabeca + "\nFalta a PayGo acertar isto no cadastro deles:\n\n" +
+                string.Join("\n\n", pendencias) +
+                "\n\nPode salvar assim mesmo: o número do caixa fica guardado e volta a funcionar\nassim que eles acertarem.", "Erro");
         }
-        catch (Exception ex) { StatusTef("✗ " + ex.Message, "Erro"); }
+        catch (Exception ex) { StatusTef("Não consegui falar com a PayGo: " + ex.Message, "Erro"); }
         finally { TravarTef(false); }
     }
 

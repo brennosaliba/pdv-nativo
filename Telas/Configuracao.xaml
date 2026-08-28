@@ -202,7 +202,7 @@
                     <!-- Só o teste de vínculo. O menu administrativo saiu daqui (28/08): o
                          ControlPay tem o painel web para isso, e no WebService a chamada
                          voltava 404 — botão que não funciona é pior que botão que não existe. -->
-                    <Button x:Name="BtnTestarCpay" Content="Conferir vínculo com a PayGo" Click="TestarControlPay"
+                    <Button x:Name="BtnTestarCpay" Content="Testar conexão com a PayGo" Click="TestarControlPay"
                             Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
                 </StackPanel>
                 <StackPanel x:Name="BlocoTefNuvem" Visibility="Collapsed">
