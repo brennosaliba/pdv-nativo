@@ -14,10 +14,33 @@ Liberação recebida em 28/08/2026 para **American Day Savassi**
 |---|---|
 | **ID de Instalação** `263397` | **PayGo Windows** desta máquina (ativação do ponto de captura). Não é campo do PDV. |
 | **Senha do Terminal** `7B54666D` | **PayGo Windows**, na mesma ativação. |
-| **ID Terminal Virtual** `25469` | PDV → Configuração → TEF → **ID do terminal** (hoje `6408`, do sandbox) |
+| **ID Terminal Virtual** `25469` | PDV → Configuração → TEF → **ID do terminal** (hoje `6408`, do sandbox) — ⚠️ **não digitar às cegas**, ver "Qual número é o ID do terminal" abaixo |
 | **Chave de Integração (token)** | PDV → Configuração → TEF → **Chave de integração** (campo mascarado → cofre DPAPI) |
 | **ID da pessoa** — *não veio na liberação* | PDV → Configuração → TEF → **ID da pessoa** (hoje `12247`, do sandbox). Está no portal ControlPay / no login do PayGo. **Sem ele o botão de teste não roda** (`Terminal/GetByPessoaId`). |
 | **Senha técnica** | Campo próprio. Padrão PayGo = `314159`; a "Senha do Terminal" acima é da *instalação*, não é esta. Confirmar com a PayGo. |
+
+## A chave de integração não vem da PayGo — você gera no portal
+
+A liberação chega com o campo "Chave de Integração" **em branco de propósito**: o token é
+criado por você no **portal ControlPay → Integrações/Configurações → Chaves de integração**
+(é o mesmo caminho do rótulo do campo na tela do PDV, e foi assim que a chave do sandbox
+saiu — passo 01 da homologação, "chave de integração validada"). O **ID da pessoa** de
+produção está nesse mesmo portal.
+
+## Qual número é o "ID do terminal" — não adivinhe
+
+No sandbox os quatro números eram **diferentes entre si**:
+Terminal Virtual/PdC **114975** · instalação **127310** · terminal lógico da API **6408**
+(que é o que vai no campo) · terminal físico **7027**.
+
+Ou seja: o "Terminal Virtual" do papel **não era** o número que a API usa. O `25469` da
+liberação pode ser o PdC, não o `terminalId`. Como resolver sem chutar:
+
+1. Deixe **"ID do terminal" VAZIO**; preencha só a chave e o ID da pessoa.
+2. Clique **Testar ControlPay (listar terminais)**. Ele lista todos assim:
+   `• <id> — <nome> · físico <N> / instalação <N>`.
+3. Escolha o que mostrar **instalação 263397** e ponha o `<id>` dele no campo.
+   (Se só houver um com terminal físico, a tela já preenche sozinha.)
 
 ## Ordem da virada
 
