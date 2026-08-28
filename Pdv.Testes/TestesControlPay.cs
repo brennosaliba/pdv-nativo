@@ -125,6 +125,46 @@ public static class TestesControlPay
                 "a via do TEF cede a vez ao cupom — menos quando o papel decide o CNF (PayGo two-phase)");
         }
 
+        // ── VOLTA DA TELA DEPOIS DE CANCELAR ─────────────────
+        // Quem cancelou já desistiu da venda e só quer o caixa de volta. O passo
+        // rápido tem que valer AQUI também: antes só o status "em pagamento" (6) o
+        // usava, e o cancelamento (18/19) caía no passo lento justamente na hora em
+        // que o operador está olhando para a tela.
+        //
+        // O cancelamento acontece DEPOIS da cobrança começar de propósito: com o
+        // token já cancelado, CobrarAsync sai no semáforo e o laço de consulta —
+        // que é o que este teste mede — nunca chega a rodar.
+        {
+            var f = new FakeControlPay { PollsAteFinal = 999 };   // nunca termina sozinha
+            using var c = new ClienteControlPay(
+                new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159",
+                                     f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 900,          // passo lento
+                IntervaloPollAtivoMs = 20,      // passo curto
+                TempoDesistirAposCancelarMs = 300,
+                TempoHttpMs = 5_000,
+            };
+            using var cts = new CancellationTokenSource();
+            var relogio = Stopwatch.StartNew();
+            var tarefa = c.CobrarAsync(TipoTef.Pix, Dinheiro.DeReais(15.50m), null, 1, null, cts.Token);
+            cts.CancelAfter(60);                 // operador aperta "Cancelar cobrança"
+            var d = tarefa.GetAwaiter().GetResult();
+            relogio.Stop();
+
+            checar(!d.Pago, "cobrança cancelada não volta como paga");
+            // 60 ms até cancelar + 300 ms de espera = ~360. No passo lento, só PERCEBER
+            // o fim do prazo custaria mais um ciclo de 900 ms.
+            checar(relogio.ElapsedMilliseconds < 800,
+                $"a tela volta logo após o cancelamento — levou {relogio.ElapsedMilliseconds} ms (no passo lento seria 900+)");
+            checar(relogio.ElapsedMilliseconds >= 300,
+                $"e não volta ANTES do prazo de desistência ({relogio.ElapsedMilliseconds} ms) — senão não passou pelo laço");
+            // O desfecho continua honesto: cobrança que pode ter sido paga vira ÓRFÃ,
+            // nunca "cancelada" por conta própria.
+            checar(d.Situacao == SituacaoTef.Cancelado,
+                "desfecho é cancelado pelo operador (a linha fica órfã para conferência)");
+        }
+
         // ── CANCELAR O PIX SEM SAIR DO CAIXA ───────────────────────
         // Com o QR na tela quem desiste é o PayGo (o ControlPay não tem rota para
         // abortar intenção pendente), então o botão do PDV aperta Esc na janela dele.

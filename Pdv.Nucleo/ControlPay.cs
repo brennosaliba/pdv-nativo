@@ -63,6 +63,13 @@ public static class StatusIntencao
         CancelamentoIniciado = 18, EmCancelamento = 19, Cancelado = 20, Recusado = 25;
 
     public static bool Final(int s) => s is Creditado or Expirado or Cancelado or Recusado;
+
+    /// <summary>
+    /// Transacao ANDANDO: alguem esta parado na frente da tela esperando o desfecho.
+    /// Inclui o cancelamento em curso (18/19) — e nele que o operador mais sente a
+    /// espera, porque ja desistiu da venda e so quer o caixa de volta.
+    /// </summary>
+    public static bool EmCurso(int s) => s is EmPagamento or CancelamentoIniciado or EmCancelamento;
 }
 
 /// <summary>Forma de pagamento (formaPagamentoId) para TEF.</summary>
@@ -368,8 +375,11 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                         if (st == StatusIntencao.Recusado) detalhe = await MensagemAdquirenteAsync(ident).ConfigureAwait(false);
                         return (st, nome, detalhe, null);
                     }
-                    // cliente no pinpad = desfecho iminente: aperta o passo (ver IntervaloPollAtivoMs)
-                    intervalo = st == StatusIntencao.EmPagamento
+                    // Desfecho iminente = aperta o passo (ver IntervaloPollAtivoMs): cliente
+                    // no pinpad, OU cancelamento andando, OU o operador ja pediu para
+                    // cancelar. Nos tres casos tem gente parada esperando a tela voltar —
+                    // deixar 1,5 s fixo aqui e o que faz o caixa parecer travado.
+                    intervalo = StatusIntencao.EmCurso(st) || ct.IsCancellationRequested
                         ? Math.Min(IntervaloPollAtivoMs, IntervaloPollMs)
                         : IntervaloPollMs;
                 }
