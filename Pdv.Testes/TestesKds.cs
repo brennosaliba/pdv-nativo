@@ -50,8 +50,13 @@ public static class TestesKds
                 "a observação do cliente sai na comanda");
 
             // 3. quadradinho de conferência em CADA item (e só nos itens)
+            // Quadradinho no item E em cada sabor do combo: quem monta a caixa
+            // confere donut a donut. 2 itens + 2 sabores = 4.
             var comBox = limpas.Count(l => l.Contains("[ ]", StringComparison.Ordinal));
-            checar(comBox == 2, $"um quadradinho por item para conferir a sacola (achei {comBox}, esperado 2)");
+            checar(comBox == 4, $"quadradinho no item E em cada sabor do combo (achei {comBox}, esperado 4)");
+            var linhaSabor = limpas.FirstOrDefault(l => l.Contains("Donut Ninho", StringComparison.Ordinal));
+            checar(linhaSabor is not null && linhaSabor.Contains("[ ]", StringComparison.Ordinal),
+                "o sabor do combo tem o proprio quadradinho");
 
             // 4. "Impresso" saiu — a cozinha usa a hora que o pedido CHEGOU
             checar(!puro.Contains("Impresso", StringComparison.OrdinalIgnoreCase),

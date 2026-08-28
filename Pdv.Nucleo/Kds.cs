@@ -306,10 +306,19 @@ public static class Kds
             linhas.Add(Esc(Corta($"[ ] {qtd}x {i.Descricao}", L), 1.5));
             // O QUE o cliente montou dentro do combo. Sem estas linhas a cozinha
             // lê "1x Combo Box 4un" e não tem o que produzir.
+            // Quadradinho no SABOR tambem: quem monta a caixa confere donut a
+            // donut, nao "o combo" — item so no pai deixa a conferencia pela
+            // metade justamente onde ela importa (combo de 4 sabores).
             if (i.Escolhas is { Count: > 0 })
                 foreach (var esc in i.Escolhas)
-                    foreach (var parte in Quebra("- " + esc, L - 6))
-                        linhas.Add(Esc("      " + parte, 1.2));
+                {
+                    var primeira = true;
+                    foreach (var parte in Quebra(esc, L - 8))
+                    {
+                        linhas.Add(Esc("    " + (primeira ? "[ ] " : "    ") + parte, 1.2));
+                        primeira = false;
+                    }
+                }
             if (i.Observacao is { Length: > 0 })
                 foreach (var parte in Quebra(">> " + i.Observacao, L - 6))
                     linhas.Add(Esc("      " + parte, 1.3));

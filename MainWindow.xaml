@@ -10,8 +10,10 @@
 
         <!-- Janela sem moldura (quiosque) precisa dos próprios botões de janela.
              Discretos de propósito: existem pro dono/suporte, não pro operador. -->
-        <StackPanel x:Name="BotoesJanela" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Panel.ZIndex="99" Margin="0,4,8,0">
+        <!-- Ficavam colados no "Sair" da barra do caixa: um toque errado fechava o
+             PDV no meio do atendimento. Vao para a ESQUERDA da barra, com folga. -->
+        <StackPanel x:Name="BotoesJanela" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Panel.ZIndex="99" Margin="6,4,0,0">
             <Button Content="─" Click="Minimizar" Width="34" Height="26" FontSize="12"
                     Background="Transparent" BorderThickness="0" Cursor="Hand"
                     Foreground="{DynamicResource TextoFraco}" ToolTip="Minimizar (Ctrl+M)"/>
