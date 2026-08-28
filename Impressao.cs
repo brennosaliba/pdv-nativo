@@ -486,8 +486,14 @@ public static class Impressao
     private static FrameworkElement MontarTexto(IReadOnlyList<string> linhas)
     {
         var pilha = new StackPanel();
-        foreach (var l in linhas)
-            pilha.Children.Add(Texto(string.IsNullOrEmpty(l) ? " " : l, Corpo, quebra: true));
+        foreach (var bruta in linhas)
+        {
+            // Linha pode vir marcada com escala (ver LinhaEscala): a comanda da
+            // cozinha usa isso para o número do pedido e os itens saírem maiores.
+            var (l, escala) = LinhaEscala.Le(bruta);
+            pilha.Children.Add(Texto(string.IsNullOrEmpty(l) ? " " : l, Corpo * escala,
+                negrito: escala > 1.0, quebra: true));
+        }
         return new Border
         {
             Width = LarguraBobinaMm * MM,

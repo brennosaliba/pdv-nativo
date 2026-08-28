@@ -32,7 +32,13 @@ public sealed record Ticket(
 }
 
 /// <param name="Qtd">Em milésimos, igual a venda_item.qtd_milesimo — 1000 = 1 unidade.</param>
-public sealed record TicketItem(string Descricao, int Qtd, string? Observacao);
+/// <param name="Escolhas">
+/// O que o cliente montou dentro de um combo ("2x Donut Ninho", "1x Cookie Duplo").
+/// Sem isto a cozinha lê "1x Combo Box 4un" e não sabe o que produzir — o combo
+/// vira um pedido sem conteúdo. Vazio para item simples.
+/// </param>
+public sealed record TicketItem(string Descricao, int Qtd, string? Observacao,
+    IReadOnlyList<string>? Escolhas = null);
 
 /// <summary>Um pedido de delivery como veio da nuvem (ifood_orders).</summary>
 /// <param name="RecebidoEm">Chegada REAL no iFood (timestamptz ISO). O relógio do
@@ -280,27 +286,39 @@ public static class Kds
         var linhas = new List<string>
         {
             new string('=', L),
-            Centro("COMANDA DE COZINHA", L),
+            Esc(Centro("COMANDA DE COZINHA", L), 1.2),
             Centro(eCardapio ? "CARDAPIO WEB" : "iFOOD", L),
             new string('=', L),
-            Centro($"PEDIDO  #{t.Numero}", L),
+            Esc(Centro($"PEDIDO  #{t.Numero}", L), 2.0),
             "",
         };
         if (t.Cliente is { Length: > 0 })
             linhas.Add(Corta("Cliente: " + t.Cliente, L));
-        linhas.Add($"Chegou:  {t.CriadoEm:HH:mm}  ·  Impresso: {DateTime.Now:HH:mm}");
+        // "Impresso" saiu (28/08): o que a cozinha usa é a hora que o pedido CHEGOU,
+        // e duas horas na mesma linha só competiam pela atenção.
+        linhas.Add($"Chegou: {t.CriadoEm:HH:mm}");
         linhas.Add(new string('-', L));
         foreach (var i in t.Itens)
         {
             var qtd = i.Qtd % 1000 == 0 ? (i.Qtd / 1000).ToString() : (i.Qtd / 1000m).ToString("0.###");
-            linhas.Add(Corta($"{qtd}x {i.Descricao}", L));
+            // Quadradinho pra conferência: quem monta risca item a item antes de
+            // fechar a sacola. É o que evita pedido sair faltando uma unidade.
+            linhas.Add(Esc(Corta($"[ ] {qtd}x {i.Descricao}", L), 1.5));
+            // O QUE o cliente montou dentro do combo. Sem estas linhas a cozinha
+            // lê "1x Combo Box 4un" e não tem o que produzir.
+            if (i.Escolhas is { Count: > 0 })
+                foreach (var esc in i.Escolhas)
+                    foreach (var parte in Quebra("- " + esc, L - 6))
+                        linhas.Add(Esc("      " + parte, 1.2));
             if (i.Observacao is { Length: > 0 })
-                foreach (var parte in Quebra(">> " + i.Observacao, L - 3))
-                    linhas.Add("   " + parte);
+                foreach (var parte in Quebra(">> " + i.Observacao, L - 6))
+                    linhas.Add(Esc("      " + parte, 1.3));
         }
         linhas.Add(new string('-', L));
         linhas.Add("");
         return linhas;
+
+        static string Esc(string s, double escala) => LinhaEscala.Com(s, escala);
 
         static string Centro(string s, int larg) =>
             s.Length >= larg ? s[..larg] : s.PadLeft((larg + s.Length) / 2).PadRight(larg);
@@ -345,11 +363,42 @@ public static class Kds
                         ?? Texto(e, "item") ?? "(item sem nome)";
                 var qtd = Numero(e, "quantity") ?? Numero(e, "quantidade") ?? Numero(e, "qtd") ?? 1m;
                 var obs = Texto(e, "observations") ?? Texto(e, "observacao") ?? Texto(e, "obs");
-                r.Add(new TicketItem(nome, (int)Math.Round(qtd * 1000), obs));
+                r.Add(new TicketItem(nome, (int)Math.Round(qtd * 1000), obs, Escolhas(e)));
             }
         }
         catch { /* JSON quebrado: devolve o que deu — nunca some com o pedido inteiro */ }
         return r;
+
+        // Escolhas do combo. TOLERANTE como o resto: o cardápio manda "escolhas"
+        // (monta_itens_v2) e o iFood manda "options"/"subItems"/"complements" —
+        // qualquer um deles é conteúdo que a cozinha PRECISA ver na comanda.
+        static List<string>? Escolhas(JsonElement e)
+        {
+            foreach (var chave in new[] { "escolhas", "options", "subItems", "complements", "opcoes" })
+            {
+                if (!e.TryGetProperty(chave, out var arr) || arr.ValueKind != JsonValueKind.Array) continue;
+                var saida = new List<string>();
+                foreach (var o in arr.EnumerateArray())
+                {
+                    if (o.ValueKind == JsonValueKind.String)
+                    {
+                        if (o.GetString() is { Length: > 0 } sx) saida.Add(sx);
+                        continue;
+                    }
+                    if (o.ValueKind != JsonValueKind.Object) continue;
+                    var nomeEsc = Texto(o, "nome") ?? Texto(o, "name") ?? Texto(o, "descricao");
+                    if (nomeEsc is null) continue;
+                    var q = Numero(o, "qtd") ?? Numero(o, "quantity") ?? Numero(o, "quantidade") ?? 1m;
+                    // grupo na frente ("Clássicos: 2x Donut Ninho") só quando existe:
+                    // combo de um grupo só não ganha ruído.
+                    var grupo = Texto(o, "grupo_nome") ?? Texto(o, "groupName");
+                    var prefixo = grupo is { Length: > 0 } ? grupo + ": " : "";
+                    saida.Add($"{prefixo}{(q % 1 == 0 ? ((int)q).ToString() : q.ToString("0.###"))}x {nomeEsc}");
+                }
+                if (saida.Count > 0) return saida;
+            }
+            return null;
+        }
 
         static string? Texto(JsonElement e, string k) =>
             e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String

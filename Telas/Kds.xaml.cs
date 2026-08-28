@@ -307,6 +307,19 @@ public partial class Kds : UserControl
             };
             linha.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
             corpo.Children.Add(linha);
+            // As escolhas do combo aparecem aqui pelo mesmo motivo da comanda: sem
+            // elas o card diz "1x Combo Box 4un" e o cozinheiro não sabe o que fazer.
+            if (i.Escolhas is { Count: > 0 })
+                foreach (var esc in i.Escolhas)
+                {
+                    var sub = new TextBlock
+                    {
+                        Text = "    - " + esc, FontSize = 13,
+                        TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 1),
+                    };
+                    sub.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+                    corpo.Children.Add(sub);
+                }
             if (i.Observacao is { Length: > 0 })
             {
                 var obs = new TextBlock

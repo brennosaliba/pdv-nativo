@@ -15,6 +15,77 @@ public static class TestesKds
 {
     public static void Rodar(Action<bool, string> checar)
     {
+        // ── COMANDA DA COZINHA ─────────────────────────────
+        // O papel que sai na cozinha é lido de longe, em pé e com pressa. O que não
+        // pode faltar: o que produzir (inclusive o CONTEÚDO do combo), a observação
+        // do cliente e um quadradinho para conferir item a item antes de fechar a
+        // sacola. O JSON aqui é o shape real de monta_itens_v2.
+        {
+            // shape do TicketItem (e o que fica gravado em kds_ticket.itens_json,
+            // ja normalizado por ItensDeJson na entrada)
+            var json = """
+            [
+              {"Descricao":"Combo Box 4un","Qtd":1000,"Observacao":null,
+               "Escolhas":["Clássicos: 2x Donut Ninho","Premium: 2x Donut Nutella"]},
+              {"Descricao":"Cookie Duplo","Qtd":3000,"Observacao":"sem castanha"}
+            ]
+            """;
+            var t0 = new Ticket("t1", "balcao", "r1", "CD-2246", "Asani Vasconcelos", json,
+                Kds.Recebido, new DateTime(2026, 8, 28, 17, 37, 0), null, null);
+
+            var linhas = Kds.ComandaLinhas(t0);
+            var limpas = linhas.Select(LinhaEscala.Limpa).ToList();
+            var puro = string.Join("\n", limpas);
+
+            // 1. o conteúdo do combo TEM que sair: sem isto a cozinha lê
+            //    "1x Combo Box 4un" e não tem o que produzir.
+            checar(puro.Contains("2x Donut Ninho", StringComparison.Ordinal)
+                   && puro.Contains("2x Donut Nutella", StringComparison.Ordinal),
+                "a comanda mostra o que o cliente montou dentro do combo");
+            checar(puro.Contains("Clássicos:", StringComparison.Ordinal),
+                "cada escolha vem com o grupo, para a cozinha separar");
+
+            // 2. observação do cliente
+            checar(puro.Contains("sem castanha", StringComparison.Ordinal),
+                "a observação do cliente sai na comanda");
+
+            // 3. quadradinho de conferência em CADA item (e só nos itens)
+            var comBox = limpas.Count(l => l.Contains("[ ]", StringComparison.Ordinal));
+            checar(comBox == 2, $"um quadradinho por item para conferir a sacola (achei {comBox}, esperado 2)");
+
+            // 4. "Impresso" saiu — a cozinha usa a hora que o pedido CHEGOU
+            checar(!puro.Contains("Impresso", StringComparison.OrdinalIgnoreCase),
+                "a comanda não mostra mais a hora da impressão");
+            checar(puro.Contains("17:37", StringComparison.Ordinal),
+                "a hora de chegada continua na comanda");
+
+            // 5. TAMANHOS: número do pedido maior que o item, item maior que o corpo
+            double EscalaDe(string trecho)
+            {
+                foreach (var l in linhas)
+                {
+                    var (txt, esc) = LinhaEscala.Le(l);
+                    if (txt.Contains(trecho, StringComparison.Ordinal)) return esc;
+                }
+                return -1;
+            }
+            var eNumero = EscalaDe("PEDIDO");
+            var eItem = EscalaDe("Cookie Duplo");
+            var eEscolha = EscalaDe("Donut Ninho");
+            checar(eNumero > eItem, $"o número do pedido é o maior da comanda ({eNumero} vs {eItem})");
+            checar(eItem > 1.0, $"os itens saem maiores que o corpo ({eItem})");
+            checar(eEscolha > 1.0 && eEscolha < eItem,
+                $"a escolha do combo fica menor que o item e maior que o corpo ({eEscolha})");
+
+            // 6. a marca de escala é INVISÍVEL para quem só lê o texto
+            checar(!puro.Contains(LinhaEscala.Marca),
+                "a marca de tamanho nunca aparece no texto lido");
+            var (txtSem, escSem) = LinhaEscala.Le("linha sem marca");
+            checar(txtSem == "linha sem marca" && escSem == 1.0,
+                "linha sem marca volta inteira, escala 1");
+        }
+
+
         var arquivo = Path.Combine(Path.GetTempPath(), $"kds_teste_{Guid.NewGuid():N}.db");
         var anterior = Banco.CaminhoForcado;
         Banco.CaminhoForcado = arquivo;
