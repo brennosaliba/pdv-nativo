@@ -268,12 +268,14 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
 
             // Memória não volátil: a cobrança existe no ControlPay a partir daqui.
             Guardar(new TransacaoPayGo(chargeId, ident, tipo, valor.Centavos, parc, "aguardando", null));
-            andamento?.Report(new AndamentoTef(FaseTef.Aguardando, chargeId, ident,
-                tipo == TipoTef.Pix ? "Siga na janela do PayGo: peça ao cliente para ler o QR…" : "Siga na janela do PayGo: aproxime, insira ou passe o cartão no pinpad…"));
+            var instrucao = tipo == TipoTef.Pix
+                ? "Peça ao cliente para ler o QR na janela do PayGo (Esc cancela)"
+                : "Aproxime, insira ou passe o cartão no pinpad (Esc cancela)";
+            andamento?.Report(new AndamentoTef(FaseTef.Aguardando, chargeId, ident, instrucao + "."));
 
             // 2. acompanhar até o final
             var teto = tipo == TipoTef.Pix ? TempoMaxPixMs : TempoMaxEmPagamentoMs;
-            var fim = await AcompanharAsync(ident, chargeId, andamento, ct, teto).ConfigureAwait(false);
+            var fim = await AcompanharAsync(ident, chargeId, andamento, ct, teto, instrucao).ConfigureAwait(false);
             if (fim.Desistencia == "tempo")
             {
                 // Passou do teto sem desfecho. A cobrança pode estar viva no pinpad: órfã +
@@ -281,7 +283,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 var msg = $"a cobrança passou de {teto / 1000} s sem resposta — confira na janela do PayGo. " +
                           "Se o cliente concluiu, NÃO cobre de novo: estorne em TEF → Estornar.";
                 Guardar(new TransacaoPayGo(chargeId, ident, tipo, valor.Centavos, parc, "orfa", null, msg));
-                Auditar?.Invoke($"controlpay: intenção {ident} sem desfecho em {TempoMaxEmPagamentoMs / 1000} s — devolvida ao operador (órfã)");
+                Auditar?.Invoke($"controlpay: intenção {ident} sem desfecho em {teto / 1000} s — devolvida ao operador (órfã)");
                 return new DesfechoTef(SituacaoTef.Timeout, ident, chargeId, null, msg, true) { Codigo = CodigoTef.Timeout };
             }
             if (fim.Desistencia is not null)
@@ -344,9 +346,10 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// null se o operador cancelou e a intenção ficou em pagamento além de <see cref="TempoDesistirAposCancelarMs"/>.
     /// </summary>
     private async Task<(int Status, string Nome, string? Detalhe, string? Desistencia)> AcompanharAsync(string ident, string chargeId,
-        IProgress<AndamentoTef>? andamento, CancellationToken ct, int tetoMs)
+        IProgress<AndamentoTef>? andamento, CancellationToken ct, int tetoMs, string instrucao = "")
     {
         Stopwatch? desdeCancelamento = null;
+        var ultimoSeg = -1;
         var falhasSeguidas = 0;
         var relogio = Stopwatch.StartNew();
         var intervalo = IntervaloPollMs;
@@ -378,10 +381,31 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             }
 
             if (desdeCancelamento is null && ct.IsCancellationRequested)
-            {
                 desdeCancelamento = Stopwatch.StartNew();
-                andamento?.Report(new AndamentoTef(FaseTef.Recado, chargeId, ident,
-                    "Cancelamento pedido — cancele na janela do PayGo (Esc). O PDV aguarda o resultado…"));
+
+            // RELÓGIO VISÍVEL. Sem isto a tela fica parada — com o QR na frente do
+            // cliente e nenhum sinal de vida, o operador não distingue "esperando"
+            // de "travou", e a reação natural é cobrar de novo. O Pix espera mais
+            // que o cartão (o cliente ainda vai abrir o app do banco), então o
+            // número na tela é a única forma de o balcão saber quanto falta.
+            if (instrucao.Length > 0)
+            {
+                var restanteMs = desdeCancelamento is null
+                    ? (tetoMs > 0 ? tetoMs - (int)relogio.ElapsedMilliseconds : -1)
+                    : TempoDesistirAposCancelarMs - (int)desdeCancelamento.ElapsedMilliseconds;
+                if (restanteMs >= 0)
+                {
+                    var seg = Math.Max(0, restanteMs / 1000);
+                    if (seg != ultimoSeg)
+                    {
+                        ultimoSeg = seg;
+                        andamento?.Report(new AndamentoTef(FaseTef.Recado, chargeId, ident,
+                            (desdeCancelamento is null
+                                ? instrucao
+                                : "Cancelamento pedido — aperte Esc na janela do PayGo")
+                            + $" · {seg / 60}:{seg % 60:00} para o PDV desistir"));
+                    }
+                }
             }
             if (desdeCancelamento is not null && desdeCancelamento.ElapsedMilliseconds >= TempoDesistirAposCancelarMs)
                 return (0, "", null, "cancelou");

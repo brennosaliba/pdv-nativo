@@ -125,6 +125,38 @@ public static class TestesControlPay
                 "a via do TEF cede a vez ao cupom — menos quando o papel decide o CNF (PayGo two-phase)");
         }
 
+        // ── CANCELAR O PIX SEM SAIR DO CAIXA ───────────────────────
+        // Com o QR na tela quem desiste é o PayGo (o ControlPay não tem rota para
+        // abortar intenção pendente), então o botão do PDV aperta Esc na janela dele.
+        {
+            // Sem o PayGo aberto tem que devolver 0 — e a tela avisa em vez de fingir
+            // que cancelou. Nunca pode lançar: isto roda no meio de uma venda.
+            var n = -1;
+            try { n = Pdv.Nucleo.JanelaPayGo.EnviarEsc(); }
+            catch (Exception ex) { checar(false, "EnviarEsc nao pode lancar: " + ex.Message); }
+            checar(n >= 0, "EnviarEsc devolve quantas janelas do PayGo receberam a tecla (veio " + n + ")");
+
+            string? fonte = null;
+            for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+            {
+                var alvo2 = Path.Combine(d.FullName, "Telas", "Pagamento.xaml.cs");
+                if (File.Exists(alvo2)) { fonte = File.ReadAllText(alvo2); break; }
+            }
+            checar(fonte is not null, "achei a fonte da tela de pagamento");
+            var i = fonte?.IndexOf("private void CancelarCobrancaNoTef()", StringComparison.Ordinal) ?? -1;
+            checar(i >= 0, "o botao de cancelar passa por CancelarCobrancaNoTef");
+            var corpo = i < 0 ? "" : fonte![i..Math.Min(fonte.Length, i + 900)];
+            checar(corpo.Contains("JanelaPayGo.EnviarEsc", StringComparison.Ordinal),
+                "cancelar manda Esc para a janela do PayGo");
+            checar(corpo.Contains("_cobranca?.Cancel()", StringComparison.Ordinal),
+                "cancelar tambem avisa o PDV para parar de esperar");
+            // O desfecho NUNCA pode ser decidido aqui: um Pix pago no ultimo segundo
+            // viraria venda entregue sem pagamento.
+            foreach (var proibido in new[] { "SituacaoTef.Cancelado", "RegistrarComoPos", "Encerrou?.Invoke" })
+                checar(!corpo.Contains(proibido, StringComparison.Ordinal),
+                    "cancelar nao decide o desfecho sozinho (sem " + proibido + ")");
+        }
+
         // ── utilitários ───────────────────────────────────────────────────
         {
             checar(ClienteControlPay.ValorComVirgula(1234567) == "12345,67", "valorTotalVendido com vírgula e sem milhar: " + ClienteControlPay.ValorComVirgula(1234567));

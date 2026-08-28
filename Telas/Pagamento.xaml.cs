@@ -395,7 +395,7 @@ public partial class Pagamento : UserControl
         var vezes = parcelas > 1 ? $" em {parcelas}x" : "";
         Estado("💳", parcelas > 1 ? $"Aguardando o cliente · {parcelas}x" : "Aguardando o cliente",
             $"Aproxime, insira ou passe o cartão na maquininha ({valor.Formatado()}{vezes}).",
-            ("Cancelar cobrança", () => _cobranca?.Cancel()));
+            ("Cancelar cobrança", CancelarCobrancaNoTef));
         Ir(Fase.Cobrando);
 
         var andamento = new Progress<AndamentoTef>(a =>
@@ -465,6 +465,25 @@ public partial class Pagamento : UserControl
     /// (queda de energia, app fechado), é ela que prova que existe uma cobrança viva
     /// na maquininha — sem isso, ninguém tem como estornar nem sequer saber.
     /// </summary>
+    /// <summary>
+    /// Cancela a cobrança EM ANDAMENTO. Aperta Esc na janela do PayGo pelo operador
+    /// — com o QR na tela quem desiste é o PayGo, porque o ControlPay não tem rota
+    /// para abortar intenção pendente — e avisa o PDV para parar de esperar.
+    ///
+    /// O desfecho continua vindo do status REAL da intenção: cancelar aqui nunca
+    /// declara a cobrança morta por conta própria, senão um Pix pago no último
+    /// segundo viraria venda entregue sem pagamento.
+    /// </summary>
+    private void CancelarCobrancaNoTef()
+    {
+        int janelas;
+        try { janelas = JanelaPayGo.EnviarEsc(); } catch { janelas = 0; }
+        TxtDetalheEstado.Text = janelas > 0
+            ? "Cancelamento enviado ao PayGo. Aguardando ele confirmar…"
+            : "Não achei a janela do PayGo — aperte Esc nela para cancelar.";
+        _cobranca?.Cancel();
+    }
+
     private void RegistrarTef(AndamentoTef a, string forma, Dinheiro valor, int parcelas = 1)
     {
         try
