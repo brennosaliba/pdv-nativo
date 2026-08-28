@@ -1735,6 +1735,7 @@ public partial class Venda : UserControl
         using (var cx = Banco.Abrir())
             linhas = cx.Query("""
                 SELECT v.id AS venda_id, v.numero_local, v.finalizada_em, v.fiscal_status,
+                       v.nfce_chave, v.nfce_protocolo,
                        p.forma, p.valor_cent, p.tef_nsu,
                        t.id AS tef_id, t.identificacao, t.valor_cent AS tef_valor, t.parcelas, t.resposta_txt
                   FROM venda v
@@ -1764,20 +1765,51 @@ public partial class Venda : UserControl
         var valor = new Dinheiro((long)l.valor_cent);
         var numero = (long)l.numero_local;
 
-        // Regra de Vendas.Cancelar: nota autorizada se cancela na SEFAZ antes. Conferir AQUI,
-        // antes do CNC — senão o dinheiro volta e a venda (com nota) continua valendo.
-        if ((string?)l.fiscal_status is "autorizada" or "contingencia")
+        // NOTA FISCAL. Autorizada com protocolo: o PDV CANCELA na SEFAZ antes de
+        // devolver o dinheiro (28/08 — antes mandava fazer no ERP).
+        //
+        // 'contingencia' continua sendo RECUSA e nao e descuido: nota offline
+        // (tpEmis 9) ainda nao foi autorizada, entao nao tem protocolo, e o
+        // evento 110111 exige um. Sem ele o agente devolve 400 — recusar aqui,
+        // com o motivo certo, e melhor que falhar la na frente.
+        var fiscal = (string?)l.fiscal_status;
+        var chaveNfce = (string?)l.nfce_chave;
+        var protNfce = (string?)l.nfce_protocolo;
+        if (fiscal == "contingencia")
+        {
+            Dialogo.Avisar(dono, "Nota em contingência",
+                $"A venda #{numero} tem NFC-e em contingência (ainda sem protocolo de autorização). " +
+                "Ela precisa ser autorizada ou cancelada pelo ERP antes do estorno.", "erro");
+            return;
+        }
+        var precisaCancelarNota = fiscal == "autorizada";
+        if (precisaCancelarNota && (chaveNfce ?? "").Trim().Length != 44)
         {
             Dialogo.Avisar(dono, "Nota fiscal emitida",
-                $"A venda #{numero} tem NFC-e autorizada. Cancele a nota no ERP antes de estornar o cartão.", "erro");
+                $"A venda #{numero} consta com NFC-e autorizada, mas a chave não está gravada neste caixa. " +
+                "Cancele a nota pelo ERP antes de estornar.", "erro");
             return;
         }
 
-        var motivo = PedirTexto.Mostrar(dono, "Estorno", "Motivo (obrigatório)", "cliente desistiu");
+        // O motivo VIRA A JUSTIFICATIVA da SEFAZ quando ha nota: 15 a 255 chars
+        // e regra dela, nao capricho nosso.
+        var pedeJust = precisaCancelarNota;
+        var motivo = PedirTexto.Mostrar(dono, "Estorno",
+            pedeJust ? $"Justificativa para a SEFAZ (mínimo {CancelamentoFiscal.JustificativaMinima} letras)"
+                     : "Motivo (obrigatório)",
+            "venda cancelada por desistência do cliente");
         if (string.IsNullOrWhiteSpace(motivo)) return;
+        if (pedeJust && !CancelamentoFiscal.JustificativaValida(motivo))
+        {
+            Dialogo.Avisar(dono, "Justificativa curta",
+                $"A SEFAZ exige de {CancelamentoFiscal.JustificativaMinima} a {CancelamentoFiscal.JustificativaMaxima} " +
+                "caracteres na justificativa do cancelamento.", "erro");
+            return;
+        }
 
         if (!Dialogo.Confirmar(dono, "Estornar no cartão",
-                $"Venda #{numero}: devolver {valor.Formatado()} no cartão/PIX (NSU {nsu}) e CANCELAR a venda no PDV. " +
+                $"Venda #{numero}: " + (precisaCancelarNota ? "CANCELAR a NFC-e na SEFAZ, " : "") +
+                $"devolver {valor.Formatado()} no cartão/PIX (NSU {nsu}) e CANCELAR a venda no PDV. " +
                 "O PayGo pode pedir a senha do lojista e o cartão do cliente. Confirma?",
                 "Estornar agora", "Voltar", perigo: true)) return;
 
@@ -1852,6 +1884,47 @@ public partial class Venda : UserControl
         // não existe auto-autorização: quem aprovou está fora da loja.
         var autoAutorizado = sup is not null && sup.Id == _operador.Id ? " [AUTO-AUTORIZADO]" : "";
         var trilha = Autorizacao.Trilha(aut);
+
+        // ── NOTA FISCAL PRIMEIRO ─────────────────────────────────────────────
+        // A ordem e o coracao deste fluxo: cancela a NOTA, so entao devolve o
+        // dinheiro. Ao contrario, um processo que morre no meio deixa o cliente
+        // reembolsado com uma NFC-e valida — que e o caso que nao pode existir.
+        // Se o cancelamento falhar, nada aconteceu ainda: dinheiro, nota e venda
+        // seguem intactos, e o operador tenta de novo.
+        if (precisaCancelarNota)
+        {
+            using (var esperando = new Espera(dono, "Cancelando a nota fiscal na SEFAZ…"))
+            {
+                var rc = await CancelamentoFiscal.CancelarAsync(
+                    Servicos.AgenteUrl(), chaveNfce!, protNfce, motivo!);
+                if (!rc.Ok)
+                {
+                    using (var cxn = Banco.Abrir())
+                        Caixa.Auditar(cxn, null, "nfce_cancelamento_negado", _operador.Id, null,
+                            $"venda={numero} chave={chaveNfce} — {rc.Mensagem}");
+                    esperando.Dispose();
+                    Dialogo.Avisar(dono,
+                        rc.Indisponivel ? "Não sei se a nota foi cancelada" : "Nota NÃO cancelada",
+                        rc.Indisponivel
+                            ? $"{rc.Mensagem}.\n\nO estorno NÃO foi feito. Confira a nota no ERP antes de tentar de novo — " +
+                              "ela pode ter sido cancelada mesmo sem a resposta chegar."
+                            : $"{rc.Mensagem}.\n\nO estorno não foi feito e nada mudou.",
+                        "erro");
+                    return;
+                }
+
+                // Sucesso: gravar ANTES do CNC. Se o caixa morrer aqui, a nota esta
+                // cancelada e o PDV sabe — no retry o pre-check ve 'cancelada' e vai
+                // direto ao dinheiro. Gravar DEPOIS abriria a janela proibida.
+                using (var cxn = Banco.Abrir())
+                {
+                    cxn.Execute("UPDATE venda SET fiscal_status = 'cancelada' WHERE id = @Id",
+                        new { Id = (string)l.venda_id });
+                    Caixa.Auditar(cxn, null, "nfce_cancelada_sefaz", _operador.Id, null,
+                        $"venda={numero} chave={chaveNfce} — {rc.Mensagem}");
+                }
+            }
+        }
 
         var original = new TransacaoPayGo((string)l.tef_id, (string?)l.identificacao ?? "",
             TipoTefExtensoes.Analisar((string)l.forma) ?? TipoTef.Credito, (long)l.tef_valor, (int)(long)l.parcelas, "pago",

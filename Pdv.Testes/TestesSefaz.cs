@@ -19,6 +19,51 @@ public static class TestesSefaz
 {
     public static void Rodar(Action<bool, string> checar)
     {
+        // ── CANCELAMENTO DA NFC-e (evento 110111) ─────────────────────────
+        // Regras que vieram da SEFAZ e do agente, nao de gosto nosso. O que este
+        // bloco protege: a JUSTIFICATIVA (15..255) e a leitura do cStat — errar
+        // o segundo faz o caixa devolver dinheiro achando que a nota caiu.
+        {
+            // O limite exato: 15 passa, 14 nao. "cliente desistiu" (16) passaria —
+            // mas o texto que o PDV sugere ja e bem maior, de proposito.
+            checar(CancelamentoFiscal.JustificativaValida(new string('a', 15)),
+                "15 caracteres (o minimo da SEFAZ) passa");
+            checar(!CancelamentoFiscal.JustificativaValida(new string('a', 14)),
+                "14 caracteres NAO passa — e a rejeicao que o agente devolveria como erro 500");
+            checar(!CancelamentoFiscal.JustificativaValida("curto"),
+                "justificativa curta e recusada ANTES de gastar a chamada");
+            checar(!CancelamentoFiscal.JustificativaValida(null),
+                "justificativa vazia e recusada");
+            checar(!CancelamentoFiscal.JustificativaValida(new string(' ', 40)),
+                "so espaco nao vale como justificativa");
+            checar(CancelamentoFiscal.JustificativaValida("venda cancelada por desistencia do cliente"),
+                "a justificativa padrao do dono passa");
+            checar(!CancelamentoFiscal.JustificativaValida(new string('x', 256)),
+                "acima de 255 a SEFAZ recusa — barrar aqui");
+
+            // cStat: 135/136/155 sao sucesso; 573 e DUPLICIDADE (ja cancelada),
+            // que para o caixa tambem e sucesso — senao o operador fica preso
+            // depois de uma queda no meio do cancelamento.
+            foreach (var ok in new[] { 135, 136, 155, 573 })
+                checar(CancelamentoFiscal.Sucesso(ok), $"cStat {ok} e sucesso do cancelamento");
+            foreach (var nao in new[] { 0, 101, 215, 501, 999 })
+                checar(!CancelamentoFiscal.Sucesso(nao), $"cStat {nao} NAO e sucesso");
+
+            // Guardas locais: nada disso pode virar chamada de rede.
+            var semChave = CancelamentoFiscal.CancelarAsync("http://127.0.0.1:1", "123", "999", "venda cancelada por desistencia").GetAwaiter().GetResult();
+            checar(!semChave.Ok && !semChave.Indisponivel && semChave.XMotivo!.Contains("chave"),
+                "chave fora de 44 digitos e recusada localmente (sem rede)");
+            var semProt = CancelamentoFiscal.CancelarAsync("http://127.0.0.1:1", new string('1', 44), null, "venda cancelada por desistencia").GetAwaiter().GetResult();
+            checar(!semProt.Ok && !semProt.Indisponivel,
+                "nota sem protocolo (contingencia) e recusada localmente — o evento 110111 exige nProt");
+
+            // Agente fora do ar: INDISPONIVEL, nunca "recusado". A diferenca e o
+            // que impede devolver dinheiro achando que a nota foi cancelada.
+            var mudo = CancelamentoFiscal.CancelarAsync("http://127.0.0.1:1", new string('1', 44), "1234567890", "venda cancelada por desistencia do cliente").GetAwaiter().GetResult();
+            checar(!mudo.Ok && mudo.Indisponivel,
+                "agente mudo e INDISPONIVEL (nao sei), nunca recusa");
+        }
+
         var itens = new List<ItemFiscal>
         {
             new("TST001", "TESTE Cookie", "19059090", "1700200", "500", "5102", "UN", 3m, 10.00m),

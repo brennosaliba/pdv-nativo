@@ -428,6 +428,16 @@ public static class Servicos
     /// Vias a imprimir, na ordem em que saem: cliente, estabelecimento. `737-000` (1 só cliente,
     /// 2 só estabelecimento, 3 ambas) manda; sem as diferenciadas, vale a reduzida ou a única.
     /// </summary>
+    /// <summary>
+    /// Endereco do agente fiscal local (o Node que tem o certificado A1 e fala
+    /// com a SEFAZ). Um lugar so: emissao, guarda e cancelamento leem daqui.
+    /// </summary>
+    public static string AgenteUrl()
+    {
+        using var cx = Banco.Abrir();
+        return Vendas.Config(cx, "agente_url", "http://127.0.0.1:4610")!;
+    }
+
     private static readonly SemaphoreSlim UmaComandaPorVez = new(1, 1);
 
     /// <summary>
