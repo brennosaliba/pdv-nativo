@@ -44,6 +44,13 @@ public static class JanelaPayGo
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsWindowVisible(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumChildWindows(IntPtr pai, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     /// <summary>
@@ -57,22 +64,50 @@ public static class JanelaPayGo
         if (pids.Count == 0) return 0;
 
         var enviadas = 0;
+
+        void Mandar(IntPtr h)
+        {
+            PostMessage(h, WM_KEYDOWN, new IntPtr(VK_ESCAPE), IntPtr.Zero);
+            PostMessage(h, WM_KEYUP, new IntPtr(VK_ESCAPE), IntPtr.Zero);
+            enviadas++;
+        }
+
+        bool EhDoPayGo(IntPtr h)
+        {
+            GetWindowThreadProcessId(h, out var pid);
+            return pids.Contains(pid);
+        }
+
         try
         {
             EnumWindows((h, _) =>
             {
                 try
                 {
-                    if (!IsWindowVisible(h)) return true;
-                    GetWindowThreadProcessId(h, out var pid);
-                    if (!pids.Contains(pid)) return true;
-                    PostMessage(h, WM_KEYDOWN, new IntPtr(VK_ESCAPE), IntPtr.Zero);
-                    PostMessage(h, WM_KEYUP, new IntPtr(VK_ESCAPE), IntPtr.Zero);
-                    enviadas++;
+                    if (!IsWindowVisible(h) || !EhDoPayGo(h)) return true;
+                    Mandar(h);
+                    // A janela do QR pode ser FILHA da principal (medido: com o
+                    // PayGo parado o processo não tem nenhuma janela de topo
+                    // visível — ela nasce junto com a transação). Mandar para as
+                    // filhas visíveis cobre esse desenho sem custo.
+                    EnumChildWindows(h, (f, _) =>
+                    {
+                        try { if (IsWindowVisible(f)) Mandar(f); } catch { }
+                        return true;
+                    }, IntPtr.Zero);
                 }
                 catch { /* uma janela problemática não pode parar a varredura */ }
                 return true;
             }, IntPtr.Zero);
+
+            // Último recurso: a janela EM FOCO, se for do PayGo. Durante a
+            // transação é ela que está na frente do operador — e continua sendo
+            // um alvo verificado (só entra se o dono do handle for o PayGo).
+            if (enviadas == 0)
+            {
+                var frente = GetForegroundWindow();
+                if (frente != IntPtr.Zero && EhDoPayGo(frente)) Mandar(frente);
+            }
         }
         catch { return enviadas; }
         return enviadas;
