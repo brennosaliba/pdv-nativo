@@ -36,6 +36,51 @@ public static class TestesControlPay
 
     public static void Rodar(Action<bool, string> checar)
     {
+        // ── CADÊNCIA DA CONSULTA (o que o operador sente como lentidão) ────
+        // Enquanto a intenção está EM PAGAMENTO o cliente já está no pinpad e o
+        // desfecho chega a qualquer instante: com o intervalo lento fixo, a tela
+        // demorava até um ciclo inteiro para reagir a um "aprovado" que já tinha
+        // acontecido. Prova pelo RELÓGIO: com o passo curto, três consultas não
+        // podem custar o que UMA custaria no passo lento.
+        {
+            var f = new FakeControlPay { PollsAteFinal = 3 };
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.Aprovar);
+            using var c = new ClienteControlPay(
+                new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159",
+                                     f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 900,        // passo lento (antes da transação começar)
+                IntervaloPollAtivoMs = 20,    // passo curto (cliente no pinpad)
+                TempoHttpMs = 5_000,
+            };
+            var relogio = Stopwatch.StartNew();
+            var d = Cobrar(c, TipoTef.Credito, 10m);
+            relogio.Stop();
+            checar(d.Pago, "a venda do teste de cadência foi aprovada");
+            checar(relogio.ElapsedMilliseconds < 900,
+                $"em pagamento, o PDV consulta no passo curto — 3 consultas levaram {relogio.ElapsedMilliseconds} ms (uma no passo lento já custaria 900)");
+        }
+
+        // O passo curto nunca pode ser MAIOR que o lento, senão a "otimização"
+        // atrasaria justamente o trecho que ela existe para apressar.
+        {
+            var f = new FakeControlPay { PollsAteFinal = 2 };
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.Aprovar);
+            using var c = new ClienteControlPay(
+                new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159",
+                                     f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 15,
+                IntervaloPollAtivoMs = 5_000,   // configuração absurda de propósito
+                TempoHttpMs = 5_000,
+            };
+            var relogio = Stopwatch.StartNew();
+            var d = Cobrar(c, TipoTef.Credito, 10m);
+            relogio.Stop();
+            checar(d.Pago && relogio.ElapsedMilliseconds < 2_000,
+                $"passo curto maior que o lento não atrasa nada (levou {relogio.ElapsedMilliseconds} ms)");
+        }
+
         // ── utilitários ───────────────────────────────────────────────────
         {
             checar(ClienteControlPay.ValorComVirgula(1234567) == "12345,67", "valorTotalVendido com vírgula e sem milhar: " + ClienteControlPay.ValorComVirgula(1234567));

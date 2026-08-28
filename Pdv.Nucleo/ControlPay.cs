@@ -84,8 +84,17 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     public string Descricao => $"ControlPay {(_op.EhSandbox ? "sandbox" : "produção")} · terminal {_op.TerminalId}";
     public bool Ocupado => _um.CurrentCount == 0;
 
-    /// <summary>Cadência da consulta de status. A doc não impõe teto; 1,5 s é imperceptível ao operador e gentil com a API.</summary>
+    /// <summary>Cadência da consulta enquanto o PayGo ainda não pegou a transação (status Pendente).
+    /// Nada muda nesse trecho, então não adianta apressar: 1,5 s é gentil com a API.</summary>
     public int IntervaloPollMs { get; init; } = 1_500;
+
+    /// <summary>
+    /// Cadência DEPOIS que a intenção entra em pagamento — o cliente já está no pinpad e o
+    /// desfecho chega a qualquer instante. É o único trecho em que o intervalo vira espera
+    /// visível no balcão: com 1,5 s fixo, a tela demorava até um segundo e meio para reagir a
+    /// um "aprovado" que já tinha acontecido.
+    /// </summary>
+    public int IntervaloPollAtivoMs { get; init; } = 500;
 
     /// <summary>Teto do POST Venda/Vender: em modo ativo a API pode segurar até ~20 s esperando o PayGo pegar a transação.</summary>
     public int TempoHttpMs { get; init; } = 40_000;
@@ -137,7 +146,18 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     {
         _op = opcoes ?? throw new ArgumentNullException(nameof(opcoes));
         if (string.IsNullOrWhiteSpace(_op.Chave)) throw new ArgumentException("chave de integração vazia", nameof(opcoes));
-        _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        // Conexão reaproveitada entre vendas: o handler padrão fecha o socket ocioso em 1 min,
+        // e aí a venda seguinte paga DNS + TCP + TLS de novo (~120 ms medidos contra
+        // api.controlpay.com.br) antes de qualquer coisa acontecer. Numa fila com intervalo
+        // maior que um minuto entre clientes, isso é toda venda. 10 min cobre o movimento real.
+        _http = handler is null
+            ? new HttpClient(new SocketsHttpHandler
+            {
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(10),
+                PooledConnectionLifetime = TimeSpan.FromMinutes(30),
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+            }, disposeHandler: true)
+            : new HttpClient(handler, disposeHandler: false);
         _http.Timeout = Timeout.InfiniteTimeSpan;   // os tetos são por chamada (CancellationTokenSource)
         _http.DefaultRequestHeaders.UserAgent.Clear();
         _http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _op.UserAgent);
@@ -329,6 +349,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
         Stopwatch? desdeCancelamento = null;
         var falhasSeguidas = 0;
         var relogio = Stopwatch.StartNew();
+        var intervalo = IntervaloPollMs;
         while (true)
         {
             try
@@ -344,6 +365,10 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                         if (st == StatusIntencao.Recusado) detalhe = await MensagemAdquirenteAsync(ident).ConfigureAwait(false);
                         return (st, nome, detalhe, null);
                     }
+                    // cliente no pinpad = desfecho iminente: aperta o passo (ver IntervaloPollAtivoMs)
+                    intervalo = st == StatusIntencao.EmPagamento
+                        ? Math.Min(IntervaloPollAtivoMs, IntervaloPollMs)
+                        : IntervaloPollMs;
                 }
             }
             catch (Exception ex)
@@ -362,7 +387,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 return (0, "", null, "cancelou");
             if (tetoMs > 0 && relogio.ElapsedMilliseconds >= tetoMs)
                 return (0, "", null, "tempo");
-            await Task.Delay(IntervaloPollMs).ConfigureAwait(false);
+            await Task.Delay(intervalo).ConfigureAwait(false);
         }
     }
 
