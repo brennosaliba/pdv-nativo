@@ -93,7 +93,27 @@ public static class TestesKds
         {
             Banco.Migrar(arquivo);
 
-            // ── CARD FANTASMA: PEDIDO VELHO TEM QUE SAIR DO QUADRO ────
+                // ── LARGURA DO CARD: O GUARD DE NaN ───────────────────
+            // WrapPanel.ItemWidth nasce NaN. Toda comparacao com NaN e FALSA,
+            // entao "Math.Abs(ItemWidth - w) > 0.5" nunca disparava e a largura
+            // NUNCA era aplicada: os cards ficavam com a largura natural de cada
+            // um e cabiam 4 por linha em vez de 2, desalinhados. Este teste trava
+            // a regra do calculo (a chamada do WPF nao roda aqui).
+            {
+                bool PrecisaAplicar(double atual, double alvo)
+                    => double.IsNaN(atual) || Math.Abs(atual - alvo) > 0.5;
+
+                checar(PrecisaAplicar(double.NaN, 300),
+                    "valor NaO definido (NaN) TEM que ser aplicado — era o bug dos 4 cards por linha");
+                checar(!PrecisaAplicar(300, 300),
+                    "valor ja correto nao e reescrito (evita layout em loop)");
+                checar(PrecisaAplicar(280, 300),
+                    "largura mudou (janela redimensionada) -> aplica de novo");
+                checar(!PrecisaAplicar(300.2, 300),
+                    "diferenca de arredondamento nao conta como mudanca");
+            }
+
+        // ── CARD FANTASMA: PEDIDO VELHO TEM QUE SAIR DO QUADRO ────
             // Aconteceu de verdade: pedido de 22/08 ainda no quadro em 28/08, já
             // cancelado no iFood, mostrando "+9847 min". A expiração só olhava
             // 'recebido' — quem chegou a 'preparando'/'pronto' ficava para sempre.

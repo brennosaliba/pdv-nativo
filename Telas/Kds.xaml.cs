@@ -134,15 +134,20 @@ public partial class Kds : UserControl
     /// e que pedido comprido corta a lista de itens, entao a altura precisa caber
     /// o caso comum (o card abre no toque com tudo).
     /// </summary>
-    private const double AlturaDoCard = 132;
+    private const double AlturaDoCard = 158;
 
     private static void LarguraDosCards(WrapPanel p)
     {
         // -1 para nao empatar com a largura disponivel por arredondamento e
         // jogar o ultimo card pra linha de baixo.
+        // ItemWidth/ItemHeight nascem NaN, e TODA comparacao com NaN e falsa —
+        // "Math.Abs(NaN - w) > 0.5" da FALSE e a largura nunca era aplicada. O
+        // resultado no quadro: cards com larguras naturais diferentes e 4 por
+        // linha em vez de 2. Por isso o IsNaN explicito vem primeiro.
         var w = Math.Max(180, (p.ActualWidth / CardsPorLinha) - 1);
-        if (Math.Abs(p.ItemWidth - w) > 0.5) p.ItemWidth = w;
-        if (Math.Abs(p.ItemHeight - AlturaDoCard) > 0.5) p.ItemHeight = AlturaDoCard;
+        if (double.IsNaN(p.ItemWidth) || Math.Abs(p.ItemWidth - w) > 0.5) p.ItemWidth = w;
+        if (double.IsNaN(p.ItemHeight) || Math.Abs(p.ItemHeight - AlturaDoCard) > 0.5)
+            p.ItemHeight = AlturaDoCard;
     }
 
     private void Encher(Panel coluna, IEnumerable<Ticket> tickets)
@@ -186,14 +191,14 @@ public partial class Kds : UserControl
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         // ── cabeçalho: número + origem + espera ─────────────────────────────
-        var cab = new Grid { Margin = new Thickness(8, 6, 8, 2) };
+        var cab = new Grid { Margin = new Thickness(11, 8, 11, 3) };
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var esq = new StackPanel { Orientation = Orientation.Horizontal };
         var numero = new TextBlock
         {
-            Text = "#" + t.Numero, FontSize = 18, FontWeight = FontWeights.Bold,
+            Text = "#" + t.Numero, FontSize = 23, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
         };
         numero.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
@@ -245,7 +250,7 @@ public partial class Kds : UserControl
             // de PRONTO. Alvo de verdade (76×56) + texto — o padrão da casa é 64px.
             var desfaz = new Button
             {
-                Content = "↩", FontSize = 13, MinHeight = 40, MinWidth = 40,
+                Content = "↩", FontSize = 15, MinHeight = 46, MinWidth = 46,
                 Margin = new Thickness(10, 0, 0, 0), Padding = new Thickness(8, 0, 8, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Devolver para A PREPARAR",
@@ -266,7 +271,7 @@ public partial class Kds : UserControl
             // Imprime DIRETO (sem claim — reimpressão é decisão de gente).
             var imprime = new Button
             {
-                Content = "🖨", FontSize = 14, MinHeight = 40, MinWidth = 40,
+                Content = "🖨", FontSize = 16, MinHeight = 46, MinWidth = 46,
                 Margin = new Thickness(10, 0, 0, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Imprimir a comanda deste pedido",
@@ -294,7 +299,7 @@ public partial class Kds : UserControl
         raiz.Children.Add(cab);
 
         // ── corpo: cliente + itens ──────────────────────────────────────────
-        var corpo = new StackPanel { Margin = new Thickness(8, 0, 8, 3) };
+        var corpo = new StackPanel { Margin = new Thickness(11, 0, 11, 4) };
         if (t.Cliente is { Length: > 0 })
         {
             var cli = new TextBlock
@@ -310,7 +315,7 @@ public partial class Kds : UserControl
             var qtd = i.Qtd % 1000 == 0 ? (i.Qtd / 1000).ToString() : (i.Qtd / 1000m).ToString("0.###");
             var linha = new TextBlock
             {
-                Text = $"{qtd}× {i.Descricao}", FontSize = 13,
+                Text = $"{qtd}× {i.Descricao}", FontSize = 16,
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1),
             };
             linha.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
@@ -322,7 +327,7 @@ public partial class Kds : UserControl
                 {
                     var sub = new TextBlock
                     {
-                        Text = "    - " + esc, FontSize = 13,
+                        Text = "    - " + esc, FontSize = 14,
                         TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 1),
                     };
                     sub.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
