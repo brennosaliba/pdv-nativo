@@ -70,10 +70,14 @@ public partial class MainWindow : Window
         MostrarVenda();
     }
 
+    /// <summary>Saiu no botão (não é o arranque do PDV): segura o auto-login da homologação.</summary>
+    private bool _saiuDeProposito;
+
     private void MostrarLogin(Microsoft.Data.Sqlite.SqliteConnection cx)
     {
         var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
-        var t = new Login(loja);
+        var t = new Login(loja) { AutoEntrar = !_saiuDeProposito };
+        _saiuDeProposito = false;
         t.Entrou += op => { _operador = op; Roteia(); };
         t.PediuConfig += AbrirConfigProtegida;
         Conteudo.Content = t;
@@ -83,7 +87,7 @@ public partial class MainWindow : Window
     {
         var t = new AberturaCaixa(_operador!);
         t.Abriu += s => { _sessao = s; Roteia(); };
-        t.Saiu += () => { _operador = null; Roteia(); };
+        t.Saiu += () => { _saiuDeProposito = true; _operador = null; Roteia(); };
         Conteudo.Content = t;
     }
 
@@ -109,8 +113,8 @@ public partial class MainWindow : Window
         }
 
         var t = new Venda(_operador!, _sessao!);
-        t.Deslogou += () => { _operador = null; _telaVenda = null; Roteia(); };
-        t.FechouCaixa += () => { _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
+        t.Deslogou += () => { _saiuDeProposito = true; _operador = null; _telaVenda = null; Roteia(); };
+        t.FechouCaixa += () => { _saiuDeProposito = true; _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
         t.PediuKds += MostrarKds;
         t.PediuChat += MostrarChat;
         t.PediuConfig += AbrirConfigProtegida;

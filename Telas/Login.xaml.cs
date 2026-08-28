@@ -33,6 +33,13 @@ public partial class Login : UserControl
     public event Action<Operador>? Entrou;
     public event Action? PediuConfig;
 
+    /// <summary>
+    /// Deixa o auto-login da homologação acontecer. Falso quando a pessoa chegou
+    /// aqui clicando em Sair/Fechar caixa — nesse caso ela quer a tela de login
+    /// (e o botão de Configuração do rodapé), não voltar direto pro caixa.
+    /// </summary>
+    public bool AutoEntrar { get; init; } = true;
+
     public Login(string nomeLoja)
     {
         InitializeComponent();
@@ -49,6 +56,10 @@ public partial class Login : UserControl
         {
             try
             {
+                // Quem clicou em Sair QUER ficar aqui: sem esta guarda o auto-login
+                // devolve a pessoa ao caixa no mesmo instante, e o rodapé com a
+                // Configuração vira inalcançável enquanto a homologação estiver ligada.
+                if (!AutoEntrar) return;
                 using var cx = Banco.Abrir();
                 if (!Vendas.Homologacao(cx)) return;
                 var op = Operadores.PrimeiroAtivo(cx);
