@@ -77,7 +77,50 @@ public partial class Kds : UserControl
             _puxando = false;
             TxtIconeAtualiza.Text = "⟳";
             Pintar();
+            _ = ImprimirComandasAsync();
         }
+    }
+
+    // ── comanda automática (28/08 — pedido do dono) ─────────────────────────
+    // Pedido de delivery que chega sai NO PAPEL sem dedo de ninguém, na
+    // impressora escolhida na Configuração (chave própria da cozinha —
+    // pode ser outra bobina, não a do caixa). Opt-in: nasce desligado.
+    private bool _imprimindo;
+
+    private async Task ImprimirComandasAsync()
+    {
+        if (_imprimindo) return;
+        _imprimindo = true;
+        try
+        {
+            string? impressora; bool auto;
+            using (var cx = Banco.Abrir())
+            {
+                auto = Vendas.Config(cx, "kds_comanda_auto") == "1";
+                impressora = Vendas.Config(cx, "kds_comanda_impressora");
+                if (impressora is { Length: 0 }) impressora = null; // "" = padrão do Windows
+            }
+            if (!auto) return;
+
+            foreach (var t in Nucleo.Kds.ParaImprimir())
+            {
+                // claim ANTES do papel: sino + timer se sobrepõem, e comanda
+                // dupla é donut duplo. Falhou depois do claim → status avisa e
+                // o botão 🖨 do card reimprime (impressora morta não pode virar
+                // metralhadora de tentativas a cada 10 s).
+                if (!Nucleo.Kds.ReivindicarImpressao(t.Id)) continue;
+                var erro = await Impressao.ImprimirTextoAsync(
+                    $"Comanda cozinha #{t.Numero}",
+                    new[] { Nucleo.Kds.ComandaLinhas(t) }, impressora);
+                if (erro is not null)
+                {
+                    TxtStatus.Text = $"comanda #{t.Numero} NÃO imprimiu — use 🖨 no card";
+                    Alerta.PedidoNovo(); // chama atenção: papel não saiu
+                }
+            }
+        }
+        catch { /* imprimir é conforto; o quadro na tela é a fonte de verdade */ }
+        finally { _imprimindo = false; }
     }
 
     // ── pintura do quadro ───────────────────────────────────────────────────
@@ -208,6 +251,35 @@ public partial class Kds : UserControl
                 e.Handled = true;
             };
             dir.Children.Add(desfaz);
+        }
+        if (t.Origem == "ifood")
+        {
+            // Reimprimir a comanda: papel atolou/acabou, ou a automática falhou.
+            // Imprime DIRETO (sem claim — reimpressão é decisão de gente).
+            var imprime = new Button
+            {
+                Content = "🖨", FontSize = 16, MinHeight = 56, MinWidth = 56,
+                Margin = new Thickness(10, 0, 0, 0),
+                Style = (Style)Application.Current.Resources["BotaoBase"],
+                ToolTip = "Imprimir a comanda deste pedido",
+            };
+            imprime.Click += async (_, e) =>
+            {
+                e.Handled = true; // não deixa o clique borbulhar e avançar etapa
+                string? imp;
+                using (var cx = Banco.Abrir())
+                {
+                    imp = Vendas.Config(cx, "kds_comanda_impressora");
+                    if (imp is { Length: 0 }) imp = null;
+                }
+                var erro = await Impressao.ImprimirTextoAsync(
+                    $"Comanda cozinha #{t.Numero} (manual)",
+                    new[] { Nucleo.Kds.ComandaLinhas(t) }, imp);
+                TxtStatus.Text = erro is null
+                    ? $"comanda #{t.Numero} impressa"
+                    : $"comanda #{t.Numero} NÃO imprimiu: {erro}";
+            };
+            dir.Children.Add(imprime);
         }
         Grid.SetColumn(dir, 1);
         cab.Children.Add(dir);

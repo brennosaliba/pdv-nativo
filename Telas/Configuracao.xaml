@@ -85,6 +85,14 @@
                           IsChecked="True" FontSize="14" Margin="0,0,0,8"/>
                 <Button x:Name="BtnTesteImpressao" Content="Imprimir cupom de teste" Click="TestarImpressao"
                         Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+
+                <TextBlock Text="COMANDA DA COZINHA (KDS)" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,18,0,8"/>
+                <CheckBox x:Name="ChkComandaAuto" Content="Imprimir a comanda automaticamente quando o pedido de delivery chegar"
+                          IsChecked="False" FontSize="14" Margin="0,0,0,8"/>
+                <TextBlock Text="Impressora da comanda" Style="{StaticResource Rotulo}"/>
+                <ComboBox x:Name="CboImpressoraComanda" Margin="0,4,0,6" FontSize="16" Padding="12,10"/>
+                <TextBlock Text="A cozinha pode ter a própria bobina — escolha aqui qual imprime a comanda. Em branco, usa a impressora padrão do Windows. Cada card do KDS também tem o botão 🖨 pra reimprimir."
+                           Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                 <TextBlock x:Name="TxtStatusImpressao" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                            TextWrapping="Wrap" Margin="0,0,0,12"/>
 

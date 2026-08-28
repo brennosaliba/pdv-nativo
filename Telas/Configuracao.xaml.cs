@@ -29,6 +29,8 @@ public partial class Configuracao : UserControl
         using var cx = Banco.Abrir();
         _jaConfigurado = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM terminal") > 0;
         _ = CarregarImpressorasAsync(Vendas.Config(cx, "impressora"));
+        _ = CarregarImpressorasComandaAsync(Vendas.Config(cx, "kds_comanda_impressora"));
+        ChkComandaAuto.IsChecked = Vendas.Config(cx, "kds_comanda_auto") == "1";
 
         // Tema: preferência da MÁQUINA, carrega mesmo antes da primeira configuração
         // e grava na hora (não espera o Salvar — o Salvar valida identidade fiscal,
@@ -153,6 +155,35 @@ public partial class Configuracao : UserControl
     private string? ImpressoraEscolhida()
     {
         var s = CboImpressora.SelectedItem as string;
+        if (s is null || s.StartsWith("(padrão")) return null;
+        var i = s.IndexOf("  (não encontrada)", StringComparison.Ordinal);
+        return i > 0 ? s[..i] : s;
+    }
+
+    /// <summary>Espelho de <see cref="CarregarImpressorasAsync"/> pro combo da
+    /// COMANDA da cozinha — impressora própria, separada da bobina do caixa.</summary>
+    private async Task CarregarImpressorasComandaAsync(string? escolhida)
+    {
+        CboImpressoraComanda.Items.Add("(padrão do Windows)");
+        CboImpressoraComanda.SelectedIndex = 0;
+        try
+        {
+            var lista = await Impressao.ImpressorasAsync();
+            foreach (var nome in lista) CboImpressoraComanda.Items.Add(nome);
+            if (escolhida is { Length: > 0 } && CboImpressoraComanda.Items.Contains(escolhida))
+                CboImpressoraComanda.SelectedItem = escolhida;
+            else if (escolhida is { Length: > 0 })
+            {
+                CboImpressoraComanda.Items.Add(escolhida + "  (não encontrada)");
+                CboImpressoraComanda.SelectedIndex = CboImpressoraComanda.Items.Count - 1;
+            }
+        }
+        catch { /* a lista do combo de cima já mostrou o erro do spooler */ }
+    }
+
+    private string? ImpressoraComandaEscolhida()
+    {
+        var s = CboImpressoraComanda.SelectedItem as string;
         if (s is null || s.StartsWith("(padrão")) return null;
         var i = s.IndexOf("  (não encontrada)", StringComparison.Ordinal);
         return i > 0 ? s[..i] : s;
@@ -695,6 +726,10 @@ public partial class Configuracao : UserControl
             else Vendas.GravarConfig(cx, "impressora", impressora);
             Vendas.GravarConfig(cx, "modo_fiscal", modoRecibo ? "recibo" : "nfce");
             Vendas.GravarConfig(cx, "imprimir_automatico", ChkImprimirAuto.IsChecked == false ? "0" : "1");
+            var impComanda = ImpressoraComandaEscolhida();
+            if (impComanda is null) cx.Execute("DELETE FROM config WHERE chave='kds_comanda_impressora'");
+            else Vendas.GravarConfig(cx, "kds_comanda_impressora", impComanda);
+            Vendas.GravarConfig(cx, "kds_comanda_auto", ChkComandaAuto.IsChecked == true ? "1" : "0");
             GravarTef(cx);
             _tefSalvo = true;
 

@@ -105,6 +105,11 @@ public static class Banco
             // sem esta coluna o segundo grava por cima do primeiro e a leitura com a
             // sessão velha APAGA a comanda do caixa que está de fato aberto.
             "ALTER TABLE comanda_rascunho ADD COLUMN dono TEXT",
+            // Comanda de COZINHA impressa automaticamente quando o pedido de delivery
+            // chega (28/08). O carimbo é o dedupe: NULL = ainda não saiu no papel.
+            // Reivindicação atômica (UPDATE ... WHERE impresso_em IS NULL) — o timer
+            // de 10s e o sino podem se sobrepor, e comanda dupla é donut duplo.
+            "ALTER TABLE kds_ticket ADD COLUMN impresso_em TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

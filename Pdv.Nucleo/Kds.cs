@@ -233,6 +233,85 @@ public static class Kds
             new { id = ticketId, de, para, agora = DateTime.Now.ToString("o") }) == 1;
     }
 
+    // ── comanda de cozinha impressa (28/08 — pedido do dono) ────────────────
+    // A comanda automática vale pro DELIVERY (origem 'ifood' cobre iFood E o
+    // cardápio próprio — a nuvem entrega os dois pelo mesmo feed; o número
+    // "CD-xxxx" distingue na impressão). Venda de balcão já tem o cupom dela.
+
+    /// <summary>Tickets de delivery ainda sem comanda no papel.</summary>
+    public static List<Ticket> ParaImprimir()
+    {
+        using var cx = Banco.Abrir();
+        return cx.Query(
+            @"SELECT * FROM kds_ticket
+               WHERE origem = 'ifood' AND impresso_em IS NULL
+                 AND status IN ('recebido','preparando','pronto')
+               ORDER BY criado_em")
+            .Select(Ler).ToList();
+    }
+
+    /// <summary>
+    /// Reivindica a impressão ANTES de mandar pro papel. Atômico: o timer de
+    /// 10s e o sino se sobrepõem, e sem isto o mesmo pedido sairia duas vezes.
+    /// Se a impressora falhar DEPOIS do claim, o pedido NÃO volta pra fila
+    /// sozinho (impressora morta viraria metralhadora de tentativas a cada
+    /// 10s) — o botão de reimprimir no card é o caminho de recuperação.
+    /// </summary>
+    public static bool ReivindicarImpressao(string ticketId)
+    {
+        using var cx = Banco.Abrir();
+        return cx.Execute(
+            @"UPDATE kds_ticket SET impresso_em = @em
+               WHERE id = @id AND impresso_em IS NULL",
+            new { id = ticketId, em = DateTime.Now.ToString("o") }) == 1;
+    }
+
+    /// <summary>
+    /// A comanda em texto monoespaçado (bobina 80mm ≈ 40 colunas), no contrato
+    /// de <c>Impressao.ImprimirTextoAsync</c>. Número GRANDE não existe em texto
+    /// puro — o destaque vem de moldura e respiro. Observação por item sai
+    /// indentada logo abaixo do item: é a instrução da cozinha ("sem granulado"),
+    /// perder isso no papel é refazer donut.
+    /// </summary>
+    public static IReadOnlyList<string> ComandaLinhas(Ticket t)
+    {
+        const int L = 40;
+        var eCardapio = t.Numero.StartsWith("CD-", StringComparison.OrdinalIgnoreCase);
+        var linhas = new List<string>
+        {
+            new string('=', L),
+            Centro("COMANDA DE COZINHA", L),
+            Centro(eCardapio ? "CARDAPIO WEB" : "iFOOD", L),
+            new string('=', L),
+            Centro($"PEDIDO  #{t.Numero}", L),
+            "",
+        };
+        if (t.Cliente is { Length: > 0 })
+            linhas.Add(Corta("Cliente: " + t.Cliente, L));
+        linhas.Add($"Chegou:  {t.CriadoEm:HH:mm}  ·  Impresso: {DateTime.Now:HH:mm}");
+        linhas.Add(new string('-', L));
+        foreach (var i in t.Itens)
+        {
+            var qtd = i.Qtd % 1000 == 0 ? (i.Qtd / 1000).ToString() : (i.Qtd / 1000m).ToString("0.###");
+            linhas.Add(Corta($"{qtd}x {i.Descricao}", L));
+            if (i.Observacao is { Length: > 0 })
+                foreach (var parte in Quebra(">> " + i.Observacao, L - 3))
+                    linhas.Add("   " + parte);
+        }
+        linhas.Add(new string('-', L));
+        linhas.Add("");
+        return linhas;
+
+        static string Centro(string s, int larg) =>
+            s.Length >= larg ? s[..larg] : s.PadLeft((larg + s.Length) / 2).PadRight(larg);
+        static string Corta(string s, int larg) => s.Length <= larg ? s : s[..(larg - 1)] + "…";
+        static IEnumerable<string> Quebra(string s, int larg)
+        {
+            for (var i = 0; i < s.Length; i += larg)
+                yield return s.Substring(i, Math.Min(larg, s.Length - i));
+        }
+    }
+
     /// <summary>Venda cancelada não pode continuar pedindo produção.</summary>
     public static void CancelarPorVenda(string vendaId)
     {
