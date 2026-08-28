@@ -53,7 +53,11 @@ public enum ViaAutorizacao
 {
     /// <summary>Ninguém autorizou: operador desistiu, PIN recusado ou token morto sem saída.</summary>
     Recusada,
-    /// <summary>Modo de homologação: autoriza sem PIN e sem token (roteiro PayGo).</summary>
+    /// <summary>
+    /// Histórico. O modo de homologação foi removido quando a operação começou
+    /// (ele autorizava sem PIN e sem token). O valor fica para LER auditoria
+    /// antiga — nada mais o produz.
+    /// </summary>
     Homologacao,
     /// <summary>Aprovado remotamente por quem recebeu o código no WhatsApp.</summary>
     Token,
@@ -103,7 +107,16 @@ public sealed record RespostaValidacao(
 public sealed record PedidoAutorizacao(
     string Terminal, string Referencia, long ValorCent,
     string? Loja = null, string? Operador = null, string? Venda = null,
-    string? Forma = null, string? Nsu = null, string? Bandeira = null);
+    string? Forma = null, string? Nsu = null, string? Bandeira = null)
+{
+    /// <summary>
+    /// O que está sendo autorizado: "estorno" (dinheiro de volta) ou
+    /// "configuracao" (abrir a tela que muda série fiscal, ambiente e TEF).
+    /// A nuvem usa isto para escrever a mensagem certa no WhatsApp — quem
+    /// aprova precisa saber o que está aprovando, senão vira carimbo.
+    /// </summary>
+    public string Tipo { get; init; } = "estorno";
+}
 
 /// <summary>A nuvem. Implementação real: <see cref="ClienteAutorizacao"/>.</summary>
 public interface IAutorizacaoRemota
@@ -331,11 +344,6 @@ public static class Autorizacao
         SqliteConnection cx, IAutorizacaoRemota? remota, PedidoAutorizacao pedido,
         Operador operador, ITelaAutorizacao tela, CancellationToken ct = default)
     {
-        // ── 1. MODO DE HOMOLOGAÇÃO: NÃO MEXER ────────────────────────────────
-        // Os passos 20, 21, 22 e 54 do roteiro PayGo SÃO estornos. Se eles
-        // passarem a depender de WhatsApp, o dono não termina a homologação —
-        // e o roteiro é rodado com a loja fechada, sem gerente para aprovar.
-        // Aqui continua exatamente o comportamento de antes: libera sem PIN.
 
 
         // A SAÍDA. Fica aqui dentro porque todo caminho de falha desemboca nela.
@@ -503,7 +511,7 @@ public sealed class ClienteAutorizacao : IAutorizacaoRemota
         {
             acao = "solicitar",
             terminal = p.Terminal,
-            tipo = "estorno",
+            tipo = p.Tipo,
             referencia = p.Referencia,
             valor_cent = p.ValorCent,
             operador = p.Operador,
