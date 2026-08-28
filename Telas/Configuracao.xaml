@@ -199,6 +199,29 @@
                                          BorderBrush="{DynamicResource Borda}"/>
                         </StackPanel>
                     </Grid>
+                    <!-- Rede pré-selecionada. Estes dois valores existiam SÓ no banco e não
+                         apareciam em lugar nenhum: a homologação deixou "PIX C6 BANK" gravado
+                         (autorizador de TESTE) e em produção o PIX passou a ser recusado, sem
+                         o dono ter como ver nem mudar. Configuração invisível que muda o
+                         comportamento é armadilha — agora está na tela. -->
+                    <Grid Margin="0,4,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Rede pré-selecionada p/ cartão" Style="{StaticResource Rotulo}"/>
+                            <TextBox x:Name="TxtCpayAdquirente" Margin="0,4,0,0" Tag="vazio = a PayGo escolhe"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Rede p/ PIX" Style="{StaticResource Rotulo}"/>
+                            <TextBox x:Name="TxtCpayAdquirentePix" Margin="0,4,0,0" Tag="vazio = a PayGo escolhe"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Text="Deixe os dois em branco em produção: quem escolhe a rede é a PayGo. Nome de rede de teste aqui faz a cobrança ser recusada."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
                     <!-- Só o teste de vínculo. O menu administrativo saiu daqui (28/08): o
                          ControlPay tem o painel web para isso, e no WebService a chamada
                          voltava 404 — botão que não funciona é pior que botão que não existe. -->

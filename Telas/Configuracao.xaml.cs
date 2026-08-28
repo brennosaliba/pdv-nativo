@@ -50,6 +50,8 @@ public partial class Configuracao : UserControl
         CmbCpayAmbiente.SelectedIndex = Vendas.Config(cx, "tef_cpay_ambiente") == "producao" ? 1 : 0;
         TxtCpayTerminal.Text = Vendas.Config(cx, "tef_cpay_terminal", "");
         TxtCpayPessoa.Text = Vendas.Config(cx, "tef_cpay_pessoa", "");
+        TxtCpayAdquirente.Text = Vendas.Config(cx, "tef_cpay_adquirente", "");
+        TxtCpayAdquirentePix.Text = Vendas.Config(cx, "tef_cpay_adquirente_pix", "");
         {
             // segredos do ControlPay no cofre DPAPI (reabrir vem preenchido)
             var segTef = LerSegredos();
@@ -826,6 +828,8 @@ public partial class Configuracao : UserControl
         Vendas.GravarConfig(cx, "tef_cpay_ambiente", CmbCpayAmbiente.SelectedIndex == 1 ? "producao" : "sandbox");
         Chave("tef_cpay_terminal", TxtCpayTerminal.Text);
         Chave("tef_cpay_pessoa", TxtCpayPessoa.Text);
+        Chave("tef_cpay_adquirente", TxtCpayAdquirente.Text);
+        Chave("tef_cpay_adquirente_pix", TxtCpayAdquirentePix.Text);
         {
             var segTef = LerSegredos();
             var chaveCpay = PwdCpayChave.Password.Trim();
