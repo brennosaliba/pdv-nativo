@@ -93,6 +93,51 @@ public static class TestesKds
         {
             Banco.Migrar(arquivo);
 
+            // ── CARD FANTASMA: PEDIDO VELHO TEM QUE SAIR DO QUADRO ────
+            // Aconteceu de verdade: pedido de 22/08 ainda no quadro em 28/08, já
+            // cancelado no iFood, mostrando "+9847 min". A expiração só olhava
+            // 'recebido' — quem chegou a 'preparando'/'pronto' ficava para sempre.
+            // Card morto que não sai faz o operador desconfiar do quadro inteiro.
+            {
+                using var cx = Banco.Abrir(arquivo);
+                cx.Execute("DELETE FROM kds_ticket");
+                var velho = DateTime.Now.AddDays(-6).ToString("o");
+                var agora = DateTime.Now.ToString("o");
+                foreach (var (id, st, quando) in new[]
+                {
+                    ("f-pronto-velho",    Kds.Pronto,     velho),
+                    ("f-preparo-velho",   Kds.Preparando, velho),
+                    ("f-recebido-velho",  Kds.Recebido,   velho),
+                    ("f-pronto-agora",    Kds.Pronto,     agora),
+                    ("f-preparo-agora",   Kds.Preparando, agora),
+                })
+                    cx.Execute(
+                        @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em)
+                          VALUES (@i,'ifood',@i,@i,'x','[]',@s,@q)",
+                        new { i = id, s = st, q = quando });
+
+                Kds.SincronizarDelivery(Array.Empty<PedidoDelivery>());
+
+                string Status(string id) => cx.ExecuteScalar<string>(
+                    "SELECT status FROM kds_ticket WHERE id=@i", new { i = id })!;
+
+                checar(Status("f-pronto-velho") == Kds.Cancelado,
+                    "pedido PRONTO de 6 dias atrás sai do quadro (era o fantasma do +9847 min)");
+                checar(Status("f-preparo-velho") == Kds.Cancelado,
+                    "pedido EM PREPARO de 6 dias atrás também sai");
+                checar(Status("f-recebido-velho") == Kds.Cancelado,
+                    "pedido RECEBIDO velho continua saindo (regra das 4h, intacta)");
+                checar(Status("f-pronto-agora") == Kds.Pronto,
+                    "pedido pronto de AGORA fica — o teto não pode varrer o trabalho do dia");
+                checar(Status("f-preparo-agora") == Kds.Preparando,
+                    "pedido em preparo de AGORA fica: ninguém tira da tela o que está no forno");
+
+                // Limpa o que este bloco semeou: os dois cards de AGORA continuam
+                // vivos de propósito, e entrariam nos contadores dos testes abaixo.
+                cx.Execute("DELETE FROM kds_ticket WHERE id LIKE 'f-%'");
+            }
+
+
             var itens = new[] { new TicketItem("COOKIE TRIPLO", 2000, null),
                                 new TicketItem("AGUA 500ML",    1000, "sem gelo") };
 

@@ -425,14 +425,29 @@ public static class Kds
         // ninguém — expira sozinho, senão o quadro acumula card morto até
         // ninguém mais confiar no que ele mostra.
         using (var cxLimpa = Banco.Abrir())
+        {
             cxLimpa.Execute(
                 @"UPDATE kds_ticket SET status = @s
                    WHERE origem = 'ifood' AND status = 'recebido'
                      AND criado_em < @limite",
                 new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o") });
-        // SO 'recebido': expirar quem esta 'preparando' cancelaria um pedido
-        // que o cozinheiro ACABOU de assumir (chegou as 3h58 do limite e foi
-        // pego) - o card sumiria da tela no meio da producao.
+            // SO 'recebido' nas 4h: expirar quem esta 'preparando' cancelaria um
+            // pedido que o cozinheiro ACABOU de assumir (chegou as 3h58 do limite e
+            // foi pego) - o card sumiria da tela no meio da producao.
+
+            // MAS 'preparando'/'pronto' precisavam de um teto proprio, senao NUNCA
+            // expiravam: um pedido que chegou a 'pronto' ficava no quadro para
+            // sempre. Aconteceu de verdade - card de 22/08 ainda no quadro em 28/08,
+            // ja cancelado no iFood, com "+9847 min" na tela. Card morto que nao sai
+            // faz o operador parar de confiar no quadro inteiro, que e pior do que
+            // nao ter quadro. 12h e folgado para qualquer preparo real e mata o
+            // fantasma no primeiro sync do dia seguinte.
+            cxLimpa.Execute(
+                @"UPDATE kds_ticket SET status = @s
+                   WHERE origem = 'ifood' AND status IN ('preparando','pronto')
+                     AND criado_em < @limite",
+                new { s = Cancelado, limite = DateTime.Now.AddHours(-12).ToString("o") });
+        }
 
         var novos = 0;
         foreach (var p in pedidos)
