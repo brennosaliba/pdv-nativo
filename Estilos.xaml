@@ -125,6 +125,51 @@
     </Style>
 
 
+    <!-- CHECKBOX: sem estilo, o WPF pinta o texto de PRETO fixo — no tema escuro
+         a legenda simplesmente sumia (o dono nao conseguia ler a opcao da comanda
+         da cozinha). Herdar a cor do tema resolve, e de quebra o alvo fica maior
+         para o dedo. -->
+    <Style TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{DynamicResource Texto}"/>
+        <Setter Property="Background" Value="{DynamicResource Painel}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Borda}"/>
+        <Setter Property="Padding" Value="9,0,0,0"/>
+        <Setter Property="MinHeight" Value="34"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <StackPanel Orientation="Horizontal" Background="Transparent" MinHeight="{TemplateBinding MinHeight}">
+                        <Border x:Name="caixa" Width="22" Height="22" CornerRadius="6" VerticalAlignment="Center"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1.5">
+                            <Path x:Name="tique" Data="M0,4 L3.5,7.5 L9,1" Stroke="White" StrokeThickness="2"
+                                  StrokeEndLineCap="Round" StrokeStartLineCap="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Border>
+                        <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center"
+                                          TextBlock.Foreground="{TemplateBinding Foreground}"
+                                          TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="caixa" Property="Background" Value="{DynamicResource Marca}"/>
+                            <Setter TargetName="caixa" Property="BorderBrush" Value="{DynamicResource Marca}"/>
+                            <Setter TargetName="tique" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="caixa" Property="BorderBrush" Value="{DynamicResource Marca}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- OPÇÃO EM CARTÃO: escolha exclusiva sem dropdown. Tudo visível de uma vez,
          alvo grande para o dedo, e o escolhido se anuncia pela cor da marca —
          numa tela de balcão isso vale mais que economizar espaço. -->
