@@ -474,7 +474,12 @@ public static class Servicos
             // insistir com diálogo aqui só empilharia janelas sobre o caixa. Uma tentativa,
             // um aviso, e o operador reimprime quando quiser (TEF → Reimprimir).
             if (!decide && ++tentativas > 1) return false;
-            var (erro, saiu) = await Impressao.ImprimirBlocosAsync(descricao, blocos, impressora, impressos).ConfigureAwait(false);
+            // `decide` = PayGo two-phase: sem o papel não há CNF, então a via tem a mesma
+            // urgência da venda. No ControlPay a transação já está efetivada e ninguém está
+            // esperando esta via — ela cede a vez para o cupom, que é o papel que o cliente
+            // tem na mão. Mesma impressora, ordem que faz sentido para quem está no balcão.
+            var (erro, saiu) = await Impressao.ImprimirBlocosAsync(descricao, blocos, impressora, impressos,
+                decide ? Impressao.PrioridadeImpressao.Alta : Impressao.PrioridadeImpressao.Baixa).ConfigureAwait(false);
             impressos += saiu;   // retentativa continua da via que NÃO saiu (não duplica a via do cliente)
             if (erro is null) return true;
             if (!decide)

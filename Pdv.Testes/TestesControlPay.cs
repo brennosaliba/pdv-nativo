@@ -81,6 +81,50 @@ public static class TestesControlPay
                 $"passo curto maior que o lento não atrasa nada (levou {relogio.ElapsedMilliseconds} ms)");
         }
 
+        // ── ORDEM DA BOBINA: o cupom passa na frente da via do TEF ────────
+        // Depois de aprovar o cartão saem dois papéis na MESMA impressora: as vias
+        // do TEF (disparadas em segundo plano, `_ = ImprimirSeguroAsync`) e o cupom
+        // da venda. Sem prioridade as vias entram no spooler primeiro e o cupom —
+        // o único papel que o cliente está esperando — sai atrás delas. Impressao
+        // vive no projeto WPF, que este projeto não referencia; então a garantia é
+        // sobre o fonte, no mesmo padrão do teste do rascunho.
+        {
+            string? Fonte(params string[] caminho)
+            {
+                for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+                {
+                    var alvo = Path.Combine(new[] { d.FullName }.Concat(caminho).ToArray());
+                    if (File.Exists(alvo)) return File.ReadAllText(alvo);
+                }
+                return null;
+            }
+
+            var impressao = Fonte("Impressao.cs");
+            checar(impressao is not null, "achei a fonte da impressão");
+            checar(impressao?.Contains("enum PrioridadeImpressao", StringComparison.Ordinal) == true,
+                "a impressão tem prioridade (cupom na frente da via do TEF)");
+            checar(impressao?.Contains("SemaphoreSlim Bobina", StringComparison.Ordinal) == true,
+                "existe uma vez única na bobina: dois papéis não disputam a impressora");
+            checar(impressao?.Contains("_altaNaFila", StringComparison.Ordinal) == true,
+                "a via do TEF espera enquanto houver cupom na fila");
+
+            // O cupom da venda tem que pedir a vez como ALTA.
+            var iCupom = impressao?.IndexOf("public static Task<string?> ImprimirAsync(DadosCupom", StringComparison.Ordinal) ?? -1;
+            var corpoCupom = iCupom < 0 ? "" : impressao![iCupom..Math.Min(impressao.Length, iCupom + 1400)];
+            checar(corpoCupom.Contains("PrioridadeImpressao.Alta", StringComparison.Ordinal),
+                "o cupom da venda imprime com prioridade alta");
+
+            // E o comprovante do ControlPay (transação JÁ efetivada, ninguém esperando)
+            // cede a vez — mas o do PayGo two-phase, onde o papel decide o CNF, NÃO cede.
+            var servicos = Fonte("Servicos.cs");
+            checar(servicos is not null, "achei a fonte dos serviços");
+            var iVia = servicos?.IndexOf("Impressao.ImprimirBlocosAsync(descricao", StringComparison.Ordinal) ?? -1;
+            var chamada = iVia < 0 ? "" : servicos![iVia..Math.Min(servicos.Length, iVia + 400)];
+            checar(chamada.Contains("PrioridadeImpressao.Baixa", StringComparison.Ordinal)
+                   && chamada.Contains("decide", StringComparison.Ordinal),
+                "a via do TEF cede a vez ao cupom — menos quando o papel decide o CNF (PayGo two-phase)");
+        }
+
         // ── utilitários ───────────────────────────────────────────────────
         {
             checar(ClienteControlPay.ValorComVirgula(1234567) == "12345,67", "valorTotalVendido com vírgula e sem milhar: " + ClienteControlPay.ValorComVirgula(1234567));

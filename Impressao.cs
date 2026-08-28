@@ -274,7 +274,43 @@ public static class Impressao
             // pagamento com a venda já paga.
             return Task.FromResult<string?>($"Cupom inconsistente, não imprimi: {ex.Message}");
         }
-        return ComPrazoAsync(EmThreadStaAsync(() => Imprimir(dados, nomeImpressora)));
+        return NaFilaAsync(PrioridadeImpressao.Alta,
+            () => ComPrazoAsync(EmThreadStaAsync(() => Imprimir(dados, nomeImpressora))));
+    }
+
+    /// <summary>Quem tem preferência na impressora quando dois papéis disputam a bobina.</summary>
+    public enum PrioridadeImpressao
+    {
+        /// <summary>Cupom/recibo da venda — é o papel que o cliente está esperando na mão.</summary>
+        Alta,
+        /// <summary>Via do TEF, comprovante de estorno: importam, mas ninguém está parado por elas.</summary>
+        Baixa,
+    }
+
+    // A impressora é UMA. Depois de aprovar o cartão saem dois papéis: as vias do TEF
+    // (disparadas em segundo plano, sem ninguém esperando) e o cupom da venda. Sem
+    // ordem, as vias entram no spooler primeiro e o cupom — o único que o cliente está
+    // esperando — sai atrás delas. Aqui o cupom passa na frente: um trabalho de baixa
+    // prioridade não começa enquanto houver cupom na fila, e o que já começou termina
+    // (não dá para tirar papel do meio do caminho).
+    private static readonly SemaphoreSlim Bobina = new(1, 1);
+    private static int _altaNaFila;
+
+    private static async Task<string?> NaFilaAsync(PrioridadeImpressao prioridade, Func<Task<string?>> trabalho)
+    {
+        if (prioridade == PrioridadeImpressao.Alta) Interlocked.Increment(ref _altaNaFila);
+        try
+        {
+            while (prioridade == PrioridadeImpressao.Baixa && Volatile.Read(ref _altaNaFila) > 0)
+                await Task.Delay(40).ConfigureAwait(false);
+            await Bobina.WaitAsync().ConfigureAwait(false);
+            try { return await trabalho().ConfigureAwait(false); }
+            finally { Bobina.Release(); }
+        }
+        finally
+        {
+            if (prioridade == PrioridadeImpressao.Alta) Interlocked.Decrement(ref _altaNaFila);
+        }
     }
 
     /// <summary>
@@ -410,8 +446,8 @@ public static class Impressao
     /// </summary>
     /// <param name="descricao">Nome do trabalho na fila do Windows (a vigia casa por nome; ganha índice e sufixo únicos).</param>
     public static async Task<string?> ImprimirTextoAsync(string descricao, IReadOnlyList<IReadOnlyList<string>> blocos,
-        string? nomeImpressora)
-        => (await ImprimirBlocosAsync(descricao, blocos, nomeImpressora, 0)).Erro;
+        string? nomeImpressora, PrioridadeImpressao prioridade = PrioridadeImpressao.Alta)
+        => (await ImprimirBlocosAsync(descricao, blocos, nomeImpressora, 0, prioridade)).Erro;
 
     /// <summary>
     /// Igual a <see cref="ImprimirTextoAsync"/>, mas devolve também QUANTOS blocos saíram e aceita
@@ -419,7 +455,8 @@ public static class Impressao
     /// imprimir a via do cliente duas vezes. `Sairam` conta só os desta chamada.
     /// </summary>
     public static async Task<(string? Erro, int Sairam)> ImprimirBlocosAsync(string descricao,
-        IReadOnlyList<IReadOnlyList<string>> blocos, string? nomeImpressora, int pular)
+        IReadOnlyList<IReadOnlyList<string>> blocos, string? nomeImpressora, int pular,
+        PrioridadeImpressao prioridade = PrioridadeImpressao.Alta)
     {
         if (blocos is null || blocos.Count == 0 || blocos.All(b => b is null || b.Count == 0))
             return ("Não há texto para imprimir.", 0);
@@ -432,7 +469,8 @@ public static class Impressao
             if (n <= pular) continue;
             var linhas = bloco;
             var nome = $"{descricao} {n}/{blocos.Count} #{Environment.TickCount64:x}";
-            var erro = await ComPrazoAsync(EmThreadStaAsync(() => ImprimirVisual(() => MontarTexto(linhas), nome, nomeImpressora)));
+            var erro = await NaFilaAsync(prioridade,
+                () => ComPrazoAsync(EmThreadStaAsync(() => ImprimirVisual(() => MontarTexto(linhas), nome, nomeImpressora))));
             if (erro is not null) return (erro, sairam);
             sairam++;
         }
