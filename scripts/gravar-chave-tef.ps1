@@ -1,4 +1,4 @@
-# gravar-chave-tef.ps1 — grava a CHAVE DE INTEGRAÇÃO do ControlPay no cofre da máquina.
+﻿# gravar-chave-tef.ps1 — grava a CHAVE DE INTEGRAÇÃO do ControlPay no cofre da máquina.
 #
 # Por que existe: a chave vive cifrada por DPAPI (escopo LocalMachine) em
 # C:\ProgramData\PdvNativo\seg\seg.dat — é de onde Servicos.Tef() lê. Ela NÃO vai
