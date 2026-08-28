@@ -30,13 +30,6 @@ public partial class Kds : UserControl
     public Kds(string loja)
     {
         InitializeComponent();
-        // A largura do card acompanha a coluna: monitor girado, janela
-        // redimensionada ou tela cheia recalculam sozinhos.
-        foreach (var col in new[] { ColPreparar, ColPreparo, ColPronto })
-        {
-            col.SizeChanged += (s, _) => LarguraDosCards((WrapPanel)s);
-            LarguraDosCards(col);
-        }
         _loja = loja;
         Pintar();
         _ = PuxarAsync();
@@ -122,38 +115,38 @@ public partial class Kds : UserControl
     }
 
     /// <summary>
-    /// Cards em 3 por linha DENTRO da coluna de status. A largura e calculada da
-    /// largura real da coluna (nao ha "3 colunas" no WrapPanel): assim o quadro
-    /// se adapta ao monitor da cozinha, que varia de loja pra loja.
+    /// Quantas colunas de card cabem DENTRO de cada coluna de status.
     /// </summary>
     private const int CardsPorLinha = 2;
 
     /// <summary>
-    /// Altura fixa do card. Com ItemWidth E ItemHeight o WrapPanel entrega cards
-    /// IGUAIS — foi o pedido do balcao: quadro harmonico, tudo alinhado. O preco
-    /// e que pedido comprido corta a lista de itens, entao a altura precisa caber
-    /// o caso comum (o card abre no toque com tudo).
+    /// Distribui os cards num Grid de <see cref="CardsPorLinha"/> colunas.
+    ///
+    /// Grid e nao WrapPanel: no WrapPanel, alinhar os cards exigia altura FIXA —
+    /// e altura fixa CORTA pedido comprido (o de 6 itens aparecia com 2). Aqui
+    /// cada LINHA cresce ate o maior card dela e os vizinhos esticam junto:
+    /// alinhado em cima e embaixo, sem esconder item nenhum.
     /// </summary>
-    private const double AlturaDoCard = 158;
-
-    private static void LarguraDosCards(WrapPanel p)
-    {
-        // -1 para nao empatar com a largura disponivel por arredondamento e
-        // jogar o ultimo card pra linha de baixo.
-        // ItemWidth/ItemHeight nascem NaN, e TODA comparacao com NaN e falsa —
-        // "Math.Abs(NaN - w) > 0.5" da FALSE e a largura nunca era aplicada. O
-        // resultado no quadro: cards com larguras naturais diferentes e 4 por
-        // linha em vez de 2. Por isso o IsNaN explicito vem primeiro.
-        var w = Math.Max(180, (p.ActualWidth / CardsPorLinha) - 1);
-        if (double.IsNaN(p.ItemWidth) || Math.Abs(p.ItemWidth - w) > 0.5) p.ItemWidth = w;
-        if (double.IsNaN(p.ItemHeight) || Math.Abs(p.ItemHeight - AlturaDoCard) > 0.5)
-            p.ItemHeight = AlturaDoCard;
-    }
-
-    private void Encher(Panel coluna, IEnumerable<Ticket> tickets)
+    private void Encher(Grid coluna, IEnumerable<Ticket> tickets)
     {
         coluna.Children.Clear();
-        foreach (var t in tickets) coluna.Children.Add(Card(t));
+        coluna.RowDefinitions.Clear();
+        coluna.ColumnDefinitions.Clear();
+        for (var c = 0; c < CardsPorLinha; c++)
+            coluna.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var i = 0;
+        foreach (var t in tickets)
+        {
+            var linha = i / CardsPorLinha;
+            if (linha >= coluna.RowDefinitions.Count)
+                coluna.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var card = Card(t);
+            Grid.SetRow(card, linha);
+            Grid.SetColumn(card, i % CardsPorLinha);
+            coluna.Children.Add(card);
+            i++;
+        }
     }
 
     /// <summary>
@@ -178,7 +171,7 @@ public partial class Kds : UserControl
         var b = new Button
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
-            MinHeight = 0, Margin = new Thickness(3, 3, 3, 4),
+            MinHeight = 116, Margin = new Thickness(3, 3, 3, 4),
             Padding = new Thickness(0), Tag = t.Id,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Stretch,

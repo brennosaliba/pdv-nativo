@@ -160,80 +160,27 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Reconfigurar exige APROVAÇÃO DE FORA da loja: a nuvem manda um código de 6
-    /// dígitos no WhatsApp do dono e da gerente (um código próprio para cada, para
-    /// a auditoria saber quem liberou) e quem está no caixa digita.
+    /// Reconfigurar exige a SENHA DE ADMINISTRADOR. Quem entra aqui muda serie
+    /// fiscal, ambiente da NFC-e e TEF — erra e a nota sai errada por dias sem
+    /// ninguem perceber.
     ///
-    /// Por que não basta a senha: quem entra aqui muda série fiscal, ambiente da
-    /// NFC-e e TEF — erra e a nota sai errada por dias sem ninguém perceber. Senha
-    /// que mora no balcão vaza; código por WhatsApp exige o celular do dono.
-    ///
-    /// A SAÍDA é a senha de administrador, e ela existe de propósito: se a internet
-    /// cair é exatamente quando alguém precisa entrar aqui para consertar o caixa.
-    /// Toda entrada por essa porta fica marcada na auditoria.
+    /// O 2FA por WhatsApp saiu (28/08): num produto SaaS a senha e do DONO da
+    /// loja, escolhida por ele no painel — depender do celular de alguem para
+    /// abrir a configuracao trava o suporte de madrugada. Numerica, porque o
+    /// caixa e de toque e o teclado da tela e numerico.
     /// </summary>
-    private async void AbrirConfigProtegida()
+    private void AbrirConfigProtegida()
     {
-        using (var cxT = Banco.Abrir())
-        {
-            var remota = Servicos.Autorizador();
-            if (remota is not null)
-            {
-                var terminal = cxT.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "PDV";
-                var pedido = new PedidoAutorizacao(
-                    Terminal: Autorizacao.NomeDoTerminal(cxT),
-                    Referencia: "config-" + DateTime.Now.ToString("yyyyMMddHHmmss"),
-                    ValorCent: 0,
-                    Loja: terminal,
-                    Operador: _operador?.Nome ?? "(sem login)")
-                { Tipo = "configuracao" };
-
-                var tela = new TelaAutorizacao(this, configuracao: true);
-                // Sem login (config aberta pela tela de login) o pedido ainda precisa
-                // de um operador para a auditoria: o primeiro ativo serve de rótulo,
-                // e quem de fato liberou é quem aprovou pelo WhatsApp.
-                var quem = _operador ?? Operadores.PrimeiroAtivo(cxT);
-                if (quem is null) return;
-                DesfechoAutorizacao d;
-                try
-                {
-                    d = await Autorizacao.ResolverAsync(cxT, remota, pedido, quem, tela, CancellationToken.None);
-                }
-                catch
-                {
-                    // Falha da autorização NUNCA pode derrubar o caixa (este método é
-                    // async void): cai para a senha de administrador logo abaixo.
-                    d = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, null, "falhou");
-                }
-                if (d.Autorizado)
-                {
-                    // A trilha diz por qual porta entrou: código da gerência ou a
-                    // saída pela senha (que a própria tela já ofereceu quando a
-                    // nuvem não respondeu). Não perguntar a senha de novo aqui.
-                    Caixa.Auditar(cxT, null, "config_aberta", _operador?.Id, d.AprovadoPor,
-                        (d.SemAprovacaoRemota
-                            ? "senha de administrador (SEM aprovação remota)"
-                            : "código no WhatsApp da gerência") + Autorizacao.Trilha(d));
-                    MostrarConfiguracao();
-                    return;
-                }
-                // A tela já explicou (cancelou, código errado, senha errada) — um
-                // segundo pedido de senha aqui seria a mesma pergunta duas vezes.
-                return;
-            }
-        }
-
-        // Saída: senha de administrador (nuvem fora do ar ou sem aprovação remota).
-        var senha = PedirSenha.Mostrar(this, "Configuração do PDV", "Senha de administrador");
+        var senha = PedirSenha.Mostrar(this, "Configuracao do PDV", "Senha de administrador");
         if (senha is null) return;
         using var cx = Banco.Abrir();
         if (!Configuracao.SenhaAdminConfere(cx, senha))
         {
             Caixa.Auditar(cx, null, "config_negada", null, null, "senha de administrador incorreta");
-            Dialogo.Avisar(this, "Senha incorreta", "A senha de administrador não confere.", "erro");
+            Dialogo.Avisar(this, "Senha incorreta", "A senha de administrador nao confere.", "erro");
             return;
         }
-        Caixa.Auditar(cx, null, "config_aberta", null, null, "pela senha de administrador (sem aprovação remota)");
+        Caixa.Auditar(cx, null, "config_aberta", null, null, null);
         MostrarConfiguracao();
     }
 }

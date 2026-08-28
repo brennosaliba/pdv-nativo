@@ -354,31 +354,28 @@ public static class TestesAutorizacao
             // solicitações do fake (o do rate limit é o AT-18, que baixa de novo).
             fake.MaxSolicitacoes = 99;
 
-            // ── CONFIGURAÇÃO TAMBÉM PASSA PELA APROVAÇÃO REMOTA ───────
-            // Quem entra na Configuração muda série fiscal, ambiente da NFC-e e TEF:
-            // erra e a nota sai errada por dias sem ninguém perceber. Por isso ela usa
-            // o MESMO caminho do estorno, mudando só o `Tipo` — a nuvem escreve outra
-            // mensagem, porque quem aprova precisa saber o que está aprovando.
+            // ── A CONFIGURAÇÃO NÃO USA APROVAÇÃO REMOTA ───────────────
+            // Chegou a usar (código no WhatsApp do dono e da gerente) e SAIU em
+            // 28/08: num produto SaaS a senha de administrador é do dono da loja,
+            // escolhida por ele no painel — depender do celular de alguém para
+            // abrir a configuração trava o suporte de madrugada. O `Tipo` do
+            // pedido continua existindo porque a nuvem o aceita, mas nada no PDV
+            // pede autorização remota para configurar.
             {
-                var pedidoCfg = pedido with { Tipo = "configuracao", ValorCent = 0 };
-                checar(pedidoCfg.Tipo == "configuracao" && pedido.Tipo == "estorno",
-                    "AT-1b o tipo do pedido separa configuração de estorno (e o estorno segue o padrão)");
-
-                var telaCfg = new TelaFalsa
+                string? fonte = null;
+                for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
                 {
-                    PinDevolve = sup,
-                    AoPedirCodigo = (rp, _) => new RespostaCodigo(AcaoCodigo.Confirmar, CodigoDe(fake, rp)),
-                };
-                var dCfg = await Autorizacao.ResolverAsync(cx, cli, pedidoCfg, op, telaCfg, CancellationToken.None);
-                checar(dCfg.Autorizado && dCfg.Via == ViaAutorizacao.Token,
-                    "AT-1c a configuração é liberada pelo código do WhatsApp, igual ao estorno");
-
-                // Nuvem fora do ar: a tela cai para a senha — e ela existe de propósito,
-                // porque internet caindo é exatamente quando se precisa entrar lá.
-                var telaMorta = new TelaFalsa { PinDevolve = sup };
-                var dMorta = await Autorizacao.ResolverAsync(cx, morta, pedidoCfg, op, telaMorta, CancellationToken.None);
-                checar(dMorta.SemAprovacaoRemota,
-                    "AT-1d com a nuvem fora do ar a configuração sai SEM aprovação remota (e a auditoria marca)");
+                    var alvo = Path.Combine(d.FullName, "MainWindow.xaml.cs");
+                    if (File.Exists(alvo)) { fonte = File.ReadAllText(alvo); break; }
+                }
+                checar(fonte is not null, "achei a fonte da janela principal");
+                var i = fonte?.IndexOf("private void AbrirConfigProtegida()", StringComparison.Ordinal) ?? -1;
+                checar(i >= 0, "AbrirConfigProtegida é síncrono de novo (sem ida à nuvem)");
+                var corpo = i < 0 ? "" : fonte![i..Math.Min(fonte.Length, i + 1200)];
+                checar(corpo.Contains("SenhaAdminConfere", StringComparison.Ordinal),
+                    "a configuração é liberada pela senha de administrador");
+                checar(!corpo.Contains("ResolverAsync", StringComparison.Ordinal),
+                    "e NÃO pede código no WhatsApp");
             }
 
             // AT-1 guarda o que foi REMOVIDO: existia um modo de homologação que
