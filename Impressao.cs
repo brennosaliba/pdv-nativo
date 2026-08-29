@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Printing;
 using System.Windows;
@@ -445,6 +445,124 @@ public static class Impressao
             return DestinoCupom(impressoraCupom, papelCupom);
         return new Destino(Fila(impressoraComanda),
             Papel.De(string.IsNullOrWhiteSpace(papelComanda) ? papelCupom : papelComanda));
+    }
+
+    // ── O SELETOR DA ABA DELIVERY (29/08 — relato do dono) ───────────────────────
+    //
+    // "apos instalado, nao mostra a impressora no PDV na aba de delivery, somente no
+    // dash principal". A escolha JÁ existia — só que trancada no passo "Impressora" do
+    // assistente de Configuração. Quem opera a cozinha vai procurar onde a comanda sai
+    // JUNTO dos pedidos, não num assistente de instalação, e não achando conclui que o
+    // PDV não deixa escolher.
+    //
+    // O seletor do cabeçalho do Delivery grava nas MESMAS chaves do assistente
+    // (kds_comanda_separada / kds_comanda_impressora / kds_comanda_papel_mm). Duas fontes
+    // de verdade sobre onde o papel sai divergem no primeiro dia, e quem descobre é a
+    // cozinha, com o pedido na mão. As regras moram AQUI, fora do WPF, porque o que não
+    // pode errar é a ESCOLHA — o desenho do combo a suíte não precisa ver.
+
+    /// <summary>
+    /// Uma linha do seletor de impressora da comanda.
+    ///
+    /// <paramref name="Impressora"/> <c>null</c> é "a mesma do cupom" (a opção de cima),
+    /// <c>""</c> é a padrão do Windows escolhida de propósito, e qualquer outro valor é o
+    /// nome da fila. Os três estados num campo só, e não num campo + bandeira, porque
+    /// bandeira e nome discordando é estado impossível que compila.
+    /// </summary>
+    public readonly record struct OpcaoComanda(string Rotulo, string? Impressora);
+
+    /// <summary>
+    /// As opções do seletor e QUAL delas está valendo agora.
+    ///
+    /// A primeira é sempre "mesma do cupom", e ela diz o NOME da impressora do cupom
+    /// entre parênteses: a pergunta do operador é "sai em qual?", e "mesma do cupom"
+    /// sozinho não responde — foi exatamente o que o dono não conseguiu ler na tela.
+    ///
+    /// A lista NÃO oferece "padrão do Windows" como escolha nova, de propósito: numa
+    /// máquina de caixa a padrão do Windows costuma ser o "Microsoft Print to PDF", um
+    /// papel que nunca sai. Ela só aparece quando o caixa JÁ está nesse estado — porque
+    /// aí esconder seria o seletor mentindo que a comanda sai na do cupom.
+    ///
+    /// Impressora gravada que sumiu da lista (desligada, renomeada, servidor de impressão
+    /// fora do ar) entra marcada com "(não encontrada)", igual ao assistente: sumir com
+    /// ela apagaria a configuração da loja no primeiro toque no seletor.
+    /// </summary>
+    public static (IReadOnlyList<OpcaoComanda> Opcoes, int Selecionada) OpcoesComanda(
+        IEnumerable<string>? impressoras, string? impressoraCupom,
+        string? separada, string? impressoraComanda)
+    {
+        var lista = new List<OpcaoComanda>
+        {
+            new($"Mesma do cupom ({Fila(impressoraCupom) ?? "padrão do Windows"})", null),
+        };
+        foreach (var nome in impressoras ?? Array.Empty<string>())
+            if (Fila(nome) is { } fila && !lista.Any(o => o.Impressora == fila))
+                lista.Add(new OpcaoComanda(fila, fila));
+
+        var separadaAgora = ComandaSeparada(separada, impressoraComanda);
+        var escolhida = Fila(impressoraComanda);
+        if (separadaAgora)
+        {
+            if (escolhida is null) lista.Add(new OpcaoComanda("(padrão do Windows)", ""));
+            else if (!lista.Any(o => o.Impressora == escolhida))
+                lista.Add(new OpcaoComanda(escolhida + "  (não encontrada)", escolhida));
+
+            var alvo = escolhida ?? "";
+            for (var i = 1; i < lista.Count; i++)
+                if (lista[i].Impressora == alvo) return (lista, i);
+        }
+        return (lista, 0);
+    }
+
+    /// <summary>
+    /// O que a escolha do seletor grava no <c>config</c>: o par
+    /// (<c>kds_comanda_separada</c>, <c>kds_comanda_impressora</c>).
+    /// <c>Impressora</c> nulo significa "não mexer nessa chave".
+    ///
+    /// ⚠️ ESCOLHER UMA IMPRESSORA AQUI LIGA A SEPARAÇÃO SOZINHA. Sem isso o operador
+    /// escolheria a térmica da expedição, leria o nome dela na tela e a comanda
+    /// continuaria saindo na bobina do caixa: escolha sem efeito é PIOR que escolha
+    /// ausente, porque ninguém vai procurar de novo — a tela já disse que estava certo.
+    /// A caixinha do assistente responde "separar ou não?"; este seletor responde "sai em
+    /// qual?", e essa resposta já contém a anterior.
+    ///
+    /// Voltar para "mesma do cupom" desliga a separação mas NÃO apaga a impressora
+    /// gravada: religar vira um toque, e "mesma do cupom" não promete esquecer a escolha
+    /// que a loja fez. (Quem quiser apagar de vez tem o assistente.)
+    /// </summary>
+    public static (string Separada, string? Impressora) GravacaoComanda(OpcaoComanda escolha)
+        => escolha.Impressora is null ? ("0", null) : ("1", escolha.Impressora);
+
+    /// <summary>
+    /// O rótulo curto do cabeçalho: para onde a comanda está saindo AGORA.
+    ///
+    /// Na mesma bobina do cupom o texto NOMEIA a impressora — "mesma do cupom (EPSON
+    /// TM-T20)" é informação, e foi a falta dela que fez o dono achar que a aba Delivery
+    /// não tinha impressora nenhuma. Separada, entra também a bobina: aí a largura é uma
+    /// decisão recente e própria, e comanda saindo cortada por bobina errada é defeito
+    /// que esta casa já viu no papel.
+    /// </summary>
+    public static string RotuloDestinoComanda(string? impressoraCupom, string? papelCupom,
+        string? separada, string? impressoraComanda, string? papelComanda, int limite = 26)
+    {
+        if (!ComandaSeparada(separada, impressoraComanda))
+            return $"mesma do cupom ({Curto(Fila(impressoraCupom) ?? "padrão do Windows", limite)})";
+        var destino = DestinoComanda(impressoraCupom, papelCupom, separada, impressoraComanda, papelComanda);
+        return Curto(destino.Impressora ?? "padrão do Windows", limite)
+             + " · " + destino.Papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture) + " mm";
+    }
+
+    /// <summary>
+    /// Nome de fila cabe em "\\SERVIDOR\EPSON TM-T20 Receipt (Cópia 2)"; o cabeçalho do
+    /// Delivery não tem essa largura, e o botão empurrando o "Voltar ao caixa" pra fora
+    /// da tela seria um estrago maior que o nome abreviado. O nome inteiro fica no
+    /// seletor, que é onde se escolhe.
+    /// </summary>
+    public static string Curto(string nome, int limite)
+    {
+        nome = nome.Trim();
+        if (limite < 2 || nome.Length <= limite) return nome;
+        return nome[..(limite - 1)].TrimEnd() + "…";
     }
 
     // ── IMPRESSÃO ────────────────────────────────────────────────────────────────

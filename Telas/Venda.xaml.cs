@@ -99,7 +99,7 @@ public partial class Venda : UserControl
         // 30 s continua embaixo como rede de segurança
         Servicos.Sino(_loja ?? "").Ping += SinoTocou;
         Servicos.Sino(_loja ?? "").CatalogoMudou += CatalogoTocou;
-        Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); OferecerRascunho(); };
+        Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); ProcurarAtualizacao(); OferecerRascunho(); };
         Unloaded += (_, _) =>
         {
             _relogio?.Stop(); _relogio = null;
@@ -350,6 +350,11 @@ public partial class Venda : UserControl
                 if (Vendas.Config(cxTema, "tema") == "auto")
                     Aparencia.Aplicar(Aparencia.Resolver(cxTema));
             }
+
+            // Versão nova: pega carona no relógio, mas com trava de 6 h lá dentro —
+            // o caixa fica aberto o dia inteiro e ninguém reinicia para descobrir
+            // que saiu release. Uma requisição de 200 bytes três vezes por dia.
+            ProcurarAtualizacao();
         }
         Bater();
         _relogio = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
@@ -455,6 +460,103 @@ public partial class Venda : UserControl
                   notas == 0 ? null : Conta(notas, "nota ainda não enviada", "notas ainda não enviadas"),
                   vendas.Resumo,
               }.Where(l => !string.IsNullOrWhiteSpace(l)));
+    }
+
+    // ── ATUALIZAR O CAIXA ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// "Toda vez ter que desinstalar e instalar?" — não. Este botão faz o ciclo
+    /// inteiro: pergunta ao servidor se tem versão nova, baixa, PROVA que o que baixou
+    /// é o instalador certo, chama o instalador (que já sabe trocar por cima
+    /// preservando vendas e configuração) e fecha o PDV.
+    ///
+    /// A decisão toda mora em <see cref="Nucleo.Atualizacao"/> e a mecânica em
+    /// <see cref="AtualizarCaixa"/> — daqui vai só o que só esta tela sabe: quantos
+    /// itens tem na comanda e se a maquininha está ocupada. São os dois portões que
+    /// não existem em lugar nenhum do banco, e são os que mais importam: caixa que
+    /// reinicia com o cliente no balcão é pior do que caixa desatualizado.
+    /// </summary>
+    private async void AtualizarOCaixa(object sender, RoutedEventArgs e)
+    {
+        var dono = Window.GetWindow(this)!;
+        BtnAtualizar.IsEnabled = false;
+        // Mesmo vocabulário do Sincronizar: o ícone anima enquanto o botão trabalha.
+        var girando = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(160) };
+        var passo = 0;
+        var quadros = new[] { "⬆", "⇧" };
+        girando.Tick += (_, _) => TxtIconeAtualizar.Text = quadros[++passo % quadros.Length];
+        girando.Start();
+
+        var estaFechando = false;
+        try
+        {
+            estaFechando = await AtualizarCaixa.ExecutarAsync(dono, _comanda.Count, _tefOcupado);
+        }
+        catch (Exception ex)
+        {
+            // Nada aqui pode derrubar a frente de caixa: o pior desfecho aceitável é
+            // "não atualizou e você continua vendendo".
+            Dialogo.Avisar(dono, "A atualização não terminou",
+                ex.Message + "\n\nO caixa NÃO foi alterado e continua funcionando.", "erro");
+        }
+        finally
+        {
+            girando.Stop();
+            TxtIconeAtualizar.Text = "⬆";
+            // Fechando: mexer na tela agora só produz exceção no caminho da saída.
+            if (!estaFechando)
+            {
+                BtnAtualizar.IsEnabled = true;
+                ProcurarAtualizacao(forcar: true);
+            }
+        }
+    }
+
+    /// <summary>Quando perguntar ao servidor de novo. 6 h: o suficiente para a loja
+    /// saber no mesmo dia, e pouco o bastante para não virar tráfego de fundo.</summary>
+    private DateTime _proximaChecagemVersao = DateTime.MinValue;
+
+    /// <summary>
+    /// O "tem atualização" do TeamViewer: o caixa vai perguntar sozinho e acende o
+    /// selo. Silencioso por princípio — checagem automática que abre diálogo no meio
+    /// do movimento seria exatamente o tipo de interrupção que a regra 1 proíbe.
+    /// Falhou (sem rede, servidor fora)? Não acende nada e ninguém fica sabendo.
+    /// </summary>
+    private void ProcurarAtualizacao(bool forcar = false)
+    {
+        if (!forcar && DateTime.UtcNow < _proximaChecagemVersao) return;
+        _proximaChecagemVersao = DateTime.UtcNow.AddHours(6);
+        _ = Task.Run(async () =>
+        {
+            var m = await AtualizarCaixa.ProcurarNoSilencioAsync();
+            // A tela pode ter sido descarregada (logout, fechamento) enquanto a
+            // consulta corria: pintar aí é exceção no dispatcher, não é informação.
+            try { Dispatcher.Invoke(() => { if (IsLoaded) PintarVersaoNova(m); }); }
+            catch { }
+        });
+    }
+
+    private void PintarVersaoNova(Nucleo.Atualizacao.Manifesto? m)
+    {
+        ChipVersaoNova.Visibility = m is null ? Visibility.Collapsed : Visibility.Visible;
+        if (m is null)
+        {
+            BtnAtualizar.ToolTip = $"Este caixa está na versão {Nucleo.Atualizacao.VersaoInstalada()}";
+            return;
+        }
+        TxtVersaoNova.Text = m.Versao;
+        // Obrigatória pinta de vermelho e diz por quê. É só isso que ela muda na
+        // tela — nada aqui reinicia o caixa sozinho: um campo de JSON servido pela
+        // internet não decide na frente de quem está atendendo o cliente.
+        var chave = m.Obrigatoria ? "ChipErro" : "ChipAlerta";
+        ChipVersaoNova.SetResourceReference(Border.BackgroundProperty, chave + "Fundo");
+        ChipVersaoNova.SetResourceReference(Border.BorderBrushProperty, chave + "Borda");
+        TxtVersaoNova.SetResourceReference(TextBlock.ForegroundProperty, m.Obrigatoria ? "Erro" : "Amarelo");
+        BtnAtualizar.ToolTip =
+            (m.Obrigatoria ? "ATUALIZAÇÃO OBRIGATÓRIA: " : "Tem versão nova: ")
+            + $"{m.Versao} (este caixa está na {Nucleo.Atualizacao.VersaoInstalada()})."
+            + "\nToque para atualizar — as vendas e a configuração da loja não se perdem."
+            + (m.Notas is { Length: > 0 } n ? "\n\n" + n : "");
     }
 
     /// <summary>Recarrega a grade depois de baixar catálogo novo, mantendo a categoria aberta.</summary>

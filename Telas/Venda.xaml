@@ -81,6 +81,26 @@
                             </Border>
                         </StackPanel>
                     </Button>
+                    <!-- Atualizar o caixa: mesmo lugar e mesma cara do Sincronizar, porque
+                         é o mesmo gesto — o operador toca, o caixa vai buscar o que está
+                         no servidor. O SELO com o número da versão é a metade que o dono
+                         pediu ("tem atualização"): sem ele ninguém descobre que existe
+                         versão nova, e um botão que ninguém aperta é o mesmo que não ter.
+                         Ele acende sozinho: o caixa pergunta ao servidor a cada 6 h. -->
+                    <Button x:Name="BtnAtualizar" Click="AtualizarOCaixa" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Trocar o programa deste caixa pela versão mais nova">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="TxtIconeAtualizar" Text="⬆" FontSize="16" FontWeight="Bold"
+                                       Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Atualizar" VerticalAlignment="Center"/>
+                            <Border x:Name="ChipVersaoNova" CornerRadius="9" Padding="7,1,7,2" Margin="9,0,0,0"
+                                    VerticalAlignment="Center" Visibility="Collapsed"
+                                    Background="{DynamicResource ChipAlertaFundo}" BorderBrush="{DynamicResource ChipAlertaBorda}" BorderThickness="1">
+                                <TextBlock x:Name="TxtVersaoNova" FontSize="11" FontWeight="Bold"
+                                           Foreground="{DynamicResource Amarelo}"/>
+                            </Border>
+                        </StackPanel>
+                    </Button>
                     <!-- KDS do quiosque: o operador cobra aqui e produz olhando ali.
                          O contador é o chamariz — sem ele ninguém abre a tela. -->
                     <Button x:Name="BtnKds" Click="AbrirKds" Style="{StaticResource BotaoBarra}">

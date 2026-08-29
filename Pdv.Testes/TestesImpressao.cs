@@ -29,6 +29,7 @@ public static class TestesImpressao
             Geometria(checar);
             Configuracao(checar);
             DestinoPorFinalidade(checar);
+            SeletorDaAbaDelivery(checar);
             ComandaNaBobinaCerta(checar);
             await NoPapelAsync(checar);
         }
@@ -201,6 +202,115 @@ public static class TestesImpressao
         // Espaço em branco no banco (digitado à mão pelo suporte) é o mesmo que vazio.
         checar(Pdv.Impressao.DestinoComanda("  EPSON TM-T20  ", "80", null, "   ", null).Impressora == "EPSON TM-T20",
             "nome de impressora com espaço sobrando é o mesmo nome; impressora só de espaços é 'nenhuma'");
+    }
+
+    /// <summary>
+    /// O SELETOR DA ABA DELIVERY (29/08 — relato do dono, com o PDV já instalado numa
+    /// loja): "apos instalado, nao mostra a impressora no PDV na aba de delivery, somente
+    /// no dash principal". A escolha existia, trancada no assistente de Configuração.
+    ///
+    /// O que estes testes seguram é a ESCOLHA, não o desenho: o que a lista oferece, o
+    /// que fica marcado ao abrir, o que cada opção grava — e, no fim, que o que o seletor
+    /// grava é lido de volta por <c>DestinoComanda</c> como o destino que o operador
+    /// escolheu. Escolha sem efeito é o defeito que este seletor existe para não ter.
+    /// </summary>
+    private static void SeletorDaAbaDelivery(Action<bool, string> checar)
+    {
+        var filas = new[] { "EPSON TM-T20", "ELGIN I9 COZINHA", "Microsoft Print to PDF" };
+
+        // ── o rótulo do cabeçalho ────────────────────────────────────────────
+        // ⭐ O PEDIDO INTEIRO: na mesma bobina do cupom, o cabeçalho NOMEIA a impressora.
+        // Campo vazio foi o que fez o dono concluir que a aba não tinha impressora.
+        checar(Pdv.Impressao.RotuloDestinoComanda("EPSON TM-T20", "80", null, null, null)
+                   == "mesma do cupom (EPSON TM-T20)",
+            "sem impressora própria, o cabeçalho diz 'mesma do cupom (EPSON TM-T20)' — nome, não vazio");
+        checar(Pdv.Impressao.RotuloDestinoComanda(null, "80", "0", "ELGIN I9 COZINHA", "58")
+                   == "mesma do cupom (padrão do Windows)",
+            "caixa sem impressora escolhida também tem resposta: 'mesma do cupom (padrão do Windows)'");
+        checar(Pdv.Impressao.RotuloDestinoComanda("EPSON TM-T20", "80", "1", "ELGIN I9 COZINHA", "58")
+                   == "ELGIN I9 COZINHA · 58 mm",
+            "com impressora própria, entra a BOBINA junto: é a largura que faz a comanda sair cortada");
+        checar(Pdv.Impressao.RotuloDestinoComanda("EPSON TM-T20", "80", "1", "  ", "58")
+                   == "padrão do Windows · 58 mm",
+            "separada e sem impressora escolhida, o cabeçalho não mente: padrão do Windows");
+        checar(Pdv.Impressao.RotuloDestinoComanda("EPSON TM-T20", "80", "1", "ELGIN", null)
+                   == "ELGIN · 80 mm",
+            "bobina da comanda em branco mostra a herdada do cupom, e não um espaço em branco");
+
+        // Nome de fila de rede não pode empurrar o "Voltar ao caixa" para fora da tela.
+        var comprido = Pdv.Impressao.RotuloDestinoComanda(
+            @"\\SERVIDOR-CAIXA\EPSON TM-T20 Receipt (Cópia 2)", "80", null, null, null);
+        checar(comprido.StartsWith("mesma do cupom (", StringComparison.Ordinal)
+               && comprido.EndsWith("…)", StringComparison.Ordinal) && comprido.Length <= 45,
+            $"nome de fila comprido é abreviado no cabeçalho, não estoura a barra (veio {comprido.Length} chars)");
+        checar(Pdv.Impressao.Curto("EPSON TM-T20", 26) == "EPSON TM-T20",
+            "e nome que cabe passa inteiro — abreviar o que cabe é esconder de graça");
+
+        // ── a lista do seletor ───────────────────────────────────────────────
+        var (opcoes, sel) = Pdv.Impressao.OpcoesComanda(filas, "EPSON TM-T20", null, null);
+        checar(opcoes[0].Rotulo == "Mesma do cupom (EPSON TM-T20)" && opcoes[0].Impressora is null,
+            "a 1a opção é 'mesma do cupom' e diz o NOME dela — a pergunta do operador é 'sai em qual?'");
+        checar(sel == 0, "sem impressora própria gravada, o seletor abre marcando 'mesma do cupom'");
+        checar(opcoes.Count == 1 + filas.Length && opcoes.Skip(1).Select(o => o.Impressora).SequenceEqual(filas),
+            $"cada fila do Windows vira uma linha, na ordem em que veio (vieram {opcoes.Count})");
+        checar(opcoes.All(o => o.Rotulo != "(padrão do Windows)"),
+            "'padrão do Windows' NÃO é oferecida como escolha nova: num caixa ela costuma ser o "
+            + "Print to PDF, papel que nunca sai");
+
+        var (comSel, iSel) = Pdv.Impressao.OpcoesComanda(filas, "EPSON TM-T20", "1", "ELGIN I9 COZINHA");
+        checar(iSel > 0 && comSel[iSel].Impressora == "ELGIN I9 COZINHA",
+            "com impressora própria gravada, o seletor abre marcando ELA (e não a de cima)");
+
+        // Retrocompatível pela MESMA regra de ComandaSeparada: quem escolheu impressora
+        // antes de a caixinha existir abre o seletor marcando a impressora dele.
+        var (comVelho, iVelho) = Pdv.Impressao.OpcoesComanda(filas, "EPSON TM-T20", null, "ELGIN I9 COZINHA");
+        checar(comVelho[iVelho].Impressora == "ELGIN I9 COZINHA",
+            "caixa antigo (sem a chave da caixinha) abre marcando a impressora que ele já usava");
+
+        // Estado "separada, sem impressora": esconder seria o seletor MENTINDO que a
+        // comanda sai na do cupom.
+        var (comPadrao, iPadrao) = Pdv.Impressao.OpcoesComanda(filas, "EPSON TM-T20", "1", null);
+        checar(comPadrao[iPadrao].Rotulo == "(padrão do Windows)" && comPadrao[iPadrao].Impressora == "",
+            "quem JÁ está na padrão do Windows vê essa opção na lista, marcada — o seletor não mente");
+
+        // Impressora desligada/renomeada/servidor fora: sumir com ela apagaria a
+        // configuração da loja no primeiro toque.
+        var (comSumida, iSumida) = Pdv.Impressao.OpcoesComanda(filas, "EPSON TM-T20", "1", "ELGIN DA EXPEDICAO");
+        checar(comSumida[iSumida].Impressora == "ELGIN DA EXPEDICAO"
+               && comSumida[iSumida].Rotulo.Contains("não encontrada", StringComparison.Ordinal),
+            "impressora gravada que sumiu da lista aparece marcada e avisada, não some");
+
+        // Spooler parado (Impressoras() devolve vazio) não pode deixar a tela sem lista.
+        var (semLista, iSemLista) = Pdv.Impressao.OpcoesComanda(null, "EPSON TM-T20", null, null);
+        checar(semLista.Count == 1 && iSemLista == 0,
+            "spooler parado ainda dá uma lista válida: sobra 'mesma do cupom', que é a verdade");
+
+        // ── o que cada escolha grava ─────────────────────────────────────────
+        var escolheOutra = Pdv.Impressao.GravacaoComanda(
+            new Pdv.Impressao.OpcaoComanda("ELGIN I9 COZINHA", "ELGIN I9 COZINHA"));
+        checar(escolheOutra.Separada == "1" && escolheOutra.Impressora == "ELGIN I9 COZINHA",
+            "escolher uma impressora aqui LIGA a separação sozinha — senão a escolha não teria efeito");
+        var voltaJunto = Pdv.Impressao.GravacaoComanda(
+            new Pdv.Impressao.OpcaoComanda("Mesma do cupom (X)", null));
+        checar(voltaJunto.Separada == "0" && voltaJunto.Impressora is null,
+            "voltar para 'mesma do cupom' desliga a separação e NÃO apaga a impressora gravada");
+
+        // ⭐ O CICLO FECHADO: o que o seletor grava é o que a impressão lê de volta. É o
+        // teste que prova que a escolha do cabeçalho tem EFEITO no papel.
+        var (gSep, gImp) = Pdv.Impressao.GravacaoComanda(comSel[iSel]);
+        var depois = Pdv.Impressao.DestinoComanda("EPSON TM-T20", "80", gSep, gImp, "58");
+        checar(depois.Impressora == "ELGIN I9 COZINHA" && depois.Papel == Papel.De("58"),
+            "gravou pelo cabeçalho, a comanda passa a sair lá — é o ciclo inteiro em uma linha");
+        // E o contra-exemplo que justifica ligar a separação sozinha: a MESMA impressora
+        // escolhida, com a separação desligada, imprimiria na bobina do caixa.
+        checar(Pdv.Impressao.DestinoComanda("EPSON TM-T20", "80", "0", gImp, "58").Impressora == "EPSON TM-T20",
+            "sem ligar a separação, a mesma escolha ficaria sem efeito nenhum (por isso ela liga)");
+
+        // Desligar volta tudo para a do cupom sem perder a impressora gravada.
+        var (dSep, dImp) = Pdv.Impressao.GravacaoComanda(comSel[0]);
+        checar(Pdv.Impressao.DestinoComanda("EPSON TM-T20", "80", dSep, "ELGIN I9 COZINHA", "58")
+                   == new Pdv.Impressao.Destino("EPSON TM-T20", Papel.De("80")) && dImp is null,
+            "e voltar para 'mesma do cupom' devolve impressora E bobina do cupom na mesma hora");
     }
 
     /// <summary>

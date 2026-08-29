@@ -1329,6 +1329,15 @@ Console.WriteLine();
 Console.WriteLine("--- Autorizacao de estorno (token por WhatsApp) ---");
 await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome, cond));
 
+// -- ATUALIZAR O CAIXA: o botao que baixa e entrega ao instalador -------------
+// O campo "url" vem da REDE e vira um exe rodando como ADMINISTRADOR na maquina da
+// loja. Aqui moram as peneiras: https, mesmo dominio do manifesto, versao semantica
+// (0.10.0 > 0.9.0), integridade antes de executar, e o portao que recusa trocar o
+// programa com comanda aberta ou cobranca no pinpad.
+Console.WriteLine();
+Console.WriteLine("--- Atualizar o caixa (versao, manifesto, portoes, download) ---");
+await TestesAtualizacao.RodarAsync((cond, nome) => Check("atualizacao: " + nome, cond));
+
 // -- INSTALADOR: a unica vez que a loja ve o sistema pela primeira vez --------
 // Ele copiava SO o Pdv.exe. O publish deixa as bibliotecas nativas soltas ao lado,
 // entao a instalacao dizia "concluido", criava o atalho, registrava o programa --

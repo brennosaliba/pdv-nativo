@@ -30,13 +30,23 @@ public static class Dialogo
         };
     }
 
+    /// <summary>
+    /// Padding lateral da moldura. É const porque o relatório PRECISA saber quantos
+    /// caracteres cabem numa linha (ver <see cref="Encaixar"/>): se este número e a
+    /// conta da largura útil saírem de sincronia, o texto volta a ser cortado.
+    /// </summary>
+    private const double PadMoldura = 26;
+
+    /// <summary>Quanto a moldura come da largura da janela: padding dos dois lados + a borda.</summary>
+    private const double MolduraLateral = 2 * PadMoldura + 2;
+
     internal static Border Moldura(UIElement conteudo) => new()
     {
         Background = R("Painel"),
         CornerRadius = new CornerRadius(18),
         BorderBrush = R("Borda"),
         BorderThickness = new Thickness(1),
-        Padding = new Thickness(26, 22, 26, 22),
+        Padding = new Thickness(PadMoldura, 22, PadMoldura, 22),
         Effect = new DropShadowEffect { BlurRadius = 28, ShadowDepth = 6, Color = Colors.Black,
             Opacity = (double)Application.Current.Resources["SombraDialogoOpacidade"] },
         Child = conteudo,
@@ -120,25 +130,56 @@ public static class Dialogo
         janela.ShowDialog();
     }
 
+    // ── O RELATÓRIO NÃO PODE CORTAR TEXTO ─────────────────────────────────────
+    // O corpo é monoespaçado porque é TABELA ("Cardápio:", "Fotos:", "Notas:" em
+    // coluna; o fechamento com valores alinhados à direita). Era NoWrap justamente
+    // para não estragar esse alinhamento — e o preço foi o dono recebendo, no dia
+    // 29/08, um aviso cortado no meio: "…Em 3 delas o envio D".
+    //
+    // O que se escolheu, e por quê:
+    //  · TextWrapping.Wrap sozinho JÁ resolveria o corte sem estragar coluna nenhuma:
+    //    quem alinha é a fonte monoespaçada, não o NoWrap, e as linhas da tabela têm
+    //    30 caracteres num espaço de 82 — nunca chegam perto da borda. Mas a
+    //    continuação da frase longa voltaria à coluna 0, onde toda linha começa um
+    //    fato novo: pareceria mais um item da lista.
+    //  · Quebrar em DOIS blocos (tabela + parágrafo) exigiria o Dialogo ADIVINHAR,
+    //    de uma string crua, o que é linha de tabela e o que é prosa — e este mesmo
+    //    método desenha o fechamento, onde tabela e prosa se alternam de propósito.
+    //    Um palpite errado reagruparia o que quem chamou compôs de propósito.
+    //  · Fica então: um bloco só, e a quebra feita AQUI, na medida real da fonte,
+    //    com recuo na continuação (ela fica pendurada sob a própria linha, sem se
+    //    disfarçar de item novo). O Wrap continua ligado como rede de segurança:
+    //    se a medida errar para mais, o texto quebra feio — mas nunca some.
+    //
+    // A largura subiu de 620 para 720 pelo mesmo defeito: a linha mais larga do
+    // fechamento ("SOBRA R$ 102.626,50" no fim) tem 76 caracteres e só cabiam 69,
+    // ou seja, o relatório de FECHAMENTO já vinha cortando valor em silêncio.
+    private const int LarguraRelatorio = 720;
+    private const double PadCorpo = 16;
+    private const double CorpoFontSize = 14;
+
     /// <summary>Texto monoespaçado (relatório de fechamento) — alinha as colunas.</summary>
     public static void Relatorio(Window dono, string titulo, string corpo, string? rodape = null)
     {
-        var janela = Base(dono, 620);
+        var janela = Base(dono, LarguraRelatorio);
         var pilha = new StackPanel();
         pilha.Children.Add(new TextBlock
         {
             Text = titulo, FontSize = 22, FontWeight = FontWeights.Bold, Foreground = R("Texto"),
         });
+        var fonte = new FontFamily("Consolas");
+        var util = LarguraRelatorio - MolduraLateral - 2 * PadCorpo;
         pilha.Children.Add(new Border
         {
             Background = R("Fundo"),
             CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(16),
+            Padding = new Thickness(PadCorpo),
             Margin = new Thickness(0, 14, 0, 14),
             Child = new TextBlock
             {
-                Text = corpo, FontFamily = new FontFamily("Consolas"), FontSize = 14,
-                Foreground = R("Texto"), TextWrapping = TextWrapping.NoWrap,
+                Text = Encaixar(corpo, Colunas(janela, util, fonte, CorpoFontSize)),
+                FontFamily = fonte, FontSize = CorpoFontSize,
+                Foreground = R("Texto"), TextWrapping = TextWrapping.Wrap,
             },
         });
         if (rodape is not null)
@@ -152,5 +193,71 @@ public static class Dialogo
         pilha.Children.Add(ok);
         janela.Content = Moldura(pilha);
         janela.ShowDialog();
+    }
+
+    /// <summary>
+    /// Quantos caracteres cabem em <paramref name="util"/> pixels — MEDIDOS, não
+    /// chutados. Consolas é monoespaçada, então medir dez "M" e dividir por dez dá a
+    /// largura exata de qualquer caractere, inclusive quando o Windows cai numa fonte
+    /// substituta (máquina de loja sem Consolas) ou quando o DPI não é 100%.
+    ///
+    /// Devolve 0 quando a medição falha; <see cref="Encaixar"/> entende 0 como "não
+    /// mexa no texto", e aí o TextWrapping.Wrap do TextBlock segura a linha sozinho.
+    /// Errar a medida tem que degradar para feio, nunca para cortado.
+    /// </summary>
+    private static int Colunas(Window janela, double util, FontFamily fonte, double tamanho)
+    {
+        try
+        {
+            var medida = new FormattedText(
+                new string('M', 10), System.Globalization.CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(fonte, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                tamanho, Brushes.Black, VisualTreeHelper.GetDpi(janela).PixelsPerDip);
+            var largura = medida.WidthIncludingTrailingWhitespace / 10.0;
+            return largura <= 0 ? 0 : (int)(util / largura);
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// Quebra em <paramref name="colunas"/> APENAS as linhas que não cabem, e recua a
+    /// continuação. Linha curta sai byte a byte igual à que entrou — é isso que
+    /// preserva o alinhamento da tabela: ninguém mexe em quem já cabia.
+    ///
+    /// A quebra é no último espaço que cabe, então o espaçamento INTERNO da linha
+    /// sobrevive (as colunas do fechamento são padding de espaços; colapsá-las
+    /// desalinharia a metade que ficou). Palavra maior que a linha inteira — o rastro
+    /// cru de um erro, uma URL — é cortada no osso, senão o laço não termina.
+    ///
+    /// Público (e sem nada de WPF dentro) para a suíte poder provar a regra sem
+    /// abrir janela.
+    /// </summary>
+    public static string Encaixar(string corpo, int colunas, string recuo = "   ")
+    {
+        // Medida ausente ou absurda (janela minúscula, fonte que não mediu): devolve
+        // o texto cru em vez de picotar em pedaços ilegíveis.
+        if (colunas < 24 || recuo.Length >= colunas) return corpo;
+
+        var saida = new List<string>();
+        foreach (var linha in corpo.Replace("\r\n", "\n").Split('\n'))
+        {
+            var resto = linha;
+            var prefixo = "";
+            while (resto.Length > colunas - prefixo.Length)
+            {
+                var largura = colunas - prefixo.Length;
+                var corte = resto.LastIndexOf(' ', largura);
+                if (corte <= 0) corte = largura;    // palavra sozinha maior que a linha
+                saida.Add((prefixo + resto[..corte]).TrimEnd());
+                resto = resto[corte..].TrimStart();
+                prefixo = recuo;
+            }
+            // O que sobrou fecha a linha. Só se some com ele quando é o rabo vazio de
+            // uma quebra (a linha original terminava em espaço) — linha em branco de
+            // verdade, que separa parágrafos, tem que continuar existindo.
+            if (resto.Length > 0 || prefixo.Length == 0) saida.Add(prefixo + resto);
+        }
+        return string.Join("\n", saida);
     }
 }

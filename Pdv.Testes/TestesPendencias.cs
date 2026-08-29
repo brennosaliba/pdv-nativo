@@ -1,6 +1,10 @@
 using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
+// Dialogo.Encaixar é a metade do conserto que mora na TELA: a quebra de linha do
+// relatório. É código puro (nenhum WPF dentro), então a suíte prova a regra sem
+// abrir janela — que é a única forma de o corte do print não voltar em silêncio.
+using Pdv.Telas;
 
 namespace Pdv.Testes;
 
@@ -87,6 +91,42 @@ public static class TestesPendencias
                    && !traduzido.Contains("23503", StringComparison.Ordinal),
                 $"o 409 real do caixa vira uma frase acionável (viu: {Sincronizacao.MotivoHumano(RastroDaLoja)})");
 
+            // ── 2b. O AVISO NÃO PODE PARECER QUE A VENDA FALHOU ─────────────────
+            // O print de 29/08 abria com "3 venda(s) que o servidor não tem", e o dono
+            // leu o que estava escrito: "3 vendas não se concretizaram". Não é isso —
+            // a venda ACONTECEU, o cliente levou o produto, o dinheiro está na gaveta;
+            // o que ficou para trás é o REGISTRO dela no painel. Quem lê no susto
+            // cancela venda certa e mexe em caixa fechado: o aviso sai mais caro que
+            // o problema que ele denuncia.
+            checar(aviso.StartsWith("NENHUMA VENDA FOI PERDIDA", StringComparison.Ordinal),
+                $"a PRIMEIRA linha mata o susto (viu: {aviso.Split('\n')[0]})");
+            checar(aviso.IndexOf("PERDIDA", StringComparison.Ordinal) < aviso.IndexOf("R$", StringComparison.Ordinal),
+                "o susto morre ANTES de o primeiro número aparecer na tela");
+            checar(aviso.Contains("gaveta", StringComparison.Ordinal),
+                "o aviso diz onde o dinheiro está: na gaveta");
+            checar(aviso.Contains("REGISTRO", StringComparison.Ordinal),
+                "…e nomeia o que de fato não subiu: o REGISTRO, não a venda");
+            checar(aviso.Contains("faturamento", StringComparison.Ordinal)
+                   && aviso.Contains("DRE", StringComparison.Ordinal),
+                "o aviso diz o que isso afeta DE VERDADE: faturamento e DRE do painel");
+            checar(aviso.Contains("NÃO MUDA", StringComparison.Ordinal)
+                   && aviso.Contains("cupom", StringComparison.Ordinal),
+                "…e o que NÃO afeta (venda, caixa, cupom) — senão o operador imagina o pior");
+
+            // ── 2c. O AVISO NOMEIA AS VENDAS ────────────────────────────────────
+            // A outra pergunta do dono foi "que vendas são essas?". Sem o número que
+            // ele grita no balcão não dá para conferir nem para contar ao gerente.
+            checar(paradas.Lista is { Count: 3 } && paradas.Lista.All(v => v.Desistiu),
+                $"a consulta traz QUAIS vendas são (viu {paradas.Lista?.Count.ToString() ?? "<nula>"})");
+            checar(aviso.Contains("nº 1, 2 e 3", StringComparison.Ordinal),
+                $"o aviso chama as vendas pelo número do balcão (viu: {aviso})");
+            // O dia vai junto porque numero_local reinicia a cada dia operacional —
+            // "nº 3" sozinho é ambíguo depois da virada das 05h.
+            var diaEsperado = DateTime.Parse(Caixa.DiaOperacional()).ToString("dd/MM");
+            checar(aviso.Contains("(hoje)", StringComparison.Ordinal)
+                   || aviso.Contains($"({diaEsperado})", StringComparison.Ordinal),
+                "…e de que dia elas são (o número reinicia a cada dia operacional)");
+
             // ── 3. VENDA DE TESTE NÃO É PENDÊNCIA ───────────────────────────────
             // Réplica exata das 3 linhas de 24/08 do caixa: venda de homologação que
             // um build antigo enfileirou. Ela nunca vai subir (e não DEVE subir), então
@@ -163,6 +203,79 @@ public static class TestesPendencias
                 "falhou de novo: volta ao estado terminal na hora, com o motivo novo");
             checar(Sincronizacao.VendasNaoEntregues().Desistidas == 1,
                 "e continua visível no aviso enquanto o motivo real não for resolvido");
+
+            // ── 7. 3 NÚMEROS CABEM; 40 NÃO — E O QUE SOBRA TEM QUE SER DITO ─────
+            // Listar 40 números seguidos é a mesma doença de outro jeito: vira parede
+            // de texto e ninguém confere. Mas cortar em silêncio é pior — o dono
+            // acharia que são só 6, e sumiriam 34 vendas do radar dele.
+            var muitas = Enumerable.Range(1, 40)
+                .Select(i => new VendaParada(100 + i, i <= 20 ? "2026-08-27" : "2026-08-28", true))
+                .ToList();
+            var lotado = new VendasParadas(0, 40, Dinheiro.DeReais(3122.45m),
+                "o operador que fez a venda não está cadastrado no painel", muitas).Resumo ?? "";
+            var quais = lotado.Split('\n').FirstOrDefault(x => x.StartsWith("Quais:", StringComparison.Ordinal)) ?? "";
+            checar(quais.Contains("nº 101, 102, 103, 104, 105 e 106", StringComparison.Ordinal),
+                $"com 40 paradas, o aviso nomeia as 6 primeiras (viu: {quais})");
+            checar(!quais.Contains("140", StringComparison.Ordinal),
+                "e NÃO despeja os 40 números — parede de texto não se lê");
+            checar(quais.Contains("e mais 34", StringComparison.Ordinal),
+                $"as que não couberam são DITAS, não cortadas em silêncio (viu: {quais})");
+            checar(quais.Contains("27/08", StringComparison.Ordinal) && quais.Contains("28/08", StringComparison.Ordinal),
+                "…com os dias delas, que é por onde o gerente procura no painel");
+
+            // ── 8. E TUDO ISSO PRECISA CABER NA TELA ────────────────────────────
+            // O defeito nº 1 do print: o corpo do relatório era NoWrap (para não
+            // estragar o alinhamento da tabela) e a frase longa morria na borda —
+            // "…Em 3 delas o envio D". Dialogo.Encaixar quebra SÓ quem não cabe.
+            const int Colunas = 82;   // Consolas 14 na janela de 720 px (medido)
+            var tabela = new[]
+            {
+                "Cardápio:  sem novidade",
+                "Fotos:     nenhuma nova",
+                "Notas:     nenhuma para enviar",
+            };
+            var corpo = Dialogo.Encaixar(string.Join("\n", tabela.Append("⚠ " + aviso)), Colunas);
+            var saida = corpo.Split('\n');
+            checar(saida.All(x => x.Length <= Colunas),
+                $"nenhuma linha estoura a largura da tela (a maior tem {saida.Max(x => x.Length)} de {Colunas})");
+            checar(tabela.All(saida.Contains),
+                "a linha da tabela sai byte a byte igual — quem já cabia não é tocado, e é isso que preserva o alinhamento");
+            checar(saida.Any(x => x.StartsWith("   ", StringComparison.Ordinal)),
+                "a continuação da frase longa entra RECUADA, para não se disfarçar de item novo da lista");
+            // Desfazendo a quebra (continuação recuada volta a ser um espaço) tem que
+            // sair EXATAMENTE o texto que entrou: nada de caractere perdido na borda,
+            // que é o defeito do print.
+            checar(corpo.Replace("\n   ", " ") == string.Join("\n", tabela) + "\n⚠ " + aviso,
+                "nenhum caractere se perde na quebra — o aviso chega inteiro na tela");
+
+            checar(Dialogo.Encaixar("a\n\nb", Colunas) == "a\n\nb",
+                "linha em branco (separador de parágrafo) sobrevive à quebra");
+
+            // A linha mais larga do FECHAMENTO tem 76 caracteres e a janela antiga
+            // dava 69: o relatório de fechamento também vinha cortando valor em
+            // silêncio. Na janela nova ela cabe — e sai intacta, com o padding das
+            // colunas preservado.
+            var maiorDoFechamento =
+                $"{"dinheiro",-9} {"contou",-7} {"R$ 102.626,50",11}  esperado {"R$ 205.253,00",11}  FALTA R$ 102.626,50";
+            checar(maiorDoFechamento.Length <= Colunas,
+                $"a linha mais larga do fechamento cabe ({maiorDoFechamento.Length} de {Colunas} colunas)");
+            checar(Dialogo.Encaixar(maiorDoFechamento, Colunas) == maiorDoFechamento,
+                "…e passa intocada pelo Encaixar (padding de coluna é alinhamento, não texto)");
+
+            // Palavra sozinha maior que a linha inteira — rastro cru de erro, URL.
+            // Sem o corte no osso o laço não termina: o PDV congelaria ao mostrar
+            // um motivo que a tradução não reconheceu.
+            var gigante = new string('x', 300);
+            var picado = Dialogo.Encaixar(gigante, Colunas);
+            checar(picado.Split('\n').All(x => x.Length <= Colunas)
+                   && picado.Replace("\n", "").Replace(" ", "").Length == 300,
+                "palavra maior que a linha é partida — nem perdida, nem em laço infinito");
+
+            // Medida impossível (janela minúscula, fonte que não mediu): devolve o
+            // texto cru. Errar a medida tem que degradar para feio, nunca para cortado
+            // — o TextWrapping.Wrap do TextBlock segura a linha nesse caso.
+            checar(Dialogo.Encaixar("linha comprida qualquer", 0) == "linha comprida qualquer",
+                "sem medida confiável o texto sai inteiro (o Wrap da tela é a rede)");
         }
         finally
         {

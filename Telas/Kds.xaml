@@ -21,16 +21,50 @@
 
         <Border Grid.Row="0" Background="{DynamicResource BarraDegrade}" Padding="20,12"
                 BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,0,1">
+            <!-- DUAS COLUNAS, e nao um Grid solto com dois StackPanel por cima do outro.
+                 Sem elas os dois se sobrepoem e o da direita, que tem fundo opaco, e
+                 desenhado EM CIMA do status. Medido: os botoes da direita passaram de
+                 260 px para 611 quando o seletor de comanda entrou, e em 1366x768 e
+                 1024x768 — resolucao de balcao — o TxtStatus ia parar debaixo deles.
+                 A frase que sumia era justamente "a comanda do #N nao saiu, confira papel
+                 e impressora": o aviso que existe para a cozinha nao ficar sem papel.
+                 Coluna * para o texto, Auto para os botoes, e reticencias no status: em
+                 tela estreita ele encolhe, nunca some por baixo. -->
             <Grid>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="🍩" FontSize="22" VerticalAlignment="Center"/>
                     <TextBlock Text="PEDIDOS" Foreground="{DynamicResource Texto}" FontSize="20"
                                FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center"/>
                     <TextBlock x:Name="TxtStatus" Foreground="{DynamicResource TextoFraco}" FontSize="12"
-                               Margin="14,0,0,0" VerticalAlignment="Center"/>
+                               Margin="14,0,8,0" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <!-- ONDE A COMANDA SAI — no cabeçalho, e não só no assistente (29/08).
+                         Relato do dono, com o PDV já instalado na loja: "apos instalado,
+                         nao mostra a impressora no PDV na aba de delivery, somente no dash
+                         principal". A escolha existia dentro de Configuração → Impressora;
+                         só que quem opera a cozinha procura onde a comanda sai JUNTO dos
+                         pedidos. Não achando, conclui que o PDV não deixa escolher.
+
+                         O botão é um RÓTULO que também é o alvo do toque: ele diz o destino
+                         de agora ("mesma do cupom (EPSON TM-T20)" é informação, não vazio) e
+                         abre o seletor. Grava nas MESMAS chaves do assistente — segunda
+                         fonte de verdade sobre onde o papel sai diverge no primeiro dia, e
+                         quem descobre é a cozinha com o pedido na mão. -->
+                    <Button x:Name="BtnDestinoComanda" Click="TrocarDestinoComanda"
+                            Style="{StaticResource BotaoBarra}"
+                            ToolTip="Escolher em qual impressora saem as comandas do delivery">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🖨" FontSize="15" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="TxtDestinoComanda" Text="Comanda…" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                     <Button Click="Atualizar" Style="{StaticResource BotaoBarra}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock x:Name="TxtIconeAtualiza" Text="⟳" FontSize="15" Margin="0,0,7,0" VerticalAlignment="Center"/>

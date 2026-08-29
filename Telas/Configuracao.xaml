@@ -177,13 +177,23 @@
 
                 <!-- 3 · IMPRESSORA ───────────────────────────────────────── -->
                 <StackPanel x:Name="PassoImpressora" Visibility="Collapsed">
-                    <TextBlock Text="Impressora do cupom" Style="{StaticResource Rotulo}"/>
-                    <ComboBox x:Name="CboImpressora" Margin="0,4,0,12"/>
+                    <!-- 29/08 — o passo tem DUAS impressoras e elas se chamavam
+                         "impressora" e "impressora da comanda". Quem instala não tem como
+                         saber que a primeira é a do cupom fiscal: são dois títulos e cada
+                         um diz QUE PAPEL sai ali. Nomear pelo papel, e não pelo lugar
+                         ("do caixa", "da cozinha"), porque a loja pode ter as duas no
+                         mesmo balcão — o papel é o que nunca muda. -->
+                    <TextBlock Text="CUPOM FISCAL E RECIBO — O PAPEL DO CLIENTE" Foreground="{DynamicResource Marca}"
+                               FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
+                    <TextBlock Text="Impressora do cupom fiscal / recibo" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboImpressora" Margin="0,4,0,4"/>
+                    <TextBlock Text="É a que imprime o papel que o cliente leva: o cupom fiscal (NFC-e), o recibo e o comprovante do cartão."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                     <!-- Largura da bobina: o que decide as colunas do cupom. 48 colunas
                          numa bobina de 58 mm saem CORTADAS — e cortadas no fim da linha,
                          onde está o valor. Ver Impressao.Papel. -->
-                    <TextBlock Text="Largura do papel" Style="{StaticResource Rotulo}"/>
+                    <TextBlock Text="Largura do papel do cupom" Style="{StaticResource Rotulo}"/>
                     <ComboBox x:Name="CboPapel" Margin="0,4,0,4" SelectionChanged="PapelMudou"/>
                     <TextBlock x:Name="TxtStatusPapel" Foreground="{DynamicResource TextoFraco}" FontSize="12"
                                TextWrapping="Wrap" Margin="0,0,0,10"/>
@@ -202,11 +212,13 @@
                          significa "tudo na impressora do cupom, como sempre foi". Quem
                          instala um caixa não pode ser obrigado a escolher duas
                          impressoras — os campos só aparecem para quem tem duas. -->
-                    <TextBlock Text="COMANDA DO DELIVERY" Foreground="{DynamicResource Marca}"
-                               FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
+                    <TextBlock Text="COMANDA DO DELIVERY — O PAPEL DA COZINHA" Foreground="{DynamicResource Marca}"
+                               FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
+                    <TextBlock Text="A comanda é o OUTRO papel: os itens e as observações do pedido, para quem produz. Não tem valor fiscal e não vai para o cliente."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     <CheckBox x:Name="ChkComandaAuto" Content="Imprimir a comanda quando o pedido de delivery chegar"
                               IsChecked="False" FontSize="14" Margin="0,0,0,8"/>
-                    <CheckBox x:Name="ChkComandaSeparada" Content="Usar outra impressora para as comandas do delivery"
+                    <CheckBox x:Name="ChkComandaSeparada" Content="Usar outra impressora só para a comanda da cozinha"
                               IsChecked="False" FontSize="14" Margin="0,0,0,4"
                               Checked="ComandaSeparadaMudou" Unchecked="ComandaSeparadaMudou"/>
                     <TextBlock x:Name="TxtComandaJunto"
@@ -214,7 +226,7 @@
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="24,0,0,8"/>
 
                     <StackPanel x:Name="BlocoComandaSeparada" Visibility="Collapsed" Margin="24,2,0,8">
-                        <TextBlock Text="Impressora da comanda" Style="{StaticResource Rotulo}"/>
+                        <TextBlock Text="Impressora da comanda da cozinha" Style="{StaticResource Rotulo}"/>
                         <ComboBox x:Name="CboImpressoraComanda" Margin="0,4,0,10"/>
                         <!-- Largura PRÓPRIA: a bobina da expedição costuma ser 58 mm e a do
                              balcão 80 mm. Antes desta linha a comanda usava a largura do
@@ -231,7 +243,7 @@
                     <Button x:Name="BtnTesteComanda" Content="Imprimir comanda de exemplo" Click="TestarComanda"
                             Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
                     <TextBlock x:Name="TxtStatusComanda"
-                               Text="Na tela Delivery, cada pedido tem o botão 🖨 para reimprimir a comanda."
+                               Text="Isto também se troca na tela Delivery, no botão 🖨 do cabeçalho — é lá que a cozinha procura. E cada pedido tem o seu 🖨 para reimprimir a comanda."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
 
@@ -263,13 +275,16 @@
                          sai daqui. O que cada opção muda vive na linha do PRÓPRIO cartão:
                          "Venda no POS" e "ControlPay" são nomes de fornecedor e não dizem
                          nada sozinhos a quem instala o caixa. -->
-                    <TextBlock Text="Escolha a maquininha deste caixa" Style="{StaticResource Rotulo}" Margin="0,0,0,6"/>
+                    <TextBlock Text="Escolha a maquininha deste caixa" Style="{StaticResource Rotulo}" Margin="0,0,0,2"/>
+                    <TextBlock Text="Na dúvida, é a primeira: a maquininha comum, que fica na mão e não tem cabo para o computador. As outras três só servem se o caixa mandar o valor para ela sozinho."
+                               FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"
+                               Foreground="{DynamicResource TextoFraco}"/>
                     <UniformGrid Columns="2" Margin="0,0,-8,6">
                         <RadioButton x:Name="OpTefNenhum" GroupName="tef" Style="{StaticResource BotaoOpcao}"
                                      MinHeight="92" Checked="TefMudou">
                             <StackPanel>
-                                <TextBlock Text="Sem maquininha" FontWeight="Bold" FontSize="17"/>
-                                <TextBlock Text="O caixa registra a forma de pagamento, mas não cobra o cartão."
+                                <TextBlock Text="Maquininha avulsa" FontWeight="Bold" FontSize="17"/>
+                                <TextBlock Text="A da mão, que não conversa com este computador. O cliente passa o cartão nela, o caixa registra que foi cartão e fecha a venda."
                                            FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
                                            Foreground="{DynamicResource TextoFraco}"/>
                             </StackPanel>
@@ -277,8 +292,8 @@
                         <RadioButton x:Name="OpTefNuvem" GroupName="tef" Style="{StaticResource BotaoOpcao}"
                                      MinHeight="92" Checked="TefMudou">
                             <StackPanel>
-                                <TextBlock Text="Venda no POS" FontWeight="Bold" FontSize="17"/>
-                                <TextBlock Text="A cobrança sai daqui e acende na maquininha da conta, pela internet."
+                                <TextBlock Text="Cobrança pela internet" FontWeight="Bold" FontSize="17"/>
+                                <TextBlock Text="O caixa manda o valor e ele acende sozinho na maquininha da conta. Ela precisa estar conectada."
                                            FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
                                            Foreground="{DynamicResource TextoFraco}"/>
                             </StackPanel>
@@ -286,8 +301,8 @@
                         <RadioButton x:Name="OpTefPayGo" GroupName="tef" Style="{StaticResource BotaoOpcao}"
                                      MinHeight="92" Checked="TefMudou">
                             <StackPanel>
-                                <TextBlock Text="PayGo (maquininha no caixa)" FontWeight="Bold" FontSize="17"/>
-                                <TextBlock Text="A maquininha fica ligada neste computador e quem fala com ela é o PayGo Windows."
+                                <TextBlock Text="PayGo (pinpad no cabo)" FontWeight="Bold" FontSize="17"/>
+                                <TextBlock Text="A maquininha fica ligada NESTE computador por cabo, e quem fala com ela é o PayGo Windows."
                                            FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
                                            Foreground="{DynamicResource TextoFraco}"/>
                             </StackPanel>
@@ -295,8 +310,8 @@
                         <RadioButton x:Name="OpTefControlPay" GroupName="tef" Style="{StaticResource BotaoOpcao}"
                                      MinHeight="92" Checked="TefMudou">
                             <StackPanel>
-                                <TextBlock Text="ControlPay" FontWeight="Bold" FontSize="17"/>
-                                <TextBlock Text="Mesma maquininha do PayGo, mas a cobrança passa pelo portal ControlPay."
+                                <TextBlock Text="ControlPay (pinpad no cabo)" FontWeight="Bold" FontSize="17"/>
+                                <TextBlock Text="Mesmo pinpad do PayGo, mas a cobrança passa pelo portal ControlPay."
                                            FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
                                            Foreground="{DynamicResource TextoFraco}"/>
                             </StackPanel>

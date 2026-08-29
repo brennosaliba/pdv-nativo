@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -31,6 +31,7 @@ public partial class Kds : UserControl
         InitializeComponent();
         _loja = loja;
         Pintar();
+        PintarDestinoComanda();
         _ = PuxarAsync();
 
         // A cada 10 s: repinta o local E busca a nuvem (o _puxando impede
@@ -51,6 +52,95 @@ public partial class Kds : UserControl
     }
 
     private void SinoTocou() => Dispatcher.Invoke(() => _ = PuxarAsync());
+
+    // ── ONDE A COMANDA SAI (29/08 — relato do dono) ─────────────────────────
+    // "apos instalado, nao mostra a impressora no PDV na aba de delivery, somente
+    // no dash principal". A escolha existia só dentro do assistente de Configuração,
+    // no passo "Impressora". Quem opera a cozinha procura isso AQUI, junto dos
+    // pedidos — e, não achando, conclui que o PDV não deixa escolher.
+    //
+    // Este seletor NÃO tem chave própria: grava kds_comanda_separada,
+    // kds_comanda_impressora e kds_comanda_papel_mm, as MESMAS do assistente. As
+    // regras da escolha moram em Impressao, fora do WPF, onde a suíte alcança.
+
+    /// <summary>
+    /// As filas do Windows, pedidas JÁ na abertura do quadro. Enumerar impressora de
+    /// rede trava no timeout de cada servidor de impressão fora do ar — segundos por
+    /// servidor —, e isso não pode acontecer com o dedo do operador no botão. Quando
+    /// ele toca, o resultado quase sempre já está aqui.
+    /// </summary>
+    private readonly Task<IReadOnlyList<string>> _impressoras = Impressao.ImpressorasAsync();
+
+    /// <summary>
+    /// Repinta o botão do cabeçalho com o destino que está valendo AGORA e devolve o
+    /// texto. Ler do config toda vez, e não guardar num campo, porque o assistente de
+    /// Configuração também escreve nessas chaves: campo em memória seria a terceira
+    /// versão da verdade.
+    /// </summary>
+    private string PintarDestinoComanda()
+    {
+        using var cx = Banco.Abrir();
+        var rotulo = Impressao.RotuloDestinoComanda(
+            Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"),
+            Vendas.Config(cx, "kds_comanda_separada"),
+            Vendas.Config(cx, "kds_comanda_impressora"),
+            Vendas.Config(cx, "kds_comanda_papel_mm"));
+        TxtDestinoComanda.Text = "Comanda: " + rotulo;
+        return rotulo;
+    }
+
+    private async void TrocarDestinoComanda(object sender, RoutedEventArgs e)
+    {
+        // Enquanto o spooler não responde, o botão diz o que está fazendo em vez de
+        // parecer travado — e fica desligado pra não abrir dois seletores.
+        var textoAntes = TxtDestinoComanda.Text;
+        BtnDestinoComanda.IsEnabled = false;
+        TxtDestinoComanda.Text = "procurando impressoras…";
+        IReadOnlyList<string> filas;
+        try { filas = await _impressoras; }
+        catch { filas = Array.Empty<string>(); }   // spooler parado: sobra "mesma do cupom"
+        finally { BtnDestinoComanda.IsEnabled = true; TxtDestinoComanda.Text = textoAntes; }
+
+        string? impCupom, papelCupom, separada, impComanda, papelComanda;
+        using (var cx = Banco.Abrir())
+        {
+            impCupom     = Vendas.Config(cx, "impressora");
+            papelCupom   = Vendas.Config(cx, "papel_mm");
+            separada     = Vendas.Config(cx, "kds_comanda_separada");
+            impComanda   = Vendas.Config(cx, "kds_comanda_impressora");
+            papelComanda = Vendas.Config(cx, "kds_comanda_papel_mm");
+        }
+        var (opcoes, selecionada) = Impressao.OpcoesComanda(filas, impCupom, separada, impComanda);
+
+        // A bobina que aparece pré-escolhida é a da comanda; nunca tendo sido escolhida,
+        // é a do cupom — que é a que a comanda usa hoje.
+        var escolha = SeletorComanda.Escolher(Window.GetWindow(this)!, opcoes, selecionada,
+            AssistenteConfig.IndicePapel(papelComanda ?? papelCupom));
+        if (escolha is null) return;
+        var (opcao, indicePapel) = escolha.Value;
+
+        var (gravaSeparada, gravaImpressora) = Impressao.GravacaoComanda(opcao);
+        using (var cx = Banco.Abrir())
+        {
+            Vendas.GravarConfig(cx, "kds_comanda_separada", gravaSeparada);
+            // null = "não mexer": voltar para "mesma do cupom" não apaga a impressora
+            // que a loja escolheu — religar tem que ser um toque, não uma redigitação.
+            if (gravaImpressora is not null)
+                Vendas.GravarConfig(cx, "kds_comanda_impressora", gravaImpressora);
+            // A largura só é decisão quando a comanda tem impressora PRÓPRIA; na mesma
+            // do cupom ela É a do cupom, e gravar aqui inventaria a segunda fonte de
+            // verdade que este seletor existe justamente para não criar.
+            if (gravaSeparada == "1")
+                Vendas.GravarConfig(cx, "kds_comanda_papel_mm",
+                    AssistenteConfig.TextoPapel(AssistenteConfig.OpcoesPapel()[indicePapel].Mm));
+        }
+
+        // Vale AGORA: quem imprime (Servicos.DestinoDaComanda) relê o config a cada
+        // comanda. Sem reiniciar o caixa e sem fechar a tela.
+        var agora = PintarDestinoComanda();
+        TxtStatus.Text = $"Comanda do delivery agora sai em {agora} — toque no 🖨 de um "
+                       + "pedido para conferir no papel.";
+    }
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
 

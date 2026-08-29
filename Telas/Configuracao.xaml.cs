@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -2044,7 +2044,7 @@ public static class AssistenteConfig
                     + (d.Ambiente == 1 ? "produção" : "MODO TESTE — as notas não valem")
                     + (d.TemCertificado ? "" : " · sem certificado"),
                     d.Ambiente != 1 || !d.TemCertificado || serie.Length == 0),
-            new("Impressora do cupom",
+            new("Impressora do cupom fiscal / recibo",
                 $"{d.Impressora ?? "padrão do Windows"} · bobina de {papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture)} mm "
                 + $"({papel.Colunas} colunas)"
                 + (d.ImprimirAuto ? "" : " · impressão automática DESLIGADA"),
@@ -2052,7 +2052,7 @@ public static class AssistenteConfig
             // "tela Delivery" é o nome do BOTÃO que abre o quadro da cozinha no
             // caixa. Mandar procurar "a tela da cozinha" é mandar procurar um
             // botão que não existe com esse nome.
-            new("Comanda do delivery", ResumoComanda(d)),
+            new("Comanda do delivery (papel da cozinha)", ResumoComanda(d)),
             new("Maquininha", ResumoTef(d), d.Tef == 3 && d.CpaySandbox),
             new("Pareamento", d.Pareado
                 ? "✓ Pareado com o painel. As vendas e as notas sobem no Sincronizar."
@@ -2084,14 +2084,20 @@ public static class AssistenteConfig
 
         return d.Tef switch
         {
-            1 => "Venda no POS" + (d.PosSerial.Trim().Length > 0
-                    ? $" · maquininha {d.PosSerial.Trim()}" : " · maquininha padrão da conta"),
-            2 => $"PayGo (maquininha no caixa) · pasta {d.PayGoPasta.Trim()} · "
+            // ⚠️ O RESUMO É A ÚLTIMA CHANCE DE PEGAR A ESCOLHA ERRADA, então ele diz o
+            // que vai ACONTECER na venda, não o nome do produto. "Venda no POS" era nome
+            // de fornecedor e custou caro: o dono marcou achando que era a maquininha da
+            // mão, e o caixa ficou preso em "aguardando o cliente" com o cartão na mão.
+            1 => "Cobrança pela internet — o caixa manda o valor e ele acende na maquininha"
+                 + (d.PosSerial.Trim().Length > 0
+                    ? $" {d.PosSerial.Trim()}" : " padrão da conta"),
+            2 => $"PayGo (pinpad no cabo) · pasta {d.PayGoPasta.Trim()} · "
                  + Rede(d.PayGoRedeCartao, "cartão") + " · " + Rede(d.PayGoRedePix, "PIX"),
-            3 => $"ControlPay · terminal {d.CpayTerminal.Trim()} · "
+            3 => $"ControlPay (pinpad no cabo) · terminal {d.CpayTerminal.Trim()} · "
                  + Rede(d.CpayRedeCartao, "cartão") + " · " + Rede(d.CpayRedePix, "PIX")
                  + (d.CpaySandbox ? " · AMBIENTE DE TESTE (sandbox): nenhuma cobrança é de verdade" : ""),
-            _ => "Sem maquininha — o caixa registra a forma de pagamento, mas não cobra o cartão.",
+            _ => "Maquininha avulsa — o cliente passa o cartão na maquininha da mão. O caixa "
+                 + "registra que foi cartão e fecha a venda, mas não cobra nada por aqui.",
         };
     }
 

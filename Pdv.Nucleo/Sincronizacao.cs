@@ -3,6 +3,22 @@ using Dapper;
 namespace Pdv.Nucleo;
 
 /// <summary>
+/// UMA venda parada, com nome. Existe porque "3 vendas" não é informação para quem
+/// está no balcão: o dono leu isso no dia 29/08 e a primeira pergunta dele foi "QUE
+/// vendas são essas?" — não dava para conferir nem para contar ao gerente.
+/// </summary>
+/// <param name="Numero">
+/// <c>numero_local</c>: o número que o operador GRITA no balcão e que sai impresso no
+/// cupom. É por ele que a venda é reconhecida na loja — o id (GUID) não serve para nada
+/// nessa conversa.
+/// </param>
+/// <param name="Dia">
+/// <c>business_date</c> (dia OPERACIONAL, vira às 05h). Vai junto porque o número se
+/// repete todo dia: "nº 3" sozinho é ambíguo assim que o caixa passa da meia-noite.
+/// </param>
+public sealed record VendaParada(long Numero, string Dia, bool Desistiu);
+
+/// <summary>
 /// Vendas gravadas no caixa que a nuvem NÃO confirmou. Em duas situações bem
 /// diferentes, e por isso separadas:
 ///  · <paramref name="Aguardando"/> — o dreno ainda vai tentar. Some sozinho.
@@ -20,29 +36,154 @@ namespace Pdv.Nucleo;
 /// table employees"}</c> — verdadeiro, e ilegível para quem está no caixa. Sem esta
 /// tradução o aviso é um número sem causa, e número sem causa não vira ação.
 /// </param>
-public sealed record VendasParadas(int Aguardando, int Desistidas, Dinheiro Valor, string? Motivo = null)
+/// <param name="Lista">
+/// QUAIS vendas são, uma a uma, para o aviso poder nomeá-las. null (ou incompleta)
+/// só degrada o texto: o aviso perde a linha "Quais:" e continua correto no resto.
+/// </param>
+public sealed record VendasParadas(
+    int Aguardando, int Desistidas, Dinheiro Valor, string? Motivo = null,
+    IReadOnlyList<VendaParada>? Lista = null)
 {
     public int Total => Aguardando + Desistidas;
 
     /// <summary>
-    /// A linha que vai para a tela. null quando não há nada parado.
-    ///
-    /// Diz o QUE, o QUANTO, o POR QUÊ e o PRÓXIMO PASSO — nesta ordem. A versão
-    /// anterior parava no "confira antes de fechar o mês": o dono lia, chamava o
-    /// suporte, arrumava o cadastro no painel, apertava Sincronizar e o número
-    /// continuava o mesmo, porque nada no PDV sabia tirar uma linha do dead-letter.
-    /// Aviso sem saída é aviso que se aprende a ignorar.
+    /// Quantos números cabem antes de a linha virar parede. 3 se lê; 40 não — vira
+    /// um borrão que ninguém confere. Passando disto, o aviso diz quantas ficaram
+    /// de fora e de que dias: cortar em silêncio é o mesmo defeito de novo.
     /// </summary>
-    public string? Resumo => Total == 0 ? null
-        : Desistidas == 0
-            ? $"{Aguardando} venda(s) na fila para o servidor — {Valor.Formatado()}. "
-              + "Elas sobem sozinhas; nada a fazer no caixa."
-            : $"{Total} venda(s) que o servidor não tem — {Valor.Formatado()}. "
-              + $"Em {Desistidas} delas o envio DESISTIU"
-              + (Motivo is { Length: > 0 } m ? $" — {m}" : "") + ".\n"
-              + "O QUE FAZER: chame o gerente para resolver esse motivo no painel e, "
-              + "depois, toque em Sincronizar. Cada toque dá mais UMA tentativa a estas "
-              + "vendas. Enquanto elas estiverem aqui, não entram no faturamento do painel.";
+    private const int MaxListadas = 6;
+
+    /// <summary>
+    /// O aviso que vai para a tela. null quando não há nada parado.
+    ///
+    /// A PRIMEIRA LINHA EXISTE PARA MATAR O SUSTO. A versão anterior abria com
+    /// "3 venda(s) que o servidor não tem", e o dono leu exatamente o que estava
+    /// escrito: que 3 vendas não se concretizaram. NÃO É ISSO — a venda aconteceu, o
+    /// cliente levou o produto e o dinheiro entrou na gaveta; o que ficou para trás é
+    /// só o REGISTRO dela no painel. Um aviso técnico e correto que assusta o dono à
+    /// toa custa mais caro que o problema que ele denuncia: no susto se cancela venda,
+    /// se refaz cupom, se mexe no caixa que estava certo.
+    ///
+    /// Por isso a ordem é: (1) nada se perdeu; (2) o que de fato não subiu, e quanto;
+    /// (3) QUAIS vendas, pelo número que se grita no balcão; (4) por quê; (5) o que
+    /// isso muda de verdade — e o que NÃO muda; (6) o próximo passo.
+    ///
+    /// O passo (6) não é enfeite: sem ele o dono lia, arrumava o cadastro no painel,
+    /// apertava Sincronizar e o número continuava o mesmo, porque nada no PDV sabia
+    /// tirar uma linha do dead-letter. Aviso sem saída é aviso que se aprende a ignorar.
+    /// </summary>
+    public string? Resumo
+    {
+        get
+        {
+            if (Total == 0) return null;
+            var quanto = Valor.Formatado();
+            var l = new List<string>
+            {
+                // Antes de qualquer número: o caixa está certo. Só depois o problema.
+                // Frase curta e sozinha de propósito — é a única linha que TEM que ser
+                // lida inteira, e linha curta não quebra em lugar nenhum.
+                "NENHUMA VENDA FOI PERDIDA.",
+                "O cliente levou o produto e o dinheiro entrou na gaveta.",
+                Desistidas == 0
+                    ? $"Falta só o REGISTRO de {Aguardando} venda(s) subir para o painel — {quanto}."
+                    : $"O que não subiu para o painel foi o REGISTRO de {Total} venda(s) — {quanto}.",
+            };
+
+            // Quais. Separadas quando há dos dois tipos: uma metade precisa de gente,
+            // a outra se resolve sozinha, e misturá-las é pedir para o dono agir na errada.
+            if (Desistidas > 0 && Aguardando > 0)
+            {
+                if (Nomear("Paradas de vez", v => v.Desistiu, Desistidas) is string d) l.Add(d);
+                if (Nomear("Ainda na fila", v => !v.Desistiu, Aguardando, " — essas sobem sozinhas")
+                    is string a) l.Add(a);
+            }
+            else if (Nomear("Quais", _ => true, Total) is string todas) l.Add(todas);
+
+            if (Desistidas > 0)
+            {
+                var porque = Motivo is { Length: > 0 } m ? $" — {m}" : "";
+                l.Add(Aguardando == 0
+                    ? $"O envio DESISTIU delas{porque}."
+                    : $"Em {Desistidas} delas o envio DESISTIU{porque}.");
+            }
+
+            // O tamanho REAL do estrago, e o tamanho do que NÃO é estrago. Sem a
+            // segunda metade o operador inventa a dele — e a dele é sempre pior:
+            // no susto se cancela venda que estava certa e se mexe em caixa fechado.
+            l.Add($"SÓ MUDA NO PAINEL: faturamento e DRE ficam {quanto} menores até elas subirem.");
+            l.Add("NÃO MUDA: a venda, o caixa deste turno e o cupom do cliente — tudo certo.");
+
+            l.Add(Desistidas == 0
+                ? "O QUE FAZER: nada no caixa. Elas sobem sozinhas na próxima sincronização."
+                : "O QUE FAZER: chame o gerente para resolver esse motivo no painel e, "
+                  + "depois, toque em Sincronizar. Cada toque dá mais UMA tentativa a "
+                  + "estas vendas.");
+
+            return string.Join("\n", l);
+        }
+    }
+
+    /// <summary>
+    /// "Paradas de vez: nº 41, 42 e 43 (hoje)." — os números pelos quais a venda é
+    /// conhecida na loja, agrupados por dia (o número reinicia a cada dia operacional).
+    ///
+    /// Devolve null quando não há lista (chamada antiga, ou a consulta falhou): o aviso
+    /// perde esta linha e continua verdadeiro. O que ele NÃO pode fazer é inventar
+    /// número.
+    /// </summary>
+    private string? Nomear(string rotulo, Func<VendaParada, bool> filtro, int quantas,
+        string sufixo = "")
+    {
+        if (Lista is null || quantas == 0) return null;
+        var vendas = Lista.Where(filtro).ToList();
+        if (vendas.Count == 0) return null;
+
+        var mostradas = vendas.Take(MaxListadas).ToList();
+        var texto = string.Join("; ", mostradas
+            .GroupBy(v => v.Dia)
+            .Select(g => "nº " + Juntar(g.Select(v => v.Numero.ToString())) + $" ({Quando(g.Key)})"));
+
+        // Quantas ficaram de fora vem do CONTADOR, não do tamanho da lista: a consulta
+        // tem teto, e é melhor dizer "e mais 34" do que fingir que eram só as 6.
+        var restam = quantas - mostradas.Count;
+        if (restam > 0)
+        {
+            // Só se promete o período dos dias quando a lista veio inteira; truncada,
+            // o intervalo seria um palpite.
+            var completa = Lista.Count == Total;
+            var dias = completa
+                ? vendas.Skip(MaxListadas).Select(v => v.Dia).Distinct().OrderBy(d => d).ToList()
+                : new List<string>();
+            texto += $" — e mais {restam}"
+                + dias switch
+                {
+                    { Count: 0 } => "",
+                    { Count: 1 } => $", de {Quando(dias[0])}",
+                    _ => $", de {Quando(dias[0])} a {Quando(dias[^1])}",
+                };
+        }
+        // O ponto final entra DEPOIS do sufixo: "…(hoje) — essas sobem sozinhas."
+        return $"{rotulo}: {texto}{sufixo}.";
+    }
+
+    /// <summary>"41, 42 e 43" — como se fala, não "41,42,43".</summary>
+    private static string Juntar(IEnumerable<string> itens)
+    {
+        var v = itens.ToList();
+        return v.Count <= 1 ? string.Concat(v)
+            : string.Join(", ", v.Take(v.Count - 1)) + " e " + v[^1];
+    }
+
+    /// <summary>
+    /// "hoje" para o dia operacional corrente (é o que o operador entende no balcão) e
+    /// dd/MM para os outros. O dia bruto ("2026-08-29") só aparece se não for data.
+    /// </summary>
+    private static string Quando(string dia)
+        => dia == Caixa.DiaOperacional() ? "hoje"
+         : DateTime.TryParse(dia, System.Globalization.CultureInfo.InvariantCulture,
+                             System.Globalization.DateTimeStyles.None, out var d) ? d.ToString("dd/MM")
+         : dia;
 }
 
 /// <summary>O que a sincronização fez, para mostrar ao operador em uma tela só.</summary>
@@ -233,7 +374,30 @@ public static class Sincronizacao
                  ORDER BY COUNT(*) DESC
                  LIMIT 1
                 """));
-            return new VendasParadas((int)r.aguardando, desistidas, new Dinheiro((long)r.valor), motivo);
+            // QUAIS vendas são. O mesmo WHERE do contador acima, palavra por palavra —
+            // se as duas consultas divergirem, o aviso lista uma venda que ele mesmo
+            // não contou, e aí ninguém acredita em nenhum dos dois números.
+            //
+            // O teto de 400 é rede de segurança para o caixa que passou semanas offline:
+            // a lista mostra 6 números de qualquer jeito, e o "e mais N" sai do CONTADOR,
+            // que não tem teto. Ou seja: o teto encurta a leitura, nunca a verdade.
+            var lista = cx.Query($"""
+                SELECT v.numero_local                              AS numero,
+                       v.business_date                             AS dia,
+                       CASE WHEN {SqlDesistiu} THEN 1 ELSE 0 END   AS desistiu
+                  FROM outbox o
+                  JOIN venda  v ON v.id = o.ref_id
+                 WHERE o.tipo = 'venda'
+                   AND v.status = 'finalizada'
+                   AND v.homologacao = 0
+                   AND (o.enviado_em IS NULL OR {SqlDesistiu})
+                 ORDER BY desistiu DESC, v.business_date, v.numero_local
+                 LIMIT 400
+                """)
+                .Select(x => new VendaParada((long)x.numero, (string)x.dia, (long)x.desistiu == 1))
+                .ToList();
+
+            return new VendasParadas((int)r.aguardando, desistidas, new Dinheiro((long)r.valor), motivo, lista);
         }
         catch { return new VendasParadas(0, 0, Dinheiro.Zero); }
     }
