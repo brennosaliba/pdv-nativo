@@ -22,6 +22,79 @@ using Pdv.Testes;
 // Servicos.ResolverPendenciasTefAsync, com a mesma referência de tempo: o START
 // DESTE PROCESSO). Recusado pela trava, sai sem encostar no banco.
 //   Pdv.Testes.exe --sonda-2a-instancia <banco.db> <nome-da-trava>
+// Modo EMPACOTAR: monta o instalador final pendurando a pasta do PDV e o paygo.exe
+// na cauda de uma copia do InstalarPdv.exe ja publicado. Chamado por
+// scripts\gerar-instalador.ps1.
+//   Pdv.Testes.exe --empacotar <exe-base> <pasta-pdv> <paygo.exe|-> <saida.exe>
+//
+// ⚠️ POR QUE ISTO MORA AQUI E NAO NO PROPRIO INSTALADOR. O InstalarPdv.exe tem
+// requireAdministrator no manifesto (ele grava em Program Files e no HKLM), e o
+// Windows recusa inicia-lo de um shell comum: "a operacao solicitada requer
+// elevacao". Empacotar e passo de BUILD, nao de instalacao — nao pode exigir UAC na
+// maquina de quem compila. O codigo do formato continua unico, em
+// Pdv.Instalador\Pacote.cs, compilado aqui por <Compile Include>: quem grava o
+// pacote e quem o le sao literalmente o mesmo fonte.
+// ⚠️ O casamento e so pelo args[0]. Exigir a aridade AQUI faria o modo cair em
+// silencio na suite de testes quando um argumento viesse errado — e foi exatamente o
+// que aconteceu: o script de build achou que empacotou e o que rodou foram os 1161
+// testes. Passo de build tem que falhar alto.
+if (args.Length >= 1 && args[0] == "--empacotar")
+{
+    if (args.Length < 5)
+    {
+        Console.WriteLine("uso: Pdv.Testes.exe --empacotar <exe-base> <pasta-pdv> <paygo.exe|-> <saida.exe>");
+        return 2;
+    }
+
+    var erroPacote = Pdv.Instalador.Pacote.Empacotar(
+        exeBase: args[1],
+        pastaPdv: args[2],
+        paygoExe: args[3] == "-" ? null : args[3],
+        saida: args[4],
+        progresso: Console.WriteLine);
+
+    if (erroPacote is not null) { Console.WriteLine("FALHOU: " + erroPacote); return 1; }
+
+    // Reabre o que acabou de gravar: empacotar sem conferir e entregar para a loja um
+    // exe que so falha la.
+    using var confere = File.OpenRead(args[4]);
+    var cauda = Pdv.Instalador.Pacote.LerTrailer(confere);
+    if (cauda is null) { Console.WriteLine("FALHOU: o trailer nao le de volta."); return 1; }
+    Console.WriteLine($"ok: {args[4]} ({new FileInfo(args[4]).Length / 1024 / 1024} MB, "
+                    + $"payload {cauda.Tamanho / 1024 / 1024} MB)");
+    return 0;
+}
+
+// Modo CONFERIR: abre o instalador JA GERADO, extrai a cauda de verdade num temporario
+// e verifica que o que saiu de la e uma pasta de PDV instalavel.
+//   Pdv.Testes.exe --conferir-pacote <instalador.exe>
+// Ler o trailer de volta so prova que a aritmetica fecha. Descompactar prova que o zip
+// esta inteiro — que e o que a loja vai descobrir no primeiro clique, se ninguem
+// descobrir antes.
+if (args.Length >= 2 && args[0] == "--conferir-pacote")
+{
+    var tmp = Path.Combine(Path.GetTempPath(), "confere-pacote-" + Guid.NewGuid().ToString("N")[..8]);
+    try
+    {
+        var falha = Pdv.Instalador.Pacote.Extrair(tmp, null, args[1]);
+        if (falha is not null) { Console.WriteLine("FALHOU: " + falha); return 1; }
+
+        var pdvDentro = Path.Combine(tmp, "pdv");
+        if (Pdv.Instalador.Instalacao.ConferirOrigem(pdvDentro) is { } incompleto)
+        {
+            Console.WriteLine("FALHOU: o pacote abriu mas o PDV la dentro esta incompleto — " + incompleto);
+            return 1;
+        }
+
+        var arquivos = Pdv.Instalador.Instalacao.ArquivosParaCopiar(pdvDentro).Count;
+        var temPayGo = File.Exists(Path.Combine(tmp, "paygo.exe"));
+        Console.WriteLine($"ok: o pacote abre — {arquivos} arquivos do PDV"
+                        + (temPayGo ? " + paygo.exe" : " (sem PayGo)"));
+        return 0;
+    }
+    finally { try { if (Directory.Exists(tmp)) Directory.Delete(tmp, true); } catch { } }
+}
+
 if (args.Length >= 3 && args[0] == "--sonda-2a-instancia")
 {
     using var trava = InstanciaUnica.Tentar(args[2]);
@@ -1204,6 +1277,13 @@ Console.WriteLine();
 Console.WriteLine("--- Fila de sincronizacao (dead-letter) ---");
 await TestesFila.RodarAsync((cond, nome) => Check("fila: " + nome, cond));
 
+// -- PENDENCIA: o aviso que nao se apaga -------------------------------------
+// 16 vendas / R$ 102.626,50 em dead-letter sem NENHUMA saida: o dono arrumava o
+// painel, apertava Sincronizar e o numero continuava 16. Aviso sem saida vira ruido.
+Console.WriteLine();
+Console.WriteLine("--- Aviso de pendencia (saida do dead-letter) ---");
+await TestesPendencias.RodarAsync((cond, nome) => Check("pendencia: " + nome, cond));
+
 // -- RASCUNHO: a comanda em andamento contra a queda de energia ---------------
 // Os itens viviam so na memoria da tela: religar = rebipar tudo com o cliente
 // no balcao. Restaurar os ITENS nao e realizar a venda (passo 24 da homologacao).
@@ -1234,12 +1314,28 @@ Console.WriteLine();
 Console.WriteLine("--- Assistente de configuracao (5 passos) ---");
 TestesAssistente.Rodar((cond, nome) => Check("config: " + nome, cond));
 
+// -- CATEGORIAS: a ordem da coluna e da grade na tela de venda ---------------
+// A ordem vinha do ORDER BY do SQLite, que compara texto por BYTE: AGUA MINERAL
+// COM GAS era o ULTIMO item de Bebidas, depois de SUCO UVA. Acento e a MESMA
+// letra em portugues, e a vitrine de PROMOCAO nao entra no alfabeto.
+Console.WriteLine();
+Console.WriteLine("--- Ordem das categorias e da grade (alfabetica pt-BR) ---");
+TestesCategorias.Rodar((cond, nome) => Check("categoria: " + nome, cond));
+
 // -- AUTORIZACAO DE ESTORNO: token de WhatsApp, PIN como saida ----------------
 // Estorno e o unico ponto onde dinheiro VOLTA sem venda. Ate hoje bastava o PIN
 // guardado no banco do proprio caixa; agora quem autoriza esta fora da loja.
 Console.WriteLine();
 Console.WriteLine("--- Autorizacao de estorno (token por WhatsApp) ---");
 await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome, cond));
+
+// -- INSTALADOR: a unica vez que a loja ve o sistema pela primeira vez --------
+// Ele copiava SO o Pdv.exe. O publish deixa as bibliotecas nativas soltas ao lado,
+// entao a instalacao dizia "concluido", criava o atalho, registrava o programa --
+// e o PDV morria antes da primeira tela. Nada no build acusava.
+Console.WriteLine();
+Console.WriteLine("--- Instalador (origem completa, copia por cima, dados intactos) ---");
+TestesInstalador.Rodar((cond, nome) => Check("instalador: " + nome, cond));
 
 cx.Dispose();
 SqliteConnection.ClearAllPools();

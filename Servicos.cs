@@ -1,4 +1,5 @@
 using Dapper;
+using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 using Pdv.Telas;
 
@@ -442,6 +443,41 @@ public static class Servicos
         return Vendas.Config(cx, "agente_url", "http://127.0.0.1:4610")!;
     }
 
+    /// <summary>
+    /// Impressora e bobina da COMANDA do delivery, lidas do <c>config</c> deste caixa.
+    ///
+    /// Um lugar só porque são TRÊS os caminhos que tiram a mesma comanda no papel (a
+    /// automática do sino/timer, o 🖨 do card no KDS e o botão de teste da Configuração)
+    /// e eles não podem discordar sobre onde ela sai — comanda de teste que sai numa
+    /// térmica e comanda de verdade que sai noutra é pior que não ter teste nenhum.
+    /// </summary>
+    public static Impressao.Destino DestinoDaComanda(SqliteConnection cx)
+        => Impressao.DestinoComanda(
+            Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"),
+            Vendas.Config(cx, "kds_comanda_separada"),
+            Vendas.Config(cx, "kds_comanda_impressora"),
+            Vendas.Config(cx, "kds_comanda_papel_mm"));
+
+    /// <summary>
+    /// Comanda de exemplo para o botão de teste da tela de Configuração. Os itens são
+    /// escolhidos para exercitar o que costuma estourar a bobina estreita: descrição
+    /// longa, combo com escolhas e observação de cozinha — é onde o corte aparece.
+    /// </summary>
+    public static Pdv.Nucleo.Ticket ComandaDeExemplo() => new(
+        Id: "exemplo", Origem: "ifood", RefId: "exemplo", Numero: "TESTE-1",
+        Cliente: "CLIENTE DE TESTE",
+        // Passa pelo MESMO ItensDeJson que a sincronização usa e serializa o resultado,
+        // que é exatamente o que fica em kds_ticket.itens_json. Escrever o JSON final à
+        // mão daria uma comanda de teste que não é a comanda de verdade.
+        ItensJson: System.Text.Json.JsonSerializer.Serialize(Pdv.Nucleo.Kds.ItensDeJson("""
+            [{"descricao":"COMBO BOX 4 DONUTS SORTIDOS","qtd":1,
+              "escolhas":["1x Donut Ninho com Nutella","1x Donut Red Velvet",
+                          "1x Donut Chocolate Belga","1x Donut Doce de Leite"]},
+             {"descricao":"COOKIE TRIPLO CHOCOLATE COM NOZES","qtd":2,
+              "observacao":"sem granulado, embalar separado"}]
+            """)),
+        Status: Pdv.Nucleo.Kds.Recebido, CriadoEm: DateTime.Now, PreparoEm: null, ProntoEm: null);
+
     private static readonly SemaphoreSlim UmaComandaPorVez = new(1, 1);
 
     /// <summary>
@@ -461,12 +497,11 @@ public static class Servicos
         if (!await UmaComandaPorVez.WaitAsync(0).ConfigureAwait(false)) return null;
         try
         {
-            string? impressora; bool auto;
+            Impressao.Destino destino; bool auto;
             using (var cx = Banco.Abrir())
             {
                 auto = Vendas.Config(cx, "kds_comanda_auto") == "1";
-                impressora = Vendas.Config(cx, "kds_comanda_impressora");
-                if (impressora is { Length: 0 }) impressora = null;   // "" = padrao do Windows
+                destino = DestinoDaComanda(cx);
             }
             if (!auto) return null;
 
@@ -479,7 +514,8 @@ public static class Servicos
                 if (!Pdv.Nucleo.Kds.ReivindicarImpressao(t.Id)) continue;
                 var erro = await Impressao.ImprimirTextoAsync(
                     $"Comanda cozinha #{t.Numero}",
-                    new[] { Pdv.Nucleo.Kds.ComandaLinhas(t) }, impressora).ConfigureAwait(false);
+                    new[] { Pdv.Nucleo.Kds.ComandaLinhas(t, Pdv.Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
+                    destino).ConfigureAwait(false);
                 // Mesma frase que o botao de reimprimir da tela Delivery mostra: e o
                 // mesmo papel que nao saiu, entao nao pode ter dois textos diferentes.
                 falha ??= erro is null ? null : $"A comanda do #{t.Numero} não saiu";

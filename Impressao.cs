@@ -383,6 +383,70 @@ public static class Impressao
         catch { return null; }
     }
 
+    // ── DESTINO POR FINALIDADE (cupom fiscal ≠ comanda do delivery) ───────────────
+    //
+    // 29/08 — pedido do dono: "pode ser q delivery use uma e cupom fiscal use outra,
+    // entao sao configuracoes individuais". A loja tem a térmica do balcão (cupom) e a
+    // da expedição (comanda). Antes disto a impressora da comanda já existia
+    // (`kds_comanda_impressora`), mas a LARGURA era uma só para as duas — a global
+    // `papel_mm` —, então a comanda numa bobina de 58 mm saía cortada mesmo com a
+    // impressora certa escolhida.
+
+    /// <summary>
+    /// Onde UM papel sai: a fila do Windows (null = padrão do Windows) e a bobina dela.
+    /// Os dois andam juntos porque errar o par é o defeito clássico: mandar para a
+    /// térmica de 58 mm um texto montado para 80 mm imprime cortado, e cortado no fim
+    /// da linha — onde está o que importa.
+    /// </summary>
+    public readonly record struct Destino(string? Impressora, Papel Papel);
+
+    /// <summary>Vazio e nulo são a mesma coisa na configuração: "padrão do Windows".</summary>
+    private static string? Fila(string? nome)
+        => string.IsNullOrWhiteSpace(nome) ? null : nome.Trim();
+
+    /// <summary>
+    /// A loja escolheu impressora PRÓPRIA para a comanda do delivery?
+    ///
+    /// <paramref name="separada"/> é <c>config['kds_comanda_separada']</c>, a caixinha
+    /// da tela de Configuração. Ausente é o caso de quem nunca abriu a opção — e aí a
+    /// resposta vem de <paramref name="impressoraComanda"/>: quem JÁ tinha escolhido uma
+    /// impressora de comanda antes desta caixinha existir continua com ela ligada, senão
+    /// a atualização silenciosamente jogaria a comanda de volta na bobina do cupom.
+    /// </summary>
+    public static bool ComandaSeparada(string? separada, string? impressoraComanda)
+        => (separada ?? "").Trim() switch
+        {
+            "1" => true,
+            "0" => false,
+            // Nunca respondida: liga só se já havia uma impressora de comanda escolhida.
+            _ => !string.IsNullOrWhiteSpace(impressoraComanda),
+        };
+
+    /// <summary>Onde sai o CUPOM da venda — a impressora e a bobina de sempre.</summary>
+    public static Destino DestinoCupom(string? impressoraCupom, string? papelCupom)
+        => new(Fila(impressoraCupom), Papel.De(papelCupom));
+
+    /// <summary>
+    /// Onde sai a COMANDA do delivery, a partir das chaves cruas do <c>config</c>.
+    ///
+    /// A REGRA DE OURO: quem nunca abriu a opção continua imprimindo onde já imprime
+    /// hoje — ou seja, na impressora do CUPOM, não na "padrão do Windows". Essa era a
+    /// armadilha da versão anterior: a loja tinha `impressora = EPSON TM-T20` e nenhuma
+    /// impressora de comanda, e a comanda ia parar na padrão do Windows (que numa
+    /// máquina de caixa costuma ser o "Microsoft Print to PDF" — um papel que nunca sai).
+    ///
+    /// Com a opção ligada, cada finalidade tem impressora E bobina próprias; a bobina da
+    /// comanda em branco cai na do cupom, que é o que valia antes de ela existir.
+    /// </summary>
+    public static Destino DestinoComanda(string? impressoraCupom, string? papelCupom,
+        string? separada, string? impressoraComanda, string? papelComanda)
+    {
+        if (!ComandaSeparada(separada, impressoraComanda))
+            return DestinoCupom(impressoraCupom, papelCupom);
+        return new Destino(Fila(impressoraComanda),
+            Papel.De(string.IsNullOrWhiteSpace(papelComanda) ? papelCupom : papelComanda));
+    }
+
     // ── IMPRESSÃO ────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -592,19 +656,35 @@ public static class Impressao
         => (await ImprimirBlocosAsync(descricao, blocos, nomeImpressora, 0, prioridade)).Erro;
 
     /// <summary>
+    /// Mesma coisa, mas com o par impressora+bobina EXPLÍCITO (ver <see cref="Destino"/>).
+    /// É por aqui que a comanda do delivery sai: ela pode estar noutra térmica, com outra
+    /// largura, e a bobina global <see cref="PapelAtual"/> é a do CUPOM — usá-la para a
+    /// comanda é o que fazia o texto sair cortado na bobina estreita da expedição.
+    /// </summary>
+    public static async Task<string?> ImprimirTextoAsync(string descricao,
+        IReadOnlyList<IReadOnlyList<string>> blocos, Destino destino,
+        PrioridadeImpressao prioridade = PrioridadeImpressao.Alta)
+        => (await ImprimirBlocosAsync(descricao, blocos, destino.Impressora, 0, prioridade, destino.Papel)).Erro;
+
+    /// <summary>
     /// Igual a <see cref="ImprimirTextoAsync"/>, mas devolve também QUANTOS blocos saíram e aceita
     /// pular os primeiros — é o que permite a retentativa continuar da via que faltou em vez de
     /// imprimir a via do cliente duas vezes. `Sairam` conta só os desta chamada.
     /// </summary>
+    /// <param name="papel">
+    /// Bobina a usar. Null = a do cupom (<see cref="PapelAtual"/>), que é o que vale para as
+    /// vias do TEF — elas saem na MESMA impressora do cupom. A comanda do delivery passa a
+    /// dela aqui porque pode estar noutra térmica.
+    /// </param>
     public static async Task<(string? Erro, int Sairam)> ImprimirBlocosAsync(string descricao,
         IReadOnlyList<IReadOnlyList<string>> blocos, string? nomeImpressora, int pular,
-        PrioridadeImpressao prioridade = PrioridadeImpressao.Alta)
+        PrioridadeImpressao prioridade = PrioridadeImpressao.Alta, Papel? papel = null)
     {
         if (blocos is null || blocos.Count == 0 || blocos.All(b => b is null || b.Count == 0))
             return ("Não há texto para imprimir.", 0);
         // Um retrato só para o conjunto de vias: elas são o mesmo comprovante partido em
         // pedaços destacáveis e não podem sair com larguras diferentes uma da outra.
-        var papel = PapelAtual;
+        var papelDoTrabalho = papel ?? PapelAtual;
         var n = 0;
         var sairam = 0;
         foreach (var bloco in blocos)
@@ -615,7 +695,8 @@ public static class Impressao
             var linhas = bloco;
             var nome = $"{descricao} {n}/{blocos.Count} #{Environment.TickCount64:x}";
             var erro = await NaFilaAsync(prioridade,
-                () => ComPrazoAsync(EmThreadStaAsync(() => ImprimirVisual(papel, () => MontarTexto(linhas, papel), nome, nomeImpressora))));
+                () => ComPrazoAsync(EmThreadStaAsync(() => ImprimirVisual(papelDoTrabalho,
+                    () => MontarTexto(linhas, papelDoTrabalho), nome, nomeImpressora))));
             if (erro is not null) return (erro, sairam);
             sairam++;
         }

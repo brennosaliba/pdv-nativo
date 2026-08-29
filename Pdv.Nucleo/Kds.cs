@@ -273,15 +273,39 @@ public static class Kds
     }
 
     /// <summary>
-    /// A comanda em texto monoespaçado (bobina 80mm ≈ 40 colunas), no contrato
-    /// de <c>Impressao.ImprimirTextoAsync</c>. Número GRANDE não existe em texto
-    /// puro — o destaque vem de moldura e respiro. Observação por item sai
-    /// indentada logo abaixo do item: é a instrução da cozinha ("sem granulado"),
-    /// perder isso no papel é refazer donut.
+    /// Largura em que a comanda sempre foi montada: 40 colunas, folgadas dentro das 48
+    /// da bobina de 80 mm — a folga é o que dá espaço às linhas ampliadas (o número do
+    /// pedido sai em 2x). É o TETO, não a medida: numa bobina mais estreita quem manda
+    /// é o papel (ver <see cref="ColunasComanda"/>).
     /// </summary>
-    public static IReadOnlyList<string> ComandaLinhas(Ticket t)
+    public const int ColunasPadrao = 40;
+
+    /// <summary>
+    /// Quantas colunas a comanda pode usar numa bobina de <paramref name="colunasDoPapel"/>.
+    ///
+    /// Existe desde 29/08, quando a comanda do delivery ganhou impressora e LARGURA
+    /// próprias: com as 40 colunas fixas no código, a comanda mandada para a térmica de
+    /// 58 mm da expedição (32 colunas) saía cortada no fim da linha — e é lá que fica a
+    /// quantidade do item. Bobina mais larga que 80 mm não estica a comanda de propósito:
+    /// o layout foi desenhado para 40 colunas e esticar só afastaria o item do quadradinho.
+    /// </summary>
+    public static int ColunasComanda(int colunasDoPapel)
+        => Math.Clamp(Math.Min(ColunasPadrao, colunasDoPapel), 20, ColunasPadrao);
+
+    /// <summary>
+    /// A comanda em texto monoespaçado, no contrato de <c>Impressao.ImprimirTextoAsync</c>.
+    /// Número GRANDE não existe em texto puro — o destaque vem de moldura e respiro.
+    /// Observação por item sai indentada logo abaixo do item: é a instrução da cozinha
+    /// ("sem granulado"), perder isso no papel é refazer donut.
+    /// </summary>
+    /// <param name="colunas">
+    /// Largura da bobina em caracteres — passe <see cref="ColunasComanda"/> da bobina que
+    /// a comanda vai usar. O padrão mantém as 40 colunas de 80 mm, que é o que a loja
+    /// imprime desde sempre: quem chama sem escolher não vê diferença nenhuma no papel.
+    /// </param>
+    public static IReadOnlyList<string> ComandaLinhas(Ticket t, int colunas = ColunasPadrao)
     {
-        const int L = 40;
+        var L = ColunasComanda(colunas);
         var eCardapio = t.Numero.StartsWith("CD-", StringComparison.OrdinalIgnoreCase);
         var linhas = new List<string>
         {

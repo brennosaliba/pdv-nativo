@@ -30,7 +30,9 @@ public static class TestesAssistente
         PassoLoja(checar);
         InscricaoEstadual(checar);
         PassoFiscal(checar);
+        SerieQueDaErro(checar);
         PassoImpressora(checar);
+        ComandaDoDelivery(checar);
         PassoMaquininha(checar);
         PassoPareamento(checar);
         PortaUnica(checar);
@@ -150,6 +152,116 @@ public static class TestesAssistente
             "e mesmo em produção o passo não trava — o aviso de 'sem certificado não emite' é do Salvar");
     }
 
+    /// <summary>
+    /// A SÉRIE QUE DÁ ERRO (29/08 — pedido do dono: "se der erro mostra o erro por causa
+    /// da série e altera para uma que seja possível").
+    ///
+    /// Dois defeitos, e os dois já custaram caro:
+    ///  · o erro chegava CRU ("Duplicidade de NF-e com diferenca na chave de acesso") e
+    ///    não dizia que o culpado era a série — nem que dava para trocá-la;
+    ///  · e não havia como trocar por uma que funcionasse.
+    /// Por isso todo teste aqui olha o PAR (a frase nomeia a série? e o que ela oferece?),
+    /// com um cuidado extra: sugestão que não se possa GARANTIR não pode existir — ela
+    /// vira a colisão seguinte, descoberta só na venda.
+    /// </summary>
+    private static void SerieQueDaErro(Action<bool, string> checar)
+    {
+        static DiagnosticoSerie D(string serie, int? nuvem = null, int? reservada = null,
+            int? emissor = null, RecusaFiscal? recusa = null)
+            => AssistenteConfig.ConferirSerie(serie, nuvem, reservada, emissor, recusa);
+
+        // ── o que a SEFAZ devolve: quem decide é o CÓDIGO ───────────────────
+        checar(AssistenteConfig.RecusaEhDeSerie(539, "Duplicidade de NF-e com diferenca na chave de acesso"),
+            "cStat 539 (duplicidade com chave diferente) é problema de série");
+        checar(AssistenteConfig.RecusaEhDeSerie(204, "Duplicidade de NF-e"),
+            "cStat 204 (duplicidade) também é problema de série");
+        // O xMotivo é texto livre, muda de estado para estado e chega truncado por quem
+        // repassa. Com o código na mão, adivinhar pelo texto é como se acusa a série por
+        // uma rejeição que era de outra coisa.
+        checar(!AssistenteConfig.RecusaEhDeSerie(217, "NF-e nao consta na base de dados da SEFAZ (duplicidade?)"),
+            "com código na mão, o texto livre NÃO decide: 217 não é série mesmo falando em duplicidade");
+        checar(!AssistenteConfig.RecusaEhDeSerie(297, "Assinatura difere do calculado"),
+            "rejeição de assinatura não vira acusação contra a série");
+        checar(AssistenteConfig.RecusaEhDeSerie(null, "Duplicidade de NF-e"),
+            "sem código, o texto é o que há — e 'duplicidade' aponta a série");
+        checar(!AssistenteConfig.RecusaEhDeSerie(null, null) && !AssistenteConfig.RecusaEhDeSerie(0, ""),
+            "sem código e sem texto não se acusa ninguém");
+
+        // ── série fora da faixa ─────────────────────────────────────────────
+        foreach (var ruim in new[] { "0", "1000", "", "  ", "três", "-1" })
+        {
+            var d = D(ruim);
+            checar(d.Nivel == 2 && d.Texto.Contains("1 a 999"),
+                $"série '{ruim}' é recusada dizendo qual é a faixa");
+        }
+        checar(D("1").Nivel == 0 && D("999").Nivel == 0, "1 e 999 são séries boas");
+
+        // ── colisão com a série da NUVEM (prova local, sem esperar a venda) ──
+        var colide = D("7", nuvem: 7);
+        checar(colide.Nivel == 2 && colide.Texto.Contains("série 7") && colide.Texto.Contains("539"),
+            $"série igual à da nuvem é barrada, nomeando a série e a rejeição que viria ({colide.Texto})");
+        checar(D("8", nuvem: 7).Nivel == 0, "série diferente da nuvem passa");
+
+        // ── a sugestão: só número GARANTIDO, nunca chute ────────────────────
+        var comReserva = D("7", nuvem: 7, reservada: 4);
+        checar(comReserva.Sugestao == 4 && comReserva.Texto.Contains("série 4"),
+            "havendo série reservada pelo painel, é ELA que a tela oferece");
+        var semReserva = D("7", nuvem: 7);
+        checar(semReserva.Sugestao is null,
+            "sem reserva do painel, NÃO se inventa número — sugestão errada vira a colisão seguinte");
+        checar(semReserva.Texto.Contains("Parear") && semReserva.Texto.Contains("painel"),
+            $"e o texto ensina onde achar a série certa em vez de deixar o dono parado ({semReserva.Texto})");
+        checar(D("7", nuvem: 7, reservada: 7).Sugestao is null,
+            "reserva igual à série da nuvem não é oferecida: seria trocar um erro por outro");
+        checar(D("7", nuvem: 7, reservada: 1000).Sugestao is null,
+            "reserva fora da faixa 1..999 também não é oferecida");
+
+        // ── a recusa que já aconteceu (série tomada por outro caixa) ────────
+        var tomada = D("3", recusa: new RecusaFiscal(539, "Duplicidade de NF-e com diferenca na chave de acesso", 3));
+        checar(tomada.Nivel == 2 && tomada.Texto.Contains("SÉRIE 3"),
+            $"recusa 539 nesta série vira erro que NOMEIA a série ({tomada.Texto})");
+        checar(tomada.Texto.Contains("539") && tomada.Texto.Contains("Duplicidade"),
+            "e leva junto o código e o motivo da SEFAZ, para quem for atrás com o contador");
+        checar(D("4", recusa: new RecusaFiscal(539, "Duplicidade", 3)).Nivel == 0,
+            "recusa de OUTRA série não acusa a série que está na tela");
+        checar(D("3", recusa: new RecusaFiscal(297, "Assinatura difere do calculado", 3)).Nivel == 0,
+            "recusa que não é de série não vira acusação contra a série");
+        // Recusa barrada localmente não grava série (numero/serie ficam nulos). Acusar a
+        // série por causa dela travaria o Salvar para sempre, sem saída nenhuma.
+        checar(D("3", recusa: new RecusaFiscal(539, "Duplicidade", null)).Nivel == 0,
+            "recusa sem série gravada não acusa a série da tela (senão o Salvar trava para sempre)");
+
+        // ── quem numera é o EMISSOR, não este campo ─────────────────────────
+        // O dono trocou 9→4 aqui e a nota continuou saindo na 3: o campo é rótulo, e o
+        // PDV o realinha sozinho com o /health. Calar isso é deixar a troca parecer feita.
+        var rotulo = D("4", emissor: 3);
+        checar(rotulo.Nivel == 1 && rotulo.Sugestao == 3 && rotulo.Texto.Contains("emissor local"),
+            $"série diferente da que o emissor local numera vira aviso com a série real ({rotulo.Texto})");
+        checar(rotulo.Texto.Contains("agent-config.json"),
+            "e diz onde se muda a série de verdade, em vez de prometer que este campo muda");
+        checar(D("3", emissor: 3).Nivel == 0, "série igual à do emissor não avisa nada");
+        checar(D("4", emissor: 7, nuvem: 7).Sugestao is null,
+            "série do emissor que colide com a da nuvem não é oferecida como saída");
+        // Havendo erro de verdade e DUAS fontes, vale a reserva do painel: só ela enxerga
+        // os outros caixas da loja; o /health só sabe desta máquina.
+        checar(D("7", nuvem: 7, reservada: 4, emissor: 5).Sugestao == 4,
+            "com as duas fontes, a sugestão é a reserva do painel");
+        checar(D("7", nuvem: 7, emissor: 5).Sugestao == 5,
+            "sem reserva, o que o emissor local DE FATO numera também é número garantido");
+
+        // ── e o que a tela faz com isso ─────────────────────────────────────
+        string? Fiscal(DadosAssistente d) => AssistenteConfig.Bloqueio(PassoConfig.Fiscal, d);
+        var travada = Pronta() with { Serie = "7", SerieNuvem = 7, SerieReservada = 4 };
+        checar(Fiscal(travada) is { } m && m.Contains("série 7") && m.Contains("série 4"),
+            "o passo 2 trava com a frase inteira: qual série está errada e qual usar");
+        checar(AssistenteConfig.PrimeiroBloqueio(travada)?.Passo == PassoConfig.Fiscal,
+            "e o Salvar manda o operador para o passo 2, onde está o campo culpado");
+        checar(Fiscal(Pronta() with { Serie = "4", SerieEmissorLocal = 3 }) is null,
+            "aviso (nível 1) NÃO trava a instalação: rótulo desalinhado não impede vender");
+        checar(Fiscal(Pronta() with { SerieNuvem = 9, SerieReservada = 1 }) is null,
+            "série boa continua passando com as duas informações novas no bolso");
+    }
+
     private static void PassoImpressora(Action<bool, string> checar)
     {
         // Tudo aqui tem padrão que funciona: impressora do Windows e bobina de 80 mm.
@@ -170,6 +282,51 @@ public static class TestesAssistente
         checar(AssistenteConfig.PodeGravarImpressora(true, "EPSON TM-T20")
                && AssistenteConfig.PodeGravarImpressora(false, "EPSON TM-T20"),
             "impressora escolhida sempre grava: aí há decisão, com lista ou sem");
+    }
+
+    /// <summary>
+    /// COMANDA DO DELIVERY em impressora própria (29/08 — pedido do dono: "pode ser q
+    /// delivery use uma e cupom fiscal use outra, entao sao configuracoes individuais").
+    ///
+    /// A regra que não pode quebrar está no primeiro teste: quem NÃO liga a opção segue
+    /// imprimindo tudo onde já imprime. Instalar um caixa não pode passar a exigir a
+    /// escolha de duas impressoras.
+    /// </summary>
+    private static void ComandaDoDelivery(Action<bool, string> checar)
+    {
+        static string Comanda(DadosAssistente d) =>
+            AssistenteConfig.Resumo(d).First(l => l.Titulo.Contains("Comanda")).Valor;
+
+        var junto = Pronta() with { ComandaAuto = true, ComandaSeparada = false };
+        checar(Comanda(junto).Contains("MESMA impressora do cupom"),
+            $"sem a opção ligada, a revisão diz que a comanda sai na mesma impressora do cupom ({Comanda(junto)})");
+
+        var separada = Pronta() with
+        {
+            ComandaAuto = true, ComandaSeparada = true,
+            ImpressoraComanda = "ELGIN I9 COZINHA", ComandaPapelMm = 58,
+        };
+        checar(Comanda(separada).Contains("ELGIN I9 COZINHA") && Comanda(separada).Contains("58 mm"),
+            $"ligada, a revisão diz a impressora E a bobina da comanda ({Comanda(separada)})");
+        checar(Comanda(separada).Contains("32 colunas"),
+            "e traduz a bobina em colunas, que é o que explica a comanda sair mais comprida");
+        checar(Comanda(separada with { ImpressoraComanda = null }).Contains("padrão do Windows"),
+            "sem impressora escolhida na opção ligada, a revisão diz que vai na padrão do Windows");
+
+        // As duas larguras são independentes: é o ponto do pedido. Cupom em 80 e comanda
+        // em 58 tem que aparecer como duas linhas diferentes na revisão.
+        var duasBobinas = separada with { PapelMm = 80 };
+        checar(AssistenteConfig.Resumo(duasBobinas).Any(l => l.Titulo.Contains("cupom") && l.Valor.Contains("80 mm"))
+               && Comanda(duasBobinas).Contains("58 mm"),
+            "cupom em 80 mm e comanda em 58 mm convivem na mesma revisão");
+
+        checar(Comanda(Pronta() with { ComandaAuto = false }).Contains("🖨"),
+            "sem impressão automática, a revisão lembra do botão que tira a comanda à mão");
+
+        // E nada disso pode travar a instalação: o passo da impressora nunca bloqueia.
+        checar(AssistenteConfig.Bloqueio(PassoConfig.Impressora, separada) is null
+               && AssistenteConfig.PrimeiroBloqueio(separada) is null,
+            "comanda em impressora e bobina próprias não bloqueia o assistente");
     }
 
     private static void PassoMaquininha(Action<bool, string> checar)

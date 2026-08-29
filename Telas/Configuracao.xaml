@@ -101,7 +101,19 @@
                 <!-- 2 · NOTA FISCAL ──────────────────────────────────────── -->
                 <StackPanel x:Name="PassoFiscal" Visibility="Collapsed">
                     <TextBlock Text="Série deste caixa" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtSerie" Margin="0,4,0,2" MaxLength="3" TextChanged="CampoMudou"/>
+                    <TextBox x:Name="TxtSerie" Margin="0,4,0,2" MaxLength="3" TextChanged="SerieMudou"/>
+                    <!-- 29/08 — pedido do dono: "ao escolher serie do caixa, se der erro,
+                         mostra o erro POR CAUSA DA SÉRIE e altera para uma que seja
+                         possível". Antes, série errada só aparecia na primeira venda, como
+                         uma Rejeição 539 crua da SEFAZ que não dizia de quem era a culpa.
+                         Esta linha nomeia a série; o botão ao lado troca por uma que o
+                         painel garantiu ser deste caixa (e só aparece quando ela existe —
+                         sugerir número no chute é pior que não sugerir nada). -->
+                    <TextBlock x:Name="TxtStatusSerie" Foreground="{DynamicResource TextoFraco}" FontSize="12"
+                               TextWrapping="Wrap" MinHeight="16" Margin="0,0,0,6"/>
+                    <Button x:Name="BtnUsarSerie" Visibility="Collapsed" Click="UsarSerieSugerida"
+                            Style="{StaticResource BotaoBase}" MinHeight="44" FontSize="14"
+                            HorizontalAlignment="Left" Padding="18,0" Margin="0,0,0,8"/>
                     <TextBlock Text="Cada caixa precisa da série dele. Dois caixas na mesma série repetem a numeração e a SEFAZ recusa as notas. O passo 5 traz a série que o painel reservou para este caixa."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
@@ -183,13 +195,45 @@
                     <TextBlock x:Name="TxtStatusImpressao" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
 
-                    <TextBlock Text="COMANDA DA COZINHA" Foreground="{DynamicResource Marca}"
+                    <!-- COMANDA DO DELIVERY — configuração INDIVIDUAL (pedido do dono,
+                         29/08): a comanda pode sair na bobina da expedição e o cupom na
+                         do balcão. A regra de ouro do desenho está na caixinha
+                         "Usar outra impressora": DESMARCADA por padrão, e desmarcada
+                         significa "tudo na impressora do cupom, como sempre foi". Quem
+                         instala um caixa não pode ser obrigado a escolher duas
+                         impressoras — os campos só aparecem para quem tem duas. -->
+                    <TextBlock Text="COMANDA DO DELIVERY" Foreground="{DynamicResource Marca}"
                                FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
                     <CheckBox x:Name="ChkComandaAuto" Content="Imprimir a comanda quando o pedido de delivery chegar"
                               IsChecked="False" FontSize="14" Margin="0,0,0,8"/>
-                    <ComboBox x:Name="CboImpressoraComanda" Margin="0,0,0,4"/>
-                    <TextBlock Text="A cozinha pode ter a própria bobina. Em branco, sai na impressora padrão do Windows. Na tela Delivery, cada pedido tem o botão 🖨 para reimprimir."
-                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                    <CheckBox x:Name="ChkComandaSeparada" Content="Usar outra impressora para as comandas do delivery"
+                              IsChecked="False" FontSize="14" Margin="0,0,0,4"
+                              Checked="ComandaSeparadaMudou" Unchecked="ComandaSeparadaMudou"/>
+                    <TextBlock x:Name="TxtComandaJunto"
+                               Text="Desmarcado, a comanda sai na mesma impressora e na mesma bobina do cupom — que é o que este caixa já faz hoje."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="24,0,0,8"/>
+
+                    <StackPanel x:Name="BlocoComandaSeparada" Visibility="Collapsed" Margin="24,2,0,8">
+                        <TextBlock Text="Impressora da comanda" Style="{StaticResource Rotulo}"/>
+                        <ComboBox x:Name="CboImpressoraComanda" Margin="0,4,0,10"/>
+                        <!-- Largura PRÓPRIA: a bobina da expedição costuma ser 58 mm e a do
+                             balcão 80 mm. Antes desta linha a comanda usava a largura do
+                             cupom e saía cortada no fim da linha, onde fica a quantidade. -->
+                        <TextBlock Text="Largura do papel da comanda" Style="{StaticResource Rotulo}"/>
+                        <ComboBox x:Name="CboPapelComanda" Margin="0,4,0,4" SelectionChanged="PapelComandaMudou"/>
+                        <TextBlock x:Name="TxtStatusPapelComanda" Foreground="{DynamicResource TextoFraco}" FontSize="12"
+                                   TextWrapping="Wrap" Margin="0,0,0,4"/>
+                    </StackPanel>
+
+                    <!-- O teste fica FORA do bloco escondido de propósito: ele imprime na
+                         impressora que a comanda vai usar de verdade (separada ou não), e
+                         é o único jeito de o dono saber que acertou antes do 1º pedido. -->
+                    <Button x:Name="BtnTesteComanda" Content="Imprimir comanda de exemplo" Click="TestarComanda"
+                            Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="TxtStatusComanda"
+                               Text="Na tela Delivery, cada pedido tem o botão 🖨 para reimprimir a comanda."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
+                               TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                     <!-- Tema mora aqui porque é a outra coisa desta MÁQUINA (a luz do
                          balcão, como a bobina), e porque grava na hora: não passa pelo

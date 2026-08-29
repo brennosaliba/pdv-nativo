@@ -20,4 +20,21 @@
          arquivo em uso — feche o PDV antes de rodar a suíte. -->
     <ProjectReference Include="..\Pdv.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- O INSTALADOR ENTRA POR FONTE, NAO POR REFERENCIA — e nao e preguica.
+         O Pdv.Instalador precisa ser <SelfContained> (ele roda numa maquina de loja
+         recem formatada, que nao tem .NET nenhum instalado), e o SDK proibe: NETSDK1151,
+         "um executavel autossuficiente nao pode ser referenciado por um executavel nao
+         autossuficiente". Restavam tres saidas: tirar o SelfContained do csproj e deixar
+         essa garantia num script (foi assim que o instalador nasceu dependente do
+         framework); criar um projeto de biblioteca so para uma classe; ou compilar o
+         MESMO fonte aqui. A terceira e a unica que nao troca uma garantia por conveniencia:
+         o que a suite exercita e byte a byte o codigo que vai para a loja.
+         ⚠️ Arquivo novo em Pdv.Instalador que a suite precise testar tem que ser
+         acrescentado aqui a mao — nao ha referencia de projeto para trazer sozinho. -->
+    <Compile Include="..\Pdv.Instalador\Instalacao.cs" Link="Instalador\Instalacao.cs" />
+    <Compile Include="..\Pdv.Instalador\PayGo.cs" Link="Instalador\PayGo.cs" />
+    <Compile Include="..\Pdv.Instalador\Pacote.cs" Link="Instalador\Pacote.cs" />
+  </ItemGroup>
 </Project>

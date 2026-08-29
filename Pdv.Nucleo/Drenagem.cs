@@ -209,8 +209,24 @@ public sealed class Drenagem : IDisposable
                     case AcaoFila.Enviado:
                         // erro aqui é uma NOTA de desfecho (ex.: "venda nunca subiu;
                         // nada a cancelar na nuvem") — vale guardar; senão preserva.
-                        cx.Execute("UPDATE outbox SET enviado_em = @Em, ultimo_erro = COALESCE(@E, ultimo_erro) WHERE id = @Id",
-                            new { Em = agora.ToString("o"), E = erro, Id = (long)item.id });
+                        //
+                        // MAS o rastro de DESISTÊNCIA morre aqui, sempre. O contador de
+                        // pendências lê `ultimo_erro LIKE 'desistido%'` para enxergar as
+                        // linhas antigas; preservá-lo depois de o servidor CONFIRMAR fazia
+                        // a venda reenviada com sucesso continuar somando no aviso — o
+                        // "apertei Sincronizar e continua 16" seguiria igual, agora com a
+                        // fila certa e o número mentindo. Desfecho novo apaga rastro velho.
+                        cx.Execute("""
+                            UPDATE outbox
+                               SET enviado_em   = @Em,
+                                   desistido_em = NULL,
+                                   ultimo_erro  = CASE
+                                       WHEN @E IS NOT NULL THEN @E
+                                       WHEN COALESCE(ultimo_erro,'') LIKE 'desistido%'
+                                         OR COALESCE(ultimo_erro,'') LIKE 'reaberto%' THEN NULL
+                                       ELSE ultimo_erro END
+                             WHERE id = @Id
+                            """, new { Em = agora.ToString("o"), E = erro, Id = (long)item.id });
                         enviados++;
                         break;
                     // DEAD-LETTER: recusa que se repete não pode ficar eterna nem entupir
@@ -609,6 +625,52 @@ public sealed class Drenagem : IDisposable
             return (false, $"resgate recusado: {err ?? Corta(resp)}");
         }
         catch { return (null, "resposta ilegível do resgate"); }
+    }
+
+    /// <summary>
+    /// Devolve à fila o que está em DEAD-LETTER, para UMA tentativa a mais. É a única
+    /// saída do estado terminal, e ela é do OPERADOR — o botão Sincronizar, depois de
+    /// alguém ter tratado o motivo no painel.
+    ///
+    /// POR QUE ISSO EXISTE: o caixa da loja carregava 16 vendas — R$ 102.626,50 —
+    /// recusadas com 409 porque o operador do PDV não existia em `employees`. O aviso
+    /// dizia "confira antes de fechar o mês" e ficava lá para sempre: a drenagem não
+    /// olha linha desistida (é o que impede o laço), e NENHUM outro trecho do PDV
+    /// sabia tirá-las dali. Cadastrar o operador no painel não mudava nada na tela.
+    ///
+    /// TRÊS CUIDADOS, cada um por um jeito conhecido de errar isto:
+    ///  · `tentativas` NÃO é zerado (só sobe até o teto se estiver abaixo). Assim uma
+    ///    recusa permanente devolve a linha ao estado terminal na MESMA varredura, com
+    ///    o motivo novo — um toque, uma tentativa. Zerar o contador transformaria cada
+    ///    clique num novo ciclo de 12 chamadas contra um servidor que já disse não.
+    ///  · `enviado_em` volta a NULL. Nas linhas antigas ele foi carimbado pelo build que
+    ///    marcava desistência e entrega na mesma coluna; sem limpá-lo, o WHERE da
+    ///    drenagem continuaria pulando a linha e o reenvio não reenviaria nada.
+    ///  · venda de HOMOLOGAÇÃO fica onde está. Ela não deve subir nunca: o roteiro da
+    ///    PayGo (R$ 990 + R$ 1.003 + R$ 500, e a de "valor máximo") viraria faturamento
+    ///    de verdade no painel. Vale para os dependentes dela também.
+    ///
+    /// `primeiro_erro_em` é preservado de propósito: é o relógio dos 7 dias, e reiniciá-lo
+    /// daria sobrevida infinita a um transitório que nunca vai passar.
+    /// </summary>
+    /// <returns>Quantas linhas voltaram para a fila.</returns>
+    public static int ReabrirDesistidas()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            return cx.Execute($"""
+                UPDATE outbox
+                   SET desistido_em = NULL,
+                       enviado_em   = NULL,
+                       tentativas   = MAX(tentativas, {MaxTentativas}),
+                       ultimo_erro  = 'reaberto pelo operador — ' || COALESCE(ultimo_erro, 'sem rastro')
+                 WHERE (desistido_em IS NOT NULL OR COALESCE(ultimo_erro,'') LIKE 'desistido%')
+                   AND tipo IN ('{string.Join("','", TiposComHandler)}')
+                   AND ref_id NOT IN (SELECT id FROM venda WHERE homologacao = 1)
+                """);
+        }
+        catch { return 0; }
     }
 
     /// <summary>

@@ -382,7 +382,13 @@ public partial class Venda : UserControl
         var andamento = new Progress<string>(t => etapa = t);
         try
         {
-            var r = await Sincronizacao.ExecutarAsync(Servicos.Nuvem(), Servicos.Guarda(), Servicos.Dreno(), andamento);
+            // reenviarDesistidas: TOCAR NO BOTÃO É O GESTO "eu tratei o motivo, tenta de
+            // novo". Sem isto o aviso de venda desistida era um beco sem saída: o gerente
+            // cadastrava o operador no painel, o operador apertava aqui, e o número não
+            // se mexia — nada no PDV sabia tirar uma linha do dead-letter. Cada toque vale
+            // UMA tentativa por linha; o ciclo automático de 45 s continua sem tocá-las.
+            var r = await Sincronizacao.ExecutarAsync(Servicos.Nuvem(), Servicos.Guarda(), Servicos.Dreno(),
+                andamento, reenviarDesistidas: true);
 
             if (!r.Ok)
             {
@@ -441,8 +447,14 @@ public partial class Venda : UserControl
         var total = notas + vendas.Total;
         ChipPendencia.Visibility = total == 0 ? Visibility.Collapsed : Visibility.Visible;
         TxtPendencia.Text = total.ToString();
+        // Só o que EXISTE entra no balão. "0 notas ainda não enviadas" em cima do aviso
+        // que importa é ruído, e ruído é o que ensina o operador a não ler o balão.
         BtnSync.ToolTip = total == 0 ? "Tudo em dia"
-            : $"{Conta(notas, "nota ainda não enviada", "notas ainda não enviadas")}\n{vendas.Resumo}";
+            : string.Join("\n", new[]
+              {
+                  notas == 0 ? null : Conta(notas, "nota ainda não enviada", "notas ainda não enviadas"),
+                  vendas.Resumo,
+              }.Where(l => !string.IsNullOrWhiteSpace(l)));
     }
 
     /// <summary>Recarrega a grade depois de baixar catálogo novo, mantendo a categoria aberta.</summary>
@@ -495,7 +507,9 @@ public partial class Venda : UserControl
     private int _colunasProdutos = 3;
 
     // ── CATÁLOGO ────────────────────────────────────────────────────────────
-    private const string CategoriaPromo = "promoção";
+    // O nome mora no Núcleo porque é lá que está a regra de "esta categoria não entra
+    // no alfabeto, fica sempre em primeiro" — e é lá que a suíte consegue prová-la.
+    private const string CategoriaPromo = Nucleo.Categorias.Promocao;
 
     private List<Nucleo.Promocoes.Promo> _promos = new();
     private Dictionary<string, Nucleo.Promocoes.ProdutoPromo> _promoVitrine = new();
@@ -518,28 +532,35 @@ public partial class Venda : UserControl
         using var cx = Banco.Abrir();
         _promos = Nucleo.Promocoes.Carregar(cx);
         _promoVitrine = Nucleo.Promocoes.ProdutosEmPromocao(_promos, DateTime.Now);
+        // Sem ORDER BY: quem ordena é o Núcleo, em pt-BR. O SQLite compara texto por BYTE,
+        // e com isso ÁGUA MINERAL COM GÁS aparecia no FIM de Bebidas, depois de SUCO UVA
+        // (defeito que o dono viu no balcão) — ver Pdv.Nucleo/Categorias.cs.
+        var lidos = new List<Produto>();
         foreach (var r in cx.Query("""
             SELECT id, plu, nome, categoria, preco_cent, unidade, ncm, cest, csosn, origem, foto_local
-              FROM produto WHERE ativo = 1 ORDER BY categoria, nome
+              FROM produto WHERE ativo = 1
             """))
         {
-            _catalogo.Add(new Produto((string)r.id, r.plu as string, (string)r.nome,
+            lidos.Add(new Produto((string)r.id, r.plu as string, (string)r.nome,
                 (r.categoria as string) ?? "Outros", new Dinheiro((long)r.preco_cent),
                 (r.unidade as string) ?? "UN", r.ncm as string, r.cest as string,
                 r.csosn as string, (int)(long)r.origem, r.foto_local as string));
         }
-
-        var cats = _catalogo.Select(p => p.Categoria).Distinct().OrderBy(c => c).ToList();
-        foreach (var c in cats) _quantosPorCategoria[c] = _catalogo.Count(p => p.Categoria == c);
+        // Ordenado UMA vez aqui: a grade é pintada a cada toque em categoria, e ela só
+        // filtra esta lista — ordenar na pintura seria refazer o mesmo trabalho por clique.
+        _catalogo.AddRange(Nucleo.Categorias.OrdenarPorNome(lidos, p => p.Nome));
 
         // vitrine de PROMOÇÃO no topo: só existe quando alguma promoção vigente
         // menciona produto do catálogo — categoria vazia é pior que nenhuma
         var emPromo = _catalogo.Count(pp => _promoVitrine.ContainsKey(pp.Id));
-        if (emPromo > 0)
-        {
-            cats.Insert(0, CategoriaPromo);
-            _quantosPorCategoria[CategoriaPromo] = emPromo;
-        }
+        var nomesCat = _catalogo.Select(p => p.Categoria).ToList();
+        if (emPromo > 0) nomesCat.Add(CategoriaPromo);
+
+        var cats = Nucleo.Categorias.Ordenar(nomesCat, CategoriaPromo);
+        foreach (var c in cats) _quantosPorCategoria[c] = _catalogo.Count(p => p.Categoria == c);
+        // PROMOÇÃO não é categoria de produto — a contagem dela é quantos produtos do
+        // catálogo alguma promoção vigente alcança, não quantos têm essa categoria (zero).
+        if (emPromo > 0) _quantosPorCategoria[CategoriaPromo] = emPromo;
         _categoriaMini = cats.Count > 12;
         ColunasCategorias = _categoriaMini ? 3 : 2;
         _categoriaAtual = cats.FirstOrDefault() ?? "";

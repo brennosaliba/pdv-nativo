@@ -283,15 +283,15 @@ public partial class Kds : UserControl
             imprime.Click += async (_, e) =>
             {
                 e.Handled = true; // não deixa o clique borbulhar e avançar etapa
-                string? imp;
-                using (var cx = Banco.Abrir())
-                {
-                    imp = Vendas.Config(cx, "kds_comanda_impressora");
-                    if (imp is { Length: 0 }) imp = null;
-                }
+                // MESMO destino da comanda automática (Servicos.DestinoDaComanda): a
+                // reimpressão tem que sair na bobina em que a original sairia, senão o
+                // 🖨 vira "saiu, mas noutra impressora" — que é pior que não sair.
+                Impressao.Destino destino;
+                using (var cx = Banco.Abrir()) destino = Servicos.DestinoDaComanda(cx);
                 var erro = await Impressao.ImprimirTextoAsync(
                     $"Comanda cozinha #{t.Numero} (manual)",
-                    new[] { Nucleo.Kds.ComandaLinhas(t) }, imp);
+                    new[] { Nucleo.Kds.ComandaLinhas(t, Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
+                    destino);
                 // Na falha, primeiro o que fazer; a causa técnica vai no fim,
                 // entre parênteses, pra quem for atrás da impressora.
                 TxtStatus.Text = erro is null

@@ -7,11 +7,41 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>InstalarPdv</AssemblyName>
-    <AssemblyTitle>Instalador do PDV - American Day</AssemblyTitle>
-    <Version>1.0.0</Version>
+    <AssemblyTitle>Instalador do PDV MMTech</AssemblyTitle>
+    <Product>PDV MMTech</Product>
+    <Company>MMTech</Company>
+    <Version>2.0.0</Version>
     <!-- Program Files + registro + icacls exigem elevacao; o proprio Windows
          mostra o escudo UAC no exe. -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <!-- ⚠️ AUTOCONTIDO NAO E OPCIONAL, E ESTA AQUI (nao na linha de comando) DE PROPOSITO.
+       O instalador roda na PRIMEIRA vez que a maquina da loja ve este sistema — antes
+       de existir qualquer coisa nossa nela. Publicado dependente do framework, ele
+       morre com "para executar este aplicativo, instale o .NET" num PC de loja recem
+       formatado, que e exatamente onde ele precisava funcionar. Quem instala esta
+       longe, sozinho, e nao vai baixar runtime nenhum.
+
+       IncludeNativeLibrariesForSelfExtract: sem isso o publish single-file AINDA
+       deixa as .dll nativas do WPF soltas ao lado do exe — e ai o "arquivo unico"
+       nao e unico: copiar so o exe para um pendrive entrega um instalador que nao
+       abre. E o mesmo defeito que o Pdv.exe tem (por isso Instalacao.Essenciais
+       existe); aqui nao pode acontecer, porque nao ha instalador para consertar o
+       instalador.
+
+       Compressao: troca ~1s de abertura por dezenas de MB a menos para baixar numa
+       internet de loja. Numa coisa que roda uma vez por maquina, o download vale mais. -->
+  <PropertyGroup>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Trimming FICA DESLIGADO: WPF resolve tipo por reflexao a partir do XAML, e
+         trimado o instalador quebra na hora de montar a janela — falha que so
+         aparece rodando, nunca no build. Tamanho nao vale esse risco. -->
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
 </Project>

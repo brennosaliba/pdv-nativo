@@ -86,6 +86,26 @@ public partial class Configuracao : UserControl
     private readonly string? _papelAoAbrir = Impressao.PapelMm;
     private bool _papelGravado;
 
+    /// <summary>
+    /// O que este caixa sabe sobre séries JÁ OCUPADAS, lido uma vez na abertura: a série
+    /// em que a nuvem numera, a que o painel reservou para este terminal e a última recusa
+    /// da SEFAZ guardada em <c>nfce_emissao</c>. É com isto que a tela consegue dizer
+    /// "o erro é POR CAUSA DA SÉRIE" em vez de repassar o xMotivo cru do autorizador.
+    /// Em campo, e não relido do banco, porque a conferência roda a cada tecla digitada.
+    /// Os dois primeiros são reescritos pelo PAREAMENTO (passo 5), que é justamente
+    /// quando o painel entrega a série deste caixa.
+    /// </summary>
+    private int? _serieNuvem;
+    private int? _serieReservada;
+    private readonly RecusaFiscal? _ultimaRecusa;
+
+    /// <summary>
+    /// Série em que o emissor local está numerando AGORA. Chega depois da tela (é um GET
+    /// no /health) e null enquanto não chegar — igual à lista de impressoras, o que não
+    /// se sabe não acusa ninguém.
+    /// </summary>
+    private int? _serieEmissorLocal;
+
     public Configuracao()
     {
         InitializeComponent();
@@ -93,13 +113,31 @@ public partial class Configuracao : UserControl
         _jaConfigurado = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM terminal") > 0;
         _pareado = LerSegredos().ContainsKey("nuvemEmail");
         _ = CarregarImpressorasAsync(Vendas.Config(cx, "impressora"));
-        _ = CarregarImpressorasComandaAsync(Vendas.Config(cx, "kds_comanda_impressora"));
+        var impComandaGravada = Vendas.Config(cx, "kds_comanda_impressora");
+        _ = CarregarImpressorasComandaAsync(impComandaGravada);
         ChkComandaAuto.IsChecked = Vendas.Config(cx, "kds_comanda_auto") == "1";
+        // Caixinha DESMARCADA é o estado de quem nunca abriu a opção — e desmarcada
+        // significa "a comanda sai onde o cupom sai". Quem já tinha escolhido uma
+        // impressora de comanda antes de a caixinha existir reabre com ela MARCADA:
+        // atualizar o PDV não pode calar uma configuração que a loja fez.
+        ChkComandaSeparada.IsChecked =
+            Impressao.ComandaSeparada(Vendas.Config(cx, "kds_comanda_separada"), impComandaGravada);
 
         // Largura da bobina: as opções saem da MESMA tabela que a impressão usa para
         // montar o cupom, então o combo nunca oferece papel que o desenho não sabe fazer.
         foreach (var op in AssistenteConfig.OpcoesPapel()) CboPapel.Items.Add(op);
         CboPapel.SelectedIndex = AssistenteConfig.IndicePapel(Vendas.Config(cx, "papel_mm"));
+        // A bobina da comanda em branco herda a do cupom: é o que valia antes de ela
+        // existir, então ninguém regride ao ligar a impressora separada.
+        foreach (var op in AssistenteConfig.OpcoesPapel()) CboPapelComanda.Items.Add(op);
+        CboPapelComanda.SelectedIndex = AssistenteConfig.IndicePapel(
+            Vendas.Config(cx, "kds_comanda_papel_mm") ?? Vendas.Config(cx, "papel_mm"));
+
+        // Séries já ocupadas que este caixa consegue enxergar — ver os campos.
+        _serieNuvem = int.TryParse(Vendas.Config(cx, "serie_nuvem"), out var snv) ? snv : null;
+        _serieReservada = int.TryParse(Vendas.Config(cx, "serie_reservada"), out var srv) ? srv : null;
+        _ultimaRecusa = LerUltimaRecusa(cx);
+        _ = CarregarSerieDoEmissorAsync(Vendas.Config(cx, "agente_url", "http://127.0.0.1:4610")!);
 
         // Tema: preferência da MÁQUINA, carrega mesmo antes da primeira configuração
         // e grava na hora (não espera o Salvar — o Salvar valida identidade fiscal,
@@ -191,6 +229,8 @@ public partial class Configuracao : UserControl
         foreach (var aba in Abas) aba.IsEnabled = _jaConfigurado;
         _montando = false;
         AplicarModoFiscal();
+        PintarComandaSeparada();
+        AtualizarStatusSerie();
         IrPara(PassoConfig.Loja);
     }
 
@@ -288,11 +328,17 @@ public partial class Configuracao : UserControl
         Serie = TxtSerie.Text,
         Ambiente = _ambiente,
         TemCertificado = _pfxEscolhido is not null || File.Exists(ArqCert),
+        SerieNuvem = _serieNuvem,
+        SerieReservada = _serieReservada,
+        SerieEmissorLocal = _serieEmissorLocal,
+        UltimaRecusa = _ultimaRecusa,
         Impressora = ImpressoraEscolhida(),
         ImprimirAuto = ChkImprimirAuto.IsChecked != false,
         PapelMm = PapelEscolhido(),
         ImpressoraComanda = ImpressoraComandaEscolhida(),
         ComandaAuto = ChkComandaAuto.IsChecked == true,
+        ComandaSeparada = ChkComandaSeparada.IsChecked == true,
+        ComandaPapelMm = PapelComandaEscolhido(),
         Tef = TefModo,
         PayGoPasta = TxtPayGoPasta.Text,
         PayGoRedeCartao = RedeEscolhida(CboPayGoRede),
@@ -514,6 +560,76 @@ public partial class Configuracao : UserControl
         finally { BtnTesteImpressao.IsEnabled = true; }
     }
 
+    // ── PASSO 3: COMANDA DO DELIVERY (impressora e bobina próprias) ──────────
+
+    private double PapelComandaEscolhido() =>
+        (CboPapelComanda.SelectedItem as OpcaoPapel)?.Mm ?? Impressao.PapelPadrao.BobinaMm;
+
+    /// <summary>
+    /// Mostra os campos da comanda só para quem marcou a caixinha. Desmarcada, o passo
+    /// volta a ter duas linhas: instalar um caixa não pode exigir escolher duas
+    /// impressoras, e a esmagadora maioria das lojas tem uma só.
+    /// </summary>
+    private void PintarComandaSeparada()
+    {
+        if (BlocoComandaSeparada is null) return;
+        var separada = ChkComandaSeparada.IsChecked == true;
+        BlocoComandaSeparada.Visibility = Se(separada);
+        TxtComandaJunto.Visibility = Se(!separada);
+    }
+
+    private void ComandaSeparadaMudou(object sender, RoutedEventArgs e) => PintarComandaSeparada();
+
+    private void PapelComandaMudou(object sender, SelectionChangedEventArgs e)
+    {
+        if (TxtStatusPapelComanda is null || CboPapelComanda.SelectedItem is not OpcaoPapel op) return;
+        // A comanda nunca passa de 40 colunas (é o layout dela); numa bobina estreita quem
+        // manda é o papel. Dizer o número é o que permite ao dono conferir no papel de teste.
+        var colunas = Nucleo.Kds.ColunasComanda(op.Colunas);
+        TxtStatusPapelComanda.Text = $"A comanda sai com {colunas} caracteres por linha."
+            + (colunas < Nucleo.Kds.ColunasPadrao
+                ? " Bobina estreita: nome de produto e escolhas do combo quebram em mais linhas."
+                : "");
+    }
+
+    /// <summary>
+    /// Comanda de exemplo na impressora que a comanda VAI usar — separada ou a do cupom.
+    /// Sem isto, a única forma de descobrir que a bobina estava errada era o primeiro
+    /// pedido de delivery da noite saindo cortado (ou não saindo).
+    ///
+    /// Usa o que está NA TELA, e não o que está gravado, pelo mesmo motivo do cupom de
+    /// teste: escolher 58 mm, imprimir em 80 e concluir que a opção não funciona.
+    /// </summary>
+    private async void TestarComanda(object sender, RoutedEventArgs e)
+    {
+        BtnTesteComanda.IsEnabled = false;
+        TxtStatusComanda.Text = "Imprimindo…";
+        try
+        {
+            var separada = ChkComandaSeparada.IsChecked == true;
+            var destino = Impressao.DestinoComanda(
+                ImpressoraEscolhida(), AssistenteConfig.TextoPapel(PapelEscolhido()),
+                separada ? "1" : "0",
+                ImpressoraComandaEscolhida(), AssistenteConfig.TextoPapel(PapelComandaEscolhido()));
+
+            var t = Servicos.ComandaDeExemplo();
+            var erro = await Impressao.ImprimirTextoAsync("Comanda de exemplo",
+                new[] { Nucleo.Kds.ComandaLinhas(t, Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
+                destino);
+
+            var onde = destino.Impressora ?? "impressora padrão do Windows";
+            var mm = destino.Papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture);
+            TxtStatusComanda.Text = erro is null
+                ? $"Mandei a comanda de exemplo para {onde}, em {mm} mm"
+                  + (separada ? "." : " — a MESMA impressora do cupom.")
+                  + " Confira no papel: nada pode sair cortado no fim da linha."
+                : $"Não imprimiu em {onde}. Confira se ela está ligada e com papel. Detalhe: {erro}";
+            TxtStatusComanda.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[
+                erro is null ? "Ok" : "Erro"];
+        }
+        finally { BtnTesteComanda.IsEnabled = true; }
+    }
+
     public static Dictionary<string, string> LerSegredos()
     {
         try
@@ -643,6 +759,19 @@ public partial class Configuracao : UserControl
         // de deixar a contingência assumir.
         if (serieNuvem is int sn) Vendas.GravarConfig(cx, "serie_nuvem", sn.ToString());
 
+        // A série que o painel RESERVOU para este caixa também fica guardada, e não só
+        // escrita no campo: quando a série der erro mais adiante, é ela — e só ela — que
+        // a tela pode oferecer como troca. O painel é o único que conhece todos os caixas
+        // da loja; sem este valor, sugerir número seria chute (ver ConferirSerie).
+        if (serieLocal is int sr) Vendas.GravarConfig(cx, "serie_reservada", sr.ToString());
+
+        // A tela conferiu a série na abertura, quando ainda não havia pareamento nenhum.
+        // Sem estas duas linhas o operador parearia, receberia a série do painel e a linha
+        // embaixo do campo continuaria falando da situação de antes.
+        if (serieNuvem is int sn2) _serieNuvem = sn2;
+        if (serieLocal is int sr2) _serieReservada = sr2;
+        AtualizarStatusSerie();
+
         var jaTem = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM terminal") > 0;
         if (jaTem && (loja is { Length: > 0 } || cnpj.Length == 14 || serieLocal is not null))
         {
@@ -675,6 +804,90 @@ public partial class Configuracao : UserControl
         return partes.Count == 0
             ? "As vendas e as notas passam a subir no Sincronizar."
             : string.Join(" · ", partes) + " — confira e salve.";
+    }
+
+    // ── PASSO 2: NOTA FISCAL — SÉRIE ────────────────────────────────────────
+
+    /// <summary>
+    /// A última nota que a SEFAZ recusou neste caixa, se houver. É a ÚNICA prova local de
+    /// que a série está tomada por outro caixa com numeração à frente: essa colisão não
+    /// existe em lugar nenhum antes de a primeira nota voltar recusada.
+    ///
+    /// Só interessa a recusa MAIS RECENTE: rejeição antiga de uma série que já foi trocada
+    /// acusaria a série de hoje por um problema de ontem.
+    /// </summary>
+    private static RecusaFiscal? LerUltimaRecusa(SqliteConnection cx)
+    {
+        try
+        {
+            var l = cx.QueryFirstOrDefault("""
+                SELECT c_stat, x_motivo, serie FROM nfce_emissao
+                 WHERE autorizado = 0 AND contingencia = 0
+                   AND (c_stat IS NOT NULL OR x_motivo IS NOT NULL)
+                 ORDER BY criado_em DESC LIMIT 1
+                """);
+            if (l is null) return null;
+            // c_stat é TEXT no banco (o agente manda como texto e a edge como número).
+            var cStat = int.TryParse(l.c_stat as string, out var c) ? c : (int?)null;
+            return new RecusaFiscal(cStat, l.x_motivo as string,
+                l.serie is null ? null : Convert.ToInt32(l.serie));
+        }
+        // Banco de caixa novo ainda não tem histórico nenhum — e "não sei" não pode
+        // impedir a tela de abrir.
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Pergunta ao emissor local em que série ele está numerando. Fora da thread de UI e
+    /// com prazo curto: numa máquina que não é o caixa da loja o agente simplesmente não
+    /// existe, e a tela de configuração não pode ficar esperando por ele.
+    /// </summary>
+    private async Task CarregarSerieDoEmissorAsync(string url)
+    {
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            var corpo = await http.GetStringAsync(url.TrimEnd('/') + "/health");
+            using var doc = JsonDocument.Parse(corpo);
+            if (doc.RootElement.TryGetProperty("serie", out var s) && s.TryGetInt32(out var serie))
+            {
+                _serieEmissorLocal = serie;
+                AtualizarStatusSerie();
+            }
+        }
+        catch { /* agente fora do ar ou máquina sem emissor: segue sem esta prova */ }
+    }
+
+    private void SerieMudou(object sender, TextChangedEventArgs e)
+    {
+        AtualizarStatusSerie();
+        Revalidar();
+    }
+
+    /// <summary>
+    /// A linha embaixo do campo Série e o botão que troca por uma série possível.
+    ///
+    /// O botão só aparece quando existe uma série que dá para GARANTIR (a reserva do
+    /// painel). Sem ela, fica só o texto ensinando onde achar — ver
+    /// <see cref="AssistenteConfig.ConferirSerie(string?, int?, int?, RecusaFiscal?)"/>.
+    /// </summary>
+    private void AtualizarStatusSerie()
+    {
+        if (_montando || TxtStatusSerie is null) return;
+        var d = AssistenteConfig.ConferirSerie(Coletar());
+        TxtStatusSerie.Text = d.Texto;
+        TxtStatusSerie.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[
+            d.Nivel == 2 ? "Erro" : d.Nivel == 1 ? "TextoFraco" : "Ok"];
+
+        var trocar = d.Sugestao is int s && s.ToString() != TxtSerie.Text.Trim();
+        BtnUsarSerie.Visibility = trocar ? Visibility.Visible : Visibility.Collapsed;
+        if (trocar) BtnUsarSerie.Content = $"Usar a série {d.Sugestao}";
+    }
+
+    private void UsarSerieSugerida(object sender, RoutedEventArgs e)
+    {
+        if (AssistenteConfig.ConferirSerie(Coletar()).Sugestao is not int s) return;
+        TxtSerie.Text = s.ToString();   // dispara SerieMudou → repinta e revalida
     }
 
     // ── PASSO 2: NOTA FISCAL ────────────────────────────────────────────────
@@ -834,6 +1047,12 @@ public partial class Configuracao : UserControl
             else Add(2, cnpj.Length == 14
                 ? "✗ CNPJ digitado errado — volte ao passo 1 e confira número por número"
                 : "✗ CNPJ incompleto — volte ao passo 1");
+
+            // 1b. SÉRIE. Entra na bateria porque é o campo desta tela cujo erro só
+            // aparecia LÁ NA FRENTE, como uma rejeição de duplicidade que não dizia de
+            // quem era a culpa. Aqui ela é nomeada, com a saída junto.
+            var serie = AssistenteConfig.ConferirSerie(Coletar());
+            Add(serie.Nivel, (serie.Nivel == 2 ? "✗ " : serie.Nivel == 1 ? "⚠ " : "✓ ") + serie.Texto);
 
             // Modo RECIBO (sem emissão): certificado/CSC/emissor não são exigidos —
             // testar e reprovar por eles confundiria (a loja ESCOLHEU não emitir).
@@ -1058,6 +1277,14 @@ public partial class Configuracao : UserControl
                 else Vendas.GravarConfig(cx, "kds_comanda_impressora", impComanda);
             }
             Vendas.GravarConfig(cx, "kds_comanda_auto", ChkComandaAuto.IsChecked == true ? "1" : "0");
+            // A caixinha é gravada SEMPRE, inclusive desmarcada: gravar "0" é o que
+            // distingue "o dono desligou a impressora separada" de "ninguém nunca abriu
+            // isto" — e é a segunda que herda a impressora de comanda antiga (ver
+            // Impressao.ComandaSeparada). A largura vai junto mesmo desmarcada: ela é
+            // ignorada enquanto a caixinha estiver desligada, e assim ligar de novo
+            // devolve a bobina que o dono já tinha escolhido.
+            Vendas.GravarConfig(cx, "kds_comanda_separada", ChkComandaSeparada.IsChecked == true ? "1" : "0");
+            Vendas.GravarConfig(cx, "kds_comanda_papel_mm", AssistenteConfig.TextoPapel(PapelComandaEscolhido()));
             GravarTef(cx);
             _tefSalvo = true;
 
@@ -1406,12 +1633,46 @@ public sealed record DadosAssistente
     public int Ambiente { get; init; } = 2;      // 1 produção · 2 homologação (vem do pareamento)
     public bool TemCertificado { get; init; }
 
+    /// <summary>
+    /// Série em que a NUVEM numera (<c>config['serie_nuvem']</c>, gravada no pareamento).
+    /// Este caixa NÃO pode usar a mesma: os dois contadores colidem e vira Rejeição 539
+    /// em cascata. Null = ninguém informou, e o que não se prova não bloqueia.
+    /// </summary>
+    public int? SerieNuvem { get; init; }
+
+    /// <summary>
+    /// Série que o PAINEL reservou para este caixa (<c>config['serie_reservada']</c>,
+    /// vinda do pareamento). É a ÚNICA fonte que conhece todos os caixas da loja — por
+    /// isso é a única de onde sai uma sugestão de série; ver <see cref="AssistenteConfig.ConferirSerie"/>.
+    /// </summary>
+    public int? SerieReservada { get; init; }
+
+    /// <summary>
+    /// Série em que o emissor local DE FATO numera (campo <c>serie</c> do <c>/health</c>).
+    /// Medição, não opinião — e é ela que manda: o campo desta tela é rótulo, e o PDV o
+    /// realinha com este valor (ver <c>Agente.AlinharSerie</c>). Null = o emissor não
+    /// respondeu, e o que não se mede não acusa ninguém.
+    /// </summary>
+    public int? SerieEmissorLocal { get; init; }
+
+    /// <summary>Última nota que a SEFAZ recusou neste caixa, quando houver. Null = nenhuma.</summary>
+    public RecusaFiscal? UltimaRecusa { get; init; }
+
     // 3 · Impressora
     public string? Impressora { get; init; }
     public bool ImprimirAuto { get; init; } = true;
     public double PapelMm { get; init; } = 80;
     public string? ImpressoraComanda { get; init; }
     public bool ComandaAuto { get; init; }
+
+    /// <summary>
+    /// A comanda do delivery sai numa impressora PRÓPRIA. Falso = sai na mesma do cupom,
+    /// que é o que a loja já faz hoje e o que quem nunca abrir a opção continua tendo.
+    /// </summary>
+    public bool ComandaSeparada { get; init; }
+
+    /// <summary>Bobina da comanda. Só vale com <see cref="ComandaSeparada"/> ligada.</summary>
+    public double ComandaPapelMm { get; init; } = 80;
 
     // 4 · Maquininha (0 sem · 1 POS · 2 PayGo · 3 ControlPay)
     public int Tef { get; init; }
@@ -1443,6 +1704,27 @@ public sealed record OpcaoPapel(double Mm, int Colunas)
     public override string ToString() =>
         $"{Mm.ToString("0", CultureInfo.InvariantCulture)} mm  ·  {Colunas} colunas por linha";
 }
+
+/// <summary>
+/// Uma recusa da SEFAZ já guardada em <c>nfce_emissao</c>, com o mínimo que interessa
+/// para saber se ela foi POR CAUSA DA SÉRIE.
+/// </summary>
+/// <param name="CStat">Código da SEFAZ. É ele que decide — ver <see cref="AssistenteConfig.RecusaEhDeSerie"/>.</param>
+/// <param name="XMotivo">Texto livre do autorizador. Muda de estado para estado; só serve quando não veio código.</param>
+/// <param name="Serie">Série da nota recusada. Recusa de OUTRA série não fala da série que está na tela.</param>
+public sealed record RecusaFiscal(int? CStat, string? XMotivo, int? Serie);
+
+/// <summary>
+/// O veredito sobre a SÉRIE digitada, pronto para a tela.
+/// </summary>
+/// <param name="Nivel">0 ok · 1 aviso (segue, mas precisa ser visto) · 2 erro (não instala assim).</param>
+/// <param name="Texto">A frase inteira: quem é o culpado e qual é a saída.</param>
+/// <param name="Sugestao">
+/// A série a oferecer no botão "Usar a série N", ou null quando não há uma que se possa
+/// GARANTIR livre. Null não é falha: sugerir número no chute é o que produz a colisão
+/// seguinte, e a colisão só aparece com cliente no balcão.
+/// </param>
+public sealed record DiagnosticoSerie(int Nivel, string Texto, int? Sugestao);
 
 /// <summary>
 /// As regras do assistente de configuração, longe do WPF: o que cada passo exige, o
@@ -1481,7 +1763,7 @@ public static class AssistenteConfig
     {
         PassoConfig.Loja => "Quem é a loja e o que sai no papel de cada venda.",
         PassoConfig.Fiscal => "O que a SEFAZ precisa para autorizar as notas deste caixa.",
-        PassoConfig.Impressora => "Onde o cupom sai e em que largura de bobina.",
+        PassoConfig.Impressora => "Onde o cupom e a comanda do delivery saem, e em que largura de bobina.",
         PassoConfig.Maquininha => "Como este caixa cobra cartão e PIX.",
         PassoConfig.Pareamento => "Ligar este caixa ao painel — é o que manda as vendas e as notas para lá.",
         _ => "Confira o que ficou configurado. Dá pra voltar em qualquer passo pela trilha aqui em cima.",
@@ -1543,13 +1825,160 @@ public static class AssistenteConfig
     private static string? BloqueioFiscal(DadosAssistente d)
     {
         // Série vale nos dois modos: ela identifica o CAIXA, e é o que evita numeração
-        // duplicada no dia em que a loja ligar a NFC-e.
-        if (!int.TryParse(d.Serie.Trim(), out var serie) || serie < 1 || serie > 999)
-            return "A série deste caixa é um número de 1 a 999. O passo 5 traz a que o painel reservou.";
+        // duplicada no dia em que a loja ligar a NFC-e. Nível 2 do diagnóstico é prova de
+        // dano fiscal (fora da faixa, ou colidindo com um contador que já existe) — e a
+        // frase dele já nomeia a série e diz a saída, então vai inteira para o rodapé.
+        var s = ConferirSerie(d);
+        if (s.Nivel == 2) return s.Texto;
         // Certificado e CSC NÃO bloqueiam de propósito: em homologação dá pra configurar o
         // caixa inteiro antes de o contador entregar o certificado, e o teste desta tela
         // (mais o aviso do Salvar) já dizem que produção sem eles não emite nota.
         return null;
+    }
+
+    // ── SÉRIE DO CAIXA ──────────────────────────────────────────────────────
+    //
+    // 29/08 — pedido do dono: "ao escolher série do caixa, se der erro, mostra o erro POR
+    // CAUSA DA SÉRIE e altera para uma que seja possível".
+    //
+    // O que existia: a série só era conferida contra a faixa 1..999. Tudo o mais aparecia
+    // na PRIMEIRA VENDA, como o xMotivo cru da SEFAZ ("Duplicidade de NF-e com diferenca
+    // na chave de acesso"), que não diz de quem é a culpa nem o que fazer.
+    //
+    // Os três cenários reais e o que este caixa consegue provar de cada um:
+    //  · série já usada por OUTRO caixa, com numeração à frente → só se vê depois: chega
+    //    como recusa da SEFAZ (204/539) e fica em nfce_emissao. É a UltimaRecusa.
+    //  · série igual à da NUVEM → dá pra provar aqui, agora: serie_nuvem está no config.
+    //  · série fora da faixa → aritmética.
+
+    /// <summary>Faixa da série da NFC-e neste PDV. 0 não é série; acima de 999 não cabe na chave.</summary>
+    public const int SerieMinima = 1;
+    public const int SerieMaxima = 999;
+
+    /// <summary>
+    /// Códigos da SEFAZ que apontam para a SÉRIE/NUMERAÇÃO deste caixa.
+    ///  · 204 — Duplicidade de NF-e: a chave (CNPJ + série + número) já foi autorizada.
+    ///  · 539 — Duplicidade de NF-e com diferença na chave: mesmo série+número, outra chave.
+    /// Os dois significam a mesma coisa na prática da loja: alguém já emitiu nesta série
+    /// com um número igual ou à frente do nosso.
+    /// </summary>
+    private static readonly int[] RejeicoesDeSerie = { 204, 539 };
+
+    /// <summary>
+    /// A recusa aponta para a série?
+    ///
+    /// Quando veio <paramref name="cStat"/>, é ELE que decide e o texto nem é lido: cStat
+    /// é contrato numérico, xMotivo é texto livre que muda de estado para estado (e que já
+    /// chega traduzido/truncado por quem repassa). Adivinhar pelo texto com o código na
+    /// mão é como se acusa a série por uma rejeição que era de outra coisa.
+    /// Sem código (o agente às vezes só devolve mensagem), aí sim o texto é o que há.
+    /// </summary>
+    public static bool RecusaEhDeSerie(int? cStat, string? xMotivo)
+    {
+        if (cStat is int c && c != 0) return RejeicoesDeSerie.Contains(c);
+        var m = (xMotivo ?? "").ToLowerInvariant();
+        if (m.Length == 0) return false;
+        return m.Contains("duplicidade") || m.Contains("série") || m.Contains("serie");
+    }
+
+    /// <summary>Atalho: o diagnóstico dos dados que estão na tela.</summary>
+    public static DiagnosticoSerie ConferirSerie(DadosAssistente d)
+        => ConferirSerie(d.Serie, d.SerieNuvem, d.SerieReservada, d.SerieEmissorLocal, d.UltimaRecusa);
+
+    /// <summary>
+    /// O que dizer sobre a série digitada — e qual série oferecer no lugar.
+    ///
+    /// CRITÉRIO DA SUGESTÃO (a decisão mais importante daqui): só se sugere número que
+    /// alguém GARANTA, nunca um "próximo livre" calculado. Duas fontes garantem:
+    ///  1. <paramref name="serieReservada"/> — a série que o PAINEL reservou para este
+    ///     caixa (vem do pareamento). O painel é o único que conhece TODOS os caixas da
+    ///     loja; é a fonte preferida.
+    ///  2. <paramref name="serieEmissorLocal"/> — a série em que o emissor local DE FATO
+    ///     numera (o `serie` do /health). Não é opinião, é medição desta máquina.
+    /// Fora dessas duas não há sugestão: "a próxima livre" calculada só com o que este PC
+    /// enxerga pareceria certeira e colidiria com o caixa do outro balcão — colisão que só
+    /// aparece na venda, como Rejeição 539, depois de queimar numeração. Sem fonte, o
+    /// texto ENSINA onde achar a série certa, e o botão de trocar nem aparece.
+    /// </summary>
+    public static DiagnosticoSerie ConferirSerie(string? serieDigitada, int? serieNuvem,
+        int? serieReservada, int? serieEmissorLocal, RecusaFiscal? ultimaRecusa)
+    {
+        static int? Valida(int? s, int? serieNuvem) =>
+            // Série fora da faixa não se oferece; e série igual à da nuvem seria trocar
+            // um erro por outro (é exatamente a colisão que estamos tentando evitar).
+            s is int v && v >= SerieMinima && v <= SerieMaxima && v != serieNuvem ? v : null;
+
+        var reserva = Valida(serieReservada, serieNuvem);
+        var doEmissor = Valida(serieEmissorLocal, serieNuvem);
+        var sugestao = reserva ?? doEmissor;
+
+        // Como sair quando não há número para oferecer. Nunca fica só o "está errado":
+        // instalação travada sem caminho é ligação para o suporte.
+        var comoDescobrir = sugestao is null
+            ? " Pegue a série deste caixa no painel: no passo 5, \"Parear com o painel\" traz " +
+              "a série já reservada para ele. Não escolha um número no palpite — série repetida " +
+              "entre dois caixas só aparece na primeira venda, com cliente no balcão."
+            : "";
+
+        if (!int.TryParse((serieDigitada ?? "").Trim(), out var serie) || serie < SerieMinima || serie > SerieMaxima)
+            return new DiagnosticoSerie(2,
+                $"A série deste caixa é um número de {SerieMinima} a {SerieMaxima}." + Oferta(sugestao) + comoDescobrir,
+                sugestao);
+
+        // Prova local de colisão: a nuvem numera nesta mesma série. Os dois contadores
+        // andam separados e vão bater no mesmo número — Rejeição 539 em cascata.
+        if (serieNuvem is int sn && sn == serie)
+            return new DiagnosticoSerie(2,
+                $"A série {serie} não pode ser usada neste caixa: é a série em que o painel já numera as notas da loja. " +
+                "Dois contadores na mesma série repetem o número da nota e a SEFAZ recusa (Rejeição 539, duplicidade) " +
+                "em cascata." + Oferta(sugestao) + comoDescobrir,
+                sugestao);
+
+        // A SEFAZ já disse não, e disse por causa da série. Só acusa quando a recusa foi
+        // NESTA série: recusa de outra série (ou sem série gravada, que é o caso da
+        // barrada local) não fala do que está na tela, e trocar a série por causa dela
+        // seria consertar o que não está quebrado — além de travar o Salvar para sempre.
+        if (ultimaRecusa is { } rec && rec.Serie == serie
+            && RecusaEhDeSerie(rec.CStat, rec.XMotivo))
+            return new DiagnosticoSerie(2,
+                $"A última nota deste caixa foi recusada POR CAUSA DA SÉRIE {serie}: " +
+                $"a SEFAZ devolveu {Codigo(rec)}. Isso é outro caixa já emitindo na série {serie} com " +
+                "um número igual ou à frente do seu — a numeração desta série não é mais deste caixa." +
+                Oferta(sugestao) + comoDescobrir,
+                sugestao);
+
+        // QUEM NUMERA É O EMISSOR, não este campo. O dono já trocou 9→4 aqui achando que a
+        // nota mudaria de série, e ela continuou saindo na 3 — o campo é um RÓTULO, e o
+        // PDV o realinha sozinho com o /health (ver Agente.AlinharSerie). Dizer isso é o
+        // único jeito de a troca não parecer que funcionou.
+        if (doEmissor is int se && se != serie)
+            return new DiagnosticoSerie(1,
+                $"Quem numera as notas deste PC é o emissor local, e ele está na série {se} — não na {serie}. " +
+                $"Deixar {serie} aqui não muda a nota: o PDV volta a mostrar {se} sozinho. " +
+                $"Para emitir mesmo na {serie}, quem tem que mudar é o emissor (agent-config.json), com o suporte.",
+                se);
+
+        // Sem erro, mas divergindo da reserva: é aviso, não bloqueio. O painel pode ter
+        // reservado depois de a loja já ter escolhido, e travar aqui pararia um caixa que
+        // talvez esteja certo.
+        if (reserva is int rr && rr != serie)
+            return new DiagnosticoSerie(1,
+                $"O painel reservou a série {rr} para este caixa, e aqui está {serie}. " +
+                $"Se a {serie} for de outro caixa, as notas vão colidir.",
+                rr);
+
+        return new DiagnosticoSerie(0,
+            $"Série {serie} — é ela que separa a numeração deste caixa da dos outros.", null);
+
+        static string Oferta(int? sugestao) =>
+            sugestao is int v ? $" A série {v} está reservada para este caixa; use ela." : "";
+
+        // Código primeiro, motivo entre parênteses: o número é o que o contador procura,
+        // o texto é o que o dono lê. Sem código, sobra o texto.
+        static string Codigo(RecusaFiscal rec) =>
+            rec.CStat is int c && c != 0
+                ? $"{c}" + (rec.XMotivo is { Length: > 0 } m ? $" ({m})" : "")
+                : rec.XMotivo is { Length: > 0 } m2 ? $"\"{m2}\"" : "uma recusa de duplicidade";
     }
 
     private static string? BloqueioMaquininha(DadosAssistente d) => d.Tef switch
@@ -1620,18 +2049,32 @@ public static class AssistenteConfig
                 + $"({papel.Colunas} colunas)"
                 + (d.ImprimirAuto ? "" : " · impressão automática DESLIGADA"),
                 !d.ImprimirAuto),
-            new("Comanda da cozinha", d.ComandaAuto
-                ? $"Imprime sozinha em {d.ImpressoraComanda ?? "padrão do Windows"} quando o pedido chega."
-                // "tela Delivery" é o nome do BOTÃO que abre o quadro da cozinha no
-                // caixa. Mandar procurar "a tela da cozinha" é mandar procurar um
-                // botão que não existe com esse nome.
-                : "Só pelo botão 🖨 da tela Delivery."),
+            // "tela Delivery" é o nome do BOTÃO que abre o quadro da cozinha no
+            // caixa. Mandar procurar "a tela da cozinha" é mandar procurar um
+            // botão que não existe com esse nome.
+            new("Comanda do delivery", ResumoComanda(d)),
             new("Maquininha", ResumoTef(d), d.Tef == 3 && d.CpaySandbox),
             new("Pareamento", d.Pareado
                 ? "✓ Pareado com o painel. As vendas e as notas sobem no Sincronizar."
                 : "Ainda NÃO pareado — sem isso não dá para concluir.", !d.Pareado),
         };
         return linhas;
+    }
+
+    /// <summary>
+    /// A comanda do delivery em uma linha: QUANDO sai e ONDE sai. As duas coisas juntas
+    /// porque "imprime sozinha" sem dizer em qual bobina é justamente o que o dono não
+    /// conseguia ver na tela — e era a pergunta dele.
+    /// </summary>
+    private static string ResumoComanda(DadosAssistente d)
+    {
+        var quando = d.ComandaAuto
+            ? "Imprime sozinha quando o pedido chega"
+            : "Só pelo botão 🖨 da tela Delivery";
+        if (!d.ComandaSeparada) return quando + ", na MESMA impressora do cupom.";
+        var papel = Impressao.Papel.De(TextoPapel(d.ComandaPapelMm));
+        return quando + $", em {d.ImpressoraComanda ?? "padrão do Windows"} · bobina de " +
+               $"{papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture)} mm ({papel.Colunas} colunas).";
     }
 
     private static string ResumoTef(DadosAssistente d)

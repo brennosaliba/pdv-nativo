@@ -28,6 +28,8 @@ public static class TestesImpressao
         {
             Geometria(checar);
             Configuracao(checar);
+            DestinoPorFinalidade(checar);
+            ComandaNaBobinaCerta(checar);
             await NoPapelAsync(checar);
         }
         finally
@@ -139,6 +141,111 @@ public static class TestesImpressao
 
         Pdv.Impressao.Auditar = null;
         Pdv.Impressao.PapelMm = null;
+    }
+
+    /// <summary>
+    /// DESTINO POR FINALIDADE (29/08 — pedido do dono): a comanda do delivery pode sair
+    /// na térmica da expedição e o cupom fiscal na do balcão, cada uma com a sua bobina.
+    ///
+    /// O primeiro teste é o que NÃO PODE QUEBRAR: quem nunca abriu a opção continua
+    /// imprimindo a comanda onde já imprime — na impressora do CUPOM. Antes disto, sem
+    /// impressora de comanda escolhida a comanda ia para a "padrão do Windows", que numa
+    /// máquina de caixa costuma ser o Microsoft Print to PDF: papel que nunca sai.
+    /// </summary>
+    private static void DestinoPorFinalidade(Action<bool, string> checar)
+    {
+        var p58 = Papel.De("58");
+        var p80 = Papel.De("80");
+
+        // ⭐ REGRESSÃO: nada configurado = tudo na impressora do cupom.
+        var nada = Pdv.Impressao.DestinoComanda("EPSON TM-T20", "80", null, null, null);
+        checar(nada.Impressora == "EPSON TM-T20" && nada.Papel == p80,
+            $"comanda SEM opção ligada sai na impressora e na bobina do cupom (veio {nada.Impressora ?? "(padrão)"})");
+        checar(Pdv.Impressao.DestinoComanda(null, "58", null, null, null)
+                   == new Pdv.Impressao.Destino(null, p58),
+            "e num caixa que usa a padrão do Windows, a comanda continua indo para a padrão do Windows");
+
+        // Ligada: impressora E bobina próprias. É o pedido inteiro em uma linha.
+        var propria = Pdv.Impressao.DestinoComanda("EPSON TM-T20", "80", "1", "ELGIN I9 COZINHA", "58");
+        checar(propria.Impressora == "ELGIN I9 COZINHA" && propria.Papel == p58,
+            "com a opção ligada, a comanda vai para a impressora e a bobina dela");
+        checar(Pdv.Impressao.DestinoCupom("EPSON TM-T20", "80").Papel == p80,
+            "e o cupom continua em 80 mm — as duas larguras são independentes");
+        checar(propria.Papel.Colunas == 32 && Pdv.Impressao.DestinoCupom("EPSON TM-T20", "80").Papel.Colunas == 48,
+            $"cada finalidade fecha as colunas na SUA bobina ({propria.Papel.Colunas} contra 48)");
+
+        // Bobina da comanda em branco herda a do cupom: é o que valia antes de a largura
+        // separada existir, então ligar a impressora própria não muda a largura sozinho.
+        checar(Pdv.Impressao.DestinoComanda(null, "58", "1", "ELGIN", null).Papel == p58
+               && Pdv.Impressao.DestinoComanda(null, "58", "1", "ELGIN", "  ").Papel == p58,
+            "bobina da comanda em branco herda a do cupom");
+
+        // "" é escolha explícita de padrão do Windows (a 1ª opção do combo).
+        checar(Pdv.Impressao.DestinoComanda("EPSON TM-T20", "80", "1", "", "58")
+                   == new Pdv.Impressao.Destino(null, p58),
+            "com a opção ligada e impressora em branco, a comanda vai para a padrão do Windows");
+
+        // ── a caixinha: ligada, desligada e nunca respondida ────────────────
+        checar(!Pdv.Impressao.ComandaSeparada(null, null) && !Pdv.Impressao.ComandaSeparada(null, ""),
+            "sem opção gravada e sem impressora de comanda, a comanda NÃO é separada");
+        checar(Pdv.Impressao.ComandaSeparada(null, "ELGIN I9"),
+            "quem já tinha impressora de comanda antes da caixinha existir continua com ela (retrocompatível)");
+        checar(!Pdv.Impressao.ComandaSeparada("0", "ELGIN I9"),
+            "e DESLIGAR a caixinha vale mesmo com impressora gravada — é decisão do dono");
+        checar(Pdv.Impressao.DestinoComanda("EPSON TM-T20", "80", "0", "ELGIN I9", "58")
+                   == new Pdv.Impressao.Destino("EPSON TM-T20", p80),
+            "desligada, a comanda volta inteira para a impressora e a bobina do cupom");
+        checar(Pdv.Impressao.ComandaSeparada("1", null),
+            "ligada sem impressora escolhida continua ligada (a bobina dela pode ser a diferença)");
+
+        // Espaço em branco no banco (digitado à mão pelo suporte) é o mesmo que vazio.
+        checar(Pdv.Impressao.DestinoComanda("  EPSON TM-T20  ", "80", null, "   ", null).Impressora == "EPSON TM-T20",
+            "nome de impressora com espaço sobrando é o mesmo nome; impressora só de espaços é 'nenhuma'");
+    }
+
+    /// <summary>
+    /// A COMANDA NÃO PODE SAIR CORTADA. As 40 colunas viviam fixas em
+    /// <c>Kds.ComandaLinhas</c>; numa bobina de 58 mm (32 colunas) o fim da linha — onde
+    /// está a quantidade do item — simplesmente não chega ao papel.
+    /// </summary>
+    private static void ComandaNaBobinaCerta(Action<bool, string> checar)
+    {
+        // POR QUE a largura da comanda precisou deixar de ser fixa. Se este teste um dia
+        // disser que cabem, é a medição que quebrou.
+        checar(Pdv.Impressao.LarguraDoTextoMm(Pdv.Nucleo.Kds.ColunasPadrao) > Papel.De("58").UtilMm,
+            $"as {Pdv.Nucleo.Kds.ColunasPadrao} colunas fixas da comanda NÃO cabem em 58 mm — era isto que saía cortado");
+
+        foreach (var mm in Pdv.Impressao.BobinasSuportadas)
+        {
+            var p = Papel.De(Texto(mm));
+            var colunas = Pdv.Nucleo.Kds.ColunasComanda(p.Colunas);
+
+            checar(Pdv.Impressao.LarguraDoTextoMm(colunas) <= p.UtilMm,
+                $"{mm:0} mm: a comanda em {colunas} colunas cabe nos {p.UtilMm:0.#} mm úteis");
+
+            // A comanda não estica em bobina larga: o layout foi desenhado para 40 colunas
+            // e esticar só afastaria o item do quadradinho de conferência.
+            checar(colunas <= Pdv.Nucleo.Kds.ColunasPadrao,
+                $"{mm:0} mm: a comanda não passa das {Pdv.Nucleo.Kds.ColunasPadrao} colunas de sempre (veio {colunas})");
+
+            // ⭐ E o texto de verdade tem que respeitar a largura — não adianta a conta
+            // fechar e a montagem continuar escrevendo 40 caracteres numa linha de 32.
+            var linhas = Pdv.Nucleo.Kds.ComandaLinhas(Pdv.Servicos.ComandaDeExemplo(), colunas);
+            var maior = linhas.Max(l => Pdv.Nucleo.LinhaEscala.Limpa(l).Length);
+            checar(maior <= colunas,
+                $"{mm:0} mm: a linha mais longa da comanda tem {maior} caracteres e a bobina tem {colunas}");
+            checar(linhas.Any(l => Pdv.Nucleo.LinhaEscala.Limpa(l).Contains("Donut Ninho")),
+                $"{mm:0} mm: as escolhas do combo continuam na comanda (sem elas a cozinha não sabe o que produzir)");
+        }
+
+        // 80 mm continua exatamente como sempre foi: quem não mexeu não vê diferença.
+        checar(Pdv.Nucleo.Kds.ColunasComanda(Papel.De("80").Colunas) == Pdv.Nucleo.Kds.ColunasPadrao,
+            "em 80 mm a comanda continua com as 40 colunas de sempre");
+        checar(Pdv.Nucleo.Kds.ComandaLinhas(Pdv.Servicos.ComandaDeExemplo())
+                   .SequenceEqual(Pdv.Nucleo.Kds.ComandaLinhas(Pdv.Servicos.ComandaDeExemplo(), 48)),
+            "e chamar sem escolher largura dá a MESMA comanda de 80 mm (nenhum chamador antigo mudou)");
+        checar(Pdv.Nucleo.Kds.ColunasComanda(Papel.De("58").Colunas) == 32,
+            "em 58 mm a comanda passa a usar as 32 colunas que cabem, em vez das 40 que não cabem");
     }
 
     /// <summary>

@@ -14,16 +14,35 @@ namespace Pdv.Nucleo;
 /// tanto pode ser R$ 12,00 de café quanto os R$ 2.493,00 do roteiro de hoje, e é o
 /// valor que decide se isso é recado de fim de expediente ou telefonema agora.
 /// </param>
-public sealed record VendasParadas(int Aguardando, int Desistidas, Dinheiro Valor)
+/// <param name="Motivo">
+/// POR QUE o envio desistiu, em português de balcão. O rastro cru é
+/// <c>HTTP 409: {"code":"23503","details":"Key (operator_id)=(…) is not present in
+/// table employees"}</c> — verdadeiro, e ilegível para quem está no caixa. Sem esta
+/// tradução o aviso é um número sem causa, e número sem causa não vira ação.
+/// </param>
+public sealed record VendasParadas(int Aguardando, int Desistidas, Dinheiro Valor, string? Motivo = null)
 {
     public int Total => Aguardando + Desistidas;
 
-    /// <summary>A linha que vai para a tela. null quando não há nada parado.</summary>
+    /// <summary>
+    /// A linha que vai para a tela. null quando não há nada parado.
+    ///
+    /// Diz o QUE, o QUANTO, o POR QUÊ e o PRÓXIMO PASSO — nesta ordem. A versão
+    /// anterior parava no "confira antes de fechar o mês": o dono lia, chamava o
+    /// suporte, arrumava o cadastro no painel, apertava Sincronizar e o número
+    /// continuava o mesmo, porque nada no PDV sabia tirar uma linha do dead-letter.
+    /// Aviso sem saída é aviso que se aprende a ignorar.
+    /// </summary>
     public string? Resumo => Total == 0 ? null
         : Desistidas == 0
-            ? $"{Aguardando} venda(s) na fila para o servidor — {Valor.Formatado()}."
+            ? $"{Aguardando} venda(s) na fila para o servidor — {Valor.Formatado()}. "
+              + "Elas sobem sozinhas; nada a fazer no caixa."
             : $"{Total} venda(s) que o servidor não tem — {Valor.Formatado()}. "
-              + $"Em {Desistidas} delas o envio DESISTIU: confira antes de fechar o mês.";
+              + $"Em {Desistidas} delas o envio DESISTIU"
+              + (Motivo is { Length: > 0 } m ? $" — {m}" : "") + ".\n"
+              + "O QUE FAZER: chame o gerente para resolver esse motivo no painel e, "
+              + "depois, toque em Sincronizar. Cada toque dá mais UMA tentativa a estas "
+              + "vendas. Enquanto elas estiverem aqui, não entram no faturamento do painel.";
 }
 
 /// <summary>O que a sincronização fez, para mostrar ao operador em uma tela só.</summary>
@@ -56,9 +75,18 @@ public sealed record ResultadoSync(
 /// </summary>
 public static class Sincronizacao
 {
+    /// <param name="reenviarDesistidas">
+    /// Só o TOQUE MANUAL no botão manda true. É o gesto "eu tratei o motivo, tenta de
+    /// novo": as linhas em dead-letter voltam para UMA tentativa cada (o contador de
+    /// tentativas NÃO é zerado, então uma recusa permanente as devolve ao estado
+    /// terminal na mesma varredura, com o motivo novo gravado). O ciclo automático de
+    /// 45 s passa false de propósito — fila morta batendo sozinha no servidor a cada
+    /// varredura é exatamente o laço silencioso que este estado existe para impedir.
+    /// </param>
     public static async Task<ResultadoSync> ExecutarAsync(
         Nuvem nuvem, GuardaNuvem? guarda, Drenagem? drenagem = null,
-        IProgress<string>? andamento = null, CancellationToken ct = default)
+        IProgress<string>? andamento = null, CancellationToken ct = default,
+        bool reenviarDesistidas = false)
     {
         var produtos = 0;
         var fotos = 0;
@@ -67,6 +95,7 @@ public static class Sincronizacao
         // Vendas da fila primeiro: são elas que alimentam os relatórios do painel.
         if (drenagem is not null)
         {
+            if (reenviarDesistidas) Drenagem.ReabrirDesistidas();
             andamento?.Report("Enviando as vendas…");
             try { await drenagem.DrenarAsync(ct).ConfigureAwait(false); }
             catch { /* a fila fica para o próximo ciclo */ }
@@ -168,6 +197,12 @@ public static class Sincronizacao
     /// divergência: sem venda lá não há faturamento para neutralizar, o estado já é
     /// consistente. Contá-la inventaria um alarme — e alarme falso é o caminho mais
     /// curto para o operador parar de olhar o número.
+    ///
+    /// Pelo MESMO motivo, venda de HOMOLOGAÇÃO fica de fora. Ela não deve subir (o
+    /// roteiro da PayGo viraria receita na DRE), e hoje nem é enfileirada — mas o caixa
+    /// da loja carrega 3 linhas de quando esse filtro ainda não existia. Somá-las era
+    /// R$ 2.493,00 de alarme que NENHUMA ação do operador conseguia zerar, para sempre.
+    /// É a mesma regra do <see cref="Caixa.Apurado"/>, que já as tira do fechamento.
     /// </summary>
     public static VendasParadas VendasNaoEntregues()
     {
@@ -182,11 +217,60 @@ public static class Sincronizacao
                   JOIN venda  v ON v.id = o.ref_id
                  WHERE o.tipo = 'venda'
                    AND v.status = 'finalizada'
+                   AND v.homologacao = 0
                    AND (o.enviado_em IS NULL OR {SqlDesistiu})
                 """);
-            return new VendasParadas((int)r.aguardando, (int)r.desistidas, new Dinheiro((long)r.valor));
+            var desistidas = (int)r.desistidas;
+            // O motivo mais comum entre as desistidas. Uma causa só, dita uma vez: o
+            // operador não precisa de 16 linhas de rastro, precisa saber a quem ligar.
+            var motivo = desistidas == 0 ? null : MotivoHumano(cx.ExecuteScalar<string?>($"""
+                SELECT o.ultimo_erro
+                  FROM outbox o
+                  JOIN venda  v ON v.id = o.ref_id
+                 WHERE o.tipo = 'venda' AND v.status = 'finalizada' AND v.homologacao = 0
+                   AND {SqlDesistiu}
+                 GROUP BY o.ultimo_erro
+                 ORDER BY COUNT(*) DESC
+                 LIMIT 1
+                """));
+            return new VendasParadas((int)r.aguardando, desistidas, new Dinheiro((long)r.valor), motivo);
         }
         catch { return new VendasParadas(0, 0, Dinheiro.Zero); }
+    }
+
+    /// <summary>
+    /// Traduz o rastro do dead-letter para quem está no balcão. Os casos vieram do
+    /// banco da loja, não da imaginação: o 23503 (operador do caixa que não existe em
+    /// employees) respondeu por TODAS as 16 vendas paradas, e o 42501 pelo movimento
+    /// de caixa. Motivo desconhecido devolve o rastro cru e curto — pior que traduzir
+    /// errado é esconder a única pista que o suporte tem.
+    /// </summary>
+    internal static string? MotivoHumano(string? erro)
+    {
+        if (string.IsNullOrWhiteSpace(erro)) return null;
+
+        bool Tem(string t) => erro!.Contains(t, StringComparison.OrdinalIgnoreCase);
+
+        if (Tem("operator_id") && Tem("employees"))
+            return "o operador que fez a venda não está cadastrado no painel";
+        if (Tem("row-level security") || Tem("42501"))
+            return "o painel recusou por permissão: este caixa não está autorizado a gravar";
+        if (Tem("órfão") || Tem("orfão"))
+            return "a venda a que esta nota se liga nunca subiu";
+        if (Tem("dias falhando"))
+            return "ficou dias sem conseguir falar com o painel";
+        if (Tem("sem_caixa_aberto"))
+            return "o painel não tinha caixa aberto para receber esta venda";
+        if (Tem("tipo sem handler"))
+            return "esta versão do PDV não sabe enviar este tipo de registro";
+
+        var http = System.Text.RegularExpressions.Regex.Match(erro!, @"HTTP (\d{3})");
+        if (http.Success) return $"o painel recusou o envio (HTTP {http.Groups[1].Value})";
+
+        // Rastro cru, sem o prefixo "desistido após N tentativas — " que já foi dito.
+        var corte = erro!.IndexOf("— ", StringComparison.Ordinal);
+        var cru = (corte >= 0 ? erro[(corte + 2)..] : erro).Trim();
+        return cru.Length <= 90 ? cru : cru[..90];
     }
 
     /// <summary>
