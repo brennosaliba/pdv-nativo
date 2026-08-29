@@ -1,11 +1,11 @@
 <Window x:Class="Pdv.Instalador.JanelaInstalador"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Instalar PDV — American Day" Width="560" SizeToContent="Height"
+        Title="Instalar o PDV" Width="560" SizeToContent="Height"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="#F7F2E9">
     <StackPanel Margin="28,24,28,24">
-        <TextBlock Text="🍩 PDV American Day" FontSize="26" FontWeight="Bold" Foreground="#16212B"/>
+        <TextBlock Text="PDV American Day" FontSize="26" FontWeight="Bold" Foreground="#16212B"/>
         <TextBlock x:Name="TxtVersao" FontSize="13" Foreground="#4A5661" Margin="0,4,0,16"/>
 
         <TextBlock TextWrapping="Wrap" FontSize="14" Foreground="#16212B" Margin="0,0,0,16"

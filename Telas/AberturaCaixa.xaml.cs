@@ -58,6 +58,19 @@ public partial class AberturaCaixa : UserControl
         => DateTime.TryParse(businessDate, out var d) ? d.ToString("dd/MM/yyyy") : businessDate;
 
     /// <summary>
+    /// Forma de pagamento em formato de gente: "Débito", não "debito". A chave
+    /// crua vazava direto pra pergunta do fechamento ("Quanto deu debito...").
+    /// </summary>
+    private static string FormaBr(string forma) => forma switch
+    {
+        "dinheiro" => "Dinheiro",
+        "debito" => "Débito",
+        "credito" => "Crédito",
+        "pix" => "PIX",
+        _ => forma,
+    };
+
+    /// <summary>
     /// Se um turno ficou aberto (inclusive de outro dia), avisa E DÁ O CAMINHO.
     /// Sempre começa limpando: era daqui que o aviso "ficou aberto" continuava na tela
     /// DEPOIS de o caixa antigo ser fechado — o retorno cedo pulava a limpeza do texto.
@@ -72,15 +85,26 @@ public partial class AberturaCaixa : UserControl
 
         if (aberta.BusinessDate == Caixa.DiaOperacional())
         {
-            Aviso($"Já existe caixa aberto por {aberta.OperadorNome}.");
+            Aviso($"O caixa de hoje já está aberto por {aberta.OperadorNome}. " +
+                  "Esse caixa precisa fechar antes de você abrir o seu.");
             return;
         }
 
-        Aviso($"⚠ O caixa de {DataBr(aberta.BusinessDate)} ficou aberto ({aberta.OperadorNome}). " +
-              "Feche-o antes de abrir o de hoje — senão as vendas dos dois dias se misturam.");
+        Aviso($"O caixa de {DataBr(aberta.BusinessDate)} ficou aberto ({aberta.OperadorNome}). " +
+              "Feche esse caixa antes de abrir o de hoje, senão as vendas dos dois dias se misturam.");
         BtnFecharAntigo.Content = $"Fechar o caixa de {DataBr(aberta.BusinessDate)}";
         BtnFecharAntigo.Visibility = Visibility.Visible;
     }
+
+    /// <summary>
+    /// O fechamento estourou. A causa vem do Núcleo e pode ser técnica; o que o
+    /// operador precisa saber é que o caixa NÃO fechou (segue aberto, a contagem
+    /// não foi gravada) e que ele não resolve isso sozinho no balcão.
+    /// </summary>
+    private static void NaoFechou(Window dono, Exception ex)
+        => Dialogo.Avisar(dono, "Caixa não fechou",
+            ex.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
+            "se continuar, chame o gerente.", "erro");
 
     /// <summary>
     /// Fecha o turno esquecido, aqui mesmo. É o MESMO fechamento cego da tela de venda:
@@ -98,9 +122,9 @@ public partial class AberturaCaixa : UserControl
         foreach (var f in Caixa.FormasContadas(cx, antiga))
         {
             var pergunta = f == "dinheiro"
-                ? "Quanto tem em Dinheiro na gaveta AGORA? (o dinheiro daquele dia continua nela)"
-                : $"Quanto deu {f} no fechamento da maquininha daquele dia?";
-            var v = PedirValor.Mostrar(dono, $"Fechar o caixa de {DataBr(antiga.BusinessDate)}", pergunta);
+                ? "Quanto tem em dinheiro na gaveta agora? O dinheiro daquele dia continua lá."
+                : $"Quanto deu em {FormaBr(f)} no fechamento da maquininha daquele dia?";
+            var v = PedirValor.Mostrar(dono, $"Fechamento de {DataBr(antiga.BusinessDate)}", pergunta);
             if (v is null) return;                 // desistiu: nada fechado
             contagem[f] = v.Value;
         }
@@ -112,14 +136,16 @@ public partial class AberturaCaixa : UserControl
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
         {
-            var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message + "\n\nO que aconteceu?", "");
+            // O texto do Núcleo já termina pedindo a descrição — repetir
+            // "O que aconteceu?" aqui só fazia o operador ler a mesma coisa duas vezes.
+            var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message, "");
             if (string.IsNullOrWhiteSpace(just)) return;
             try { Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia, just), antiga, just); }
-            catch (Exception e2) { Dialogo.Avisar(dono, "Não foi possível fechar", e2.Message, "erro"); }
+            catch (Exception e2) { NaoFechou(dono, e2); }
         }
         catch (Exception ex)
         {
-            Dialogo.Avisar(dono, "Não foi possível fechar", ex.Message, "erro");
+            NaoFechou(dono, ex);
         }
 
         void Concluir(List<LinhaFechamento> linhas, Sessao sessao, string? justificativa)
@@ -132,7 +158,9 @@ public partial class AberturaCaixa : UserControl
                     "sobra" => "SOBRA " + l.Diferenca.Abs.Formatado(),
                     _ => "FALTA " + l.Diferenca.Abs.Formatado(),
                 };
-                return $"{l.Forma,-9} contou {l.Declarado.Formatado(),11}  sistema {l.Apurado.Formatado(),11}  {dif}";
+                // "esperado", não "sistema": é o valor com que a contagem tem que
+                // bater, e é assim que a divergência da abertura chama a mesma coisa.
+                return $"{FormaBr(l.Forma),-9} contou {l.Declarado.Formatado(),11}  esperado {l.Apurado.Formatado(),11}  {dif}";
             }));
             // Venda de teste fica fora dos totais — mas aparece rotulada, aqui também.
             if (Caixa.ResumoDeTeste(cx, sessao) is string teste) texto += "\n\n" + teste;
@@ -166,12 +194,14 @@ public partial class AberturaCaixa : UserControl
             if (presa is not null && presa.BusinessDate != Caixa.DiaOperacional())
             {
                 var dono = Window.GetWindow(this)!;
-                if (Dialogo.Confirmar(dono, $"Feche o caixa de {DataBr(presa.BusinessDate)} primeiro",
+                if (Dialogo.Confirmar(dono, $"Caixa de {DataBr(presa.BusinessDate)} em aberto",
                         $"O caixa de {DataBr(presa.BusinessDate)} ficou aberto ({presa.OperadorNome}). " +
-                        "Abrir o de hoje por cima misturaria as vendas dos dois dias.\n\n" +
-                        "O certo é fechar aquele caixa agora, contando a gaveta. Pular a contagem " +
-                        "exige o PIN do gerente e fica registrado na auditoria.",
-                        "Fechar aquele caixa", "Pular (PIN do gerente)"))
+                        "Se abrir o de hoje por cima, as vendas dos dois dias se misturam.\n\n" +
+                        "O certo é fechar aquele caixa agora, contando a gaveta. Fechar sem contar " +
+                        "precisa do PIN do gerente e fica registrado no nome dele.",
+                        // Rótulos curtos de propósito: o botão do diálogo é fixo em
+                        // ~200px e texto de botão CORTA (não quebra linha).
+                        "Contar e fechar", "Fechar sem contar"))
                 {
                     FecharAntigo(sender, e);
                     return;
@@ -181,14 +211,18 @@ public partial class AberturaCaixa : UserControl
                 // (o modo de homologacao, que dispensava, saiu com a operacao no ar).
                 Operador? sup;
                 {
+                    // "sem contar a gaveta" é o que de fato acontece aqui — o caixa
+                    // FECHA; o que se pula é a contagem. O texto antigo ("pular o
+                    // fechamento") descrevia outra coisa.
                     var pin = PedirSenha.Mostrar(dono, "Autorização do gerente",
-                        $"PIN do gerente para pular o fechamento de {DataBr(presa.BusinessDate)}");
+                        $"PIN do gerente para fechar o caixa de {DataBr(presa.BusinessDate)} sem contar a gaveta");
                     if (pin is null) return;
                     sup = Operadores.AutorizarSupervisor(cx, pin);
                 }
                 if (sup is null)
                 {
-                    Dialogo.Avisar(dono, "Não autorizado", "O PIN não confere ou não é de um supervisor.", "erro");
+                    Dialogo.Avisar(dono, "PIN não confere",
+                        "Esse PIN não é de gerente, ou saiu errado. Peça para o gerente digitar de novo.", "erro");
                     return;
                 }
                 Caixa.FecharSemConferencia(cx, presa, _operador, sup);
@@ -211,13 +245,14 @@ public partial class AberturaCaixa : UserControl
                 var texto = dif.Centavos > 0
                     ? $"{dif.Formatado()} a mais"
                     : $"{dif.Abs.Formatado()} a menos";
+                // Sem sujeito na frase da contagem ("a contagem de agora deu"), e sem
+                // promessa de que ninguém vai ser cobrado — isso o sistema não decide.
+                // O que ele garante é o registro dos dois valores; é só isso que a tela diz.
                 if (!Dialogo.Confirmar(Window.GetWindow(this)!, "Conferência do fundo de troco",
-                        $"O último fechamento registrou {exp.Formatado()} na gaveta e a contagem " +
-                        $"de agora encontrou {new Dinheiro(_centavos).Formatado()} — {texto}.\n\n" +
-                        "Pode ser troco reposto, sangria de ontem ou erro de contagem. " +
-                        "A diferença fica anotada com os dois valores, e o fechamento de " +
-                        "hoje já começa explicado.\n\n" +
-                        "Registrar a diferença e abrir o caixa?",
+                        $"O último fechamento deixou {exp.Formatado()} na gaveta e a contagem " +
+                        $"de agora deu {new Dinheiro(_centavos).Formatado()} — {texto}.\n\n" +
+                        "Pode ser troco reposto, sangria de ontem ou erro na contagem. " +
+                        "Vale conferir uma vez; os dois valores ficam anotados de qualquer jeito.",
                         "Registrar e abrir", "Recontar"))
                     return;
                 Caixa.Auditar(cx, null, "abertura_divergente", _operador.Id, null,

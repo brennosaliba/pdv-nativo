@@ -138,7 +138,7 @@ public partial class Venda : UserControl
                 Dispatcher.Invoke(() =>
                 {
                     RecarregarCatalogo();
-                    TxtToastKds.Text = "Catálogo atualizado pelo painel";
+                    TxtToastKds.Text = "Cardápio atualizado";
                     ToastKds.Visibility = Visibility.Visible;
                     _toastSome?.Stop();
                     _toastSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -197,7 +197,7 @@ public partial class Venda : UserControl
 
     private void NotificarPedidoNovo(int quantos)
     {
-        TxtToastKds.Text = quantos == 1 ? "Pedido novo do iFood!" : $"{quantos} pedidos novos do iFood!";
+        TxtToastKds.Text = quantos == 1 ? "Pedido novo do iFood" : $"{quantos} pedidos novos do iFood";
         ToastKds.Visibility = Visibility.Visible;
         Alerta.PedidoNovo();
 
@@ -228,6 +228,13 @@ public partial class Venda : UserControl
 
     /// <summary>Double do tema atual (fatores de degradê, opacidade de glow).</summary>
     private static double RD(string chave) => (double)Application.Current.Resources[chave];
+
+    /// <summary>
+    /// "1 nota" / "3 notas". Existe para o operador nunca ler "1 nota(s)": com fila
+    /// no balcão, parêntese de plural é ruído que faz reler a frase inteira.
+    /// </summary>
+    private static string Conta(long quantos, string singular, string plural)
+        => $"{quantos} {(quantos == 1 ? singular : plural)}";
 
     /// <summary>Nome da loja no topo e a ficha do terminal no rodapé.</summary>
     private void CarregarIdentificacao()
@@ -269,7 +276,7 @@ public partial class Venda : UserControl
         var serie = t is null ? "?" : Convert.ToString(t.serie_nfce);
         // Homologação precisa gritar: nota de teste não vale nada, e já vi caixa
         // rodando o dia inteiro em teste sem ninguém perceber.
-        var amb = t is not null && Convert.ToInt64(t.ambiente) == 2 ? "  ·  ⚠ HOMOLOGAÇÃO" : "";
+        var amb = t is not null && Convert.ToInt64(t.ambiente) == 2 ? "  ·  ⚠ MODO TESTE — as notas não valem" : "";
         TxtRodape.Text = $"{loja}  ·  Série {serie}  ·  Versão {versao}{amb}";
         if (amb.Length > 0) TxtRodape.SetResourceReference(TextBlock.ForegroundProperty, "Amarelo");
     }
@@ -287,8 +294,8 @@ public partial class Venda : UserControl
             // cupom, e nota do agente local ainda não aparece na 2ª via do servidor.
             var caminho = Servicos.CaminhoDoEmissor() switch
             {
-                "agente" => "  ·  emissor local",
-                "nenhum" => "  ·  SEM EMISSOR",
+                "agente" => "  ·  nota sai deste PC",
+                "nenhum" => "  ·  ⚠ SEM NOTA FISCAL",
                 _ => "",
             };
             // Sem conta de nuvem, o XML da nota fica SÓ neste PC: não entra na 2ª via
@@ -379,32 +386,36 @@ public partial class Venda : UserControl
 
             if (!r.Ok)
             {
-                Dialogo.Avisar(dono, "Não consegui sincronizar",
-                    $"{r.Erro}\n\n(parou em: {etapa})", "erro");
+                var onde = etapa.Length == 0 ? "" : $"Parou em: {etapa.TrimEnd('…', '.')}. ";
+                Dialogo.Avisar(dono, "Sem atualizar",
+                    $"{r.Erro}\n\n{onde}As vendas deste caixa continuam guardadas aqui. " +
+                    "Tente de novo em alguns minutos.", "erro");
             }
             else if (r.SemNovidade)
             {
                 // Sem novidade o relatório detalhado só confunde: parecia estar
                 // mostrando "a última sincronização" de novo.
                 Dialogo.Avisar(dono, "Tudo em dia",
-                    "Não há novas atualizações — o caixa já está igual ao painel.", "ok");
+                    "O cardápio e os preços deste caixa já estão em dia. Nada novo para baixar.", "ok");
             }
             else
             {
                 var linhas = new List<string>
                 {
-                    $"Catálogo:  {(r.CatalogoMudou ? $"atualizado ({r.ProdutosBaixados} produtos)" : "sem mudanças")}",
-                    $"Fotos:     {r.FotosBaixadas} novas",
-                    $"Notas:     {r.NotasSubidas} enviadas ao servidor",
+                    $"Cardápio:  {(r.CatalogoMudou ? $"atualizado ({Conta(r.ProdutosBaixados, "produto", "produtos")})" : "sem novidade")}",
+                    $"Fotos:     {(r.FotosBaixadas == 0 ? "nenhuma nova" : Conta(r.FotosBaixadas, "nova", "novas"))}",
+                    $"Notas:     {(r.NotasSubidas == 0 ? "nenhuma para enviar" : Conta(r.NotasSubidas, "enviada", "enviadas"))}",
                 };
                 if (r.NotasPendentes > 0)
-                    linhas.Add($"\n⚠ {r.NotasPendentes} nota(s) ainda não subiram" +
-                        (Servicos.TemContaDeNuvem() ? "." : " — este caixa ainda não foi pareado ao servidor."));
-                // O valor vem junto de propósito: "3 venda(s) na fila" não distingue
+                    linhas.Add($"\n⚠ {Conta(r.NotasPendentes, "nota", "notas")} ainda não " +
+                        (r.NotasPendentes == 1 ? "foi enviada" : "foram enviadas") +
+                        (Servicos.TemContaDeNuvem() ? ". Tente de novo mais tarde."
+                                                    : ". Este caixa ainda não foi ligado ao painel — chame o gerente."));
+                // O valor vem junto de propósito: "3 vendas na fila" não distingue
                 // R$ 12,00 de R$ 2.493,00, e é o número em reais que faz alguém agir.
                 if (r.Vendas.Resumo is string avisoVendas) linhas.Add("⚠ " + avisoVendas);
 
-                Dialogo.Relatorio(dono, "Sincronizado", string.Join("\n", linhas), null);
+                Dialogo.Relatorio(dono, "Caixa atualizado", string.Join("\n", linhas), null);
                 RecarregarCatalogo();
             }
         }
@@ -430,8 +441,8 @@ public partial class Venda : UserControl
         var total = notas + vendas.Total;
         ChipPendencia.Visibility = total == 0 ? Visibility.Collapsed : Visibility.Visible;
         TxtPendencia.Text = total.ToString();
-        BtnSync.ToolTip = total == 0 ? "Tudo sincronizado"
-            : $"{notas} nota(s) esperando para subir\n{vendas.Resumo}";
+        BtnSync.ToolTip = total == 0 ? "Tudo em dia"
+            : $"{Conta(notas, "nota ainda não enviada", "notas ainda não enviadas")}\n{vendas.Resumo}";
     }
 
     /// <summary>Recarrega a grade depois de baixar catálogo novo, mantendo a categoria aberta.</summary>
@@ -738,7 +749,7 @@ public partial class Venda : UserControl
         linhaCab.Children.Add(titulo);
         var detalhe = new TextBlock
         {
-            Text = info.AtivaAgora ? $"  ·  {info.Quando}" : $"  ·  fora do dia/horário — vale {info.Quando}",
+            Text = info.AtivaAgora ? $"  ·  {info.Quando}" : $"  ·  não vale agora — só {info.Quando}",
             FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
         };
         detalhe.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
@@ -760,7 +771,7 @@ public partial class Venda : UserControl
         if (ativa) return el;
 
         el.IsEnabled = false;
-        el.ToolTip = $"{info.Nome} — válida {info.Quando}";
+        el.ToolTip = $"{info.Nome} — só vale {info.Quando}";
         var moldura = new Grid();
         moldura.Children.Add(el);
         var faixa = new Border
@@ -773,7 +784,7 @@ public partial class Venda : UserControl
         faixa.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
         var aviso = new TextBlock
         {
-            Text = $"fora do horário · {info.Quando}",
+            Text = $"só vale {info.Quando}",
             FontSize = 11, FontWeight = FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -865,7 +876,7 @@ public partial class Venda : UserControl
             Text = precoEf.Formatado(), FontSize = 17, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = (Brush)Application.Current.Resources[promoNome is null ? "Ciano" : "Rosa"],
-            ToolTip = promoNome is null ? null : "PROMO: " + promoNome,
+            ToolTip = promoNome is null ? null : "Promoção: " + promoNome,
         };
         Grid.SetColumn(preco, 2);
         g.Children.Add(preco);
@@ -972,7 +983,7 @@ public partial class Venda : UserControl
             Text = precoEf2.Formatado(), FontSize = 18, FontWeight = FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 4, 0, 0),
             Foreground = (Brush)Application.Current.Resources[promoNome2 is null ? "Ciano" : "Rosa"],
-            ToolTip = promoNome2 is null ? null : "PROMO: " + promoNome2,
+            ToolTip = promoNome2 is null ? null : "Promoção: " + promoNome2,
         };
         Grid.SetRow(preco, 2);
         grade.Children.Add(preco);
@@ -1118,8 +1129,8 @@ public partial class Venda : UserControl
         // que é testado; a tela só mostra.
         var aviso = Rascunho.AvisoDeCobranca(cobrado);
 
-        var recuperar = Dialogo.Confirmar(Window.GetWindow(this)!, "Continuar comanda?",
-            $"O caixa foi interrompido às {quando}, mas esta comanda ainda estava aberta:\n\n" +
+        var recuperar = Dialogo.Confirmar(Window.GetWindow(this)!, "Comanda aberta",
+            $"O caixa parou às {quando} e esta comanda ficou aberta:\n\n" +
             $"{Rascunho.TextoItens(unidades)} · {total.Formatado()}\n\n" +
             aviso + "\n\n" +
             (unidades == 1m ? "Ao continuar, o item volta" : "Ao continuar, os itens voltam") +
@@ -1290,7 +1301,9 @@ public partial class Venda : UserControl
     private void LimparComanda(object sender, RoutedEventArgs e)
     {
         if (_comanda.Count == 0) return;
-        if (!Dialogo.Confirmar(Window.GetWindow(this)!, "Limpar comanda", $"Remover os {_comanda.Count} itens da comanda?", "Limpar", "Voltar", perigo: true)) return;
+        if (!Dialogo.Confirmar(Window.GetWindow(this)!, "Limpar comanda",
+                _comanda.Count == 1 ? "Tirar o item da comanda?" : $"Tirar os {_comanda.Count} itens da comanda?",
+                "Limpar comanda", "Voltar", perigo: true)) return;
         _comanda.Clear();
         PintarComanda();
     }
@@ -1307,7 +1320,7 @@ public partial class Venda : UserControl
         var dono = Window.GetWindow(this)!;
 
         var codigo = PedirTexto.Mostrar(dono, "Cortesia",
-            "Código do cupom (ex.: AD-XXXXXX) — do QR ou digitado", "");
+            "Código do cupom que o cliente trouxe (ex.: AD-XXXXXX)", "");
         if (string.IsNullOrWhiteSpace(codigo)) return;
 
         BtnCortesia.IsEnabled = false;
@@ -1319,13 +1332,13 @@ public partial class Venda : UserControl
         {
             Dialogo.Avisar(dono, "Cupom não vale", c.Erro switch
             {
-                "not_found" => "Código não encontrado. Confira as letras e números.",
-                "expired" => "Este cupom já venceu.",
-                "already_redeemed" => "Este cupom já foi usado.",
-                "cancelled" => "Este cupom foi cancelado.",
+                "not_found" => "Não achei esse código. Confira as letras e os números e digite de novo.",
+                "expired" => "Este cupom venceu. Siga a venda sem a cortesia.",
+                "already_redeemed" => "Este cupom já foi usado. Siga a venda sem a cortesia.",
+                "cancelled" => "Este cupom foi cancelado. Siga a venda sem a cortesia.",
                 "code_required" => "Digite o código do cupom.",
-                "sem_rede" => "Sem internet para validar o cupom agora.",
-                _ => "Não foi possível validar o cupom.",
+                "sem_rede" => "Sem internet para conferir o cupom agora. Tente de novo em alguns segundos.",
+                _ => "Não deu para conferir o cupom agora. Tente de novo.",
             }, "erro");
             return;
         }
@@ -1356,8 +1369,8 @@ public partial class Venda : UserControl
 
         if (cobertura.Count == 0)
         {
-            Dialogo.Avisar(dono, "Itens do cupom não estão na comanda",
-                "Adicione à comanda os produtos do cupom antes de aplicar a cortesia:\n" +
+            Dialogo.Avisar(dono, "Faltam itens do cupom",
+                "Passe primeiro estes produtos na comanda e aplique o cupom depois:\n" +
                 string.Join(", ", c.Itens.Select(i => $"{i.Quantidade}× {i.Nome}")), "erro");
             return;
         }
@@ -1371,7 +1384,7 @@ public partial class Venda : UserControl
             _comanda.Where(i => CoberturaDe(i) > 0)
                     .Select(i => $"{CoberturaDe(i)}× {i.Produto.Nome} grátis"));
         if (faltando.Count > 0)
-            TxtCortesiaItens.Text += $"  ·  (não estavam na comanda: {string.Join(", ", faltando)})";
+            TxtCortesiaItens.Text += $"  ·  fora da comanda: {string.Join(", ", faltando)}";
         CaixaCortesia.Visibility = Visibility.Visible;
         PintarComanda();
     }
@@ -1411,9 +1424,9 @@ public partial class Venda : UserControl
         // emitir (é um brinde). Só resgata o cupom e limpa.
         if (itens.Count == 0)
         {
-            if (!Dialogo.Confirmar(dono, "Entregar cortesia",
-                    "A comanda toda é cortesia — nada a cobrar. Entregar os itens e queimar o cupom?",
-                    "Entregar", "Voltar")) return;
+            if (!Dialogo.Confirmar(dono, "Cortesia",
+                    "A comanda toda é cortesia: não há nada a cobrar. Ao entregar, o cupom é usado e não vale mais.",
+                    "Entregar os itens", "Voltar")) return;
             _ = ResgatarEConcluirBrindeAsync();
             return;
         }
@@ -1471,12 +1484,12 @@ public partial class Venda : UserControl
         var r = await _cortesias.ResgatarAsync(_cortesiaCodigo!, _operador.Nome, _loja);
         if (!r.Ok)
         {
-            Dialogo.Avisar(dono, "Não deu para resgatar", r.Erro switch
+            Dialogo.Avisar(dono, "Cortesia não saiu", r.Erro switch
             {
-                "already_redeemed" => "O cupom já tinha sido usado.",
-                "loja_errada" => "O cupom é de outra loja.",
-                "sem_rede" => "Sem internet para resgatar agora.",
-                _ => "Tente de novo.",
+                "already_redeemed" => "O cupom já tinha sido usado. Não entregue de graça: cobre a venda normal.",
+                "loja_errada" => "O cupom é de outra loja. Só pode ser usado lá.",
+                "sem_rede" => "Sem internet para usar o cupom agora. Tente de novo em alguns segundos.",
+                _ => "Não deu para usar o cupom agora. Tente de novo.",
             }, "erro");
             return;
         }
@@ -1484,7 +1497,7 @@ public partial class Venda : UserControl
             $"cupom={_cortesiaCodigo} (comanda inteira em cortesia)");
         _comanda.Clear();                                   // esvazia antes de repintar (ver Finalizar)
         RemoverCortesia(this, new RoutedEventArgs());
-        Dialogo.Avisar(dono, "Cortesia entregue", "Cupom queimado. Bom atendimento!", "ok");
+        Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");
     }
 
     // ── CICLO DO DINHEIRO ───────────────────────────────────────────────────
@@ -1502,7 +1515,9 @@ public partial class Venda : UserControl
         try { nomes = (await Impressao.ImpressorasAsync()).ToList(); }
         catch (Exception ex)
         {
-            Dialogo.Avisar(dono, "Impressoras", "Não consegui listar as impressoras: " + ex.Message, "erro");
+            Dialogo.Avisar(dono, "Impressoras",
+                "Não consegui ler a lista de impressoras deste computador. Tente de novo; " +
+                "se continuar assim, chame o suporte.\n\nDetalhe: " + ex.Message, "erro");
             return;
         }
 
@@ -1538,7 +1553,7 @@ public partial class Venda : UserControl
         // balcão com fila desliga, quem quer papel sempre liga.
         var chkAuto = new CheckBox
         {
-            Content = "Imprimir automaticamente ao concluir a venda",
+            Content = "Imprimir o cupom sozinho ao fim de cada venda",
             IsChecked = Vendas.Config(cx, "imprimir_automatico", "1") != "0",
             FontSize = 14,
             Foreground = (Brush)Application.Current.Resources["Texto"],
@@ -1564,36 +1579,37 @@ public partial class Venda : UserControl
         Caixa.Auditar(cx, null, "impressora_trocada", _operador.Id, null,
             (escolhida ?? "padrão do Windows") + (chkAuto.IsChecked == false ? " · impressão automática OFF" : ""));
         Dialogo.Avisar(dono, "Impressora",
-            $"Cupons passam a sair em: {escolhida ?? "impressora padrão do Windows"}.", "ok");
+            $"Os cupons passam a sair em {escolhida ?? "impressora padrão do Windows"}.", "ok");
     }
     // ── TEF (PayGo): estorno, menu administrativo, reimpressão ────────────────
 
     /// <summary>
-    /// Menu do TEF na barra: estornar o cartão/PIX de uma venda (CNC no PayGo + cancelar a
-    /// venda no MESMO ato), menu administrativo do PayGo (teste de comunicação, relatórios,
-    /// cancelamento pelo menu) e reimpressão do último comprovante. Só PayGo: o Smart TEF da
-    /// nuvem não tem estorno pela tela (estorna-se no portal da adquirente).
+    /// Menu do botão "Cartão" na barra: estornar o cartão/PIX de uma venda (CNC no PayGo +
+    /// cancelar a venda no MESMO ato) e reimprimir o último comprovante. Só PayGo: o Smart
+    /// TEF da nuvem não tem estorno pela tela (estorna-se no portal da adquirente).
     /// </summary>
     private async void MenuTef(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;
         if (_comanda.Count > 0)
         {
-            Dialogo.Avisar(dono, "Venda em andamento", "Conclua ou limpe a comanda antes de usar o menu do TEF.", "erro");
+            Dialogo.Avisar(dono, "Comanda aberta",
+                "Termine ou limpe a comanda antes de estornar ou reimprimir.", "erro");
             return;
         }
         if (TefEmAndamento(dono)) return;
         var cli = Servicos.Operavel();
         if (cli is null)
         {
-            Dialogo.Avisar(dono, "TEF", "O TEF não está configurado neste caixa (Configuração → TEF: PayGo ou ControlPay).", "erro");
+            Dialogo.Avisar(dono, "Maquininha",
+                "Este caixa não tem maquininha ligada a ele. Chame o gerente para configurar.", "erro");
             return;
         }
         // Menu administrativo do PayGo e roteiro de homologação saíram (28/08): o ADM
         // é o painel web da PayGo, e a homologação terminou — opção que ninguém usa
         // só aumenta a chance de tocar na errada com o cliente esperando.
-        var opcoes = new[] { "Estornar cartão/PIX de uma venda", "Reimprimir o último comprovante" };
-        var escolha = EscolherOpcao(dono, "TEF", "O que você quer fazer?", opcoes);
+        var opcoes = new[] { "Estornar o cartão/PIX de uma venda", "Reimprimir o último comprovante" };
+        var escolha = EscolherOpcao(dono, "Cartão e PIX", "O que você quer fazer?", opcoes);
         if (escolha < 0) return;
         // Enquanto o PayGo está com a tela/pinpad (CNC/ADM não têm timeout), a venda não pode
         // seguir por baixo: Finalizar/Fechar caixa/Sair conferem _tefOcupado.
@@ -1654,14 +1670,14 @@ public partial class Venda : UserControl
             (long)l.valor_cent, (int)(long)l.parcelas, "pago", RespostaPayGo.Analisar((string?)l.resposta_txt));
     }
 
-    /// <summary>Operação do TEF (estorno/ADM) em curso: nada de vender, fechar caixa ou sair por baixo dela.</summary>
+    /// <summary>Estorno em curso na maquininha: nada de vender, fechar caixa ou sair por baixo dele.</summary>
     private bool _tefOcupado;
 
     private bool TefEmAndamento(Window dono)
     {
         if (!_tefOcupado) return false;
-        Dialogo.Avisar(dono, "TEF em andamento",
-            "Há uma operação do TEF (estorno ou menu administrativo) em curso no PayGo. Conclua-a antes.", "erro");
+        Dialogo.Avisar(dono, "Maquininha ocupada",
+            "Tem um estorno acontecendo na maquininha. Termine ele antes de continuar aqui.", "erro");
         return true;
     }
 
@@ -1749,7 +1765,9 @@ public partial class Venda : UserControl
                 """, new { Ses = _sessao.Id, Desde = _sessao.AberturaEm.ToString("o") }).ToList();
         if (linhas.Count == 0)
         {
-            Dialogo.Avisar(dono, "Estorno", "Não há venda deste turno paga com cartão/PIX pelo PayGo.", "erro");
+            Dialogo.Avisar(dono, "Estorno",
+                "Nenhuma venda deste turno foi paga na maquininha. Só dá para estornar cartão ou PIX daqui — " +
+                "venda em dinheiro você devolve na mão.", "erro");
             return;
         }
 
@@ -1758,7 +1776,10 @@ public partial class Venda : UserControl
         var rotulos = linhas.Select(l =>
             $"Venda #{l.numero_local} · {Hora(l.finalizada_em)} · {Forma((string)l.forma)} {new Dinheiro((long)l.valor_cent).Formatado()} · NSU {l.tef_nsu}")
             .ToArray();
-        var i = EscolherOpcao(dono, "Estornar cartão", "Qual pagamento vai ser estornado?", rotulos);
+        // O NSU é a única coisa aqui que também está no papel do cliente: é por ele
+        // que se confere se a linha escolhida é a do comprovante em cima do balcão.
+        var i = EscolherOpcao(dono, "Estorno",
+            "Qual pagamento você vai estornar? O NSU está no comprovante do cliente.", rotulos);
         if (i < 0) return;
         var l = linhas[i];
         string vendaId = (string)l.venda_id, nsu = (string)l.tef_nsu;
@@ -1777,17 +1798,17 @@ public partial class Venda : UserControl
         var protNfce = (string?)l.nfce_protocolo;
         if (fiscal == "contingencia")
         {
-            Dialogo.Avisar(dono, "Nota em contingência",
-                $"A venda #{numero} tem NFC-e em contingência (ainda sem protocolo de autorização). " +
-                "Ela precisa ser autorizada ou cancelada pelo ERP antes do estorno.", "erro");
+            Dialogo.Avisar(dono, "Nota pendente",
+                $"A nota da venda #{numero} saiu sem aprovação e ainda está pendente — sem isso o estorno " +
+                "não pode sair daqui. Chame o gerente para resolver a nota primeiro.", "erro");
             return;
         }
         var precisaCancelarNota = fiscal == "autorizada";
         if (precisaCancelarNota && (chaveNfce ?? "").Trim().Length != 44)
         {
-            Dialogo.Avisar(dono, "Nota fiscal emitida",
-                $"A venda #{numero} consta com NFC-e autorizada, mas a chave não está gravada neste caixa. " +
-                "Cancele a nota pelo ERP antes de estornar.", "erro");
+            Dialogo.Avisar(dono, "Nota sem os dados",
+                $"A venda #{numero} tem nota aprovada, mas os dados dela não estão neste caixa — " +
+                "o estorno não pode sair daqui. Chame o gerente para cancelar a nota pelo sistema.", "erro");
             return;
         }
 
@@ -1795,22 +1816,24 @@ public partial class Venda : UserControl
         // e regra dela, nao capricho nosso.
         var pedeJust = precisaCancelarNota;
         var motivo = PedirTexto.Mostrar(dono, "Estorno",
-            pedeJust ? $"Justificativa para a SEFAZ (mínimo {CancelamentoFiscal.JustificativaMinima} letras)"
-                     : "Motivo (obrigatório)",
+            pedeJust ? $"Por que está estornando? Escreva pelo menos {CancelamentoFiscal.JustificativaMinima} " +
+                       "letras — isso vai junto no cancelamento da nota."
+                     : "Por que está estornando? (obrigatório)",
             "venda cancelada por desistência do cliente");
         if (string.IsNullOrWhiteSpace(motivo)) return;
         if (pedeJust && !CancelamentoFiscal.JustificativaValida(motivo))
         {
-            Dialogo.Avisar(dono, "Justificativa curta",
-                $"A SEFAZ exige de {CancelamentoFiscal.JustificativaMinima} a {CancelamentoFiscal.JustificativaMaxima} " +
-                "caracteres na justificativa do cancelamento.", "erro");
+            Dialogo.Avisar(dono, "Motivo curto",
+                $"Escreva o motivo com {CancelamentoFiscal.JustificativaMinima} a " +
+                $"{CancelamentoFiscal.JustificativaMaxima} letras. É o que vai junto no cancelamento da nota.", "erro");
             return;
         }
 
-        if (!Dialogo.Confirmar(dono, "Estornar no cartão",
-                $"Venda #{numero}: " + (precisaCancelarNota ? "CANCELAR a NFC-e na SEFAZ, " : "") +
-                $"devolver {valor.Formatado()} no cartão/PIX (NSU {nsu}) e CANCELAR a venda no PDV. " +
-                "O PayGo pode pedir a senha do lojista e o cartão do cliente. Confirma?",
+        if (!Dialogo.Confirmar(dono, "Estorno",
+                $"Venda #{numero} · {valor.Formatado()} em {Forma((string)l.forma)}.\n\n" +
+                (precisaCancelarNota ? "A nota vai ser cancelada, o valor volta " : "O valor volta ") +
+                "no cartão do cliente e a venda sai do caixa.\n\n" +
+                "A maquininha pode pedir a senha da loja e o cartão do cliente.",
                 "Estornar agora", "Voltar", perigo: true)) return;
 
         // ── AUTORIZAÇÃO ──────────────────────────────────────────────────────
@@ -1859,22 +1882,24 @@ public partial class Venda : UserControl
                 // APROVAÇÃO REMOTA na auditoria. Se nem o PIN sair, o estorno é
                 // recusado — mas o caixa continua de pé.
                 aut = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, null,
-                    "a autorização de estorno falhou neste caixa (" + ex.Message + ")");
+                    "o pedido de aprovação não saiu deste caixa (" + ex.Message + ")");
                 try
                 {
                     var supEmergencia = await telaAut.PedirPinAsync(
-                        "a autorização por WhatsApp falhou neste caixa (" + ex.Message + ")");
+                        "o pedido de aprovação por WhatsApp não saiu deste caixa");
                     aut = supEmergencia is null
                         ? aut with { Avisado = true }
                         : new DesfechoAutorizacao(ViaAutorizacao.Pin, supEmergencia, null, null,
-                            "a autorização por WhatsApp falhou neste caixa");
+                            "o pedido de aprovação por WhatsApp não saiu deste caixa");
                 }
                 catch { /* nem o PIN deu: recusa o estorno, mas não derruba o PDV */ }
             }
         }
         if (!aut.Autorizado)
         {
-            if (!aut.Avisado) Dialogo.Avisar(dono, "Estorno não autorizado", aut.Motivo + ".", "erro");
+            if (!aut.Avisado)
+                Dialogo.Avisar(dono, "Estorno não autorizado",
+                    aut.Motivo + ".\n\nNada foi estornado. Chame o gerente.", "erro");
             return;
         }
         var sup = aut.Supervisor;
@@ -1893,7 +1918,7 @@ public partial class Venda : UserControl
         // seguem intactos, e o operador tenta de novo.
         if (precisaCancelarNota)
         {
-            using (var esperando = new Espera(dono, "Cancelando a nota fiscal na SEFAZ…"))
+            using (var esperando = new Espera(dono, "Cancelando a nota fiscal…"))
             {
                 var rc = await CancelamentoFiscal.CancelarAsync(
                     Servicos.AgenteUrl(), chaveNfce!, protNfce, motivo!);
@@ -1904,11 +1929,12 @@ public partial class Venda : UserControl
                             $"venda={numero} chave={chaveNfce} — {rc.Mensagem}");
                     esperando.Dispose();
                     Dialogo.Avisar(dono,
-                        rc.Indisponivel ? "Não sei se a nota foi cancelada" : "Nota NÃO cancelada",
+                        rc.Indisponivel ? "Nota sem resposta" : "Nota não cancelada",
                         rc.Indisponivel
-                            ? $"{rc.Mensagem}.\n\nO estorno NÃO foi feito. Confira a nota no ERP antes de tentar de novo — " +
-                              "ela pode ter sido cancelada mesmo sem a resposta chegar."
-                            : $"{rc.Mensagem}.\n\nO estorno não foi feito e nada mudou.",
+                            ? $"{rc.Mensagem}.\n\nNada foi estornado. A nota pode ter sido cancelada mesmo sem a " +
+                              "resposta chegar — chame o gerente para conferir antes de tentar de novo."
+                            : $"{rc.Mensagem}.\n\nNada mudou: a nota, o dinheiro e a venda seguem como estavam. " +
+                              "Tente de novo; se continuar, chame o gerente.",
                         "erro");
                     return;
                 }
@@ -1934,7 +1960,9 @@ public partial class Venda : UserControl
         try { d = await cli.CancelarAsync(original, CancellationToken.None); }
         catch (Exception ex)
         {
-            Dialogo.Avisar(dono, "Estorno não realizado", ex.Message, "erro");
+            Dialogo.Avisar(dono, "Maquininha sem resposta",
+                "A maquininha não respondeu. Confira se ela está ligada e o programa dela aberto, " +
+                "e veja no comprovante se o estorno saiu antes de tentar de novo.\n\nDetalhe: " + ex.Message, "erro");
             return;
         }
         if (!d.Pago)
@@ -1944,7 +1972,11 @@ public partial class Venda : UserControl
             using var cxn = Banco.Abrir();
             Caixa.Auditar(cxn, null, "tef_estorno_negado", _operador.Id, aut.Autorizador,
                 $"venda={numero} nsu={nsu} {d.Motivo}{autoAutorizado}{trilha}");
-            Dialogo.Avisar(dono, "Estorno não realizado", d.MensagemParaTela, "erro");
+            Dialogo.Avisar(dono, "Estorno negado",
+                $"A maquininha não aprovou o estorno: {d.MensagemParaTela}.\n\n" +
+                "O dinheiro não voltou para o cliente." +
+                (precisaCancelarNota ? " A nota fiscal já foi cancelada — chame o gerente." : " Tente de novo."),
+                "erro");
             return;
         }
 
@@ -1981,8 +2013,9 @@ public partial class Venda : UserControl
             {
                 Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, aut.Autorizador, detalhe + $" (venda segue: restam {restantes} cartão/PIX)");
                 Dialogo.Avisar(dono, "Cartão estornado",
-                    $"{valor.Formatado()} devolvido no cartão. A venda #{numero} ainda tem {restantes} outro(s) pagamento(s) " +
-                    "em cartão/PIX — estorne-os também para a venda ser cancelada.", "ok");
+                    $"{valor.Formatado()} voltou para o cliente. A venda #{numero} ainda tem " +
+                    $"{Conta(restantes, "outro pagamento", "outros pagamentos")} na maquininha — " +
+                    "estorne também, senão a venda continua aberta.", "ok");
                 return;
             }
             try
@@ -1992,14 +2025,15 @@ public partial class Venda : UserControl
             catch (Exception ex)
             {
                 Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, aut.Autorizador, detalhe + " — CARTÃO ESTORNADO, venda não cancelada: " + ex.Message);
-                Dialogo.Avisar(dono, "Cartão estornado, venda NÃO cancelada",
-                    ex.Message + $" — cancele a venda #{numero} manualmente.", "erro");
+                Dialogo.Avisar(dono, "Venda ainda aberta",
+                    $"O dinheiro voltou para o cliente, mas a venda #{numero} continua no caixa. " +
+                    "Chame o gerente para cancelar a venda.\n\nDetalhe: " + ex.Message, "erro");
                 return;
             }
             Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, aut.Autorizador, detalhe);
-            Dialogo.Avisar(dono, "Estorno concluído",
-                $"Venda #{numero} cancelada e {valor.Formatado()} devolvido no cartão/PIX (NSU {nsu})." +
-                (dinheiro > 0 ? $" Atenção: havia {new Dinheiro(dinheiro).Formatado()} em dinheiro nessa venda — devolva em espécie." : ""),
+            Dialogo.Avisar(dono, "Estorno feito",
+                $"{valor.Formatado()} voltou para o cliente (NSU {nsu}) e a venda #{numero} foi cancelada." +
+                (dinheiro > 0 ? $" Essa venda também tinha {new Dinheiro(dinheiro).Formatado()} em dinheiro — devolva na mão." : ""),
                 "ok");
         }
     }
@@ -2019,7 +2053,8 @@ public partial class Venda : UserControl
         }
         if (txt is null)
         {
-            Dialogo.Avisar(dono, "Reimpressão", "Nenhum comprovante de TEF para reimprimir.", "erro");
+            Dialogo.Avisar(dono, "Reimpressão",
+                "Este caixa ainda não tem nenhum comprovante de cartão para reimprimir.", "erro");
             return;
         }
         // ViasParaImprimir devolve na ordem em que saem: [cliente, estabelecimento].
@@ -2028,7 +2063,8 @@ public partial class Venda : UserControl
         var todas = Servicos.ViasParaImprimir(RespostaPayGo.Analisar(txt));
         if (todas.Count == 0)
         {
-            Dialogo.Avisar(dono, "Reimpressão", "Este comprovante não tem vias para imprimir.", "erro");
+            Dialogo.Avisar(dono, "Reimpressão",
+                "O último pagamento não gerou comprovante para imprimir.", "erro");
             return;
         }
         IReadOnlyList<IReadOnlyList<string>> blocos;
@@ -2051,8 +2087,8 @@ public partial class Venda : UserControl
         var erro = await Impressao.ImprimirTextoAsync("Comprovante TEF (reimpressão)", blocos, impressora);
         Dialogo.Avisar(dono, "Reimpressão",
             erro is null
-                ? (blocos.Count > 1 ? "As duas vias foram enviadas à impressora." : "Via enviada à impressora.")
-                : erro,
+                ? (blocos.Count > 1 ? "As duas vias foram para a impressora." : "A via foi para a impressora.")
+                : erro + "\n\nConfira se a impressora está ligada e com papel, e tente de novo.",
             erro is null ? "ok" : "erro");
     }
 
@@ -2061,12 +2097,15 @@ public partial class Venda : UserControl
     private void Movimento(string tipo)
     {
         var dono = Window.GetWindow(this)!;
-        var titulo = tipo == "sangria" ? "Sangria" : "Suprimento";
-        var valor = PedirValor.Mostrar(dono, titulo, "Valor");
+        var sangria = tipo == "sangria";
+        var titulo = sangria ? "Sangria" : "Suprimento";
+        var valor = PedirValor.Mostrar(dono, titulo,
+            sangria ? "Quanto está saindo da gaveta?" : "Quanto está entrando na gaveta?");
         if (valor is null || !valor.Value.Positivo) return;
 
-        var motivo = PedirTexto.Mostrar(dono, titulo, "Motivo (obrigatório)",
-            tipo == "sangria" ? "envio ao cofre" : "reforço de troco");
+        var motivo = PedirTexto.Mostrar(dono, titulo,
+            sangria ? "Para onde vai o dinheiro? (obrigatório)" : "De onde vem o dinheiro? (obrigatório)",
+            sangria ? "envio ao cofre" : "reforço de troco");
         if (string.IsNullOrWhiteSpace(motivo)) return;
 
         string? autorizador = null;
@@ -2077,13 +2116,17 @@ public partial class Venda : UserControl
             using var cxa = Banco.Abrir();
             Operador? sup;
             {
-                var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do supervisor");
+                // "gerente" na tela: é como o balcão chama quem autoriza, e é a
+                // mesma palavra da abertura de caixa. O perfil no banco (supervisor
+                // ou gerente) segue igual — quem decide é ESupervisor.
+                var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do gerente");
                 if (pin is null) return;
                 sup = Operadores.AutorizarSupervisor(cxa, pin);
             }
             if (sup is null)
             {
-                Dialogo.Avisar(dono, "Não autorizado", "O PIN não confere ou não é de um supervisor.", "erro");
+                Dialogo.Avisar(dono, "PIN não confere",
+                    "Esse PIN não é de gerente, ou saiu errado. Peça para o gerente digitar de novo.", "erro");
                 return;
             }
             // Segundo par de olhos NÃO pode ser o próprio: um gerente que opera o
@@ -2091,8 +2134,8 @@ public partial class Venda : UserControl
             // aval de si mesmo, o furto que a autorização existe pra impedir.
             if (sup.Id == _operador.Id)
             {
-                Dialogo.Avisar(dono, "Não autorizado",
-                    "A sangria precisa ser autorizada por OUTRO supervisor — você não pode autorizar a sua própria.", "erro");
+                Dialogo.Avisar(dono, "Precisa de outro gerente",
+                    "Você não pode autorizar a sua própria sangria. Chame OUTRO gerente para digitar o PIN dele.", "erro");
                 return;
             }
             autorizador = sup.Id;
@@ -2103,12 +2146,14 @@ public partial class Venda : UserControl
             using var cx = Banco.Abrir();
             Caixa.Movimentar(cx, _sessao, tipo, valor.Value, motivo!, _operador, autorizador,
                 tipo == "sangria" ? "cofre" : null);
-            Dialogo.Avisar(dono, $"{titulo} registrada",
+            // "Suprimento registrada" saía errado: o gênero acompanha a palavra, não o rótulo.
+            Dialogo.Avisar(dono, sangria ? "Sangria registrada" : "Suprimento registrado",
                 $"{valor.Value.Formatado()} — {motivo}", "ok");
         }
         catch (Exception ex)
         {
-            Dialogo.Avisar(dono, "Não foi possível registrar", ex.Message, "erro");
+            Dialogo.Avisar(dono, sangria ? "Sangria não saiu" : "Suprimento não entrou",
+                ex.Message + "\n\nNada foi registrado. Confira o valor e tente de novo.", "erro");
         }
     }
 
@@ -2123,8 +2168,8 @@ public partial class Venda : UserControl
         if (TefEmAndamento(dono)) return;
         if (_comanda.Count > 0)
         {
-            Dialogo.Avisar(dono, "Venda em andamento",
-                "Finalize ou limpe a comanda antes de fechar o caixa.", "erro");
+            Dialogo.Avisar(dono, "Comanda aberta",
+                "Termine ou limpe a comanda antes de fechar o caixa.", "erro");
             return;
         }
 
@@ -2139,8 +2184,8 @@ public partial class Venda : UserControl
         foreach (var f in formasContadas)
         {
             var pergunta = f == "dinheiro"
-                ? "Quanto você contou em Dinheiro? (conte a gaveta inteira, incluindo o fundo de troco)"
-                : $"Quanto deu {Rotulo(f)} no fechamento da maquininha?";
+                ? "Quanto você contou em dinheiro? Conte a gaveta inteira, com o fundo de troco."
+                : $"Quanto deu em {Rotulo(f)} no fechamento da maquininha?";
             var v = PedirValor.Mostrar(dono, "Fechamento de caixa", pergunta);
             if (v is null) return;                 // desistiu no meio: não fecha nada
             contagem[f] = v.Value;
@@ -2157,7 +2202,9 @@ public partial class Venda : UserControl
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
         {
-            var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message + "\n\nO que aconteceu?", "");
+            // A mensagem do Núcleo já termina pedindo a descrição; repetir
+            // "O que aconteceu?" só fazia ler a mesma pergunta duas vezes.
+            var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message, "");
             if (string.IsNullOrWhiteSpace(just)) return;
             try
             {
@@ -2169,12 +2216,16 @@ public partial class Venda : UserControl
             }
             catch (Exception e2)
             {
-                Dialogo.Avisar(dono, "Não foi possível fechar", e2.Message, "erro");
+                Dialogo.Avisar(dono, "Caixa não fechou",
+                    e2.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
+                    "se continuar, chame o gerente.", "erro");
             }
         }
         catch (Exception ex)
         {
-            Dialogo.Avisar(dono, "Não foi possível fechar", ex.Message, "erro");
+            Dialogo.Avisar(dono, "Caixa não fechou",
+                ex.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
+                "se continuar, chame o gerente.", "erro");
         }
     }
 
@@ -2189,18 +2240,22 @@ public partial class Venda : UserControl
                 "sobra" => "SOBRA " + l.Diferenca.Abs.Formatado(),
                 _ => "FALTA " + l.Diferenca.Abs.Formatado(),
             };
-            var origem = l.Contada ? "contou" : "  TEF ";
-            return $"{Rotulo(l.Forma),-9} {origem} {l.Declarado.Formatado(),11}  sistema {l.Apurado.Formatado(),11}  {dif}";
+            // "TEF" não diz nada a quem está fechando a gaveta: o que importa é se o
+            // valor foi contado à mão ou veio da maquininha.
+            var origem = l.Contada ? "contou" : "máquina";
+            // "esperado", e não "sistema", é a mesma palavra que a abertura usa na
+            // conferência do fundo — é o valor com que a contagem tem que bater.
+            return $"{Rotulo(l.Forma),-9} {origem,-7} {l.Declarado.Formatado(),11}  esperado {l.Apurado.Formatado(),11}  {dif}";
         }));
 
         // O desvio é a soma dos módulos. O líquido esconderia falta num lugar
         // compensada por sobra em outro, que é justamente o que se quer enxergar.
         var desvio = new Dinheiro(linhas.Sum(l => l.Diferenca.Abs.Centavos));
-        var corpo = texto + $"\n\nDesvio total: {desvio.Formatado()}";
+        var corpo = texto + $"\n\nDiferença total: {desvio.Formatado()}";
 
         if (linhas.Any(l => l.Situacao == "sobra"))
-            corpo += "\n\nSobrou dinheiro na gaveta. Isso costuma ser venda que não passou\n" +
-                     "pelo PDV — e venda assim também não baixou estoque nem gerou nota.";
+            corpo += "\n\nSobrou dinheiro na gaveta. Costuma ser venda feita fora do caixa\n" +
+                     "— e venda assim não baixou estoque nem gerou nota.";
 
         // O turno teve venda de TESTE: ela ficou fora dos totais acima, e o operador
         // precisa ler isso aqui. Número que some sem explicação é número que vira
@@ -2208,12 +2263,12 @@ public partial class Venda : UserControl
         if (resumoTeste is not null) corpo += "\n\n" + resumoTeste;
 
         if (divergencias.Count > 0)
-            corpo += "\n\nTEF x PDV:\n" + string.Join("\n", divergencias.Select(d =>
-                $"{Rotulo(d.Forma),-9} maquininha {d.NoTef.Formatado(),11}  no PDV {d.NaVenda.Formatado(),11}" +
+            corpo += "\n\nMaquininha x caixa:\n" + string.Join("\n", divergencias.Select(d =>
+                $"{Rotulo(d.Forma),-9} máquina {d.NoTef.Formatado(),11}  caixa {d.NaVenda.Formatado(),11}" +
                 $"  diferença {d.Diferenca.Abs.Formatado()}"))
-                + "\n\nA maquininha aprovou uma cobrança que não virou venda aqui — o PDV\n" +
-                  "perdeu o desfecho (queda de energia, app fechado ou tempo esgotado).\n" +
-                  "Confira no extrato da adquirente antes de estornar.";
+                + "\n\nA maquininha aprovou uma cobrança que não virou venda aqui (queda de\n" +
+                  "energia, programa fechado ou tempo esgotado). Confira o extrato da\n" +
+                  "maquininha antes de estornar qualquer coisa.";
 
         Dialogo.Relatorio(dono, "Caixa fechado", corpo,
             justificativa is null ? null : $"Justificativa: {justificativa}");
@@ -2236,9 +2291,8 @@ public partial class Venda : UserControl
     private void AbrirConfiguracao(object sender, RoutedEventArgs e)
     {
         if (TefEmAndamento(Window.GetWindow(this)!)) return;
-        if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Abrir configuração",
-                "A comanda em andamento fica guardada. Quando você voltar da configuração, " +
-                "o caixa pergunta se quer continuar com ela.",
+        if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Configuração",
+                "A comanda fica guardada. Quando você voltar, o caixa pergunta se quer continuar com ela.",
                 "Abrir configuração", "Voltar"))
             return;
         PediuConfig?.Invoke();
@@ -2248,7 +2302,8 @@ public partial class Venda : UserControl
     {
         if (TefEmAndamento(Window.GetWindow(this)!)) return;
         if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Sair do caixa",
-                "Há uma venda em andamento e ela será descartada.", "Sair mesmo assim", "Voltar", perigo: true))
+                "A comanda aberta vai ser jogada fora — ela não volta depois.",
+                "Descartar e sair", "Voltar", perigo: true))
             return;
         // Descartar é descartar: o rascunho não pode voltar oferecendo esta comanda
         // no próximo login do turno, quando o cliente já foi embora.

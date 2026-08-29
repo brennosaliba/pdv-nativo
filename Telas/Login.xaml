@@ -10,7 +10,7 @@
                        Foreground="{DynamicResource Marca}" HorizontalAlignment="Center"/>
             <TextBlock x:Name="TxtLoja" Style="{StaticResource Rotulo}" HorizontalAlignment="Center" Margin="0,2,0,26"/>
 
-            <TextBlock x:Name="TxtEtapa" Text="CPF do funcionário" Style="{StaticResource Rotulo}" HorizontalAlignment="Center"/>
+            <TextBlock x:Name="TxtEtapa" Text="Digite seu CPF" Style="{StaticResource Rotulo}" HorizontalAlignment="Center"/>
 
             <!-- Bolinhas em vez de números: o cliente do outro lado do balcão não
                  precisa ver quantos dígitos nem quais. -->

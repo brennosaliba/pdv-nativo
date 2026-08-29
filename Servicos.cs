@@ -263,6 +263,10 @@ public static class Servicos
                 _tef = new ClientePayGo(
                     Vendas.Config(cx, "tef_paygo_pasta") ?? ClientePayGo.PastaPadrao,
                     new OpcoesPayGo(
+                        // Campo 716 e a razao social de QUEM FAZ A AUTOMACAO, nao a da
+                        // loja — o nome da loja quem manda e o terminal do PayGo. Trocar
+                        // este default por loja_nome muda o que vai para a rede e nao e
+                        // reescrita de texto.
                         Empresa: Vendas.Config(cx, "tef_paygo_empresa") ?? "American Day",
                         NomeAutomacao: "Pdv.AmericanDay",
                         VersaoAutomacao: versao,
@@ -476,7 +480,9 @@ public static class Servicos
                 var erro = await Impressao.ImprimirTextoAsync(
                     $"Comanda cozinha #{t.Numero}",
                     new[] { Pdv.Nucleo.Kds.ComandaLinhas(t) }, impressora).ConfigureAwait(false);
-                falha ??= erro is null ? null : $"comanda #{t.Numero} NAO imprimiu";
+                // Mesma frase que o botao de reimprimir da tela Delivery mostra: e o
+                // mesmo papel que nao saiu, entao nao pode ter dois textos diferentes.
+                falha ??= erro is null ? null : $"A comanda do #{t.Numero} não saiu";
             }
             return falha;
         }

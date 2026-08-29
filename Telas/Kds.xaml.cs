@@ -9,7 +9,7 @@ namespace Pdv.Telas;
 /// <summary>
 /// O quadro de preparo do quiosque, no fluxo do KDS da Savassi:
 ///
-///   A PREPARAR → EM PREPARO → PRONTO · AGUARDANDO COLETA → (entregue, sai)
+///   NA FILA → FAZENDO → PRONTO → (entregue, sai)
 ///
 /// Fonte de verdade é o SQLite local (kds_ticket); a nuvem só ABASTECE a
 /// coluna da esquerda com os pedidos do delivery. Sem internet, quem produz
@@ -64,12 +64,23 @@ public partial class Kds : UserControl
         try
         {
             var novos = await Nucleo.Kds.PuxarDaNuvemAsync(Servicos.Nuvem(), _loja);
-            TxtStatus.Text = $"nuvem ok · {DateTime.Now:HH:mm:ss}" + (novos > 0 ? $" · {novos} novo(s)" : "");
+            // Plural escrito à mão: "3 novo(s)" no quadro é a nossa preguiça
+            // aparecendo na parede da cozinha.
+            var chegaram = novos switch
+            {
+                0 => "",
+                1 => " · 1 pedido novo",
+                _ => $" · {novos} pedidos novos",
+            };
+            TxtStatus.Text = $"Conectado · {DateTime.Now:HH:mm:ss}{chegaram}";
             if (novos > 0) Alerta.PedidoNovo();
         }
         catch
         {
-            TxtStatus.Text = $"sem nuvem · fila local · {DateTime.Now:HH:mm:ss}";
+            // O que muda pra quem está na cozinha: pedido de delivery para de
+            // entrar. O quadro em si continua igual — por isso não é "erro".
+            TxtStatus.Text = "Sem internet — pedido do delivery não entra. " +
+                             $"Confira o wi-fi. {DateTime.Now:HH:mm:ss}";
         }
         finally
         {
@@ -94,7 +105,7 @@ public partial class Kds : UserControl
     {
         var falha = await Servicos.ImprimirComandasPendentesAsync();
         if (falha is null) return;
-        TxtStatus.Text = falha + " — use o botao de imprimir no card";
+        TxtStatus.Text = falha + " — confira papel e impressora e toque no 🖨 do pedido.";
         Alerta.PedidoNovo();   // chama atencao: papel nao saiu
     }
 
@@ -159,11 +170,13 @@ public partial class Kds : UserControl
         // de entrega fica so pro BALCAO, onde nao existe evento externo.
         var (acaoTexto, acaoCor, acaoFundo) = t.Status switch
         {
-            Nucleo.Kds.Preparando => ("TOCAR QUANDO FICAR PRONTO", "Ok", "ChipOkFundo"),
+            Nucleo.Kds.Preparando => ("TOQUE QUANDO FICAR PRONTO", "Ok", "ChipOkFundo"),
+            // "sai sozinho" evita o operador caçando um botão que não existe:
+            // este card só some quando o entregador declara a coleta lá fora.
             Nucleo.Kds.Pronto when t.Origem == "ifood"
-                                  => ("AGUARDANDO ENTREGADOR · sai na coleta", "TextoFraco", "VeuElevado"),
-            Nucleo.Kds.Pronto     => ("TOCAR NA RETIRADA ✓", "Texto", "VeuElevado"),
-            _                     => ("TOCAR PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
+                                  => ("ESPERANDO O ENTREGADOR · sai sozinho", "TextoFraco", "VeuElevado"),
+            Nucleo.Kds.Pronto     => ("TOQUE QUANDO O CLIENTE LEVAR", "Texto", "VeuElevado"),
+            _                     => ("TOQUE PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
         };
 
         var b = new Button
@@ -244,7 +257,7 @@ public partial class Kds : UserControl
                 Content = "↩", FontSize = 15, MinHeight = 46, MinWidth = 46,
                 Margin = new Thickness(10, 0, 0, 0), Padding = new Thickness(8, 0, 8, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
-                ToolTip = "Devolver para A PREPARAR",
+                ToolTip = "Devolver para a fila",
             };
             desfaz.Click += (_, e) =>
             {
@@ -265,7 +278,7 @@ public partial class Kds : UserControl
                 Content = "🖨", FontSize = 16, MinHeight = 46, MinWidth = 46,
                 Margin = new Thickness(10, 0, 0, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
-                ToolTip = "Imprimir a comanda deste pedido",
+                ToolTip = "Tirar a comanda deste pedido no papel de novo",
             };
             imprime.Click += async (_, e) =>
             {
@@ -279,9 +292,12 @@ public partial class Kds : UserControl
                 var erro = await Impressao.ImprimirTextoAsync(
                     $"Comanda cozinha #{t.Numero} (manual)",
                     new[] { Nucleo.Kds.ComandaLinhas(t) }, imp);
+                // Na falha, primeiro o que fazer; a causa técnica vai no fim,
+                // entre parênteses, pra quem for atrás da impressora.
                 TxtStatus.Text = erro is null
-                    ? $"comanda #{t.Numero} impressa"
-                    : $"comanda #{t.Numero} NÃO imprimiu: {erro}";
+                    ? $"Comanda do #{t.Numero} saiu na impressora"
+                    : $"A comanda do #{t.Numero} não saiu — confira papel e impressora " +
+                      $"e toque no 🖨 de novo. ({erro})";
             };
             dir.Children.Add(imprime);
         }
@@ -371,12 +387,16 @@ public partial class Kds : UserControl
                     // acidental aqui vira motoboy na porta sem donut na caixa —
                     // por isso a confirmação explícita.
                     var dono = Window.GetWindow(this)!;
-                    var aviso = t.Origem == "ifood"
-                        ? $"O pedido #{t.Numero} vai constar como PRONTO para coleta no iFood " +
-                          "e o entregador VAI ser acionado. Confirma que está tudo embalado?"
-                        : $"Marcar o pedido #{t.Numero} como PRONTO para entrega ao cliente?";
-                    if (Dialogo.Confirmar(dono, "Pedido pronto?", aviso,
-                                          "Sim, está pronto", "Ainda não"))
+                    var delivery = t.Origem == "ifood";
+                    // O botão diz a consequência, não "Sim": quem toca sem ler
+                    // ainda lê "Chamar o entregador" no dedo.
+                    var aviso = delivery
+                        ? $"O pedido #{t.Numero} vai para coleta e o entregador é chamado agora. " +
+                          "Já está tudo embalado?"
+                        : $"O pedido #{t.Numero} já pode ir para o cliente?";
+                    if (Dialogo.Confirmar(dono, "Pedido pronto", aviso,
+                                          delivery ? "Chamar entregador" : "Marcar pronto",
+                                          "Ainda não"))
                         Nucleo.Kds.Liberar(t.Id);
                     break;
 

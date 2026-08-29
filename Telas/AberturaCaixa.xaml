@@ -11,7 +11,7 @@
 
             <TextBlock Text="Quanto tem em dinheiro na gaveta agora?" Style="{StaticResource Rotulo}"
                        HorizontalAlignment="Center"/>
-            <TextBlock Text="Conte antes de digitar — este valor é a base do fechamento."
+            <TextBlock Text="Conte antes de digitar — é com este valor que o caixa fecha no fim do dia."
                        Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                        HorizontalAlignment="Center" Margin="0,2,0,8" TextWrapping="Wrap"
                        TextAlignment="Center" MaxWidth="380"/>

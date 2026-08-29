@@ -4,11 +4,15 @@
     <!-- KDS em QUADRO, espelhando o fluxo do KDS da Savassi
          (NEW → IN_PRODUCTION → READY → CONCLUDED):
 
-           A PREPARAR   →   EM PREPARO   →   PRONTO · AGUARDANDO COLETA
+           NA FILA   →   FAZENDO   →   PRONTO
 
          O pedido ENTRA na esquerda e SAI pela direita — quem olha de longe sabe
          o estado da cozinha pela coluna mais cheia, sem ler card nenhum.
-         Toque no card avança a etapa; entregar/coletar tira do quadro. -->
+         Toque no card avança a etapa; entregar/coletar tira do quadro.
+
+         Os rótulos são UMA palavra e começam com letras diferentes de propósito:
+         "A PREPARAR" e "EM PREPARO" viravam a mesma mancha de tinta a três
+         metros de distância, que é a distância de quem produz. -->
     <Grid Background="{DynamicResource Fundo}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -62,7 +66,7 @@
                     <Border Grid.Row="0" Padding="14,10" CornerRadius="14,14,0,0"
                             Background="{DynamicResource ChipInfoFundo}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="A PREPARAR" Foreground="{DynamicResource Ciano}"
+                            <TextBlock Text="NA FILA" Foreground="{DynamicResource Ciano}"
                                        FontSize="14" FontWeight="Bold"/>
                             <TextBlock x:Name="TxtQtdPreparar" Text="0" Foreground="{DynamicResource Ciano}"
                                        FontSize="14" FontWeight="Bold" Margin="8,0,0,0"/>
@@ -86,7 +90,7 @@
                     <Border Grid.Row="0" Padding="14,10" CornerRadius="14,14,0,0"
                             Background="{DynamicResource ChipAlertaFundo}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="EM PREPARO" Foreground="{DynamicResource Amarelo}"
+                            <TextBlock Text="FAZENDO" Foreground="{DynamicResource Amarelo}"
                                        FontSize="14" FontWeight="Bold"/>
                             <TextBlock x:Name="TxtQtdPreparo" Text="0" Foreground="{DynamicResource Amarelo}"
                                        FontSize="14" FontWeight="Bold" Margin="8,0,0,0"/>
@@ -110,7 +114,7 @@
                     <Border Grid.Row="0" Padding="14,10" CornerRadius="14,14,0,0"
                             Background="{DynamicResource ChipOkFundo}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="PRONTO · AGUARDANDO COLETA" Foreground="{DynamicResource Ok}"
+                            <TextBlock Text="PRONTO" Foreground="{DynamicResource Ok}"
                                        FontSize="14" FontWeight="Bold"/>
                             <TextBlock x:Name="TxtQtdPronto" Text="0" Foreground="{DynamicResource Ok}"
                                        FontSize="14" FontWeight="Bold" Margin="8,0,0,0"/>

@@ -178,7 +178,7 @@ public partial class Pagamento : UserControl
         TxtRotuloTotal.Text = "FALTA";
         TxtTotal.Text = Falta.Formatado();
         TxtTotal.Foreground = (Brush)Application.Current.Resources["Amarelo"];
-        TxtContaPagamento.Text = $"total {_total.Formatado()}  −  pago {pago.Formatado()}";
+        TxtContaPagamento.Text = $"{_total.Formatado()} no total  ·  {pago.Formatado()} já pago";
         TxtContaPagamento.Visibility = Visibility.Visible;
     }
 
@@ -196,15 +196,15 @@ public partial class Pagamento : UserControl
     {
         var dono = Window.GetWindow(this)!;
         if (posPodeEstarOcupado &&
-            !Dialogo.Confirmar(dono, "Antes de passar na maquininha",
-                "A cobrança do TEF pode ter ficado na maquininha. CANCELE-A lá antes de " +
-                "passar manualmente — senão o cliente paga duas vezes.\n\nJá cancelei na maquininha.",
+            !Dialogo.Confirmar(dono, "Risco de cobrança em dobro",
+                "A cobrança de agora pode ter ficado presa na maquininha. Cancele lá primeiro — " +
+                "se passar por cima, o cliente paga duas vezes.",
                 "Já cancelei — continuar", "Voltar"))
             return;
 
         if (!Dialogo.Confirmar(dono,
-                $"Cobrar {valor.Formatado()} na maquininha",
-                $"Passe {valor.Formatado()} em {Rotulo(forma)} na maquininha.\n\nO pagamento foi APROVADO?",
+                $"Cobrança de {valor.Formatado()}",
+                $"Passe {valor.Formatado()} em {Rotulo(forma)} na maquininha e confirme aqui.\n\nO pagamento foi aprovado?",
                 "Aprovado — registrar", "Voltar"))
             return;
         AdicionarParte(new PagamentoVenda(forma, valor, Dinheiro.Zero));
@@ -219,7 +219,7 @@ public partial class Pagamento : UserControl
         var limite = LimiteDocumento();
         if (_total.Centavos < limite.Centavos || _documento is not null) return true;
         Dialogo.Avisar(Window.GetWindow(this)!, "CPF/CNPJ obrigatório",
-            $"Acima de {limite.Formatado()} a nota exige a identificação do consumidor.", "erro");
+            $"Acima de {limite.Formatado()} a nota só sai com CPF ou CNPJ. Peça ao cliente e toque em Informar.", "erro");
         return false;
     }
 
@@ -274,7 +274,11 @@ public partial class Pagamento : UserControl
             var b = new Button
             {
                 Style = (Style)Application.Current.Resources["BotaoBase"],
-                Content = v == falta ? $"Restante ({new Dinheiro(v).Formatado()})" : new Dinheiro(v).Formatado(),
+                // com parte já paga o botão do valor exato é o que FALTA; na venda inteira
+                // ele é o TOTAL — as mesmas palavras que estão no alto da tela.
+                Content = v == falta
+                    ? $"{(_partes.Count == 0 ? "Total" : "Falta")} ({new Dinheiro(v).Formatado()})"
+                    : new Dinheiro(v).Formatado(),
                 Margin = new Thickness(5), MinHeight = 58, FontSize = 16, Padding = new Thickness(4, 0, 4, 0),
             };
             var valor = v;
@@ -288,13 +292,13 @@ public partial class Pagamento : UserControl
         var rec = Recebido;
         var falta = Falta.Centavos;
         var ehDinheiro = _formaEmEdicao == "dinheiro";
-        TxtRotuloEntrada.Text = ehDinheiro ? "RECEBIDO" : $"VALOR NO {Rotulo(_formaEmEdicao).ToUpperInvariant()}";
+        TxtRotuloEntrada.Text = ehDinheiro ? "RECEBIDO" : $"COBRAR NO {Rotulo(_formaEmEdicao).ToUpperInvariant()}";
         TxtRecebido.Text = rec.Formatado();
 
         if (!ehDinheiro && rec.Centavos > falta)
         {
             // cartão não gera troco: cobrar a mais no cartão é erro, não troco
-            TxtRotuloTroco.Text = "MÁXIMO NESTA PARTE";
+            TxtRotuloTroco.Text = $"MÁXIMO NO {Rotulo(_formaEmEdicao).ToUpperInvariant()}";
             TxtTroco.Text = Falta.Formatado();
             Pintar(CaixaTroco, TxtRotuloTroco, TxtTroco, "Erro");
             BtnConfirmarDinheiro.IsEnabled = false;
@@ -319,8 +323,8 @@ public partial class Pagamento : UserControl
         // cartão só aceita até o restante
         BtnConfirmarDinheiro.IsEnabled = rec.Positivo;
         BtnConfirmarDinheiro.Content = rec.Centavos >= falta
-            ? (ehDinheiro ? "Confirmar pagamento" : "Cobrar")
-            : $"Registrar parte de {rec.Formatado()}";
+            ? (ehDinheiro ? "Confirmar pagamento" : "Cobrar na maquininha")
+            : $"{(ehDinheiro ? "Receber" : "Cobrar")} {rec.Formatado()} agora";
     }
 
     private static void Pintar(Border caixa, TextBlock rotulo, TextBlock valor, string cor)
@@ -367,12 +371,12 @@ public partial class Pagamento : UserControl
         var dono = Window.GetWindow(this)!;
         while (true)
         {
-            var txt = PedirTexto.Mostrar(dono, "Parcelas no crédito", "Número de parcelas (1 = à vista, máx. 99)", "1");
+            var txt = PedirTexto.Mostrar(dono, "Parcelas no crédito", "Em quantas vezes? (1 = à vista, até 99)", "1");
             if (txt is null) return 0;   // cancelou / em branco = desistiu (nunca cobrar com parcelas adivinhadas)
             if (int.TryParse(txt.Trim(), out var n) && n >= 1 && n <= 99) return n;
             // "1O", "100", "abc": perguntar de novo — cair em "à vista" sem avisar cobraria
             // errado e o operador só descobriria no comprovante.
-            Dialogo.Avisar(dono, "Parcelas", "Informe um número de 1 a 99.", "erro");
+            Dialogo.Avisar(dono, "Parcelas", "Digite um número de 1 a 99.", "erro");
         }
     }
 
@@ -393,15 +397,18 @@ public partial class Pagamento : UserControl
         // Parcelas no TÍTULO (os reports de andamento reescrevem o detalhe): o operador precisa
         // conferir o "3x" enquanto o cliente ainda não passou o cartão.
         var vezes = parcelas > 1 ? $" em {parcelas}x" : "";
+        var selo = parcelas > 1 ? $" · {parcelas}x" : "";   // colado nos recados curtos do provedor
         Estado("💳", parcelas > 1 ? $"Aguardando o cliente · {parcelas}x" : "Aguardando o cliente",
-            $"Aproxime, insira ou passe o cartão na maquininha ({valor.Formatado()}{vezes}).",
+            forma == "pix"
+                ? $"Peça ao cliente para ler o QR na maquininha ({valor.Formatado()})."
+                : $"Aproxime, insira ou passe o cartão na maquininha ({valor.Formatado()}{vezes}).",
             ("Cancelar cobrança", CancelarCobrancaNoTef));
         Ir(Fase.Cobrando);
 
         var andamento = new Progress<AndamentoTef>(a =>
         {
             RegistrarTef(a, forma, valor, parcelas);
-            if (a.Mensagem.Length > 0) TxtDetalheEstado.Text = a.Mensagem + vezes;
+            if (a.Mensagem.Length > 0) TxtDetalheEstado.Text = a.Mensagem + selo;
         });
 
         DesfechoTef d;
@@ -412,9 +419,13 @@ public partial class Pagamento : UserControl
         catch (Exception ex)
         {
             // TEF caiu antes de armar a maquininha: registrar como POS é seguro.
-            Estado("⚠️", "TEF indisponível", ex.Message,
+            Estado("⚠️", "Maquininha fora do ar",
+                "Não consegui falar com a maquininha. O cliente NÃO foi cobrado.\n\n" +
+                "Confira se ela está ligada e o programa dela aberto, e tente de novo — " +
+                "ou passe o valor direto nela." +
+                $"\n\nDetalhe: {ex.Message}",
                 ("Tentar de novo", () => _ = CobrarNoTefAsync(forma, valor, parcelas)),
-                ("Registrar como venda POS", () => RegistrarComoPos(forma, valor, posPodeEstarOcupado: false)),
+                ("Passar na maquininha", () => RegistrarComoPos(forma, valor, posPodeEstarOcupado: false)),
                 ("Trocar forma", () => { Ir(Fase.Forma); PintarPartes(); }));
             Ir(Fase.Falha);
             return;
@@ -439,7 +450,7 @@ public partial class Pagamento : UserControl
         // Transação DESFEITA (PayGo/NCN) também não ganha o desvio pra POS: o cliente não pagou
         // nada — registrar na mão seria cobrar o que foi desfeito.
         if (d.Situacao != SituacaoTef.Recusado && !d.Desfeita)
-            acoes.Add(("Registrar como venda POS",
+            acoes.Add(("Passar na maquininha",
                 () => RegistrarComoPos(forma, valor, d.PosPodeTerFicadoOcupado || d.Situacao == SituacaoTef.Timeout)));
         acoes.Add(("Trocar forma", () => { Ir(Fase.Forma); PintarPartes(); }));
         // "Cancelar venda" só enquanto NADA foi aprovado. Com pagamento aprovado na venda,
@@ -447,15 +458,28 @@ public partial class Pagamento : UserControl
         // em TEF → Estornar (com autorização do gerente), que devolve o dinheiro de verdade.
         if (_partes.Count == 0) acoes.Add(("Cancelar venda", ConfirmarAbandono));
 
+        // A pergunta que o operador faz de verdade é "o cliente pagou ou não?". Quando a
+        // resposta é certa, ela vem escrita; quando é incerta, o recado manda conferir na
+        // maquininha — nunca deixamos o operador adivinhar e cobrar de novo por cima.
+        // Fica MUDO onde o provedor já mandou o recado certo: POS possivelmente ocupado
+        // (sufixo do MensagemParaTela) e valor divergente ("NÃO emita a nota: confira e
+        // estorne"), onde uma frase genérica só enfraqueceria a instrução.
+        var recado = d.PosPodeTerFicadoOcupado || d.Codigo == CodigoTef.ValorDivergente ? ""
+            : d.Desfeita ? "A cobrança foi desfeita: o cliente não pagou nada."
+            : d.Situacao == SituacaoTef.Recusado ? "O cliente NÃO foi cobrado. Tente outro cartão ou outra forma."
+            : d.Situacao == SituacaoTef.Cancelado ? "O cliente NÃO foi cobrado."
+            : d.Situacao == SituacaoTef.Timeout ? "Pode ter sobrado uma cobrança na maquininha — confira lá antes de cobrar de novo."
+            : "Confira na maquininha se a cobrança passou antes de cobrar de novo.";
+
         Estado(d.Situacao == SituacaoTef.Cancelado ? "↩️" : "⚠️",
             d.Situacao switch
             {
                 SituacaoTef.Recusado => "Pagamento não aprovado",
                 SituacaoTef.Cancelado => "Cobrança cancelada",
-                SituacaoTef.Timeout => "Tempo esgotado",
-                _ => "Falha no pagamento",
+                SituacaoTef.Timeout => "Sem resposta da maquininha",
+                _ => "Cobrança não concluída",
             },
-            d.MensagemParaTela,
+            recado.Length == 0 ? d.MensagemParaTela : $"{d.MensagemParaTela}\n\n{recado}",
             acoes.ToArray());
         Ir(Fase.Falha);
     }
@@ -479,8 +503,8 @@ public partial class Pagamento : UserControl
         int janelas;
         try { janelas = JanelaPayGo.EnviarEsc(); } catch { janelas = 0; }
         TxtDetalheEstado.Text = janelas > 0
-            ? "Cancelamento enviado ao PayGo. Aguardando ele confirmar…"
-            : "Não achei a janela do PayGo — aperte Esc nela para cancelar.";
+            ? "Pedi o cancelamento. Espere a maquininha confirmar…"
+            : "Não achei a janela do PayGo — aperte Esc nela para cancelar a cobrança.";
         _cobranca?.Cancel();
     }
 
@@ -547,21 +571,22 @@ public partial class Pagamento : UserControl
         var dinheiro = _partes.Where(p => p.Forma == "dinheiro")
             .Sum(p => p.Valor.Centavos - p.Troco.Centavos);
         // Cartão/PIX JÁ APROVADO não se resolve cancelando a tela: o dinheiro só volta com
-        // estorno na rede. Então a venda é concluída e o estorno sai por TEF → Estornar (com
-        // autorização do gerente), que cancela a venda no mesmo ato.
+        // estorno na rede. Então a venda é concluída e o estorno sai pelo botão Cartão →
+        // Estornar (com autorização do gerente), que cancela a venda no mesmo ato.
         if (cartoes > 0 && _partes.Any(p => p.Forma != "dinheiro" && (p.Nsu is not null || p.Aut is not null)))
         {
             Dialogo.Avisar(Window.GetWindow(this)!, "Pagamento já aprovado",
-                $"Esta venda tem {new Dinheiro(cartoes).Formatado()} aprovado no cartão/PIX — o dinheiro já saiu da conta do cliente.\n\n" +
-                "Conclua a venda e, se precisar devolver, use TEF → Estornar (autorização do gerente): ele estorna na rede E cancela a venda.", "erro");
+                $"O cliente já pagou {new Dinheiro(cartoes).Formatado()} no cartão/PIX — o dinheiro saiu da conta dele.\n\n" +
+                "Termine a venda. Para devolver, use o botão Cartão → Estornar (precisa de autorização do gerente): " +
+                "devolve o dinheiro e cancela a venda no mesmo passo.", "erro");
             return;
         }
 
         var aviso = "Esta venda já tem pagamento recebido:";
-        if (cartoes > 0) aviso += $"\n• {new Dinheiro(cartoes).Formatado()} no cartão/PIX — ESTORNE na maquininha";
+        if (cartoes > 0) aviso += $"\n• {new Dinheiro(cartoes).Formatado()} no cartão/PIX — estorne na maquininha";
         if (dinheiro > 0) aviso += $"\n• {new Dinheiro(dinheiro).Formatado()} em dinheiro — devolva ao cliente";
 
-        if (Dialogo.Confirmar(Window.GetWindow(this)!, "Cancelar venda com pagamento feito",
+        if (Dialogo.Confirmar(Window.GetWindow(this)!, "Pagamento já recebido",
                 aviso, "Cancelar mesmo assim", "Voltar", perigo: true))
             Encerrou?.Invoke(DesfechoVenda.Desistiu);
     }
@@ -569,7 +594,7 @@ public partial class Pagamento : UserControl
     // ── 4. GRAVA, EMITE, IMPRIME ────────────────────────────────────────────
     private async Task ConcluirTudoAsync()
     {
-        Estado("🧾", "Emitindo a nota", "Aguarde — não desligue o caixa.");
+        Estado("🧾", "Emitindo a nota", "Leva alguns segundos — não desligue o caixa.");
         Ir(Fase.Emitindo);
 
         // Gravar ANTES de emitir. Se o dinheiro entrou, a venda tem que existir mesmo
@@ -585,10 +610,12 @@ public partial class Pagamento : UserControl
         catch (Exception ex)
         {
             var extra = _partes.All(p => p.Forma == "dinheiro") ? "" :
-                "\n\nO PAGAMENTO JÁ FOI APROVADO no cartão. Anote e confira antes de cobrar de novo.";
-            Estado("⛔", "Não consegui gravar a venda", ex.Message + extra,
+                "\n\nO cliente JÁ PAGOU no cartão/PIX — não cobre de novo. Anote o valor.";
+            Estado("⛔", "Venda não gravada",
+                "O dinheiro já entrou, mas a venda não foi salva. Toque em Tentar de novo antes de liberar o cliente." +
+                extra + $"\n\nDetalhe: {ex.Message}",
                 ("Tentar de novo", () => _ = ConcluirTudoAsync()),
-                ("Voltar", () => { Ir(Fase.Forma); PintarPartes(); }));
+                ("Voltar ao pagamento", () => { Ir(Fase.Forma); PintarPartes(); }));
             Ir(Fase.Falha);
             return;
         }
@@ -636,16 +663,18 @@ public partial class Pagamento : UserControl
         }
 
         var troco = new Dinheiro(_partes.Sum(p => p.Troco.Centavos));
-        var detalhe = "Modo recibo (sem emissão fiscal) — nenhuma nota foi gerada.";
-        if (!autoImp && !forcarImpressao) detalhe += "\nImpressão automática desligada.";
-        if (erro is not null) detalhe += $"\n\n⚠️ O recibo não imprimiu: {erro}";
+        var detalhe = "Este caixa não emite nota fiscal — o papel sai como recibo.";
+        if (!autoImp && !forcarImpressao) detalhe += "\nImpressão automática desligada — toque em Imprimir recibo se o cliente quiser.";
+        if (erro is not null) detalhe += $"\n\nO recibo não saiu: {erro}";
 
         var acaoImpressao = erro is not null
             ? ("Reimprimir", (Action)(() => _ = ConcluirReciboAsync(true)))
             : !autoImp && !forcarImpressao
                 ? ("Imprimir recibo", (Action)(() => _ = ConcluirReciboAsync(true)))
                 : default;
-        Estado("✅", "Venda concluída — recibo", detalhe,
+        // ícone honesto: com o recibo entalado na impressora, o ✅ dizia "pronto" bem
+        // em cima do texto que avisa que o papel não saiu.
+        Estado(erro is null ? "✅" : "⚠️", "Venda concluída", detalhe,
             acaoImpressao,
             ("Nova venda", () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
         Ir(Fase.Sucesso);
@@ -673,7 +702,7 @@ public partial class Pagamento : UserControl
         // 06/08 uma venda de teste consumiu 18 números da série 2 assim.
         if (_emitindo) return;
         _emitindo = true;
-        Estado("🧾", "Emitindo a nota", "Aguarde — não desligue o caixa.");
+        Estado("🧾", "Emitindo a nota", "Leva alguns segundos — não desligue o caixa.");
         Ir(Fase.Emitindo);
         try { await EmitirDeVerdadeAsync(); }
         finally { _emitindo = false; }
@@ -735,11 +764,17 @@ public partial class Pagamento : UserControl
         // fechar com ele. O que falta é o documento fiscal, e isso se resolve depois.
         var pendente = r.Indisponivel;
         Estado(pendente ? "⏳" : "⛔",
-            pendente ? "Não consegui falar com o emissor" : "Nota não autorizada",
-            (r.Erro ?? "sem detalhe") +
+            // Título é substantivo, e é o MESMO nome que a tela de venda dá a este
+            // estado quando barra o estorno — o operador não pode achar que são
+            // duas coisas diferentes.
+            pendente ? "Nota sem resposta" : "Nota não autorizada",
             (pendente
-                ? "\n\nA venda foi gravada. A nota pode ter saído do outro lado — confira antes de emitir de novo, senão sai duplicada."
-                : "\n\nA venda foi gravada e conta no caixa. Falta só o documento fiscal."),
+                // Não existe "relatório de vendas" no caixa: mandar o operador olhar lá
+                // é mandá-lo procurar um botão que não está na barra. Quem resolve nota
+                // é o gerente, e é isso que o texto diz.
+                ? "A venda está gravada — o dinheiro entrou. A nota pode ter saído mesmo assim: chame o gerente para conferir antes de emitir de novo, senão sai nota em dobro."
+                : "A venda está gravada e conta no caixa. Falta só a nota — avise o gerente para emitir depois.") +
+            (r.Erro is { Length: > 0 } ? $"\n\nMotivo: {r.Erro}" : ""),
             ("Tentar emitir de novo", () => _ = EmitirAsync()),
             ("Concluir sem nota", () => _ = ImprimirEConcluirAsync(r)));
         Ir(Fase.Falha);
@@ -756,22 +791,26 @@ public partial class Pagamento : UserControl
         var semImpressao = !autoImp && !forcarImpressao;
 
         var troco = new Dinheiro(_partes.Sum(p => p.Troco.Centavos));
-        var titulo = r.Contingencia ? "Venda concluída — em contingência"
+        // "nota pendente" é como a tela de venda chama esta nota quando ela aparece de
+        // novo (no estorno). "Sem internet" também nomeava errado: a nota sai assim
+        // sempre que a SEFAZ não responde, com ou sem internet na loja.
+        var titulo = r.Contingencia ? "Venda concluída — nota pendente"
                    : r.Sucesso ? "Venda concluída"
                    : "Venda concluída sem nota";
         var detalhe = r.Contingencia
-            ? "A nota sai da fila e vai para a SEFAZ assim que a internet voltar."
-            : r.Sucesso ? $"Nota {r.Numero}/{r.Serie} autorizada."
-            : "Emita a nota depois pelo relatório de vendas.";
-        if (erro is not null) detalhe += $"\n\n⚠️ O cupom não imprimiu: {erro}";
-        if (semImpressao) detalhe += "\n(Impressão automática desligada — use \"Imprimir cupom\" se precisar.)";
+            ? "A nota saiu sem aprovação. Ela sobe sozinha quando a conexão voltar."
+            : r.Sucesso ? $"Nota {r.Numero} (série {r.Serie}) autorizada."
+            : "Avise o gerente: falta emitir a nota desta venda.";
+        if (erro is not null) detalhe += $"\n\nO cupom não saiu: {erro}";
+        if (semImpressao) detalhe += "\nImpressão automática desligada — toque em Imprimir cupom se o cliente quiser.";
 
         var acaoImpressao = erro is not null
             ? ("Reimprimir", (Action)(() => _ = ImprimirEConcluirAsync(r, true)))
             : semImpressao
                 ? ("Imprimir cupom", (Action)(() => _ = ImprimirEConcluirAsync(r, true)))
                 : default;
-        Estado(r.Sucesso ? "✅" : "⚠️", titulo, detalhe,
+        // ícone honesto: cupom entalado na impressora não é ✅, mesmo com a nota autorizada.
+        Estado(r.Sucesso && erro is null ? "✅" : "⚠️", titulo, detalhe,
             acaoImpressao,
             ("Nova venda", () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
         Ir(Fase.Sucesso);
@@ -870,11 +909,14 @@ public partial class Pagamento : UserControl
         TxtEtapa.Text = f switch
         {
             Fase.Forma => "Como o cliente vai pagar?",
-            Fase.Dinheiro => "Quanto o cliente entregou?",
+            // "entregou" só vale para dinheiro na mão; no cartão o número é o que vai ser cobrado.
+            Fase.Dinheiro => _formaEmEdicao == "dinheiro"
+                ? "Quanto o cliente entregou?"
+                : $"Quanto cobrar no {Rotulo(_formaEmEdicao)}?",
             Fase.Cobrando => "Cobrando na maquininha",
             Fase.Emitindo => "Emitindo a nota",
-            Fase.Sucesso => "Concluído",
-            _ => "Atenção",
+            Fase.Sucesso => "Pronto",
+            _ => "Não deu certo",
         };
         if (f == Fase.Forma) PintarDocumento();
     }

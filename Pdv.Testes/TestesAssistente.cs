@@ -279,8 +279,11 @@ public static class TestesAssistente
         // escritas E marcadas na revisão.
         checar(Atencao(Pronta() with { Recibo = true }, "SEM VALOR FISCAL"),
             "só recibo aparece marcado: é a loja operando sem emitir nota");
-        checar(Atencao(Pronta() with { Ambiente = 2 }, "HOMOLOGA"),
-            "homologação aparece marcada — nota de homologação não vale nada");
+        // A revisão diz "MODO TESTE" (a mesma palavra do rodapé do caixa), não
+        // "HOMOLOGAÇÃO": o que importa é que a nota emitida assim não vale.
+        checar(Atencao(Pronta() with { Ambiente = 2 }, "MODO TESTE")
+               && Atencao(Pronta() with { Ambiente = 2 }, "não valem"),
+            "ambiente de teste aparece marcado — nota emitida assim não vale nada");
         checar(Atencao(Pronta() with { Tef = 3, CpayTerminal = "6408", CpaySandbox = true }, "TESTE"),
             "sandbox do ControlPay aparece marcado: nenhuma cobrança ali é de verdade");
         checar(Atencao(Pronta() with { Pareado = false }, "pareado"), "falta de pareamento aparece marcada");

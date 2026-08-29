@@ -14,7 +14,7 @@
                 BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,0,1">
             <Grid>
                 <StackPanel VerticalAlignment="Center">
-                    <TextBlock x:Name="TxtEtapa" Text="Pagamento" Foreground="{DynamicResource TextoFraco}"
+                    <TextBlock x:Name="TxtEtapa" Text="Como o cliente vai pagar?" Foreground="{DynamicResource TextoFraco}"
                                FontSize="13" FontWeight="Bold"/>
                     <TextBlock x:Name="TxtResumo" Foreground="{DynamicResource Texto}" FontSize="15" Margin="0,4,0,0"/>
                 </StackPanel>
@@ -110,7 +110,7 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" Content="Voltar" Click="VoltarParaFormas"
+                    <Button Grid.Column="0" Content="Trocar forma" Click="VoltarParaFormas"
                             Style="{StaticResource BotaoBase}" MinHeight="66" FontSize="17" Padding="30,0" Margin="0,0,12,0"/>
                     <Button Grid.Column="1" x:Name="BtnConfirmarDinheiro" Content="Confirmar pagamento"
                             Click="ConfirmarDinheiro" Style="{StaticResource BotaoPrincipal}" MinHeight="66" IsEnabled="False"/>

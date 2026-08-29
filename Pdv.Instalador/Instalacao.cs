@@ -22,6 +22,11 @@ namespace Pdv.Instalador;
 /// </summary>
 public static class Instalacao
 {
+    // NOME DO PRODUTO: nao e so texto. Ele vira a pasta de instalacao
+    // (PastaDestinoPadrao) e o DisplayName do Adicionar/Remover Programas —
+    // trocar a palavra reinstala em outro diretorio e deixa a instalacao antiga
+    // orfa. Vender o PDV para outra loja pede uma marca DE VERDADE decidida pelo
+    // dono; ate la fica a que existe.
     public const string NomePrograma = "PDV American Day";
     private const string ChaveRun = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
     private const string ChaveUninstall = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PdvAmericanDay";

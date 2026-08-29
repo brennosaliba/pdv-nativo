@@ -65,7 +65,7 @@ public partial class Login : UserControl
     {
         if (_etapa == Etapa.Cpf)
         {
-            TxtEtapa.Text = "CPF do funcionário  (ou o PIN de quem ainda não tem CPF)";
+            TxtEtapa.Text = "Digite seu CPF — ou o PIN antigo";
             TxtPin.Text = FormatarCpfParcial(_cpf);
             TxtPin.FontSize = 34;
             BtnEntrar.IsEnabled = _cpf.Length == 11 || Operadores.PinValido(_cpf);
@@ -107,7 +107,7 @@ public partial class Login : UserControl
         var espera = _bloqueadoAte - DateTime.Now;
         if (espera > TimeSpan.Zero)
         {
-            TxtErro.Text = $"Aguarde {Math.Ceiling(espera.TotalSeconds)}s para tentar de novo.";
+            TxtErro.Text = $"Espere {(int)Math.Ceiling(espera.TotalSeconds)}s e tente de novo.";
             return;
         }
 
@@ -120,7 +120,7 @@ public partial class Login : UserControl
             {
                 if (!Documentos.CpfValido(_cpf))
                 {
-                    TxtErro.Text = "CPF inválido — confira os dígitos.";
+                    TxtErro.Text = "Esse CPF não confere. Confira os números.";
                     return;
                 }
                 _etapa = Etapa.Senha;
@@ -134,11 +134,11 @@ public partial class Login : UserControl
             {
                 _cpf = "";
                 Pintar();
-                TxtErro.Text = "Esse PIN está cadastrado para duas pessoas. Procure o gerente.";
+                TxtErro.Text = "Esse PIN está cadastrado para duas pessoas. Chame o gerente.";
                 Caixa.Auditar(cx, null, "login_pin_duplicado", null, null, null);
                 return;
             }
-            if (legado is null) { Errou(cx, "PIN incorreto."); return; }
+            if (legado is null) { Errou(cx, "PIN errado."); return; }
             Entrou4(cx, legado, "pin");
             return;
         }
@@ -149,13 +149,19 @@ public partial class Login : UserControl
             // volta pra senha vazia, não pro CPF: o CPF provavelmente está certo
             _senha = "";
             Pintar();
-            Errou(cx, "Senha incorreta.");
+            Errou(cx, "Senha errada.");
             return;
         }
         Entrou4(cx, op, $"cpf={_cpf}");
     }
 
-    private void Errou(Microsoft.Data.Sqlite.SqliteConnection cx, string mensagem)
+    /// <summary>
+    /// <paramref name="oQueHouve"/> diz SÓ o que deu errado ("Senha errada.") —
+    /// a saída é colada aqui, porque ela muda quando a espera entra. Antes as
+    /// duas metades vinham juntas do chamador e a tela se contradizia:
+    /// "tente de novo. Aguarde 15s."
+    /// </summary>
+    private void Errou(Microsoft.Data.Sqlite.SqliteConnection cx, string oQueHouve)
     {
         _erros++;
         if (_etapa == Etapa.Cpf) { _cpf = ""; Pintar(); }
@@ -163,10 +169,10 @@ public partial class Login : UserControl
         {
             var seg = Math.Min(30, 5 * (_erros - 2));   // 5s, 10s, 15s… até 30s
             _bloqueadoAte = DateTime.Now.AddSeconds(seg);
-            TxtErro.Text = $"{mensagem} Aguarde {seg}s.";
+            TxtErro.Text = $"{oQueHouve} Espere {seg}s e tente de novo.";
             Caixa.Auditar(cx, null, "login_bloqueado", null, null, $"{_erros} tentativas");
         }
-        else TxtErro.Text = mensagem;
+        else TxtErro.Text = $"{oQueHouve} Digite de novo.";
     }
 
     private void Entrou4(Microsoft.Data.Sqlite.SqliteConnection cx, Operador op, string como)
