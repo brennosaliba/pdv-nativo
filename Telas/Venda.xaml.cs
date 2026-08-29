@@ -2288,6 +2288,8 @@ public partial class Venda : UserControl
         List<dynamic> linhas;
         var pagsPorVenda = new Dictionary<string, List<PagamentoDaVenda>>(StringComparer.Ordinal);
         bool temTef;
+        // Quem monta é a consulta, quem usa é o diálogo — escopos diferentes.
+        string? rodape = null;
         using (var cx = Banco.Abrir())
         {
             linhas = cx.Query("""
@@ -2302,6 +2304,18 @@ public partial class Venda : UserControl
                  WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
                  ORDER BY v.finalizada_em DESC LIMIT 12
                 """, new { Ses = _sessao.Id }).ToList();
+
+            // ⚠️ A LISTA CORTA, E TEM QUE DIZER QUE CORTOU. São as 12 mais recentes DESTE
+            // turno — as duas limitações são razoáveis (o prazo de 30 min da nota
+            // praticamente garante que o alvo é recente e do turno de agora), mas cortar
+            // em silêncio faz o operador concluir que a venda "sumiu" e desistir com o
+            // relógio correndo. Dizer quantas ficaram de fora custa uma linha.
+            var totalNoTurno = cx.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM venda WHERE sessao_id = @Ses AND status = 'finalizada'",
+                new { Ses = _sessao.Id });
+            rodape = totalNoTurno > linhas.Count
+                ? $"Mostrando as {linhas.Count} mais recentes de {totalNoTurno} vendas deste turno."
+                : null;
             if (linhas.Count > 0)
                 foreach (var p in cx.Query("""
                     SELECT venda_id, forma, valor_cent - troco_cent AS liquido
@@ -2358,7 +2372,10 @@ public partial class Venda : UserControl
                         $"{CancelamentoVenda.ResumoDasFormas(pags)} · {Etiqueta(p)}");
         }
 
-        var i = EscolherOpcao(dono, "Cancelar venda", "Qual venda você vai cancelar?", rotulos.ToArray());
+        var i = EscolherOpcao(dono, "Cancelar venda",
+            rodape is null ? "Qual venda você vai cancelar?"
+                           : "Qual venda você vai cancelar?" + Environment.NewLine + rodape,
+            rotulos.ToArray());
         if (i < 0) return;
         var alvo = linhas[i];
         var plano = planos[i];
@@ -2564,7 +2581,16 @@ public partial class Venda : UserControl
                           (plano.CancelaNota ? " e a nota foi cancelada na SEFAZ." : "."));
         recado.AppendLine();
         recado.AppendLine(CancelamentoVenda.AvisoDoDinheiro);
-        foreach (var linha in plano.Dinheiro) recado.AppendLine("• " + linha);
+        // ⚠️ RECALCULA COM estornoPeloPdv: false, mesmo em loja COM maquininha.
+        //
+        // Antes da confirmação, "use Estornar o cartão/PIX" era o conselho certo: aquele
+        // caminho devolve o dinheiro E cancela a venda no mesmo ato. AGORA a venda já
+        // está cancelada — e a lista do estorno só enxerga venda finalizada, então ela
+        // não vai mais achar esta. Repetir o conselho aqui manda o operador a um lugar
+        // onde ele não encontra nada, com o cliente esperando o dinheiro. Depois do
+        // fato, a devolução é na maquininha, na mão, com ou sem TEF.
+        foreach (var linha in CancelamentoVenda.ComoDevolver(pagsAlvo, estornoPeloPdv: false))
+            recado.AppendLine("• " + linha);
         Dialogo.Avisar(dono, "Venda cancelada", recado.ToString().TrimEnd(), "ok");
     }
 

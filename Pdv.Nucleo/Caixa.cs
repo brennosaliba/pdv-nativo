@@ -431,14 +431,19 @@ public static class Caixa
                       D = l.Declarado.Centavos, A = l.Apurado.Centavos, Dif = l.Diferenca.Centavos,
                       J = justificativa, Em = Agora }, tx);
         }
+        // Canoniza como o Abrir já faz: quem fechou tem que ser a MESMA identidade que
+        // abriu. Sem isto, um turno aberto depois da reconciliação (id do painel) fechava
+        // com o id velho na memória da tela, e o histórico dizia que duas pessoas
+        // diferentes cuidaram do mesmo caixa.
+        var idFecha = Operadores.IdCanonico(cx, quemFecha.Id);
         cx.Execute("UPDATE caixa_sessao SET status='fechado', fechamento_em=@Em, fechado_por=@Por WHERE id=@Id",
-            new { Em = Agora, Por = quemFecha.Id, Id = sessao.Id }, tx);
+            new { Em = Agora, Por = idFecha, Id = sessao.Id }, tx);
         // A auditoria registra a QUEBRA discriminada, não só o número total: "faltou 50 no
         // dinheiro e sobrou 50 no crédito" e "bateu tudo" são fatos opostos que dariam o
         // mesmo total líquido.
         var quebra = string.Join("; ", linhas.Where(l => l.Diferenca.Centavos != 0)
             .Select(l => $"{l.Forma}:{l.Situacao}:{l.Diferenca.Abs.Formatado()}"));
-        Auditar(cx, tx, "caixa_fechado", quemFecha.Id, null,
+        Auditar(cx, tx, "caixa_fechado", idFecha, null,
             $"desvio={desvio.Formatado()}{(quebra.Length == 0 ? " (conferiu)" : " — " + quebra)}" +
             $"{(justificativa is null ? "" : " — " + justificativa)}");
         Enfileirar(cx, tx, "fechamento", sessao.Id, sessao.Id,
@@ -470,9 +475,12 @@ public static class Caixa
                 """,
                 new { Id = Guid.NewGuid().ToString(), Ses = sessao.Id, F = forma,
                       V = valor.Centavos, J = marca, Em = Agora }, tx);
+        // Mesma canonização do Fechar: identidade única no histórico do turno.
+        var idPula = Operadores.IdCanonico(cx, quemPula.Id);
+        var idSuper = Operadores.IdCanonico(cx, supervisor.Id);
         cx.Execute("UPDATE caixa_sessao SET status='fechado', fechamento_em=@Em, fechado_por=@Por WHERE id=@Id",
-            new { Em = Agora, Por = quemPula.Id, Id = sessao.Id }, tx);
-        Auditar(cx, tx, "caixa_fechado_sem_conferencia", quemPula.Id, supervisor.Id,
+            new { Em = Agora, Por = idPula, Id = sessao.Id }, tx);
+        Auditar(cx, tx, "caixa_fechado_sem_conferencia", idPula, idSuper,
             $"dia={sessao.BusinessDate} aberto_por={sessao.OperadorNome}");
         Enfileirar(cx, tx, "fechamento", sessao.Id, sessao.Id, new
         {

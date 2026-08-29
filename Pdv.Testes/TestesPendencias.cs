@@ -590,9 +590,14 @@ public static class TestesPendencias
                 "cético/turno: idem a sessão de caixa enfileirada ANTES da fusão (sobe com o id velho)");
             var fechado = Caixa.Fechar(cx, turno, new Dictionary<string, Dinheiro>(), eu,
                 Dinheiro.DeReais(9999));
+            // Esta asserção nasceu ao contrário — o cético a escreveu para REGISTRAR que
+            // `fechado_por` ficava no id velho, assimétrico com o Abrir, que canoniza.
+            // Consertado depois: quem abriu e quem fechou o mesmo turno têm que ser a
+            // MESMA identidade no histórico, senão o relatório mostra duas pessoas
+            // cuidando de um caixa que teve uma.
             checar(fechado.Count >= 0 && cx.ExecuteScalar<string?>(
-                       "SELECT fechado_por FROM caixa_sessao WHERE id=@i", new { i = turno.Id }) == "local-brenno",
-                "cético/turno: `fechado_por` NÃO é canonizado — fica no id velho (só histórico local, sem FK)");
+                       "SELECT fechado_por FROM caixa_sessao WHERE id=@i", new { i = turno.Id }) == "painel-brenno",
+                "cético/turno: `fechado_por` é canonizado — quem abriu e quem fechou são a mesma identidade");
 
             // ── 5. CASOS DE BORDA DO CPF ────────────────────────────────────────
             // Sem documento não há identidade: dois operadores sem CPF são duas pessoas.
