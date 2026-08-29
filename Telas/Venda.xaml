@@ -146,11 +146,16 @@
                             <TextBlock Text="Impressora" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
-                    <Button x:Name="BtnTef" Click="MenuTef" Style="{StaticResource BotaoBarra}"
-                            ToolTip="Estornar o cartão/PIX de uma venda ou reimprimir o comprovante">
+                    <!-- Diz "Cancelar venda", não "Cartão": cancelar a venda e a NFC-e NÃO
+                         precisam de maquininha (quem cancela a nota é o agente fiscal local),
+                         e um botão com nome de cartão escondia isso justamente de quem opera
+                         com maquininha AVULSA — que era quem mais precisava achar. O estorno
+                         do cartão e a reimpressão continuam aqui dentro, para quem tem TEF. -->
+                    <Button x:Name="BtnCancelar" Click="MenuCancelamento" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Cancelar uma venda e a nota fiscal · estornar cartão/PIX · reimprimir comprovante">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="💳" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Cartão" VerticalAlignment="Center"/>
+                            <TextBlock Text="↩" FontSize="16" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Cancelar venda" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
                     <Button Content="Sair" Click="Sair" Style="{StaticResource BotaoBarra}"

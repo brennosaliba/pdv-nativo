@@ -713,6 +713,25 @@ public partial class Configuracao : UserControl
             // nome de outra loja; série repetida entre dois caixas = Rejeição 539 em
             // cascata, descoberta só com cliente no balcão.
             var resumo = AplicarIdentidade(cx, r);
+
+            // OS OPERADORES DO PAINEL DESCEM JÁ AQUI, e não só no primeiro Sincronizar.
+            // O assistente pede o primeiro operador no PASSO 1 e pareia no PASSO 5: sem
+            // esta chamada, o Salvar logo em seguida grava um cadastro local para alguém
+            // que o painel já governa, com um id que só existe nesta máquina — e é
+            // exatamente assim que nasceram os dois "Brenno" do caixa da Savassi, com
+            // 16 vendas (R$ 102.626,50) recusadas com 409. Com a lista na mão, o Salvar
+            // reconhece a pessoa e adota a identidade do painel em vez de criar outra.
+            //
+            // Falhar aqui NÃO desfaz o pareamento (que já está gravado e é o que importa):
+            // a sincronização baixa de novo, e a reconciliação na descida cobre o caso.
+            try
+            {
+                var painel = new Nuvem();
+                if (await painel.EntrarAsync(em.GetString()!, sn.GetString()!))
+                    await painel.BaixarOperadoresAsync(cx);
+            }
+            catch { /* sem rede agora: fica para o Sincronizar */ }
+
             TxtStatusPareamento.Text = "✓ Caixa pareado. " + resumo;
             TxtStatusPareamento.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Ok"];
         }
@@ -1205,19 +1224,14 @@ public partial class Configuracao : UserControl
             {
                 var nome = TxtOpNome.Text.Trim();
                 var pin = TxtOpPin.Text.Trim();
-                var cpfOp = Documentos.SoDigitos(TxtOpCpf.Text);
-                if (nome.Length < 2) throw new InvalidOperationException("Falta o nome do administrador (o dono da loja).");
-                // CPF é o login: sem ele, a abertura de caixa não tem dono de verdade
-                if (!Documentos.CpfValido(cpfOp))
-                    throw new InvalidOperationException("CPF do administrador inválido — é com ele que o dono entra no caixa.");
-                if (!Operadores.PinValido(pin))
-                    throw new InvalidOperationException("A senha do administrador deve ter de 4 a 6 dígitos.");
+                // A REGRA mora no núcleo (Operadores.SalvarAdministrador), não aqui: é ela
+                // que decide entre CRIAR um cadastro local e ADOTAR o que o painel já tem
+                // para este CPF — a origem dos dois ids para a mesma pessoa. Tela não é
+                // lugar de invariante: o que só existe aqui a suíte não alcança.
+                Operadores.SalvarAdministrador(cx, tx, nome, pin, TxtOpCpf.Text);
+                // a senha do DONO é a senha da configuração (o _admin_ guarda a MESMA SENHA;
+                // hash próprio, porque o salt é por linha e nunca se copia entre operadores)
                 var (h, s) = Operadores.GerarHash(pin);
-                cx.Execute("""
-                    INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,cpf,ativo,atualizado)
-                    VALUES (@Id,@N,@H,@S,'gerente',@Cpf,1,@Em)
-                    """, new { Id = Guid.NewGuid().ToString(), N = nome, H = h, S = s, Cpf = cpfOp, Em = DateTime.Now.ToString("o") }, tx);
-                // a senha do DONO é a senha da configuração (upsert do _admin_ espelhando o hash)
                 cx.Execute("""
                     INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado)
                     VALUES ('_admin_',@N,@H,@S,'gerente',0,@Em)

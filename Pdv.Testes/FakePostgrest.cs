@@ -34,6 +34,16 @@ public sealed class FakePostgrest : IDisposable
     public ConcurrentDictionary<string, byte> Resgatadas { get; } = new();
     public int Vinculos;
 
+    /// <summary>
+    /// A LISTA DE FUNCIONÁRIOS DO PAINEL, do jeito que `pdv_operadores_sync` devolve.
+    /// É por aqui que o teste encena o encontro entre o operador que nasceu NO CAIXA e
+    /// o que o painel governa — o cruzamento onde os dois viravam duas pessoas.
+    /// </summary>
+    public sealed record OperadorDoPainel(string Id, string Nome, string PinHash, string PinSalt,
+        string Perfil = "operador", string? Cpf = null, bool Ativo = true);
+
+    public List<OperadorDoPainel> OperadoresDoPainel { get; } = new();
+
     // ── injeção de falhas ───────────────────────────────────────────────────
     /// <summary>% de respostas 503 nas rotas de DADOS (auth nunca falha).</summary>
     public volatile int PctErro503;
@@ -104,6 +114,16 @@ public sealed class FakePostgrest : IDisposable
                     Responder(ctx, 200, $$"""{"ok":true,"sale_id":"{{saleId}}"}""");
                     return;
                 }
+                case "/rest/v1/rpc/pdv_operadores_sync":
+                    // O painel devolve o hash PRONTO (mesmo PBKDF2 do caixa) — quem baixa
+                    // só copia. Nomes de campo são CONTRATO com Nuvem.BaixarOperadoresAsync.
+                    Responder(ctx, 200, JsonSerializer.Serialize(OperadoresDoPainel
+                        .Select(o => new
+                        {
+                            id = o.Id, nome = o.Nome, pin_hash = o.PinHash, pin_salt = o.PinSalt,
+                            perfil = o.Perfil, cpf = o.Cpf, ativo = o.Ativo,
+                        })));
+                    return;
                 case "/rest/v1/rpc/pdv_vincular_nfce":
                     Interlocked.Increment(ref Vinculos);
                     Responder(ctx, 200, """{"ok":true}""");

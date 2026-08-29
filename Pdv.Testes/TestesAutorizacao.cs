@@ -828,6 +828,102 @@ public static class TestesAutorizacao
                     "TL-10 a tela do código avisa quando o token é o que JÁ tinha sido mandado");
             }
 
+            // ── 8b. CANCELAR VENDA E NOTA SEM MAQUININHA (CV-*) ──────────────
+            // O FURO QUE ISTO FECHA: cancelar a VENDA e cancelar a NFC-e moravam
+            // DENTRO do estorno, e o estorno abria só com TEF integrado. Em loja de
+            // maquininha AVULSA, `Servicos.Operavel()` devolve null e o operador lia
+            // "chame o gerente para configurar" — conselho errado: ele não precisa de
+            // maquininha, precisa cancelar uma nota, e o relógio dos 30 minutos da
+            // SEFAZ está correndo. Não existia caminho nenhum: a janela fechava.
+            //
+            // São TRÊS atos, e só o terceiro precisa de TEF:
+            //   · cancelar a VENDA                 → banco local, nada de maquininha
+            //   · cancelar a NFC-e (evento 110111) → agente fiscal em 127.0.0.1 (tem o A1)
+            //   · estornar o cartão eletronicamente → maquininha integrada
+            //
+            // Code-behind de WPF não se instancia num teste (o Pdv.Testes é console):
+            // a fonte é lida, como nos TL-* acima e na trava de instância única.
+            {
+                var fonte = Fonte("Telas", "Venda.xaml.cs") ?? "";
+                var xaml = Fonte("Telas", "Venda.xaml") ?? "";
+
+                static string Trecho(string todo, string de, string ate)
+                {
+                    var i = todo.IndexOf(de, StringComparison.Ordinal);
+                    if (i < 0) return "";
+                    var f = todo.IndexOf(ate, i, StringComparison.Ordinal);
+                    return f < 0 ? "" : todo[i..f];
+                }
+                static bool Ordem(string corpo, string primeiro, string depois)
+                {
+                    var a = corpo.IndexOf(primeiro, StringComparison.Ordinal);
+                    var b = corpo.IndexOf(depois, StringComparison.Ordinal);
+                    return a >= 0 && b > a;
+                }
+
+                // O operador de maquininha avulsa tem que ACHAR isto. A porta continua
+                // sendo a mesma (botão da barra → menu), mas um botão escrito "Cartão"
+                // é exatamente o que escondia o cancelamento de quem não tem cartão
+                // integrado.
+                checar(xaml.Contains("Click=\"MenuCancelamento\"", StringComparison.Ordinal)
+                       && xaml.Contains("Cancelar venda", StringComparison.Ordinal),
+                    "CV-1 a barra tem um botão que DIZ que cancela venda (não só 'Cartão')");
+
+                var menu = Trecho(fonte, "private async void MenuCancelamento", "private static void GuardarPasso");
+                checar(menu.Length > 0, "CV-2 achei o menu de cancelamento na tela de venda");
+
+                // O PECADO ORIGINAL: `if (Servicos.Operavel() is null) return;` no TOPO
+                // do menu trancava os três atos atrás do TEF.
+                checar(menu.Length > 0
+                       && !menu.Contains("não tem maquininha ligada a ele", StringComparison.Ordinal),
+                    "CV-3 o menu não manda mais 'chame o gerente para configurar' a quem quer cancelar uma nota");
+                checar(Ordem(menu, "CancelarVendaAsync", "Servicos.Operavel()"),
+                    "CV-4 o cancelamento vem ANTES de qualquer checagem de maquininha (o TEF só barra o estorno)");
+
+                var corpo = Trecho(fonte, "private async Task CancelarVendaAsync", "\n    private void Suprimento");
+                checar(corpo.Length > 0, "CV-5 existe um cancelamento de venda que vive por conta própria");
+                checar(corpo.Length > 0
+                       && !corpo.Contains("Servicos.Operavel()", StringComparison.Ordinal)
+                       && !corpo.Contains("IProvedorTefOperavel", StringComparison.Ordinal),
+                    "CV-6 o cancelamento funciona COM ou SEM TEF (não toca no provedor da maquininha)");
+
+                // A ORDEM É O CORAÇÃO: nota primeiro, venda depois. Ao contrário sobra
+                // NFC-e válida para venda que não existe mais — e `Vendas.Cancelar`
+                // recusa exatamente isso (teste "Cancele a nota na SEFAZ").
+                checar(Ordem(corpo, "CancelamentoFiscal.CancelarAsync", "Vendas.Cancelar"),
+                    "CV-7 cancela a NOTA antes da VENDA (nota viva para venda morta não pode existir)");
+
+                // "Não sei" (agente mudo/timeout) NUNCA pode virar "cancelada" — nem na
+                // tela nem no banco. A SEFAZ pode ter registrado o evento com a resposta
+                // perdida na volta.
+                checar(corpo.Contains("rc.Indisponivel", StringComparison.Ordinal)
+                       && Ordem(corpo, "rc.Indisponivel", "fiscal_status = 'cancelada'"),
+                    "CV-8 agente indisponível não vira nota cancelada no banco");
+
+                // Cancelar nota é ato fiscal: mesmo caminho de autorização do estorno.
+                checar(corpo.Contains("Autorizacao.ResolverAsync", StringComparison.Ordinal)
+                       && !corpo.Contains("PedirSenha.Mostrar", StringComparison.Ordinal),
+                    "CV-9 passa pela autorização por token (sem porta lateral pedindo PIN)");
+                checar(Ordem(corpo, "Dialogo.Confirmar", "Autorizacao.ResolverAsync"),
+                    "CV-10 o WhatsApp da gerência só acende depois de o operador confirmar");
+                checar(Ordem(corpo, "Autorizacao.ResolverAsync", "catch (Exception ex)")
+                       && Ordem(corpo, "catch (Exception ex)", "PedirPinAsync"),
+                    "CV-11 falha na autorização não derruba o PDV: cai para o PIN do supervisor");
+                checar(corpo.Contains("Autorizacao.AuditarSemAprovacaoRemota", StringComparison.Ordinal),
+                    "CV-12 cancelamento que escapou do token também entra na lista do dono");
+
+                // O MAL-ENTENDIDO QUE CUSTA DINHEIRO: cancelar a nota NÃO devolve nada
+                // ao cliente. Em maquininha avulsa o estorno é na mão, na maquininha.
+                checar(corpo.Contains("CancelamentoVenda", StringComparison.Ordinal)
+                       && corpo.Contains("AvisoDoDinheiro", StringComparison.Ordinal),
+                    "CV-13 a tela diz, em letras, que NENHUM dinheiro volta sozinho");
+
+                // O RELÓGIO: 30 min da autorização, e depois disso a mensagem tem que
+                // parar de prometer o que a SEFAZ não faz mais.
+                checar(corpo.Contains("TextoDaNota", StringComparison.Ordinal),
+                    "CV-14 a tela mostra quanto tempo resta do prazo da nota");
+            }
+
             // ── 9. O QUE O .EXE NÃO PODE CARREGAR ───────────────────────────
             // O binário fica numa loja: quem copiar o arquivo tem a chave que
             // estiver dentro dele. Com service_role, isso seria o banco inteiro.

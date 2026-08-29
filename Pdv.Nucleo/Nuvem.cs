@@ -240,6 +240,14 @@ public sealed class Nuvem
     /// Operadores criados localmente (suporte, primeira instalação) NÃO são tocados:
     /// só as linhas marcadas como vindas da nuvem são regidas pelo painel — inclusive
     /// a desativação de quem sumiu de lá (demitido some do caixa no próximo Sincronizar).
+    ///
+    /// A ÚNICA EXCEÇÃO É A MESMA PESSOA. "Não tocar no local" virou, na prática, deixar
+    /// dois cadastros vivos para quem instalou o caixa: o assistente cria o primeiro
+    /// operador (passo 1) antes do pareamento (passo 5), com um id que só existe nesta
+    /// máquina, e o painel manda o dele depois. O local continuava logando e assinando
+    /// vendas que a nuvem recusava com 409 — 16 delas, R$ 102.626,50, no caixa da
+    /// Savassi. Quando o CPF é o mesmo, os dois viram UMA identidade aqui dentro:
+    /// <see cref="Operadores.ReconciliarComNuvem"/>.
     /// </summary>
     public async Task<int> BaixarOperadoresAsync(SqliteConnection cx)
     {
@@ -265,21 +273,50 @@ public sealed class Nuvem
                 var id = S("id");
                 var hash = S("pin_hash");
                 var salt = S("pin_salt");
-                var cpf = S("cpf");
+                var cpfCru = S("cpf");
                 if (id is null || hash is null || salt is null) continue;
+
+                // O CPF é gravado NORMALIZADO (só dígitos, zero à esquerda reposto). O
+                // painel manda do jeito que foi digitado lá, e o login por CPF limpa a
+                // pontuação antes de consultar: guardar "529.982.247-25" fazia a linha
+                // do painel nunca ser encontrada, e a identidade forte morria em silêncio.
+                var cpf = string.IsNullOrWhiteSpace(cpfCru)
+                    ? null
+                    : Operadores.CpfChave(cpfCru) ?? Documentos.SoDigitos(cpfCru);
 
                 // perfil do painel → perfil do caixa (gerente autoriza sangria/cancelamento)
                 var perfil = S("perfil") == "gerente" ? "gerente" : "operador";
                 var ativo = !o.TryGetProperty("ativo", out var a) || a.ValueKind != JsonValueKind.False;
 
                 cx.Execute("""
-                    INSERT INTO operador (id, nome, pin_hash, pin_salt, perfil, cpf, ativo, da_nuvem, atualizado)
-                    VALUES (@Id,@N,@H,@S,@P,@C,@A,1,@Em)
-                    ON CONFLICT(id) DO UPDATE SET nome=@N, pin_hash=@H, pin_salt=@S, perfil=@P,
-                                                  cpf=@C, ativo=@A, da_nuvem=1, atualizado=@Em
+                    INSERT INTO operador (id, nome, pin_hash, pin_salt, perfil, cpf, ativo, da_nuvem,
+                                          pin_nuvem_hash, pin_nuvem_salt, atualizado)
+                    VALUES (@Id,@N,@H,@S,@P,@C,@A,1,@H,@S,@Em)
+                    ON CONFLICT(id) DO UPDATE SET
+                        nome=@N, perfil=@P, cpf=@C, ativo=@A, da_nuvem=1, atualizado=@Em,
+                        -- A SENHA SÓ É REESCRITA QUANDO O PAINEL DE FATO A TROCOU.
+                        -- `pin_nuvem_hash` é o que o painel mandou da última vez; comparar
+                        -- com ele separa "o ciclo de sincronização passou de novo" (a cada
+                        -- poucos minutos) de "alguém trocou a senha lá" (ato deliberado).
+                        -- Sem essa distinção, a senha que a loja digita todo dia —
+                        -- preservada na reconciliação logo abaixo — morreria na
+                        -- sincronização seguinte, e amanhã ninguém entraria no caixa.
+                        -- `IS` e não `=` porque linha antiga tem pin_nuvem_hash NULL, e
+                        -- NULL = @H não é falso, é nulo: o CASE cairia no ELSE por acidente
+                        -- (que por sorte é o comportamento antigo, mas por acidente).
+                        pin_hash = CASE WHEN operador.pin_nuvem_hash IS @H THEN operador.pin_hash ELSE @H END,
+                        pin_salt = CASE WHEN operador.pin_nuvem_hash IS @H THEN operador.pin_salt ELSE @S END,
+                        pin_nuvem_hash = @H, pin_nuvem_salt = @S
                     """,
                     new { Id = id, N = S("nome") ?? "OPERADOR", H = hash, S = salt, P = perfil,
                           C = cpf, A = ativo ? 1 : 0, Em = agora }, tx);
+
+                // MESMA PESSOA, DOIS CADASTROS: aqui, na MESMA transação da descida.
+                // Roda depois do upsert de propósito — a linha do painel precisa já
+                // existir (a lápide aponta para ela) e já ter o `pin_nuvem_hash` do
+                // ciclo, para o CASE acima preservar a senha da loja no próximo.
+                Operadores.ReconciliarComNuvem(cx, tx, id, cpfCru, ativo, agora);
+
                 vieram.Add(id);
                 n++;
             }
@@ -295,6 +332,43 @@ public sealed class Nuvem
                        AND id NOT IN ({string.Join(',', vieram.Select((_, i) => "@P" + i))})
                     """,
                     BuildParams(vieram, agora), tx);
+
+            // ⚠️ PISO: A DESCIDA NUNCA DEIXA O CAIXA SEM NINGUÉM QUE ABRA O TURNO.
+            //
+            // Antes da reconciliação, o operador criado no caixa era a última rede: a
+            // sincronização não o tocava. Agora ele vira lápide (ativo=0) e a única
+            // identidade viva é a do painel — o que resolve o defeito das vendas
+            // recusadas, mas abre um pior: se o painel responder 200 com LISTA VAZIA
+            // (não é rede caindo; rede caindo cai no catch e não commita), ou se alguém
+            // simplesmente desligar o dono lá, este UPDATE apaga o último acesso e a
+            // LOJA NÃO ABRE AMANHÃ. E a saída de emergência fechou junto: o _admin_
+            // nasce inativo, e recadastrar pelo CPF esbarra na guarda nova.
+            //
+            // Ninguém no balcão tem como sair disso às 7h da manhã. Então a regra é:
+            // demissão vale no caixa, MENOS a última. Se a desativação zeraria o
+            // acesso, o mais recente volta a valer e fica o rastro na auditoria — o
+            // painel continua sendo a verdade sobre QUEM é quem, mas não sobre se a
+            // loja consegue vender hoje.
+            var abrem = cx.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM operador WHERE ativo = 1", transaction: tx);
+            if (abrem == 0)
+            {
+                var reerguido = cx.ExecuteScalar<string?>("""
+                    SELECT id FROM operador
+                     WHERE pin_hash IS NOT NULL AND pin_hash <> ''
+                     ORDER BY atualizado DESC LIMIT 1
+                    """, transaction: tx);
+                if (reerguido is not null)
+                {
+                    cx.Execute("UPDATE operador SET ativo = 1, atualizado = @Em WHERE id = @Id",
+                        new { Em = agora, Id = reerguido }, tx);
+                    Caixa.Auditar(cx, tx, "operador_piso_reerguido", null, null,
+                        $"a sincronizacao deixaria o caixa sem nenhum operador ativo; "
+                        + $"'{reerguido}' foi mantido para a loja conseguir abrir. "
+                        + "Confira o cadastro de funcionarios no painel.");
+                }
+            }
+
             tx.Commit();
             return n;
         }

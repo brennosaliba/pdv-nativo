@@ -67,6 +67,13 @@ public static class Vendas
         // sabendo que nasceu de um teste.
         var homologacao = Homologacao(cx);
 
+        // QUEM ASSINA. A identidade na memória do turno é a de quem logou — que pode ser
+        // a que nasceu SÓ nesta máquina, se a reconciliação com o painel aconteceu depois
+        // do login (sincronização não desloga ninguém: tem fila no balcão). Gravar o id
+        // canônico aqui é o que impede a venda de nascer com um id que a nuvem não
+        // conhece e voltar 409. Lido ANTES da transação, pelo mesmo motivo do `homologacao`.
+        var idAssina = Operadores.IdCanonico(cx, operador.Id);
+
         using var tx = cx.BeginTransaction();
 
         // Numeração dentro da transação, senão duas vendas quase simultâneas pegam o
@@ -82,7 +89,7 @@ public static class Vendas
             VALUES (@Id,@Key,@Ses,@Bd,@Num,@Op,@Tot,0,@Tot,@Doc,'finalizada','pendente',@Em,@Em,@Homolog)
             """,
             new { Id = vendaId, Key = clientKey, Ses = sessao.Id, Bd = sessao.BusinessDate,
-                  Num = numero, Op = operador.Id, Tot = total.Centavos, Doc = documento, Em = agora,
+                  Num = numero, Op = idAssina, Tot = total.Centavos, Doc = documento, Em = agora,
                   Homolog = homologacao ? 1 : 0 }, tx);
 
         var seq = 1;
@@ -146,7 +153,9 @@ public static class Vendas
             // mix_dinheiro em "aprendendo" eterno e o score descartava a venda no
             // balde "?". O nome vai junto porque o operador do caixa NÃO é employee do
             // ERP — o id sozinho não resolve o nome do outro lado.
-            p_operator_id = operador.Id,
+            // O MESMO id que ficou na linha da venda — é este que o servidor confere
+            // contra `employees`, e é aqui que o 409 nascia.
+            p_operator_id = idAssina,
             p_operator_name = operador.Nome,
             p_desconto = 0m,
             p_recebido = pagamentos.Sum(p => p.Valor.Centavos) / 100m,

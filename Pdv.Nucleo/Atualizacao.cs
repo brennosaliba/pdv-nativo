@@ -178,31 +178,60 @@ public static class Atualizacao
         if (raiz.ValueKind != JsonValueKind.Object)
             return new(null, "A lista de versões veio num formato que este caixa não entende.");
 
+        var (m, erro) = LerCampos(raiz, urlDoManifesto, exigirVersao: true);
+        return erro is { Length: > 0 } ? new(null, erro) : new(m, null);
+    }
+
+    /// <summary>
+    /// As peneiras de um anúncio de versão, sem se importar de ONDE o JSON veio — o
+    /// <c>versao.json</c> do nginx e a resposta da RPC do painel passam pelas MESMAS.
+    ///
+    /// <paramref name="ancoraDeDominio"/> é o endereço com que o host do instalador é
+    /// comparado, e ele é o coração da segurança deste arquivo: o campo <c>url</c> vem
+    /// da rede e vira um executável rodando como ADMINISTRADOR nesta máquina. No
+    /// caminho do arquivo a âncora é a própria URL do manifesto; no caminho do painel
+    /// ela NÃO é o endereço do Supabase — é a `atualizacao_url` gravada NESTE caixa.
+    /// A diferença é o que impede o painel (ou quem tomar o painel) de mandar a loja
+    /// baixar um exe de qualquer lugar da internet: o painel escolhe QUAL versão e
+    /// QUANDO, e nunca DE ONDE.
+    ///
+    /// <paramref name="exigirVersao"/> falso é o caso do painel: "não tenho nada para
+    /// este terminal" é resposta NORMAL (é assim que se libera loja por loja), e tratar
+    /// isso como erro faria o caixa acender aviso de falha em todo terminal que ainda
+    /// não entrou na onda.
+    /// </summary>
+    private static (Manifesto? Ok, string? Erro) LerCampos(
+        JsonElement raiz, string ancoraDeDominio, bool exigirVersao)
+    {
+        var versaoCrua = Texto(raiz, "versao");
+        if (!exigirVersao && string.IsNullOrWhiteSpace(versaoCrua))
+            return (null, null);        // nada para este terminal — e isso não é falha
+
         var produto = Texto(raiz, "produto");
         if (!string.Equals(produto, NomeDoProduto, StringComparison.OrdinalIgnoreCase))
-            return new(null, $"Esta lista de versões não é a do caixa (ela fala de \"{produto ?? "?"}\").");
+            return (null, $"Esta lista de versões não é a do caixa (ela fala de \"{produto ?? "?"}\").");
 
-        var versao = Texto(raiz, "versao");
+        var versao = versaoCrua;
         if (!TentarLerVersao(versao, out _))
-            return new(null, $"O servidor anunciou uma versão que não dá para entender (\"{versao ?? ""}\").");
+            return (null, $"O servidor anunciou uma versão que não dá para entender (\"{versao ?? ""}\").");
 
         var url = Texto(raiz, "url");
         if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
-            return new(null, "O servidor não disse onde baixar o instalador.");
+            return (null, "O servidor não disse onde baixar o instalador.");
         // http:// puro numa rede de loja é o cenário de troca de arquivo mais barato
         // que existe. Executável só desce por canal cifrado.
         if (uri.Scheme != Uri.UriSchemeHttps)
-            return new(null, "O endereço do instalador não é seguro (precisa ser https).");
-        if (!MesmoDominio(urlDoManifesto, url))
-            return new(null, "O instalador anunciado está fora do servidor da atualização. "
-                           + "Por segurança este caixa não baixa.");
+            return (null, "O endereço do instalador não é seguro (precisa ser https).");
+        if (!MesmoDominio(ancoraDeDominio, url))
+            return (null, "O instalador anunciado está fora do servidor da atualização. "
+                        + "Por segurança este caixa não baixa.");
 
         // Hash torto é pior que hash ausente: sem ele existe um plano B declarado
         // (tamanho + executável válido); com ele torto, a conferência nunca fecharia e
         // a loja ficaria travada num erro que ninguém entende.
         var sha = Texto(raiz, "sha256")?.Trim();
         if (sha is { Length: > 0 } && !EhHexDe32Bytes(sha))
-            return new(null, "A impressão digital (sha256) anunciada está malformada.");
+            return (null, "A impressão digital (sha256) anunciada está malformada.");
 
         long? tamanho = null;
         if (raiz.TryGetProperty("tamanho", out var t))
@@ -211,7 +240,7 @@ public static class Atualizacao
             else if (t.ValueKind == JsonValueKind.String && long.TryParse(t.GetString(), out var n2) && n2 > 0) tamanho = n2;
         }
 
-        return new(new Manifesto(
+        return (new Manifesto(
             Versao: versao!.Trim(),
             Url: url,
             Notas: Texto(raiz, "notas"),
@@ -280,15 +309,26 @@ public static class Atualizacao
     /// </summary>
     /// <param name="PapeisNaFila">Trabalhos na fila da impressora. -1 = não deu para
     /// ler a fila (driver simples, impressora de rede fora do ar). Ver <see cref="Impede"/>.</param>
+    /// <param name="EstadoIncerto">Alguma leitura que este estado precisava falhou (o
+    /// banco não abriu, a comanda gravada não deu para contar). Não muda nada no
+    /// caminho manual — lá tem gente decidindo — e barra o automático, onde não tem.
+    /// Ver <see cref="ImpedeSozinho"/>.</param>
     public sealed record EstadoDoCaixa(
         int ItensNaComanda = 0,
         bool MaquininhaOcupada = false,
         int CobrancasNoPinpad = 0,
         int PapeisNaFila = 0,
         bool CaixaAberto = false,
-        int VendasPorSubir = 0);
+        int VendasPorSubir = 0,
+        bool EstadoIncerto = false);
 
-    public enum Impedimento { Nenhum, ComandaAberta, MaquininhaOcupada, CobrancaNoPinpad, PapelNaFila }
+    /// <param name="EstadoDesconhecido">Só existe no caminho AUTOMÁTICO: alguma coisa
+    /// que o portão precisa saber não pôde ser lida. Ver <see cref="ImpedeSozinho"/>.</param>
+    public enum Impedimento
+    {
+        Nenhum, ComandaAberta, MaquininhaOcupada, CobrancaNoPinpad, PapelNaFila,
+        EstadoDesconhecido,
+    }
 
     /// <summary>
     /// A recusa. Roda ANTES de perguntar ao servidor e DE NOVO antes de entregar ao
@@ -313,6 +353,34 @@ public static class Atualizacao
         if (e.CobrancasNoPinpad > 0) return Impedimento.CobrancaNoPinpad;
         if (e.PapeisNaFila > 0) return Impedimento.PapelNaFila;
         return Impedimento.Nenhum;
+    }
+
+    /// <summary>
+    /// O MESMO portão, para quando NÃO TEM NINGUÉM OLHANDO.
+    ///
+    /// A única diferença é a regra do desconhecido, e ela é invertida de propósito:
+    ///
+    ///  · no caminho MANUAL, "não sei" (fila da impressora ilegível) deixa passar,
+    ///    porque tem uma pessoa de frente para o balcão que viu a loja e apertou o
+    ///    botão. O julgamento dela vale mais do que a leitura de um driver;
+    ///  · no caminho AUTOMÁTICO não existe esse julgamento. Aqui "não sei" vira "não
+    ///    pode" — e o preço do erro é assimétrico: barrar por engano custa um dia a
+    ///    mais na versão velha (e o painel enxerga isso, porque o caixa reporta a
+    ///    versão que está rodando); deixar passar por engano fecha a frente de caixa
+    ///    sozinha com um cupom saindo pela metade.
+    ///
+    /// Nada aqui é EXCEÇÃO ao portão: é o portão mais uma regra a mais. A janela
+    /// responde "posso agora?"; isto responde "é seguro agora?"; as duas precisam
+    /// dizer sim.
+    /// </summary>
+    public static Impedimento ImpedeSozinho(EstadoDoCaixa e)
+    {
+        // O impedimento CONCRETO ganha do genérico: "tem 2 itens na comanda" é uma
+        // frase que o dono entende no painel; "não sei o que está acontecendo" não.
+        var i = Impede(e);
+        if (i != Impedimento.Nenhum) return i;
+        return e.EstadoIncerto || e.PapeisNaFila < 0
+            ? Impedimento.EstadoDesconhecido : Impedimento.Nenhum;
     }
 
     /// <summary>Por que recusou E o que fazer para destravar. Recusa sem saída é a
@@ -340,7 +408,27 @@ public static class Atualizacao
             + "O QUE FAZER: espere o cupom sair e toque em Atualizar de novo. "
             + "Se a impressora estiver travada, resolva ela primeiro."),
 
+        Impedimento.EstadoDesconhecido => ("Não deu para conferir se é seguro",
+            "A fila da impressora não respondeu, então este caixa não consegue provar "
+            + "que não tem cupom saindo agora.\n\n"
+            + "A troca sozinha (na janela de atualização) fica para quando der. "
+            + "O QUE FAZER: toque em Atualizar — pelo botão, quem julga se a loja está "
+            + "parada é você."),
+
         _ => ("", ""),
+    };
+
+    /// <summary>O impedimento em UMA PALAVRA, para o painel. É o que o dono lê na
+    /// coluna "por que este caixa não atualizou" — por isso é estável e sem acento:
+    /// vira chave de filtro do outro lado, não frase de tela.</summary>
+    public static string NomeDoImpedimento(Impedimento i) => i switch
+    {
+        Impedimento.ComandaAberta => "comanda",
+        Impedimento.MaquininhaOcupada => "maquininha",
+        Impedimento.CobrancaNoPinpad => "pinpad",
+        Impedimento.PapelNaFila => "papel",
+        Impedimento.EstadoDesconhecido => "desconhecido",
+        _ => "nenhum",
     };
 
     internal static string Plural(int n, string um, string varios)
@@ -388,10 +476,21 @@ public static class Atualizacao
             return new Veredito(Situacao.Impedido, t, m, TextoSim: "Entendi", TextoNao: "");
         }
 
-        if (leitura.Ok is null || leitura.Erro is { Length: > 0 })
+        if (leitura.Erro is { Length: > 0 })
             return new Veredito(Situacao.Erro, "Não consegui verificar",
-                (leitura.Erro is { Length: > 0 } ? leitura.Erro : "O servidor de atualização não respondeu.")
+                leitura.Erro
                 + "\n\nO caixa continua funcionando normalmente. Tente de novo mais tarde.",
+                TextoSim: "Entendi", TextoNao: "");
+
+        // Sem manifesto E sem erro = o PAINEL respondeu, e a resposta foi "não tenho
+        // versão para este terminal". É a resposta normal de quem publica loja por
+        // loja: as 39 que ainda não entraram na onda recebem exatamente isto. Chamar
+        // de falha faria o operador ligar para o suporte por causa do funcionamento
+        // correto do sistema.
+        if (leitura.Ok is null)
+            return new Veredito(Situacao.EmDia, "Tudo em dia",
+                $"Este caixa está na versão {Mostrar(versaoInstalada)} e não tem nenhuma "
+                + "atualização liberada para ele.",
                 TextoSim: "Entendi", TextoNao: "");
 
         var m2 = leitura.Ok;
@@ -441,6 +540,441 @@ public static class Atualizacao
     {
         if (string.IsNullOrWhiteSpace(v)) return "?";
         return TentarLerVersao(v, out var lida) ? lida.ToString() : v!.Trim();
+    }
+
+    // ══ A ORDEM DO PAINEL ════════════════════════════════════════════════════
+    //
+    // POR QUE A INSTRUÇÃO DE VERSÃO SAIU DO ARQUIVO E FOI PARA O PAINEL.
+    //
+    // O versao.json é UM SÓ para todo mundo. Com 40 lojas isso significa que publicar
+    // é publicar para as 40 ao mesmo tempo, e a primeira notícia de que a versão nova
+    // tem um defeito chega por telefone, de 40 lugares. O que o dono precisa é mandar
+    // para UMA loja, olhar, e só então liberar o resto — e isso é uma decisão POR
+    // TERMINAL, que um arquivo estático servido pelo nginx não sabe tomar (e que o
+    // painel, aliás, nem consegue escrever).
+    //
+    // O caixa já fala com o Supabase: sincroniza catálogo, sobe venda, puxa pedido do
+    // KDS, e já sabe de que loja ele é (tabela `terminal`, do pareamento). A instrução
+    // de versão anda por ESSE canal. O versao.json fica como o que ele sempre foi bom
+    // em ser: o caminho do caixa recém-instalado, que ainda não tem identidade.
+    //
+    // ⚠️ E O QUE O PAINEL NÃO PODE FAZER, que é a parte que importa:
+    //  · não escolhe DE ONDE o exe vem — a âncora de domínio é a `atualizacao_url`
+    //    gravada neste caixa, não o endereço de quem respondeu (ver LerCampos);
+    //  · não fura o portão — nem pela janela, nem por "obrigatória", nem por
+    //    "atualizar agora". Remoto aqui quer dizer AGENDAR, não FORÇAR;
+    //  · não vale nada se veio do arquivo: instrução com Origem.Arquivo nunca dá
+    //    autonomia. Um JSON estático num nginx não reinicia 40 frentes de caixa.
+
+    /// <summary>De onde veio o anúncio de versão. Muda o que ele TEM DIREITO de fazer.</summary>
+    public enum Origem
+    {
+        /// <summary>RPC do painel: sabe de que terminal se trata. Pode agendar.</summary>
+        Painel,
+        /// <summary>versao.json estático: igual para todo mundo. Só informa.</summary>
+        Arquivo,
+    }
+
+    /// <summary>
+    /// O que o painel respondeu sobre ESTE terminal.
+    /// </summary>
+    /// <param name="Manifesto">null = "não tenho versão para este terminal". É a
+    /// resposta normal de quem libera loja por loja, não uma falha.</param>
+    /// <param name="Janela">Faixa de horas em que este caixa pode se trocar sozinho.
+    /// null = sem janela, e sem janela ele NUNCA se troca sozinho.</param>
+    /// <param name="AgoraNaLoja">O relógio da loja, dito pelo SERVIDOR, com o fuso
+    /// dela junto. Ver <see cref="RelogioDaLoja"/> para por que ele não é opcional
+    /// quando existe janela.</param>
+    /// <param name="AtualizarAgora">O dono marcou ESTE terminal no painel. Dispensa a
+    /// janela — e não dispensa o portão.</param>
+    public sealed record Instrucao(
+        Manifesto? Manifesto,
+        Janela? Janela = null,
+        DateTimeOffset? AgoraNaLoja = null,
+        bool AtualizarAgora = false,
+        Origem Origem = Origem.Painel);
+
+    /// <summary>Ou a instrução, ou o motivo em português de por que ela não serve.</summary>
+    public sealed record LeituraInstrucao(Instrucao? Ok, string? Erro);
+
+    /// <summary>O manifesto do arquivo, embrulhado como instrução SEM autonomia.</summary>
+    public static Instrucao DoArquivo(Manifesto m) => new(m, Origem: Origem.Arquivo);
+
+    /// <summary>
+    /// Lê a resposta da RPC do painel.
+    ///
+    /// Aceita objeto (<c>{...}</c>), lista de um elemento (<c>[{...}]</c>, que é o que
+    /// o PostgREST devolve quando a função é <c>SETOF</c>/<c>RETURNS TABLE</c>) e o
+    /// literal <c>null</c> — os três são formas legítimas do mesmo "nada para este
+    /// terminal", e recusar duas delas amarraria o caixa à assinatura exata que a
+    /// função tiver no dia em que ela nascer.
+    /// </summary>
+    public static LeituraInstrucao LerInstrucao(string? json, string ancoraDeDominio)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new(null, "O painel não respondeu nada sobre a versão deste caixa.");
+
+        JsonElement raiz;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            raiz = doc.RootElement.Clone();
+        }
+        catch
+        {
+            return new(null, "O painel respondeu algo que não é a versão deste caixa. "
+                           + "Pode ser o wi-fi da loja pedindo login numa página.");
+        }
+
+        // SETOF: lista vazia é "nada para este terminal"; com mais de um, a função está
+        // errada e adivinhar qual linha vale seria escolher qual versão a loja instala.
+        if (raiz.ValueKind == JsonValueKind.Array)
+        {
+            var n = raiz.GetArrayLength();
+            if (n == 0) return new(new Instrucao(null), null);
+            if (n > 1) return new(null, "O painel respondeu mais de uma versão para este caixa.");
+            raiz = raiz[0].Clone();
+        }
+
+        if (raiz.ValueKind == JsonValueKind.Null) return new(new Instrucao(null), null);
+        if (raiz.ValueKind != JsonValueKind.Object)
+            return new(null, "O painel respondeu num formato que este caixa não entende.");
+
+        var (m, erro) = LerCampos(raiz, ancoraDeDominio, exigirVersao: false);
+        if (erro is { Length: > 0 }) return new(null, erro);
+
+        // A janela é do painel, e ela pode vir torta (o dono digita "5" e "7", ou
+        // alguém salva "25:00"). Janela ilegível não vira erro da consulta: vira
+        // AUSÊNCIA de janela — a versão continua aparecendo para o botão, e o que se
+        // perde é só a autonomia, que é exatamente o que não se deve conceder por
+        // cima de um campo que não deu para ler.
+        Janela? janela = TentarLerJanela(Texto(raiz, "janela_inicio"), Texto(raiz, "janela_fim"), out var j)
+            ? j : null;
+
+        DateTimeOffset? agora = null;
+        if (Texto(raiz, "agora") is { Length: > 0 } quando
+            && DateTimeOffset.TryParse(quando, CultureInfo.InvariantCulture,
+                   DateTimeStyles.AllowWhiteSpaces, out var dto))
+            agora = dto;
+
+        return new(new Instrucao(m, janela, agora, Bandeira(raiz, "atualizar_agora")), null);
+    }
+
+    // ══ A JANELA ═════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A faixa de horas em que este caixa tem PERMISSÃO de se trocar sozinho, em
+    /// minutos desde a meia-noite, no relógio DA LOJA.
+    ///
+    /// Intervalo meio-aberto [início, fim): "05:00 às 07:00" acaba às 07:00 em ponto,
+    /// e não às 07:01. Uma loja que abre às 7 não quer o caixa reiniciando às 7h00.
+    /// </summary>
+    public readonly record struct Janela(int InicioMin, int FimMin)
+    {
+        /// <summary>22:00–02:00 é janela de loja que fecha tarde, e é o caso que quebra
+        /// a comparação ingênua (início &lt; fim).</summary>
+        public bool CruzaMeiaNoite => FimMin <= InicioMin;
+
+        public int DuracaoMin => CruzaMeiaNoite ? 1440 - InicioMin + FimMin : FimMin - InicioMin;
+
+        public override string ToString()
+            => $"{InicioMin / 60:00}:{InicioMin % 60:00}–{FimMin / 60:00}:{FimMin % 60:00}";
+    }
+
+    /// <summary>
+    /// "05:00" / "5" / "05h30" / "05:00:00" viram minutos desde a meia-noite. Quem
+    /// digita a janela é gente, no painel, e gente escreve de todo jeito.
+    /// </summary>
+    public static bool TentarLerHora(string? texto, out int minutos)
+    {
+        minutos = 0;
+        if (string.IsNullOrWhiteSpace(texto)) return false;
+
+        var t = texto.Trim().ToLowerInvariant().Replace('h', ':');
+        if (t.EndsWith(':')) t = t[..^1];                 // "05h" → "05"
+        var p = t.Split(':');
+        if (p.Length is 0 or > 3) return false;
+
+        if (!int.TryParse(p[0], NumberStyles.None, CultureInfo.InvariantCulture, out var hh)) return false;
+        var mm = 0;
+        if (p.Length > 1 && !int.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out mm)) return false;
+        // Os segundos são aceitos e ignorados: "05:00:00" é a cara de um `time` do
+        // Postgres, e recusá-lo faria a janela morrer por causa do tipo da coluna.
+        if (p.Length > 2 && !int.TryParse(p[2], NumberStyles.None, CultureInfo.InvariantCulture, out _)) return false;
+
+        if (hh is < 0 or > 23 || mm is < 0 or > 59) return false;
+        minutos = hh * 60 + mm;
+        return true;
+    }
+
+    /// <summary>
+    /// A janela do painel, se ela fizer sentido.
+    ///
+    /// ⚠️ INÍCIO IGUAL AO FIM É RECUSADO, e essa é a recusa que mais importa aqui.
+    /// "05:00 às 05:00" tem duas leituras — "nunca" e "o dia inteiro" — e uma delas
+    /// dá ao painel autonomia permanente sobre a frente de caixa. Campo ambíguo cuja
+    /// interpretação errada libera o dia inteiro não se interpreta: se recusa.
+    /// </summary>
+    public static bool TentarLerJanela(string? inicio, string? fim, out Janela janela)
+    {
+        janela = default;
+        if (!TentarLerHora(inicio, out var i) || !TentarLerHora(fim, out var f)) return false;
+        if (i == f) return false;
+        janela = new Janela(i, f);
+        return true;
+    }
+
+    /// <summary>Estamos dentro dela agora? <paramref name="horaDaLoja"/> é a hora do
+    /// dia no relógio DA LOJA (ver <see cref="RelogioDaLoja"/>).</summary>
+    public static bool DentroDaJanela(Janela j, TimeSpan horaDaLoja)
+        => MinutosAteFechar(j, horaDaLoja) > 0;
+
+    /// <summary>Quanto ainda resta de janela, em minutos. 0 = está fora dela.</summary>
+    public static int MinutosAteFechar(Janela j, TimeSpan horaDaLoja)
+    {
+        var min = (int)Math.Floor(horaDaLoja.TotalMinutes);
+        if (min is < 0 or >= 1440) return 0;              // hora do dia impossível: não é hora
+        if (j.CruzaMeiaNoite)
+        {
+            if (min >= j.InicioMin) return 1440 - min + j.FimMin;
+            return min < j.FimMin ? j.FimMin - min : 0;
+        }
+        return min >= j.InicioMin && min < j.FimMin ? j.FimMin - min : 0;
+    }
+
+    /// <summary>Janela mínima para COMEÇAR um download. 265 MB na internet de loja não
+    /// cabem em 5 minutos, e começar sabendo que não cabe é saturar o link da loja bem
+    /// na hora em que ela abre.</summary>
+    public const int MinimoParaBaixar = 15;
+
+    /// <summary>Janela mínima para TROCAR quando o arquivo já está baixado e conferido.
+    /// A troca em si é entregar o exe e sair: segundos.</summary>
+    public const int MinimoParaTrocar = 2;
+
+    /// <summary>Cabe fazer isto no que resta de janela?</summary>
+    public static bool CabeNaJanela(int minutosDeJanela, bool jaBaixado)
+        => minutosDeJanela >= (jaBaixado ? MinimoParaTrocar : MinimoParaBaixar);
+
+    // ══ O RELÓGIO ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A HORA DA LOJA — e por que ela NÃO vem de <c>DateTime.Now</c>.
+    ///
+    /// PC de balcão tem relógio errado. Pilha de placa-mãe velha, fuso trocado na
+    /// instalação, horário de verão que ninguém desligou: nada disso é raro, e o
+    /// sintoma normal (a NFC-e recusada pela SEFAZ por diferença de horário) só
+    /// aparece na venda. Pendurar "atualiza entre 05h e 07h" nesse relógio é aceitar
+    /// que uma máquina com 8 horas de erro feche a frente de caixa às 13h de sábado.
+    ///
+    /// A ÂNCORA É O SERVIDOR. O painel responde `agora` já no fuso da loja (ele sabe
+    /// de que loja o terminal é; o caixa não precisa de banco de fusos horários para
+    /// nada). A partir daí o tempo passa por um contador MONOTÔNICO — o mesmo que
+    /// conta desde o boot da máquina, que não anda para trás quando alguém acerta o
+    /// relógio no meio do caminho.
+    ///
+    /// A ÂNCORA VENCE EM 30 MINUTOS, e isso é uma decisão, não um detalhe: o vigia
+    /// pergunta ao painel a cada 15 min, então em operação normal ela está sempre
+    /// fresca. Quando a internet cai, ela vence — e o caixa PERDE O DIREITO de se
+    /// atualizar sozinho. É a propriedade que se quer: autonomia exige painel vivo.
+    /// Ninguém se troca sozinho com base numa ordem de ontem.
+    /// </summary>
+    public sealed class RelogioDaLoja
+    {
+        public static readonly TimeSpan ValidadeDaAncora = TimeSpan.FromMinutes(30);
+
+        private readonly DateTimeOffset _ancora;
+        private readonly long _msDaAncora;
+        private readonly Func<long> _ms;
+
+        private RelogioDaLoja(DateTimeOffset ancora, Func<long> ms)
+        {
+            _ancora = ancora;
+            _ms = ms;
+            _msDaAncora = ms();
+        }
+
+        /// <summary>null quando o painel não disse que horas são na loja — e sem isso
+        /// não existe janela. <paramref name="milissegundos"/> é o contador monotônico;
+        /// só o teste passa outro.</summary>
+        public static RelogioDaLoja? Ancorar(DateTimeOffset? agoraNaLoja, Func<long>? milissegundos = null)
+            => agoraNaLoja is { } a ? new RelogioDaLoja(a, milissegundos ?? (() => Environment.TickCount64)) : null;
+
+        public TimeSpan Decorrido => TimeSpan.FromMilliseconds(_ms() - _msDaAncora);
+
+        /// <summary>O INSTANTE na loja (com fuso), ou null com a âncora vencida. É por
+        /// aqui que se mede o erro do relógio da máquina — ver <see cref="DesvioDoRelogio"/>.</summary>
+        public DateTimeOffset? AgoraNaLoja => Vencido ? null : _ancora + Decorrido;
+
+        /// <summary>Ancoragem velha demais para mandar em alguma coisa. Decorrido
+        /// negativo entra aqui também: contador que anda para trás é contador que não
+        /// dá para usar (suspensão, troca de núcleo, máquina virtual mal comportada).</summary>
+        public bool Vencido => Decorrido < TimeSpan.Zero || Decorrido >= ValidadeDaAncora;
+
+        /// <summary>A hora do dia na loja, ou null quando a âncora venceu.</summary>
+        public TimeSpan? HoraDaLoja => Vencido ? null : (_ancora + Decorrido).TimeOfDay;
+    }
+
+    /// <summary>Acima disto o relógio da máquina não é ruído de rede, é relógio errado —
+    /// e vale contar ao painel, porque a mesma diferença rejeita NFC-e na SEFAZ.</summary>
+    public static readonly TimeSpan DesvioQueImporta = TimeSpan.FromMinutes(5);
+
+    /// <summary>Quanto o relógio DESTA MÁQUINA está adiantado em relação ao da loja.
+    /// Positivo = a máquina está na frente. null = o painel não disse a hora.</summary>
+    public static TimeSpan? DesvioDoRelogio(DateTimeOffset? agoraNaLoja, DateTimeOffset agoraNaMaquina)
+        => agoraNaLoja is { } a ? agoraNaMaquina - a : null;
+
+    // ══ A DECISÃO SEM NINGUÉM ════════════════════════════════════════════════
+
+    /// <summary>Por que este caixa pode (ou não pode) se trocar sozinho agora.</summary>
+    public enum Autonomia
+    {
+        /// <summary>O painel não respondeu, ou quem respondeu foi o arquivo estático.</summary>
+        SemInstrucao,
+        /// <summary>Não há versão nova liberada para este terminal.</summary>
+        EmDia,
+        /// <summary>Este terminal não tem janela configurada — e sem janela não há
+        /// troca sozinha. É o padrão, e é o padrão CERTO.</summary>
+        SemJanela,
+        /// <summary>Tem janela; agora não é dentro dela.</summary>
+        ForaDaJanela,
+        /// <summary>Não dá para saber que horas são na loja. Ver <see cref="RelogioDaLoja"/>.</summary>
+        SemRelogio,
+        /// <summary>A janela deixou; o PORTÃO não deixou.</summary>
+        Impedido,
+        /// <summary>Pode. As duas perguntas responderam sim.</summary>
+        Sim,
+    }
+
+    /// <param name="MinutosDeJanela">Quanto tempo ainda cabe fazer coisa. Vira o prazo
+    /// do download: quando ele acaba, o download é CANCELADO (e o pedaço fica no disco
+    /// para a noite seguinte continuar), nunca a troca é feita fora da hora.</param>
+    public sealed record VeredictoSozinho(
+        Autonomia Autonomia, string Motivo,
+        Manifesto? Manifesto = null, int MinutosDeJanela = 0,
+        Impedimento Impedimento = Impedimento.Nenhum)
+    {
+        public bool Pode => Autonomia == Autonomia.Sim;
+    }
+
+    /// <summary>Prazo de um terminal MARCADO no painel ("atualizar agora"). Ele não tem
+    /// janela para respeitar, mas tem que ter um fim: download que corre para sempre é
+    /// download que ninguém percebe que não termina.</summary>
+    public const int MinutosDoMarcado = 240;
+
+    /// <summary>
+    /// "Posso me trocar sozinho, agora, sem ninguém clicar?"
+    ///
+    /// A ORDEM DAS PERGUNTAS NÃO É ARBITRÁRIA — ela é a ordem em que o dono vai LER a
+    /// resposta no painel. "Está impedido" só é informação útil depois de "tem versão
+    /// nova e é a hora dela"; o contrário encheria o painel de 40 caixas "impedidos"
+    /// que na verdade só estão em dia.
+    ///
+    /// ⚠️ O PORTÃO É O ÚLTIMO E É INTEIRO. Nem a janela, nem "obrigatória", nem
+    /// "atualizar agora" marcado pelo dono passam por cima dele. A janela responde
+    /// "POSSO agora?"; <see cref="ImpedeSozinho"/> responde "é SEGURO agora?". As duas
+    /// precisam dizer sim, e é por isso que elas são duas funções e não uma.
+    /// </summary>
+    public static VeredictoSozinho DecidirSozinho(
+        EstadoDoCaixa estado, string? versaoInstalada,
+        Instrucao? instrucao, TimeSpan? horaDaLoja)
+    {
+        if (instrucao is null)
+            return new(Autonomia.SemInstrucao, "o painel não respondeu");
+
+        // ARQUIVO NÃO MANDA REINICIAR CAIXA. O versao.json é igual para as 40 lojas e
+        // qualquer um que escreva naquele nginx passaria a poder derrubar as 40 frentes
+        // de caixa ao mesmo tempo. Ele informa (e o botão continua funcionando com ele);
+        // agendar é privilégio de quem sabe de que terminal está falando.
+        if (instrucao.Origem != Origem.Painel)
+            return new(Autonomia.SemInstrucao,
+                "a versão veio do arquivo público, que não sabe de que caixa está falando");
+
+        if (instrucao.Manifesto is not { } m)
+            return new(Autonomia.EmDia, "o painel não tem versão liberada para este caixa");
+
+        if (Comparar(versaoInstalada, m.Versao) >= 0)
+            return new(Autonomia.EmDia, $"já está na {Mostrar(versaoInstalada)}", m);
+
+        int minutos;
+        if (instrucao.AtualizarAgora)
+        {
+            // O dono marcou ESTE terminal, olhando para ele no painel. Isso dispensa a
+            // janela — é literalmente o pedido "esse aí, agora" — e não dispensa mais
+            // nada. O relógio também não é exigido aqui: a marcação vale porque acabou
+            // de chegar na resposta, e ela é reconferida antes da troca.
+            minutos = MinutosDoMarcado;
+        }
+        else
+        {
+            if (instrucao.Janela is not { } j)
+                return new(Autonomia.SemJanela,
+                    "este caixa não tem janela de atualização — só troca pelo botão", m);
+
+            // Sem relógio confiável a janela não abre. É a escolha entre dois defeitos:
+            // uma janela que NUNCA abre deixa a loja um dia a mais na versão velha, e o
+            // dono ENXERGA isso (o caixa reporta a versão que está rodando) e resolve
+            // com um toque no botão. Uma janela que abre NA HORA ERRADA fecha a frente
+            // de caixa no meio do almoço de sábado. Entre o defeito visível e reversível
+            // e o defeito invisível e caro, escolhe-se o visível.
+            if (horaDaLoja is not { } hora)
+                return new(Autonomia.SemRelogio,
+                    "não dá para saber que horas são na loja — a janela não abre no escuro", m);
+
+            minutos = MinutosAteFechar(j, hora);
+            if (minutos <= 0)
+                return new(Autonomia.ForaDaJanela, $"agora não é a janela ({j})", m);
+        }
+
+        var impede = ImpedeSozinho(estado);
+        if (impede != Impedimento.Nenhum)
+            return new(Autonomia.Impedido, NomeDoImpedimento(impede), m, minutos, impede);
+
+        return new(Autonomia.Sim, instrucao.AtualizarAgora ? "marcado no painel" : "dentro da janela",
+                   m, minutos);
+    }
+
+    // ══ O QUE O CAIXA CONTA DE VOLTA ═════════════════════════════════════════
+
+    /// <summary>
+    /// O corpo da pergunta ao painel — que é, na mesma viagem, o RELATÓRIO deste caixa.
+    ///
+    /// POR QUE JUNTO E NÃO NUM CANAL NOVO: o painel só consegue responder "qual é a sua
+    /// versão" se souber em qual o terminal está (é assim que se libera loja por loja),
+    /// então a versão instalada JÁ PRECISA ir na pergunta. Reportar é de graça: mesma
+    /// requisição, mesmo token, nenhum canal a mais para alguém manter.
+    ///
+    /// E o que se ganha por ser junto, e não "no boot": a pergunta se repete a cada 15
+    /// minutos, então o painel nunca está mais do que um ciclo atrasado. Depois de uma
+    /// troca bem-sucedida, o PRIMEIRO ciclo do caixa novo já reporta a versão nova — o
+    /// dono vê a onda fechar sozinha. Reportar só no boot deixaria o painel achando que
+    /// a loja continua na versão velha até alguém desligar a máquina.
+    ///
+    /// O estado vai junto porque é a resposta para a única pergunta que sobra quando o
+    /// dono olha o painel e vê um caixa parado na versão antiga: POR QUÊ. Sem isso ele
+    /// republica às cegas em cima de um caixa que estava com comanda aberta.
+    /// </summary>
+    public static string CorpoDaPergunta(
+        string? terminalUuid, string? lojaId, string? versaoInstalada,
+        EstadoDoCaixa? estado, TimeSpan? desvioDoRelogio)
+    {
+        var impede = estado is null ? Impedimento.EstadoDesconhecido : ImpedeSozinho(estado);
+        return JsonSerializer.Serialize(new
+        {
+            _produto = NomeDoProduto,
+            _terminal_uuid = terminalUuid,
+            _loja_id = lojaId,
+            _versao = string.IsNullOrWhiteSpace(versaoInstalada) ? null : versaoInstalada.Trim(),
+            _estado = new
+            {
+                pode_trocar_agora = impede == Impedimento.Nenhum,
+                impedimento = NomeDoImpedimento(impede),
+                turno_aberto = estado?.CaixaAberto ?? false,
+                vendas_por_subir = estado?.VendasPorSubir ?? 0,
+                // Segundos, e não texto: o painel precisa ORDENAR por isto para achar
+                // as máquinas de relógio torto antes de a SEFAZ recusar a nota delas.
+                desvio_relogio_seg = desvioDoRelogio is { } d ? (int)Math.Round(d.TotalSeconds) : (int?)null,
+            },
+        });
     }
 
     // ══ PROGRESSO ════════════════════════════════════════════════════════════
@@ -654,7 +1188,7 @@ public static class Atualizacao
             Directory.CreateDirectory(destinoPasta);
             LimparDeOutrasVersoes(destinoPasta, m.Versao);
             parcial = Path.Combine(destinoPasta, $"InstalarPdv-{Seguro(m.Versao)}.parcial");
-            pronto = Path.Combine(destinoPasta, $"InstalarPdv-{Seguro(m.Versao)}.exe");
+            pronto = CaminhoPronto(destinoPasta, m.Versao);
         }
         catch (Exception ex)
         {
@@ -795,6 +1329,29 @@ public static class Atualizacao
         long tamanho;
         try { tamanho = new FileInfo(pronto).Length; } catch { tamanho = 0; }
         return new Baixa(pronto, null, tamanho, retomou);
+    }
+
+    private static string CaminhoPronto(string pasta, string versao)
+        => Path.Combine(pasta, $"InstalarPdv-{Seguro(versao)}.exe");
+
+    /// <summary>
+    /// O instalador DESTA versão já está baixado e aprovado no TEMP? Devolve o caminho,
+    /// ou null.
+    ///
+    /// É o que separa "preciso de 15 minutos de janela" (baixar 265 MB) de "preciso de
+    /// 2" (entregar um arquivo que já está no disco) — ver <see cref="CabeNaJanela"/>.
+    /// Confere de novo em vez de confiar na existência do arquivo: entre o download de
+    /// ontem e a janela de hoje o disco passou por uma noite, e o instalador é o que
+    /// vai rodar como administrador.
+    /// </summary>
+    public static string? JaBaixado(Manifesto m, string? pasta = null)
+    {
+        try
+        {
+            var pronto = CaminhoPronto(pasta ?? PastaTemp, m.Versao);
+            return File.Exists(pronto) && Conferir(pronto, m, null) is null ? pronto : null;
+        }
+        catch { return null; }
     }
 
     /// <summary>Downloads de versões que não interessam mais. PC de loja tem disco

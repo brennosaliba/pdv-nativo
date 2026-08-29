@@ -86,7 +86,12 @@ public partial class MainWindow : Window
         // precisa saber que está assumindo o turno — e a conferência — de outra
         // pessoa. Sem este aviso, a diferença do fechamento cai em quem fechou,
         // que nem sabia que a gaveta não era dele.
-        if (_sessao!.OperadorId != _operador!.Id)
+        // Comparado no id CANÔNICO: o turno pode ter sido aberto com a identidade que
+        // nasceu só nesta máquina e o login de agora já devolver a do painel (ou o
+        // contrário). São a mesma pessoa — perguntar "quer assumir o caixa de outro?"
+        // para quem abriu o próprio caixa treina o operador a dizer sim sem ler.
+        using var cx = Banco.Abrir();
+        if (Operadores.IdCanonico(cx, _sessao!.OperadorId) != Operadores.IdCanonico(cx, _operador!.Id))
         {
             var assume = Dialogo.Confirmar(this, "Caixa de outro operador",
                 $"Este caixa foi aberto por {_sessao.OperadorNome} às {_sessao.AberturaEm:HH:mm} " +
@@ -94,7 +99,6 @@ public partial class MainWindow : Window
                 "conferência do fechamento também vira responsabilidade sua.",
                 "Assumir este caixa", "Voltar ao login");
             if (!assume) { _operador = null; Roteia(); return; }
-            using var cx = Banco.Abrir();
             Caixa.Auditar(cx, null, "caixa_assumido", _operador.Id, null,
                 $"turno aberto por {_sessao.OperadorNome} ({_sessao.OperadorId}) às {_sessao.AberturaEm:HH:mm}");
         }

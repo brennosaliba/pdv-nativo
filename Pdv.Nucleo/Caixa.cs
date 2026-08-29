@@ -87,7 +87,12 @@ public static class Caixa
             throw new InvalidOperationException(msg);
         }
 
-        var s = new Sessao(Guid.NewGuid().ToString(), DiaOperacional(), operador.Id, operador.Nome,
+        // Quem ABRE o turno assina com o id canônico pelo mesmo motivo da venda: a
+        // sessão sobe para o painel e `caixa_sessao.operador_id` tem chave estrangeira
+        // para `operador`. Lido antes da transação (o SQLite recusa comando sem
+        // transação numa conexão que já tem uma pendente).
+        var idAssina = Operadores.IdCanonico(cx, operador.Id);
+        var s = new Sessao(Guid.NewGuid().ToString(), DiaOperacional(), idAssina, operador.Nome,
             DateTime.Now, fundoTroco);
 
         using var tx = cx.BeginTransaction();
@@ -96,9 +101,9 @@ public static class Caixa
                                       abertura_em, fundo_troco_cent, status)
             VALUES (@Id, @Bd, @Op, @Nome, @Ab, @Fundo, 'aberto')
             """,
-            new { Id = s.Id, Bd = s.BusinessDate, Op = operador.Id, Nome = operador.Nome, Ab = Agora, Fundo = fundoTroco.Centavos }, tx);
-        Auditar(cx, tx, "caixa_aberto", operador.Id, null, $"fundo={fundoTroco.Reais:F2}");
-        Enfileirar(cx, tx, "caixa_sessao", s.Id, s.Id, new { s.Id, s.BusinessDate, operador = operador.Id, fundo_cent = fundoTroco.Centavos, abertura = Agora });
+            new { Id = s.Id, Bd = s.BusinessDate, Op = idAssina, Nome = operador.Nome, Ab = Agora, Fundo = fundoTroco.Centavos }, tx);
+        Auditar(cx, tx, "caixa_aberto", idAssina, null, $"fundo={fundoTroco.Reais:F2}");
+        Enfileirar(cx, tx, "caixa_sessao", s.Id, s.Id, new { s.Id, s.BusinessDate, operador = idAssina, fundo_cent = fundoTroco.Centavos, abertura = Agora });
         tx.Commit();
         return s;
     }
@@ -114,7 +119,15 @@ public static class Caixa
         // A TELA já barra isto, mas a regra mora AQUI: quem opera o caixa não pode
         // autorizar a própria sangria — a dupla assinatura é o único controle da
         // operação que mais some com dinheiro, e defesa que só existe na UI não é defesa.
-        if (tipo == "sangria" && autorizadoPor == operador.Id)
+        //
+        // COMPARADA NO ID CANÔNICO, e não no id cru: quem opera pode estar logado com a
+        // identidade que nasceu só nesta máquina (login feito antes de a sincronização
+        // reconciliá-la com o painel), enquanto a autorização — que varre apenas
+        // operadores ATIVOS — devolve a do painel. Ids crus diriam "são duas pessoas"
+        // para a MESMA pessoa, e ela liberaria a própria sangria.
+        var idAssina = Operadores.IdCanonico(cx, operador.Id);
+        var idAutoriza = autorizadoPor is null ? null : Operadores.IdCanonico(cx, autorizadoPor);
+        if (tipo == "sangria" && idAutoriza == idAssina)
             throw new InvalidOperationException(
                 "Quem opera o caixa não pode autorizar a própria sangria. Chame outro supervisor.");
 
@@ -142,9 +155,9 @@ public static class Caixa
             VALUES (@Id, @Ses, @Tipo, @Val, @Mot, @Dest, @Op, @Aut, @Em)
             """,
             new { Id = id, Ses = sessao.Id, Tipo = tipo, Val = valor.Centavos, Mot = motivo.Trim(),
-                  Dest = destino, Op = operador.Id, Aut = autorizadoPor, Em = Agora }, tx);
-        Auditar(cx, tx, $"caixa_{tipo}", operador.Id, autorizadoPor, $"{valor.Reais:F2} — {motivo}");
-        Enfileirar(cx, tx, "movimento", id, id, new { id, sessao = sessao.Id, tipo, valor_cent = valor.Centavos, motivo, destino, autorizadoPor });
+                  Dest = destino, Op = idAssina, Aut = idAutoriza, Em = Agora }, tx);
+        Auditar(cx, tx, $"caixa_{tipo}", idAssina, idAutoriza, $"{valor.Reais:F2} — {motivo}");
+        Enfileirar(cx, tx, "movimento", id, id, new { id, sessao = sessao.Id, tipo, valor_cent = valor.Centavos, motivo, destino, autorizadoPor = idAutoriza });
         tx.Commit();
     }
 

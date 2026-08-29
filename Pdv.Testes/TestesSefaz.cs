@@ -1,4 +1,4 @@
-using Pdv.Nucleo;
+﻿using Pdv.Nucleo;
 
 namespace Pdv.Testes;
 
@@ -17,8 +17,49 @@ namespace Pdv.Testes;
 /// </summary>
 public static class TestesSefaz
 {
+    /// <summary>
+    /// "NAO SEI" DA EMISSAO NAO E "NAO TEM NOTA".
+    ///
+    /// fiscal_status='pendente' significa que o emissor ficou MUDO — a nota PODE ter
+    /// sido assinada e autorizada do outro lado. O proprio projeto ja tinha isso escrito
+    /// em Fiscal.cs:207-213 ("quem consome 'pendente' tem que CONFERIR antes"), e mesmo
+    /// assim o cancelamento novo mandava 'pendente' para o balde de "esta venda nao gerou
+    /// nota fiscal" e cancelava a venda sem consultar ninguem. Resultado: NFC-e viva
+    /// apontando para venda cancelada, com os 30 minutos vencendo em silencio.
+    ///
+    /// A regra aqui e assimetrica de proposito: errar para "bloqueia" custa uma ligacao
+    /// ao gerente; errar para "segue" custa uma nota que nao da mais para cancelar.
+    /// </summary>
+    private static void PendenteNaoEhSemNota(Action<bool, string> checar)
+    {
+        var agora = new DateTime(2026, 8, 29, 12, 0, 0, DateTimeKind.Local);
+
+        var pendente = CancelamentoVenda.Montar("pendente", null, null, null, Array.Empty<PagamentoDaVenda>(), false, agora);
+        checar(pendente.Nota == SituacaoDaNota.SemResposta,
+            "nfce: emissao 'pendente' e SEM RESPOSTA, nao 'sem nota'");
+        checar(!pendente.PodeSeguir,
+            "nfce: 'pendente' BLOQUEIA o cancelamento — nota viva em venda cancelada e o pior desfecho");
+        checar(pendente.Impedimento?.Contains("conferir") == true,
+            "nfce: e o impedimento manda CONFERIR na SEFAZ, nao adivinhar");
+
+        // Valor que este codigo nao conhece tambem bloqueia: silencio nao vira permissao.
+        var estranho = CancelamentoVenda.Montar("processando", null, null, null, Array.Empty<PagamentoDaVenda>(), false, agora);
+        checar(estranho.Nota == SituacaoDaNota.SemResposta && !estranho.PodeSeguir,
+            "nfce: fiscal_status desconhecido tambem bloqueia (falha para o lado seguro)");
+
+        // O que REALMENTE nao tem nota continua passando — senao a tela travaria a loja
+        // inteira de balcao, que nem emite.
+        foreach (var f in new[] { "", "rejeitada", "erro" })
+        {
+            var p = CancelamentoVenda.Montar(f, null, null, null, Array.Empty<PagamentoDaVenda>(), false, agora);
+            checar(p.Nota == SituacaoDaNota.SemNota && p.PodeSeguir,
+                $"nfce: '{(f.Length == 0 ? "(vazio)" : f)}' e sem nota de verdade, e segue");
+        }
+    }
+
     public static void Rodar(Action<bool, string> checar)
     {
+        PendenteNaoEhSemNota(checar);
         // ── CANCELAMENTO DA NFC-e (evento 110111) ─────────────────────────
         // Regras que vieram da SEFAZ e do agente, nao de gosto nosso. O que este
         // bloco protege: a JUSTIFICATIVA (15..255) e a leitura do cStat — errar
@@ -62,6 +103,106 @@ public static class TestesSefaz
             var mudo = CancelamentoFiscal.CancelarAsync("http://127.0.0.1:1", new string('1', 44), "1234567890", "venda cancelada por desistencia do cliente").GetAwaiter().GetResult();
             checar(!mudo.Ok && mudo.Indisponivel,
                 "agente mudo e INDISPONIVEL (nao sei), nunca recusa");
+        }
+
+        // ── CANCELAR A VENDA, COM OU SEM MAQUININHA ────────────────────────
+        // O furo do dono (29/08): cancelar venda e cancelar nota moravam DENTRO do
+        // estorno, e o estorno so abria com TEF integrado. Em maquininha AVULSA nao
+        // existia caminho — e a NFC-e morre em 30 minutos.
+        //
+        // Aqui se testa a DECISAO (o que da para fazer, em que ordem, e o que o
+        // operador faz com as maos), que e a parte que erra caro.
+        {
+            var agora = new DateTime(2026, 8, 29, 15, 0, 0, DateTimeKind.Local);
+            var chave = new string('7', 44);
+            static IReadOnlyList<PagamentoDaVenda> So(params PagamentoDaVenda[] p) => p;
+            var cartao = So(new PagamentoDaVenda("credito", 4500));
+            var especie = So(new PagamentoDaVenda("dinheiro", 3000));
+
+            checar(CancelamentoFiscal.Prazo == TimeSpan.FromMinutes(30),
+                "o prazo do evento 110111 e de 30 minutos da AUTORIZACAO");
+            checar(CancelamentoFiscal.RestanteDoPrazo(agora.AddMinutes(-22), agora) == TimeSpan.FromMinutes(8),
+                "22 minutos depois da nota, restam 8 do prazo");
+            checar(CancelamentoFiscal.RestanteDoPrazo(agora.AddMinutes(-47), agora) < TimeSpan.Zero,
+                "vencido nao satura em zero — a tela precisa dizer de quanto passou");
+
+            // ── o caso do dono: nota viva, maquininha avulsa ────────────────
+            var vivo = CancelamentoVenda.Montar("autorizada", chave, "135260", agora.AddMinutes(-22),
+                cartao, estornoPeloPdv: false, agora);
+            checar(vivo.PodeSeguir && vivo.Nota == SituacaoDaNota.DentroDoPrazo,
+                "SEM maquininha integrada, a venda com nota viva PODE ser cancelada");
+            checar(vivo.CancelaNota && vivo.PedeJustificativaFiscal,
+                "havendo nota, o motivo digitado vira o xJust da SEFAZ (15..255)");
+            checar(vivo.TextoDaNota.Contains("8 minutos") && vivo.TextoDaNota.Contains("110111"),
+                "a tela diz quanto tempo resta do prazo");
+
+            // ── passou dos 30 min: parar de prometer ────────────────────────
+            var tarde = CancelamentoVenda.Montar("autorizada", chave, "135260", agora.AddMinutes(-47),
+                cartao, estornoPeloPdv: false, agora);
+            checar(tarde.Nota == SituacaoDaNota.ForaDoPrazo && tarde.Arriscado,
+                "47 minutos depois, a nota esta FORA do prazo");
+            checar(!tarde.TextoDaNota.Contains("vai ser cancelada"),
+                "vencido o prazo, a tela NAO promete o cancelamento que a SEFAZ nao faz mais");
+            checar(tarde.TextoDaNota.Contains("devolução", StringComparison.OrdinalIgnoreCase)
+                   && tarde.TextoDaNota.Contains("contador"),
+                "vencido o prazo, a tela diz o caminho real: nota de devolucao com o contador");
+            checar(tarde.PodeSeguir,
+                "prazo vencido AVISA, nao proibe: o relogio deste caixa nao e o da SEFAZ (e existe o cStat 155)");
+            var cravado = CancelamentoVenda.Montar("autorizada", chave, "135260", agora.AddMinutes(-30),
+                cartao, estornoPeloPdv: false, agora);
+            checar(cravado.Nota == SituacaoDaNota.ForaDoPrazo,
+                "no minuto 30 cravado ja conta como vencido (erra para o lado de nao prometer)");
+
+            // ── O DINHEIRO. O mal-entendido que custa dinheiro de verdade ───
+            checar(CancelamentoVenda.AvisoDoDinheiro.Contains("NENHUM dinheiro volta sozinho"),
+                "o aviso do dinheiro diz, em letras, que nada volta sozinho");
+            checar(vivo.Dinheiro.Count == 1 && vivo.Dinheiro[0].Contains("ESTORNE NA MAQUININHA")
+                   && vivo.Dinheiro[0].Contains("na mão", StringComparison.OrdinalIgnoreCase),
+                "cartao em maquininha avulsa: o estorno e NA MAQUININHA, na mao do operador");
+            checar(!vivo.Dinheiro[0].Contains("volta para o cliente"),
+                "nada na tela do cancelamento promete devolucao automatica");
+            var comTef = CancelamentoVenda.Montar("autorizada", chave, "135260", agora.AddMinutes(-5),
+                cartao, estornoPeloPdv: true, agora);
+            checar(comTef.Dinheiro[0].Contains("Estornar o cartão"),
+                "com maquininha integrada, a tela manda usar o estorno (que devolve e cancela no mesmo ato)");
+            var mista = CancelamentoVenda.Montar(null, null, null, null,
+                So(new PagamentoDaVenda("dinheiro", 3000), new PagamentoDaVenda("pix", 1500)),
+                estornoPeloPdv: false, agora);
+            checar(mista.Dinheiro.Count == 2,
+                "uma linha por forma de pagamento — o operador nao pode esquecer metade");
+            checar(mista.Dinheiro.All(l => l.Contains("na mão", StringComparison.OrdinalIgnoreCase)),
+                "sem TEF, TODA forma volta na mao (lista vazia seria o operador supondo que o sistema devolveu)");
+            checar(CancelamentoVenda.ComoDevolver(especie, false).Count == 1,
+                "venda so em dinheiro tambem tem sua linha");
+            checar(CancelamentoVenda.ResumoDasFormas(
+                       So(new PagamentoDaVenda("dinheiro", 100), new PagamentoDaVenda("credito", 100)))
+                   == "dinheiro + Crédito",
+                "o rotulo da lista resume as formas da venda");
+
+            // ── venda sem nota: cancela e pronto ────────────────────────────
+            // ⚠️ O exemplo era "pendente", e estava ERRADO — nao a assercao, o valor.
+            // 'pendente' e o emissor MUDO: a nota PODE ter sido autorizada do outro lado
+            // (Fiscal.cs:207-213). Usa-lo aqui ensinava o codigo a tratar "nao sei" como
+            // "nao tem", que e o defeito que PendenteNaoEhSemNota agora trava. Venda que
+            // de fato nao emitiu tem fiscal_status vazio.
+            var semNota = CancelamentoVenda.Montar("", null, null, null, especie, false, agora);
+            checar(semNota.PodeSeguir && !semNota.CancelaNota && !semNota.PedeJustificativaFiscal,
+                "venda sem nota nao chama a SEFAZ nem exige justificativa de 15 letras");
+
+            // ── o caixa que caiu no meio: nota cancelada, venda de pe ───────
+            // Estado REAL (o estorno grava a nota antes do CNC). Ate hoje nao tinha
+            // saida nenhuma no PDV: a venda ficava aberta para sempre no caixa.
+            var meio = CancelamentoVenda.Montar("cancelada", chave, "135260", agora.AddMinutes(-90), cartao, false, agora);
+            checar(meio.PodeSeguir && meio.Nota == SituacaoDaNota.JaCancelada && !meio.CancelaNota,
+                "nota ja cancelada e venda de pe: da para fechar a venda (mesmo fora do prazo da nota)");
+
+            // ── o que NAO da para fazer daqui, dito com o motivo certo ──────
+            var conting = CancelamentoVenda.Montar("contingencia", chave, null, agora.AddMinutes(-2), cartao, false, agora);
+            checar(!conting.PodeSeguir && conting.Impedimento!.Contains("protocolo"),
+                "contingencia (sem nProt) e recusada com o motivo certo, nao com a janela fechando");
+            var semDados = CancelamentoVenda.Montar("autorizada", "123", "135260", agora, cartao, false, agora);
+            checar(!semDados.PodeSeguir && semDados.Nota == SituacaoDaNota.SemDados,
+                "nota autorizada sem a chave neste caixa nao cancela daqui — e a tela explica");
         }
 
         var itens = new List<ItemFiscal>

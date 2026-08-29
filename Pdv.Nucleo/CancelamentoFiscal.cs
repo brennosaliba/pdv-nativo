@@ -46,6 +46,28 @@ public static class CancelamentoFiscal
     public const int TempoMs = 40_000;
 
     /// <summary>
+    /// PRAZO DO EVENTO 110111: 30 minutos contados da AUTORIZAÇÃO da nota (não da
+    /// venda, não do pagamento). Passou, a NFC-e não morre mais nunca — o desfecho
+    /// vira nota de devolução com o contador, que é outra conversa e outro papel.
+    ///
+    /// Por que isto AVISA em vez de PROIBIR: o relógio que vale é o da SEFAZ, e o
+    /// relógio deste caixa não é o dela (já houve terminal de loja com meia hora de
+    /// diferença). Uma trava local recusaria cancelamento que a SEFAZ ainda aceita,
+    /// e o cStat 155 ("cancelamento fora de prazo homologado") existe justamente
+    /// porque o corte não é tão seco quanto parece. Quem recusa é a SEFAZ; o PDV
+    /// só tem que parar de PROMETER depois do prazo.
+    /// </summary>
+    public static readonly TimeSpan Prazo = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// O que sobra do prazo. NÃO satura em zero de propósito: depois de vencido a
+    /// tela precisa dizer de quanto passou ("autorizada há 47 minutos"), senão o
+    /// operador acha que faltou pouco e tenta de novo com o cliente esperando.
+    /// </summary>
+    public static TimeSpan RestanteDoPrazo(DateTime autorizadaEm, DateTime agora)
+        => Prazo - (agora - autorizadaEm);
+
+    /// <summary>
     /// cStat de SUCESSO do 110111: 135 (evento vinculado), 136 (registrado, não
     /// vinculado) e 155 (cancelamento fora do prazo, aceito). 573 é DUPLICIDADE:
     /// o evento já existia — a nota já está cancelada, então para o caixa isso é

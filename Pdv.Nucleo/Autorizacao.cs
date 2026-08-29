@@ -220,6 +220,23 @@ public static class Autorizacao
         return $"estorno:{Limpo(tefId, 48)}:v{numeroVenda}:nsu{Limpo(nsu, 24)}:c{valorCent}";
     }
 
+    /// <summary>
+    /// AMARRA O TOKEN ÀQUELE CANCELAMENTO DE VENDA. Prefixo próprio, e não o de
+    /// estorno, porque são atos diferentes: um código aprovado para cancelar a
+    /// venda #12 não pode servir para devolver dinheiro no cartão — e a conferência
+    /// de referência (aqui e na edge) é o que impede isso.
+    ///
+    /// Aqui não existe NSU nem transação de TEF (cancelar venda e cancelar nota não
+    /// passam pela maquininha), então o que identifica é a venda: id, número e
+    /// valor. Fica em ~90 caracteres, bem abaixo dos 200 que a edge corta.
+    /// </summary>
+    public static string ReferenciaCancelamento(string vendaId, long numeroVenda, long valorCent)
+    {
+        static string Limpo(string? s, int max)
+            => new((s ?? "").Where(char.IsLetterOrDigit).Take(max).ToArray());
+        return $"cancelamento:{Limpo(vendaId, 48)}:v{numeroVenda}:c{valorCent}";
+    }
+
     /// <summary>Nome com que este caixa se apresenta à nuvem (cadastro `pdv_terminais.nome`).</summary>
     public static string NomeDoTerminal(SqliteConnection cx)
     {

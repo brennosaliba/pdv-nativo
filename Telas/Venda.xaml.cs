@@ -1704,49 +1704,92 @@ public partial class Venda : UserControl
         Dialogo.Avisar(dono, "Impressora",
             $"Os cupons passam a sair em {escolhida ?? "impressora padrão do Windows"}.", "ok");
     }
-    // ── TEF (PayGo): estorno, menu administrativo, reimpressão ────────────────
+    // ── PÓS-VENDA: cancelar a venda, cancelar a nota, estornar, reimprimir ────
 
     /// <summary>
-    /// Menu do botão "Cartão" na barra: estornar o cartão/PIX de uma venda (CNC no PayGo +
-    /// cancelar a venda no MESMO ato) e reimprimir o último comprovante. Só PayGo: o Smart
-    /// TEF da nuvem não tem estorno pela tela (estorna-se no portal da adquirente).
+    /// Menu do botão "Cancelar venda" da barra. TRÊS ATOS DIFERENTES, e só o
+    /// terceiro precisa de maquininha:
+    ///
+    ///  · cancelar a VENDA                  → UPDATE no banco deste caixa;
+    ///  · cancelar a NFC-e (evento 110111)  → agente fiscal local (127.0.0.1), que
+    ///    é quem tem o certificado A1 da loja;
+    ///  · estornar o cartão/PIX (CNC)       → maquininha INTEGRADA.
+    ///
+    /// Até 29/08/2026 os três moravam dentro do estorno e o menu INTEIRO abria só
+    /// com `Servicos.Operavel()` não-nulo. Em loja de MAQUININHA AVULSA o operador
+    /// lia "chame o gerente para configurar" — conselho errado: ele não precisava
+    /// de maquininha, precisava cancelar uma nota, e a NFC-e morre em 30 minutos.
+    /// Não existia caminho nenhum, e a janela fechava em silêncio.
+    ///
+    /// A porta continua sendo esta (mesmo botão da barra, mesmo menu de opções):
+    /// inventar uma navegação nova para o caixa aprender seria trocar um problema
+    /// por outro. O que mudou é que o TEF barra só o que é dele.
     /// </summary>
-    private async void MenuTef(object sender, RoutedEventArgs e)
+    private async void MenuCancelamento(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;
         if (_comanda.Count > 0)
         {
             Dialogo.Avisar(dono, "Comanda aberta",
-                "Termine ou limpe a comanda antes de estornar ou reimprimir.", "erro");
+                "Termine ou limpe a comanda antes de cancelar, estornar ou reimprimir.", "erro");
             return;
         }
         if (TefEmAndamento(dono)) return;
-        var cli = Servicos.Operavel();
-        if (cli is null)
-        {
-            Dialogo.Avisar(dono, "Maquininha",
-                "Este caixa não tem maquininha ligada a ele. Chame o gerente para configurar.", "erro");
-            return;
-        }
+
+        // O menu se monta pela CONFIG (`tef_habilitado`), não por o provedor estar de
+        // pé neste segundo: num caixa com maquininha integrada e o PayGo fechado,
+        // sumir com as opções do cartão esconderia justamente o que o operador
+        // precisa entender. Quem confere se ela responde é a opção do estorno.
+        // (E ler a config não constrói o cliente do TEF — construir aqui disputaria
+        // a pasta do PayGo com uma cobrança em voo.)
+        bool temTef;
+        using (var cx = Banco.Abrir()) temTef = Vendas.Config(cx, "tef_habilitado") == "1";
+
         // Menu administrativo do PayGo e roteiro de homologação saíram (28/08): o ADM
         // é o painel web da PayGo, e a homologação terminou — opção que ninguém usa
         // só aumenta a chance de tocar na errada com o cliente esperando.
-        var opcoes = new[] { "Estornar o cartão/PIX de uma venda", "Reimprimir o último comprovante" };
-        var escolha = EscolherOpcao(dono, "Cartão e PIX", "O que você quer fazer?", opcoes);
+        var opcoes = new List<string> { "Cancelar uma venda (e a nota fiscal)" };
+        if (temTef)
+        {
+            opcoes.Add("Estornar o cartão/PIX de uma venda");
+            opcoes.Add("Reimprimir o último comprovante");
+        }
+        // Maquininha avulsa tem UMA opção: perguntar "o que você quer fazer?" com uma
+        // única resposta possível é um toque a mais com o cliente no balcão.
+        var escolha = opcoes.Count == 1
+            ? 0
+            : EscolherOpcao(dono, "Cancelar venda", "O que você quer fazer?", opcoes.ToArray());
         if (escolha < 0) return;
-        // Enquanto o PayGo está com a tela/pinpad (CNC/ADM não têm timeout), a venda não pode
-        // seguir por baixo: Finalizar/Fechar caixa/Sair conferem _tefOcupado.
-        BtnTef.IsEnabled = false;
+        // Enquanto isto corre (o PayGo pode ficar com a tela/pinpad, e a autorização
+        // acende o celular da gerência), a venda não pode seguir por baixo:
+        // Finalizar/Fechar caixa/Sair conferem _tefOcupado.
+        BtnCancelar.IsEnabled = false;
         _tefOcupado = true;
         try
         {
             switch (escolha)
             {
-                case 0: await EstornarTefAsync(dono, cli); break;
-                case 1: await ReimprimirComprovanteAsync(dono); break;
+                case 0:
+                    await CancelarVendaAsync(dono);
+                    break;
+                case 1:
+                    // O ÚNICO ato que precisa de maquininha — e o aviso, quando ela não
+                    // responde, aponta para o caminho que continua aberto.
+                    var cli = Servicos.Operavel();
+                    if (cli is null)
+                        Dialogo.Avisar(dono, "Maquininha",
+                            "A maquininha integrada não respondeu — sem ela o PDV não devolve o cartão. " +
+                            "Confira se ela está ligada e com o programa dela aberto.\n\n" +
+                            "Para cancelar a VENDA e a NOTA você não precisa dela: volte e escolha " +
+                            "\"Cancelar uma venda\".", "erro");
+                    else await EstornarTefAsync(dono, cli);
+                    break;
+                case 2:
+                    await ReimprimirComprovanteAsync(dono);
+                    break;
             }
         }
-        finally { _tefOcupado = false; BtnTef.IsEnabled = true; }
+        finally { _tefOcupado = false; BtnCancelar.IsEnabled = true; }
     }
 
     private static void GuardarPasso(string numero, string? intencao, string resultado)
@@ -1793,14 +1836,18 @@ public partial class Venda : UserControl
             (long)l.valor_cent, (int)(long)l.parcelas, "pago", RespostaPayGo.Analisar((string?)l.resposta_txt));
     }
 
-    /// <summary>Estorno em curso na maquininha: nada de vender, fechar caixa ou sair por baixo dele.</summary>
+    /// <summary>
+    /// Estorno OU cancelamento em curso: nada de vender, fechar caixa ou sair por
+    /// baixo dele. Vale para os dois porque o cancelamento também tem passo que
+    /// não se interrompe (o evento 110111 já mandado à SEFAZ).
+    /// </summary>
     private bool _tefOcupado;
 
     private bool TefEmAndamento(Window dono)
     {
         if (!_tefOcupado) return false;
-        Dialogo.Avisar(dono, "Maquininha ocupada",
-            "Tem um estorno acontecendo na maquininha. Termine ele antes de continuar aqui.", "erro");
+        Dialogo.Avisar(dono, "Espere terminar",
+            "Tem um cancelamento ou estorno em andamento. Termine ele antes de continuar aqui.", "erro");
         return true;
     }
 
@@ -2213,6 +2260,312 @@ public partial class Venda : UserControl
                 ? (blocos.Count > 1 ? "As duas vias foram para a impressora." : "A via foi para a impressora.")
                 : erro + "\n\nConfira se a impressora está ligada e com papel, e tente de novo.",
             erro is null ? "ok" : "erro");
+    }
+
+    /// <summary>
+    /// CANCELAR UMA VENDA — com ou sem maquininha. Faz DUAS coisas, nesta ordem:
+    ///   1. cancela a NFC-e na SEFAZ (evento 110111, pelo agente fiscal local);
+    ///   2. cancela a VENDA no caixa.
+    ///
+    /// A ORDEM É INEGOCIÁVEL e já era regra do núcleo: <see cref="Vendas.Cancelar"/>
+    /// RECUSA venda com nota viva, porque documento válido para venda que não existe
+    /// mais é divergência que aparece na apuração do contador, não no caixa. Se o
+    /// passo 1 falhar, nada aconteceu — nota, venda e dinheiro seguem como estavam,
+    /// e o operador tenta de novo.
+    ///
+    /// O QUE ELA NÃO FAZ É DEVOLVER DINHEIRO, e a tela repete isso duas vezes (na
+    /// confirmação e no fim). Em maquininha AVULSA o estorno é na maquininha, na mão
+    /// do operador; o PDV só registra que a venda caiu. Operador que cancela a nota e
+    /// acha que o cliente foi reembolsado custa dinheiro de verdade. Com maquininha
+    /// integrada existe caminho melhor — o estorno, que devolve e cancela no mesmo
+    /// ato — e a tela manda usar ele em vez de abrir um segundo caminho de dinheiro.
+    /// </summary>
+    private async Task CancelarVendaAsync(Window dono)
+    {
+        // SÓ O TURNO ABERTO. Venda de turno fechado tem caixa já apurado e conferido;
+        // derrubar uma por aqui mudaria um fechamento que alguém assinou. E o prazo de
+        // 30 min da NFC-e praticamente garante que o alvo está no turno de agora.
+        List<dynamic> linhas;
+        var pagsPorVenda = new Dictionary<string, List<PagamentoDaVenda>>(StringComparer.Ordinal);
+        bool temTef;
+        using (var cx = Banco.Abrir())
+        {
+            linhas = cx.Query("""
+                SELECT v.id AS venda_id, v.numero_local, v.finalizada_em, v.total_cent,
+                       v.fiscal_status, v.nfce_chave, v.nfce_protocolo,
+                       -- dhRecbto é a hora que a SEFAZ carimbou: é DELA que correm os
+                       -- 30 minutos, não da venda nem do pagamento.
+                       (SELECT n.dh_recbto FROM nfce_emissao n
+                         WHERE n.venda_id = v.id AND n.chave = v.nfce_chave
+                         ORDER BY n.tentativa DESC LIMIT 1) AS nota_em
+                  FROM venda v
+                 WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
+                 ORDER BY v.finalizada_em DESC LIMIT 12
+                """, new { Ses = _sessao.Id }).ToList();
+            if (linhas.Count > 0)
+                foreach (var p in cx.Query("""
+                    SELECT venda_id, forma, valor_cent - troco_cent AS liquido
+                      FROM venda_pagamento WHERE venda_id IN @Ids
+                    """, new { Ids = linhas.Select(x => (string)x.venda_id).ToArray() }))
+                {
+                    var id = (string)p.venda_id;
+                    if (!pagsPorVenda.TryGetValue(id, out var lista))
+                        pagsPorVenda[id] = lista = new List<PagamentoDaVenda>();
+                    lista.Add(new PagamentoDaVenda((string)p.forma, (long)p.liquido));
+                }
+            // "Este caixa TEM maquininha integrada" é config, não o provedor no ar:
+            // é só para escolher o texto do dinheiro, e construir o cliente do TEF
+            // aqui disputaria a pasta do PayGo à toa.
+            temTef = Vendas.Config(cx, "tef_habilitado") == "1";
+        }
+        if (linhas.Count == 0)
+        {
+            Dialogo.Avisar(dono, "Cancelar venda",
+                "Nenhuma venda deste turno para cancelar.", "erro");
+            return;
+        }
+
+        static DateTime? Data(object? v) =>
+            v is string s && DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.AdjustToUniversal
+                | System.Globalization.DateTimeStyles.AssumeLocal, out var dt) ? dt.ToLocalTime() : null;
+        static string Hora(object? fe) => Data(fe) is { } d ? d.ToString("HH:mm") : "--:--";
+        static string Etiqueta(PlanoDeCancelamento p) => p.Nota switch
+        {
+            SituacaoDaNota.SemNota => "sem nota",
+            SituacaoDaNota.JaCancelada => "nota já cancelada",
+            SituacaoDaNota.ForaDoPrazo => "nota: PRAZO VENCIDO",
+            SituacaoDaNota.SemProtocolo => "nota em contingência",
+            SituacaoDaNota.SemDados => "nota sem dados aqui",
+            _ => p.RestanteDaNota is { } r
+                ? $"nota: {Math.Max(0, (int)r.TotalMinutes)} min para cancelar"
+                : "nota autorizada",
+        };
+
+        var agora = DateTime.Now;
+        var planos = new List<PlanoDeCancelamento>();
+        var rotulos = new List<string>();
+        foreach (var l in linhas)
+        {
+            var pags = pagsPorVenda.TryGetValue((string)l.venda_id, out var lp) ? lp : new List<PagamentoDaVenda>();
+            var p = CancelamentoVenda.Montar((string?)l.fiscal_status, (string?)l.nfce_chave,
+                (string?)l.nfce_protocolo, Data(l.nota_em) ?? Data(l.finalizada_em),
+                pags, estornoPeloPdv: temTef, agora);
+            planos.Add(p);
+            // O RELÓGIO APARECE JÁ NA LISTA: se o operador precisa abrir uma por uma
+            // para descobrir de qual dá tempo, o prazo vence enquanto ele procura.
+            rotulos.Add($"Venda #{l.numero_local} · {Hora(l.finalizada_em)} · " +
+                        $"{new Dinheiro((long)l.total_cent).Formatado()} · " +
+                        $"{CancelamentoVenda.ResumoDasFormas(pags)} · {Etiqueta(p)}");
+        }
+
+        var i = EscolherOpcao(dono, "Cancelar venda", "Qual venda você vai cancelar?", rotulos.ToArray());
+        if (i < 0) return;
+        var alvo = linhas[i];
+        var plano = planos[i];
+        var vendaId = (string)alvo.venda_id;
+        var numero = (long)alvo.numero_local;
+        var total = new Dinheiro((long)alvo.total_cent);
+        var chaveNfce = (string?)alvo.nfce_chave;
+        var protNfce = (string?)alvo.nfce_protocolo;
+        var pagsAlvo = pagsPorVenda.TryGetValue(vendaId, out var pv) ? pv : new List<PagamentoDaVenda>();
+
+        // Fim da linha com o MOTIVO na tela — nunca a janela fechando em silêncio,
+        // que era o que acontecia com maquininha avulsa.
+        if (!plano.PodeSeguir)
+        {
+            Dialogo.Avisar(dono, "Não dá para cancelar daqui", plano.Impedimento!, "erro");
+            return;
+        }
+
+        // Havendo nota, o motivo VIRA o xJust do evento: 15..255 é regra da SEFAZ,
+        // não capricho nosso. Sem nota, exigir 15 letras seria capricho.
+        var motivo = PedirTexto.Mostrar(dono, "Cancelar venda",
+            plano.PedeJustificativaFiscal
+                ? $"Por que está cancelando? Escreva pelo menos {CancelamentoFiscal.JustificativaMinima} letras — " +
+                  "isso vai junto no cancelamento da nota, para a SEFAZ."
+                : "Por que está cancelando? (obrigatório)",
+            "venda cancelada por desistência do cliente");
+        if (string.IsNullOrWhiteSpace(motivo)) return;
+        if (plano.PedeJustificativaFiscal && !CancelamentoFiscal.JustificativaValida(motivo))
+        {
+            Dialogo.Avisar(dono, "Motivo curto",
+                $"Escreva o motivo com {CancelamentoFiscal.JustificativaMinima} a " +
+                $"{CancelamentoFiscal.JustificativaMaxima} letras. É o que vai junto no cancelamento da nota.", "erro");
+            return;
+        }
+
+        // A CONFIRMAÇÃO DIZ O QUE ACONTECE COM O DINHEIRO, linha por forma de
+        // pagamento. Sem isto o operador cancela, lê "pronto" e manda o cliente
+        // embora achando que foi reembolsado.
+        var oQueAcontece = new System.Text.StringBuilder();
+        oQueAcontece.AppendLine($"Venda #{numero} · {total.Formatado()}");
+        oQueAcontece.AppendLine();
+        oQueAcontece.AppendLine(plano.TextoDaNota);
+        oQueAcontece.AppendLine();
+        oQueAcontece.AppendLine(CancelamentoVenda.AvisoDoDinheiro);
+        foreach (var linha in plano.Dinheiro) oQueAcontece.AppendLine("• " + linha);
+        if (!Dialogo.Confirmar(dono,
+                plano.Arriscado ? "Prazo da nota vencido" : "Cancelar venda",
+                oQueAcontece.ToString().TrimEnd(),
+                plano.Arriscado ? "Tentar mesmo assim" : "Cancelar a venda", "Voltar", perigo: true)) return;
+
+        // ── AUTORIZAÇÃO ──────────────────────────────────────────────────────
+        // Cancelar nota é ato fiscal: passa pelo MESMO caminho do estorno (token de
+        // 6 dígitos no WhatsApp da gerência, PIN do supervisor como saída quando a
+        // nuvem não responde). Vem depois do motivo e da confirmação pelo motivo de
+        // sempre: o aviso que acende à toa é o aviso que ninguém lê.
+        DesfechoAutorizacao aut;
+        PedidoAutorizacao pedidoAut;
+        using (var cxa = Banco.Abrir())
+        {
+            pedidoAut = new PedidoAutorizacao(
+                Autorizacao.NomeDoTerminal(cxa),
+                // Referência PRÓPRIA (prefixo "cancelamento:"): um token aprovado para
+                // esta venda não pode servir para cancelar outra — nem para um estorno.
+                Autorizacao.ReferenciaCancelamento(vendaId, numero, total.Centavos),
+                total.Centavos,
+                Loja: cxa.ExecuteScalar<string?>("SELECT loja_nome FROM terminal LIMIT 1"),
+                Operador: _operador.Nome,
+                Venda: numero.ToString(),
+                // Quem aprova pelo WhatsApp precisa saber COMO a venda foi paga: é o que
+                // deixa claro que não existe estorno automático nenhum nesta aprovação.
+                Forma: CancelamentoVenda.ResumoDasFormas(pagsAlvo),
+                Nsu: null);
+            var telaAut = new TelaAutorizacao(dono);
+            try
+            {
+                aut = await Autorizacao.ResolverAsync(cxa, Servicos.Autorizador(), pedidoAut,
+                    _operador, telaAut);
+            }
+            catch (Exception ex)
+            {
+                // MESMA REDE DO ESTORNO, e pelo mesmo motivo: este método é chamado de
+                // um `async void` sem catch, e o App não registra
+                // DispatcherUnhandledException — exceção que escape daqui ENCERRA o
+                // Pdv.exe no meio do atendimento. Nenhuma falha de autorização vale o
+                // caixa fechando sozinho.
+                aut = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, null,
+                    "o pedido de aprovação não saiu deste caixa (" + ex.Message + ")");
+                try
+                {
+                    var supEmergencia = await telaAut.PedirPinAsync(
+                        "o pedido de aprovação por WhatsApp não saiu deste caixa");
+                    aut = supEmergencia is null
+                        ? aut with { Avisado = true }
+                        : new DesfechoAutorizacao(ViaAutorizacao.Pin, supEmergencia, null, null,
+                            "o pedido de aprovação por WhatsApp não saiu deste caixa");
+                }
+                catch { /* nem o PIN deu: recusa o cancelamento, mas não derruba o PDV */ }
+            }
+        }
+        if (!aut.Autorizado)
+        {
+            if (!aut.Avisado)
+                Dialogo.Avisar(dono, "Cancelamento não autorizado",
+                    aut.Motivo + ".\n\nNada foi cancelado. Chame o gerente.", "erro");
+            return;
+        }
+
+        var trilha = Autorizacao.Trilha(aut);
+        var autoAutorizado = aut.Supervisor is { } quem && quem.Id == _operador.Id ? " [AUTO-AUTORIZADO]" : "";
+        // A auditoria diz COMO a venda foi paga e que a devolução é MANUAL: quem for
+        // conferir isto depois (o dono, o contador) precisa saber que o PDV não
+        // devolveu nada — senão o cancelamento parece um estorno que nunca houve.
+        var detalhe = $"venda={numero} total={total.Formatado()} pago em " +
+                      $"{CancelamentoVenda.ResumoDasFormas(pagsAlvo)} (devolução do dinheiro é MANUAL, " +
+                      $"fora do PDV) — {motivo}{autoAutorizado}{trilha}";
+
+        // A linha "escapou do token" sai UMA vez, no PRIMEIRO ato irreversível — que
+        // aqui é a nota (evento 110111 registrado não volta atrás), e só na falta
+        // dela é a venda. Sem o guarda ela sairia duas vezes e o painel do dono
+        // contaria dois cancelamentos onde houve um.
+        var registrou = false;
+        void RegistrarEscape()
+        {
+            if (registrou) return;
+            registrou = true;
+            using var c = Banco.Abrir();
+            Autorizacao.AuditarSemAprovacaoRemota(c, aut, _operador.Id,
+                $"cancelamento de venda={numero} total={total.Formatado()}", pedidoAut, vendaId);
+        }
+
+        // ── A NOTA PRIMEIRO ──────────────────────────────────────────────────
+        if (plano.CancelaNota)
+        {
+            using (var esperando = new Espera(dono, "Cancelando a nota fiscal…"))
+            {
+                var rc = await CancelamentoFiscal.CancelarAsync(
+                    Servicos.AgenteUrl(), chaveNfce!, protNfce, motivo!);
+                if (!rc.Ok)
+                {
+                    using (var cxn = Banco.Abrir())
+                        Caixa.Auditar(cxn, null, "nfce_cancelamento_negado", _operador.Id, aut.Autorizador,
+                            $"venda={numero} chave={chaveNfce} — {rc.Mensagem}{trilha}");
+                    esperando.Dispose();
+                    // "NÃO SEI" NUNCA VIRA "CANCELADA": nem na tela, nem no banco. A
+                    // SEFAZ pode ter registrado o evento com a resposta perdida na
+                    // volta — carimbar 'cancelada' aqui deixaria a venda cancelada
+                    // com uma nota que talvez ainda esteja viva.
+                    Dialogo.Avisar(dono,
+                        rc.Indisponivel ? "Nota sem resposta" : "Nota não cancelada",
+                        rc.Indisponivel
+                            ? $"{rc.Mensagem}.\n\nNADA foi cancelado. A nota PODE ter sido cancelada mesmo sem a " +
+                              "resposta chegar — chame o gerente para conferir antes de tentar de novo."
+                            : $"{rc.Mensagem}.\n\nNada mudou: a nota e a venda seguem como estavam." +
+                              (plano.Arriscado
+                                  ? " O prazo de 30 minutos venceu, então daqui não sai mais: o caminho agora é " +
+                                    "uma NOTA DE DEVOLUÇÃO com o contador."
+                                  : " Tente de novo; se continuar, chame o gerente."),
+                        "erro");
+                    return;
+                }
+
+                // Sucesso: gravar ANTES de mexer na venda. Se o caixa morrer aqui, a
+                // nota está cancelada e o PDV sabe — no retry a venda aparece como
+                // "nota já cancelada" e só falta fechá-la.
+                using (var cxn = Banco.Abrir())
+                {
+                    cxn.Execute("UPDATE venda SET fiscal_status = 'cancelada' WHERE id = @Id",
+                        new { Id = vendaId });
+                    Caixa.Auditar(cxn, null, "nfce_cancelada_sefaz", _operador.Id, aut.Autorizador,
+                        $"venda={numero} chave={chaveNfce} — {rc.Mensagem}{trilha}");
+                }
+                RegistrarEscape();
+            }
+        }
+
+        // ── E SÓ ENTÃO A VENDA ───────────────────────────────────────────────
+        using (var cx = Banco.Abrir())
+        {
+            try
+            {
+                Vendas.Cancelar(cx, vendaId, _operador.Id, motivo!, aut.Autorizador);
+            }
+            catch (Exception ex)
+            {
+                Caixa.Auditar(cx, null, "venda_cancelamento_falhou", _operador.Id, aut.Autorizador,
+                    detalhe + " — nota resolvida, venda NÃO cancelada: " + ex.Message);
+                Dialogo.Avisar(dono, "Venda ainda aberta",
+                    $"A nota foi resolvida, mas a venda #{numero} continua no caixa. " +
+                    "Chame o gerente.\n\nDetalhe: " + ex.Message, "erro");
+                return;
+            }
+            RegistrarEscape();
+            // Linha separada da que `Vendas.Cancelar` grava: é esta que carrega a
+            // TRILHA (quem aprovou, ou o aviso em maiúsculas de que ninguém de fora
+            // aprovou). O motivo que sobe para a nuvem fica limpo do lado de lá.
+            Caixa.Auditar(cx, null, "cancelamento_autorizado", _operador.Id, aut.Autorizador, detalhe);
+        }
+
+        // O RECADO DO DINHEIRO DE NOVO, agora que o operador vai virar para o
+        // cliente. É a última chance de ele não mandar embora quem não recebeu nada.
+        var recado = new System.Text.StringBuilder();
+        recado.AppendLine($"A venda #{numero} foi cancelada" +
+                          (plano.CancelaNota ? " e a nota foi cancelada na SEFAZ." : "."));
+        recado.AppendLine();
+        recado.AppendLine(CancelamentoVenda.AvisoDoDinheiro);
+        foreach (var linha in plano.Dinheiro) recado.AppendLine("• " + linha);
+        Dialogo.Avisar(dono, "Venda cancelada", recado.ToString().TrimEnd(), "ok");
     }
 
     private void Suprimento(object sender, RoutedEventArgs e) => Movimento("suprimento");

@@ -69,6 +69,29 @@ public static class Banco
             // marca quem é regido pelo painel: só esses são atualizados/desativados
             // pela sincronização — operador criado localmente não é tocado
             "ALTER TABLE operador ADD COLUMN da_nuvem INTEGER NOT NULL DEFAULT 0",
+            // "esta linha é a MESMA PESSOA que o operador <id>". Nasce quando a
+            // sincronização encontra, na descida, um operador do painel com o CPF de
+            // alguém que já existia SÓ no caixa — o que acontece sempre, porque o
+            // assistente cria o primeiro operador (passo 1) antes do pareamento
+            // (passo 5). Sem isto os dois ficavam vivos, o LOCAL continuava logando, e
+            // toda venda subia assinada por um id que `employees` não tem: 16 vendas /
+            // R$ 102.626,50 recusadas com 409 no caixa da Savassi.
+            //
+            // POR QUE UMA LÁPIDE E NÃO TROCAR O ID: venda, sessão de caixa, movimento e
+            // auditoria apontam para o id antigo, e a maioria dessas colunas NÃO tem
+            // chave estrangeira — trocar o id orfanaria em silêncio o que eu esquecesse
+            // de reapontar, e reescreveria quem assinou vendas já fechadas. A linha
+            // antiga fica de pé como âncora do histórico; quem assina o que é NOVO passa
+            // a ser o id do painel.
+            "ALTER TABLE operador ADD COLUMN mesmo_que TEXT",
+            // O hash/salt que o PAINEL mandou na última descida — guardado à parte do
+            // pin_hash que vale para entrar. É o que distingue "o painel não mexeu na
+            // senha" (então preserva a senha que a loja usa todo dia) de "alguém trocou
+            // a senha no painel" (ato deliberado: passa a valer). Sem esta memória, ou a
+            // descida trancava a loja fora do caixa na sincronização seguinte ao
+            // conserto, ou o painel perdia para sempre o poder de trocar aquela senha.
+            "ALTER TABLE operador ADD COLUMN pin_nuvem_hash TEXT",
+            "ALTER TABLE operador ADD COLUMN pin_nuvem_salt TEXT",
             // quando a PRIMEIRA falha real (com sessão de pé) aconteceu. A expiração da
             // fila conta a partir daqui, NÃO do criado_em: um terminal que ficou semanas
             // desligado religaria com itens "velhos" e os perderia no primeiro soluço.

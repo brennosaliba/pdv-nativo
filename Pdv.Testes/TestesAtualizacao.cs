@@ -41,6 +41,12 @@ public static class TestesAtualizacao
             MensagemDeProgresso(checar);
             Integridade(checar, raiz);
             DeOndeOExeVem(checar);
+            AHoraEAJanela(checar);
+            ORelogio(checar);
+            AOrdemDoPainel(checar);
+            ADecisaoSemNinguem(checar);
+            OQueOCaixaContaDeVolta(checar);
+            OArquivoJaBaixado(checar, raiz);
             await Download(checar, raiz);
         }
         finally
@@ -526,7 +532,470 @@ public static class TestesAtualizacao
         }
     }
 
+    // ═══ 8. A HORA E A JANELA ════════════════════════════════════════════════
+
+    /// <summary>
+    /// A janela "05h às 07h" — a peça que transforma "o lojista clica" em "o dono
+    /// decide".
+    ///
+    /// O QUE QUEBRA NA LOJA SE ISTO QUEBRAR:
+    ///  · janela lida ao contrário numa loja que fecha tarde (22h–02h): ou ela nunca
+    ///    abre, ou ela abre o DIA INTEIRO — e "o dia inteiro" quer dizer o caixa
+    ///    fechando sozinho no meio do almoço de sábado;
+    ///  · início igual ao fim aceito como "24 horas": autonomia permanente por causa de
+    ///    um campo que alguém deixou igual no painel;
+    ///  · intervalo fechado nos dois lados: a loja abre às 7h e o caixa reinicia às
+    ///    7h00 em ponto, junto com o primeiro cliente.
+    /// </summary>
+    private static void AHoraEAJanela(Action<bool, string> checar)
+    {
+        // ── a hora, do jeito que gente digita
+        checar(Atualizacao.TentarLerHora("05:00", out var h1) && h1 == 300, "hora: 05:00");
+        checar(Atualizacao.TentarLerHora("5", out var h2) && h2 == 300, "hora: '5' também é 5h (o painel não obriga a digitar zero)");
+        checar(Atualizacao.TentarLerHora(" 05h30 ", out var h3) && h3 == 330, "hora: 05h30 com espaço sobrando");
+        checar(Atualizacao.TentarLerHora("05:00:00", out var h4) && h4 == 300,
+            "hora: 05:00:00 (a cara de um `time` do Postgres) é aceita — o segundo é ignorado");
+        checar(Atualizacao.TentarLerHora("23:59", out var h5) && h5 == 1439, "hora: 23:59 é o último minuto do dia");
+        checar(Atualizacao.TentarLerHora("00:00", out var h6) && h6 == 0, "hora: meia-noite é zero, não é vazio");
+
+        checar(!Atualizacao.TentarLerHora("24:00", out _), "hora: 24:00 não existe");
+        checar(!Atualizacao.TentarLerHora("05:60", out _), "hora: minuto 60 não existe");
+        checar(!Atualizacao.TentarLerHora("-1", out _), "hora: negativa é recusada");
+        checar(!Atualizacao.TentarLerHora("de manhã", out _), "hora: texto livre é recusado");
+        checar(!Atualizacao.TentarLerHora("", out _) && !Atualizacao.TentarLerHora(null, out _),
+            "hora: vazia e nula são recusadas (é assim que 'sem janela' chega aqui)");
+
+        // ── a janela
+        checar(Atualizacao.TentarLerJanela("05:00", "07:00", out var j) && j.InicioMin == 300 && j.FimMin == 420,
+            "janela: 05:00–07:00 é lida");
+        checar(!j.CruzaMeiaNoite && j.DuracaoMin == 120, "janela: 05–07 dura 120 min e não cruza a meia-noite");
+
+        checar(Atualizacao.TentarLerJanela("22:00", "02:00", out var noite) && noite.CruzaMeiaNoite
+               && noite.DuracaoMin == 240,
+            "janela: 22:00–02:00 CRUZA a meia-noite e dura 240 min (loja que fecha tarde)");
+
+        // ⚠️ A recusa que mais importa deste arquivo.
+        checar(!Atualizacao.TentarLerJanela("05:00", "05:00", out _),
+            "janela: início IGUAL ao fim é RECUSADO — 'nunca' e 'o dia inteiro' têm a mesma cara, e uma delas entrega a frente de caixa");
+        checar(!Atualizacao.TentarLerJanela("25:00", "07:00", out _), "janela: hora impossível derruba a janela inteira");
+        checar(!Atualizacao.TentarLerJanela(null, null, out _), "janela: sem campos não há janela");
+
+        // ── estar dentro dela
+        TimeSpan Hora(int h, int m) => new(h, m, 0);
+
+        checar(!Atualizacao.DentroDaJanela(j, Hora(4, 59)), "janela: 04:59 ainda é fora");
+        checar(Atualizacao.DentroDaJanela(j, Hora(5, 0)), "janela: 05:00 em ponto já é dentro");
+        checar(Atualizacao.DentroDaJanela(j, Hora(6, 59)), "janela: 06:59 é o último minuto");
+        checar(!Atualizacao.DentroDaJanela(j, Hora(7, 0)),
+            "janela: 07:00 em ponto é FORA — a loja abre às 7 e o caixa não reinicia junto com o primeiro cliente");
+
+        checar(Atualizacao.MinutosAteFechar(j, Hora(5, 0)) == 120, "janela: às 05:00 restam 120 min");
+        checar(Atualizacao.MinutosAteFechar(j, Hora(6, 45)) == 15, "janela: às 06:45 restam 15");
+        checar(Atualizacao.MinutosAteFechar(j, Hora(9, 0)) == 0, "janela: fora dela não resta nada");
+
+        // A que cruza a meia-noite — onde a comparação ingênua (início < fim) mata.
+        checar(!Atualizacao.DentroDaJanela(noite, Hora(21, 59)), "janela noturna: 21:59 é fora");
+        checar(Atualizacao.DentroDaJanela(noite, Hora(22, 0)), "janela noturna: 22:00 é dentro");
+        checar(Atualizacao.DentroDaJanela(noite, Hora(23, 59)), "janela noturna: 23:59 é dentro");
+        checar(Atualizacao.DentroDaJanela(noite, Hora(0, 30)),
+            "janela noturna: 00:30 do dia seguinte É dentro (aqui a comparação ingênua diria não)");
+        checar(Atualizacao.DentroDaJanela(noite, Hora(1, 59)), "janela noturna: 01:59 é dentro");
+        checar(!Atualizacao.DentroDaJanela(noite, Hora(2, 0)), "janela noturna: 02:00 é fora");
+        checar(Atualizacao.MinutosAteFechar(noite, Hora(23, 0)) == 180,
+            "janela noturna: às 23:00 restam 180 min (a conta atravessa a meia-noite)");
+        checar(Atualizacao.MinutosAteFechar(noite, Hora(1, 0)) == 60, "janela noturna: à 01:00 resta 1 hora");
+
+        // ── o que cabe no que sobrou
+        checar(!Atualizacao.CabeNaJanela(10, jaBaixado: false),
+            "cabe: 10 min não dá para baixar 265 MB — e começar sabendo disso satura o link da loja na hora de abrir");
+        checar(Atualizacao.CabeNaJanela(10, jaBaixado: true),
+            "cabe: 10 min sobram para trocar quando o arquivo JÁ está no disco");
+        checar(Atualizacao.CabeNaJanela(15, jaBaixado: false), "cabe: 15 min é o mínimo para começar a baixar");
+        checar(!Atualizacao.CabeNaJanela(1, jaBaixado: true), "cabe: 1 min não dá nem para trocar");
+        checar(!Atualizacao.CabeNaJanela(0, jaBaixado: true) && !Atualizacao.CabeNaJanela(0, jaBaixado: false),
+            "cabe: fora da janela nada cabe");
+    }
+
+    // ═══ 9. O RELÓGIO ════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// De que relógio a janela depende — e a resposta é: NÃO do relógio da máquina.
+    ///
+    /// PC de balcão com relógio errado não é hipótese: é pilha de placa-mãe velha, fuso
+    /// trocado na instalação, horário de verão que ninguém desligou. Pendurar "atualiza
+    /// entre 05h e 07h" nesse relógio é aceitar que uma máquina com 8 horas de erro
+    /// feche a frente de caixa às 13h de sábado.
+    ///
+    /// A ESCOLHA, dita em voz alta: entre uma janela que NUNCA abre e uma que abre NA
+    /// HORA ERRADA, escolhe-se a que nunca abre. A primeira custa um dia a mais na
+    /// versão velha, é VISÍVEL no painel (o caixa reporta a versão que está rodando) e
+    /// tem saída manual — o botão continua lá. A segunda é um caixa fechando no
+    /// movimento, e ninguém liga o efeito à causa.
+    /// </summary>
+    private static void ORelogio(Action<bool, string> checar)
+    {
+        var cincoDaManha = new DateTimeOffset(2026, 8, 29, 5, 0, 0, TimeSpan.FromHours(-3));
+
+        checar(Atualizacao.RelogioDaLoja.Ancorar(null) is null,
+            "relógio: sem a hora do servidor não existe relógio — e sem relógio não existe janela");
+
+        long ms = 1_000_000;                       // contador monotônico de mentira
+        var r = Atualizacao.RelogioDaLoja.Ancorar(cincoDaManha, () => ms)!;
+        checar(r.HoraDaLoja == new TimeSpan(5, 0, 0), "relógio: ancorado no servidor, são 05:00 na loja");
+
+        ms += 10 * 60_000;
+        checar(r.HoraDaLoja == new TimeSpan(5, 10, 0),
+            "relógio: 10 min de contador monotônico depois, são 05:10 — sem consultar o relógio da máquina");
+
+        ms += 25 * 60_000;                          // 35 min desde a âncora
+        checar(r.Vencido && r.HoraDaLoja is null && r.AgoraNaLoja is null,
+            "relógio: âncora de mais de 30 min VENCE — internet caída tira do caixa o direito de se atualizar sozinho");
+
+        // Contador andando para trás (suspensão, VM mal comportada): não se usa.
+        long ms2 = 500;
+        var r2 = Atualizacao.RelogioDaLoja.Ancorar(cincoDaManha, () => ms2)!;
+        ms2 = 100;
+        checar(r2.Vencido, "relógio: contador que anda PARA TRÁS invalida a âncora em vez de virar hora negativa");
+
+        // O desvio: medido, reportado, e fora do portão.
+        var maquina = cincoDaManha.AddMinutes(90);
+        var d = Atualizacao.DesvioDoRelogio(cincoDaManha, maquina);
+        checar(d is { } dd && Math.Abs(dd.TotalMinutes - 90) < 0.01,
+            "relógio: o desvio da máquina é medido em relação ao da loja (90 min adiantada)");
+        checar(d > Atualizacao.DesvioQueImporta,
+            "relógio: 90 min é desvio que importa — é a mesma diferença que faz a SEFAZ recusar a NFC-e");
+        checar(Atualizacao.DesvioDoRelogio(null, maquina) is null,
+            "relógio: sem hora do servidor não há desvio para reportar");
+
+        // ⚠️ O TESTE QUE FECHA A ESCOLHA: sem relógio, a janela NÃO abre.
+        var livre = new Atualizacao.EstadoDoCaixa();
+        var comJanela = DoPainel(versao: "9.9.9", janela: ("05:00", "07:00"));
+        var semRelogio = Atualizacao.DecidirSozinho(livre, "0.1.0", comJanela, horaDaLoja: null);
+        checar(semRelogio.Autonomia == Atualizacao.Autonomia.SemRelogio && !semRelogio.Pode,
+            "relógio: sem saber que horas são na loja, a janela NÃO ABRE (janela que nunca abre > janela na hora errada)");
+    }
+
+    // ═══ 10. A ORDEM DO PAINEL ═══════════════════════════════════════════════
+
+    /// <summary>
+    /// A instrução por TERMINAL, que é o que o dono pediu: mandar para UMA loja, olhar,
+    /// e só então liberar o resto. Com 40 clientes, um versao.json único quer dizer
+    /// publicar para os 40 ao mesmo tempo e descobrir o defeito por telefone.
+    ///
+    /// ⚠️ E O LIMITE DO PAINEL, que é o teste mais importante desta seção: o painel
+    /// escolhe QUAL versão e QUANDO. Nunca DE ONDE. A âncora de domínio continua sendo
+    /// a `atualizacao_url` gravada NO CAIXA — um dado local — e não o endereço de quem
+    /// respondeu. Sem isso, tomar o painel (ou errar um UPDATE nele) viraria execução
+    /// remota como administrador em toda loja instalada.
+    /// </summary>
+    private static void AOrdemDoPainel(Action<bool, string> checar)
+    {
+        const string ancora = "https://mmtech.software/pdv/versao.json";
+
+        var completa = Atualizacao.LerInstrucao("""
+            { "produto":"pdv", "versao":"0.4.0",
+              "url":"https://pdv.mmtech.software/download/InstalarPdv-0.4.0.exe",
+              "sha256":"0000000000000000000000000000000000000000000000000000000000000abc",
+              "tamanho":265123456, "notas":"conserta o troco", "obrigatoria":false,
+              "janela_inicio":"05:00", "janela_fim":"07:00",
+              "agora":"2026-08-29T05:12:03-03:00", "atualizar_agora":false }
+            """, ancora);
+        checar(completa.Ok is { Manifesto.Versao: "0.4.0" } && completa.Erro is null,
+            "painel: a resposta completa é lida");
+        checar(completa.Ok!.Janela is { InicioMin: 300, FimMin: 420 }, "painel: a janela vem junto");
+        checar(completa.Ok.AgoraNaLoja?.Hour == 5 && completa.Ok.AgoraNaLoja?.Offset == TimeSpan.FromHours(-3),
+            "painel: `agora` vem no FUSO DA LOJA — o caixa não carrega banco de fusos e não confia no relógio do balcão");
+        checar(completa.Ok.Origem == Atualizacao.Origem.Painel, "painel: a origem é o painel");
+        checar(completa.Ok.Manifesto!.Tamanho == 265123456 && completa.Ok.Manifesto.Sha256!.Length == 64,
+            "painel: as mesmas peneiras do arquivo valem aqui (sha256 e tamanho)");
+
+        // "Nada para este terminal" é a resposta NORMAL das 39 lojas que ainda não
+        // entraram na onda. Tratar isso como falha acenderia alarme em 39 lugares.
+        foreach (var (json, nome) in new[]
+        {
+            ("null", "o literal null"),
+            ("[]", "a lista vazia (RETURNS TABLE sem linha)"),
+            ("""{"produto":"pdv"}""", "o objeto sem versão"),
+        })
+        {
+            var nada = Atualizacao.LerInstrucao(json, ancora);
+            checar(nada.Erro is null && nada.Ok is { Manifesto: null },
+                $"painel: {nome} = 'nada para este terminal', e isso NÃO é erro (é assim que se libera loja por loja)");
+        }
+
+        var lista = Atualizacao.LerInstrucao("""
+            [{ "produto":"pdv", "versao":"0.4.0", "url":"https://pdv.mmtech.software/x.exe" }]
+            """, ancora);
+        checar(lista.Ok is { Manifesto.Versao: "0.4.0" },
+            "painel: lista de UM elemento é aceita (é o que o PostgREST devolve em SETOF)");
+
+        var duas = Atualizacao.LerInstrucao("""
+            [{ "produto":"pdv","versao":"0.4.0","url":"https://pdv.mmtech.software/x.exe" },
+             { "produto":"pdv","versao":"0.5.0","url":"https://pdv.mmtech.software/y.exe" }]
+            """, ancora);
+        checar(duas.Erro is not null,
+            "painel: DUAS versões para o mesmo caixa é erro — adivinhar qual instalar é escolher a versão da loja no palpite");
+
+        // ⚠️ O painel não muda o domínio do instalador.
+        var foraDoDominio = Atualizacao.LerInstrucao("""
+            { "produto":"pdv", "versao":"0.4.0", "url":"https://cdn-de-terceiro.com/InstalarPdv.exe" }
+            """, ancora);
+        checar(foraDoDominio.Erro is not null,
+            "painel: instalador FORA do domínio deste caixa é recusado — o painel manda na versão, não no domínio");
+
+        var semHttps = Atualizacao.LerInstrucao("""
+            { "produto":"pdv", "versao":"0.4.0", "url":"http://pdv.mmtech.software/x.exe" }
+            """, ancora);
+        checar(semHttps.Erro is not null, "painel: http:// puro é recusado também vindo do painel");
+
+        // Janela torta não derruba a versão: derruba só a AUTONOMIA. O botão continua.
+        var janelaTorta = Atualizacao.LerInstrucao("""
+            { "produto":"pdv", "versao":"0.4.0", "url":"https://pdv.mmtech.software/x.exe",
+              "janela_inicio":"25:00", "janela_fim":"07:00" }
+            """, ancora);
+        checar(janelaTorta.Ok is { Manifesto: not null, Janela: null } && janelaTorta.Erro is null,
+            "painel: janela ilegível NÃO invalida a versão — some só a autonomia, que é o que não se concede por cima de campo ilegível");
+
+        var portalCativo = Atualizacao.LerInstrucao("<html>Faça login no wi-fi</html>", ancora);
+        checar(portalCativo.Erro is not null && portalCativo.Erro.Contains("wi-fi"),
+            "painel: HTML de portal cativo é explicado como wi-fi, não como 'JSON inválido'");
+
+        checar(Atualizacao.LerInstrucao("", ancora).Erro is not null, "painel: resposta vazia é erro");
+        checar(Atualizacao.LerInstrucao("[1,2,3]", ancora).Erro is not null, "painel: lista de números não é instrução");
+
+        // O botão manual, quando o painel diz "nada para este terminal": é EM DIA, e não
+        // "não consegui verificar" — senão o operador liga para o suporte por causa do
+        // funcionamento correto do sistema.
+        var emDia = Atualizacao.Decidir(new Atualizacao.EstadoDoCaixa(), "0.3.0",
+            new Atualizacao.LeituraManifesto(null, null));
+        checar(emDia.Situacao == Atualizacao.Situacao.EmDia,
+            "painel: 'nada liberado para este caixa' aparece no botão como TUDO EM DIA, não como falha");
+    }
+
+    // ═══ 11. A DECISÃO SEM NINGUÉM ═══════════════════════════════════════════
+
+    /// <summary>
+    /// "Posso me trocar sozinho, agora?" — a pergunta que o vigia faz a cada 15 min.
+    ///
+    /// ⚠️ A REGRA QUE NÃO TEM EXCEÇÃO, e que é metade dos testes daqui: a JANELA
+    /// responde "posso agora?" e o PORTÃO responde "é seguro agora?". As duas precisam
+    /// dizer sim. Nem a janela, nem "obrigatoria":true, nem o "atualizar agora" marcado
+    /// pelo dono no painel passam por cima do portão — porque o que está do outro lado
+    /// dele é um cliente no balcão com o cartão no pinpad.
+    /// </summary>
+    private static void ADecisaoSemNinguem(Action<bool, string> checar)
+    {
+        var livre = new Atualizacao.EstadoDoCaixa();
+        var cincoEMeia = new TimeSpan(5, 30, 0);
+        var meioDia = new TimeSpan(12, 0, 0);
+        var janela = ("05:00", "07:00");
+
+        Atualizacao.VeredictoSozinho Decidir(
+            Atualizacao.EstadoDoCaixa e, Atualizacao.Instrucao? i, TimeSpan? hora)
+            => Atualizacao.DecidirSozinho(e, "0.1.0", i, hora);
+
+        // ── de quem se aceita ordem
+        checar(Decidir(livre, null, cincoEMeia).Autonomia == Atualizacao.Autonomia.SemInstrucao,
+            "sozinho: painel mudo não autoriza nada");
+
+        // ⚠️ ARQUIVO ESTÁTICO NÃO REINICIA CAIXA.
+        var doArquivo = Atualizacao.DoArquivo(
+            new Atualizacao.Manifesto("9.9.9", "https://pdv.mmtech.software/x.exe", null, true));
+        var pelaFile = Decidir(livre, doArquivo, cincoEMeia);
+        checar(pelaFile.Autonomia == Atualizacao.Autonomia.SemInstrucao && !pelaFile.Pode,
+            "sozinho: versão vinda do versao.json NUNCA dá autonomia — um arquivo no nginx não derruba 40 frentes de caixa");
+
+        // ── em dia
+        checar(Decidir(livre, DoPainel(null), cincoEMeia).Autonomia == Atualizacao.Autonomia.EmDia,
+            "sozinho: sem versão liberada para este terminal, não há o que fazer");
+        checar(Atualizacao.DecidirSozinho(livre, "9.9.9", DoPainel("9.9.9", janela), cincoEMeia).Autonomia
+               == Atualizacao.Autonomia.EmDia,
+            "sozinho: mesma versão instalada = em dia (e aqui o bug de comparar texto mataria)");
+
+        // ── sem janela não tem troca sozinha, e esse é o PADRÃO
+        var semJanela = Decidir(livre, DoPainel("9.9.9"), cincoEMeia);
+        checar(semJanela.Autonomia == Atualizacao.Autonomia.SemJanela && !semJanela.Pode,
+            "sozinho: terminal SEM janela configurada nunca se troca sozinho — só pelo botão");
+
+        // ── fora da janela
+        var fora = Decidir(livre, DoPainel("9.9.9", janela), meioDia);
+        checar(fora.Autonomia == Atualizacao.Autonomia.ForaDaJanela && !fora.Pode,
+            "sozinho: meio-dia não é 05h–07h");
+
+        // ── dentro dela, com o caixa parado: PODE
+        var pode = Decidir(livre, DoPainel("9.9.9", janela), cincoEMeia);
+        checar(pode.Pode && pode.Autonomia == Atualizacao.Autonomia.Sim && pode.MinutosDeJanela == 90,
+            "sozinho: 05:30 dentro da janela, caixa parado = PODE, e ainda restam 90 min");
+
+        // ── as duas perguntas do dono sobre o estado do caixa
+        var comTurno = Decidir(livre with { CaixaAberto = true }, DoPainel("9.9.9", janela), cincoEMeia);
+        checar(comTurno.Pode,
+            "sozinho: CAIXA ABERTO sem venda em andamento PODE — o turno mora no ProgramData e volta inteiro; travar por turno aberto seria travar para sempre numa loja que abre às 8 e fecha às 22");
+        checar(Decidir(livre with { CaixaAberto = false }, DoPainel("9.9.9", janela), cincoEMeia).Pode,
+            "sozinho: CAIXA FECHADO (ninguém logado) é o melhor momento que existe — atualiza");
+        checar(Decidir(livre with { VendasPorSubir = 12 }, DoPainel("9.9.9", janela), cincoEMeia).Pode,
+            "sozinho: venda na fila para o painel não barra — ela fica no banco e sobe depois da troca");
+
+        // ⚠️ ── O PORTÃO É INTEIRO, DENTRO DA JANELA IGUAL
+        foreach (var (estado, nome) in new[]
+        {
+            (livre with { ItensNaComanda = 1 }, "um item na comanda"),
+            (livre with { MaquininhaOcupada = true }, "maquininha ocupada"),
+            (livre with { CobrancasNoPinpad = 1 }, "cobrança sem resposta no pinpad"),
+            (livre with { PapeisNaFila = 2 }, "papel na fila da impressora"),
+        })
+        {
+            var v = Decidir(estado, DoPainel("9.9.9", janela), cincoEMeia);
+            checar(v.Autonomia == Atualizacao.Autonomia.Impedido && !v.Pode,
+                $"sozinho: DENTRO da janela, {nome} BARRA — janela não é exceção ao portão");
+        }
+
+        var obrigatoria = DoPainel("9.9.9", janela, obrigatoria: true);
+        var barradaObrigatoria = Decidir(livre with { ItensNaComanda = 2 }, obrigatoria, cincoEMeia);
+        checar(!barradaObrigatoria.Pode && barradaObrigatoria.Autonomia == Atualizacao.Autonomia.Impedido,
+            "sozinho: nem OBRIGATÓRIA dentro da janela passa por cima da comanda aberta");
+
+        // ── "não sei" vira "não pode" — a regra invertida do caminho automático
+        var filaIlegivel = livre with { PapeisNaFila = -1 };
+        checar(Atualizacao.Impede(filaIlegivel) == Atualizacao.Impedimento.Nenhum,
+            "sozinho: no BOTÃO, fila ilegível deixa passar (tem gente olhando a loja e decidindo)");
+        checar(Atualizacao.ImpedeSozinho(filaIlegivel) == Atualizacao.Impedimento.EstadoDesconhecido,
+            "sozinho: no AUTOMÁTICO, fila ilegível BARRA — sem ninguém olhando, 'não sei' é 'não pode'");
+        checar(!Decidir(filaIlegivel, DoPainel("9.9.9", janela), cincoEMeia).Pode,
+            "sozinho: e isso realmente impede a troca de madrugada");
+
+        var incerto = livre with { EstadoIncerto = true };
+        checar(Atualizacao.Impede(incerto) == Atualizacao.Impedimento.Nenhum
+            && Atualizacao.ImpedeSozinho(incerto) == Atualizacao.Impedimento.EstadoDesconhecido,
+            "sozinho: banco que não abriu barra o automático e não barra o botão");
+        checar(Atualizacao.ImpedeSozinho(incerto with { ItensNaComanda = 3 }) == Atualizacao.Impedimento.ComandaAberta,
+            "sozinho: o impedimento CONCRETO ganha do genérico — no painel, 'comanda' explica e 'desconhecido' não");
+
+        // ── "ATUALIZAR AGORA": o terminal marcado no painel
+        var marcado = DoPainel("9.9.9", atualizarAgora: true);
+        var agora = Decidir(livre, marcado, meioDia);
+        checar(agora.Pode && agora.Autonomia == Atualizacao.Autonomia.Sim,
+            "marcado: 'atualizar agora' dispensa a janela — é literalmente o dono dizendo 'esse aí, agora'");
+        checar(Decidir(livre, marcado, null).Pode,
+            "marcado: e dispensa o relógio também — a marcação vale porque acabou de chegar na resposta");
+        var marcadoBarrado = Decidir(livre with { CobrancasNoPinpad = 1 }, marcado, meioDia);
+        checar(!marcadoBarrado.Pode && marcadoBarrado.Impedimento == Atualizacao.Impedimento.CobrancaNoPinpad,
+            "⚠️ marcado: 'atualizar agora' NÃO fura o portão — o dono no painel não vê o cartão do cliente no pinpad");
+        checar(Decidir(livre with { PapeisNaFila = -1 }, marcado, meioDia).Autonomia
+               == Atualizacao.Autonomia.Impedido,
+            "marcado: e continua valendo o 'não sei = não pode'");
+
+        // ── o motivo tem que ser dizível no painel
+        checar(Atualizacao.NomeDoImpedimento(Atualizacao.Impedimento.ComandaAberta) == "comanda"
+            && Atualizacao.NomeDoImpedimento(Atualizacao.Impedimento.EstadoDesconhecido) == "desconhecido"
+            && Atualizacao.NomeDoImpedimento(Atualizacao.Impedimento.Nenhum) == "nenhum",
+            "sozinho: o impedimento tem nome curto e estável para virar coluna no painel");
+        var (t, msg) = Atualizacao.Explicar(Atualizacao.Impedimento.EstadoDesconhecido, filaIlegivel);
+        checar(t.Length > 0 && msg.Contains("O QUE FAZER"),
+            "sozinho: até a recusa por 'não consegui conferir' diz o que fazer");
+    }
+
+    // ═══ 12. O QUE O CAIXA CONTA DE VOLTA ════════════════════════════════════
+
+    /// <summary>
+    /// Sem isto o dono publica às cegas: ele não sabe qual versão cada caixa está
+    /// rodando, então não sabe se a onda que ele soltou ontem chegou.
+    ///
+    /// A pergunta e o relatório são a MESMA requisição de propósito. O painel só
+    /// consegue responder "qual é a sua versão" se souber em qual o terminal está — é
+    /// assim que se libera loja por loja —, então a versão instalada já precisa subir
+    /// na pergunta. Reportar sai de graça: mesma viagem, mesmo token, nenhum canal a
+    /// mais para alguém manter vivo. E como a pergunta se repete a cada 15 min, o
+    /// painel nunca fica mais de um ciclo atrasado; depois de uma troca, o PRIMEIRO
+    /// ciclo do caixa novo já conta a versão nova e o dono vê a onda fechar sozinha.
+    /// </summary>
+    private static void OQueOCaixaContaDeVolta(Action<bool, string> checar)
+    {
+        var estado = new Atualizacao.EstadoDoCaixa(CaixaAberto: true, VendasPorSubir: 4);
+        var corpo = Atualizacao.CorpoDaPergunta("term-uuid-1", "loja-savassi", "0.3.0", estado,
+            TimeSpan.FromSeconds(90));
+
+        checar(corpo.Contains("\"_versao\":\"0.3.0\""),
+            "relato: a versão que ESTE caixa está rodando vai na pergunta — é ela que fecha o ciclo do painel");
+        checar(corpo.Contains("\"_terminal_uuid\":\"term-uuid-1\"") && corpo.Contains("\"_loja_id\":\"loja-savassi\""),
+            "relato: quem está falando — sem isso não existe publicar loja por loja");
+        checar(corpo.Contains("\"_produto\":\"pdv\""), "relato: de que produto se fala");
+        checar(corpo.Contains("\"pode_trocar_agora\":true") && corpo.Contains("\"impedimento\":\"nenhum\""),
+            "relato: e se dá para trocar agora — é a resposta para 'por que aquele caixa não atualizou'");
+        checar(corpo.Contains("\"turno_aberto\":true") && corpo.Contains("\"vendas_por_subir\":4"),
+            "relato: turno e fila pendente sobem junto");
+        checar(corpo.Contains("\"desvio_relogio_seg\":90"),
+            "relato: o erro do relógio vai em SEGUNDOS — o painel ordena por ele e acha a máquina antes de a SEFAZ recusar a nota");
+
+        var barrado = Atualizacao.CorpoDaPergunta("t", "l", "0.3.0",
+            estado with { ItensNaComanda = 2 }, null);
+        checar(barrado.Contains("\"impedimento\":\"comanda\"") && barrado.Contains("\"pode_trocar_agora\":false"),
+            "relato: o caixa que não pode trocar DIZ POR QUÊ, em vez de sumir do relatório");
+        checar(barrado.Contains("\"desvio_relogio_seg\":null"),
+            "relato: sem hora do servidor, o desvio vai nulo — não vai zero, que seria mentira de relógio certo");
+
+        var semEstado = Atualizacao.CorpoDaPergunta("t", "l", "0.3.0", null, null);
+        checar(semEstado.Contains("\"impedimento\":\"desconhecido\"") && semEstado.Contains("\"pode_trocar_agora\":false"),
+            "relato: sem conseguir ler o estado, o caixa reporta 'desconhecido' — não reporta 'está tudo bem'");
+    }
+
+    // ═══ 13. O ARQUIVO QUE JÁ ESTÁ NO DISCO ══════════════════════════════════
+
+    /// <summary>
+    /// A ponte entre uma janela e a seguinte. É ela que faz "265 MB não cabem em 2 h de
+    /// janela" deixar de ser um problema: o pedaço fica no disco, a noite seguinte
+    /// continua, e quando o arquivo estiver inteiro a troca precisa de 2 minutos de
+    /// janela em vez de 15.
+    /// </summary>
+    private static void OArquivoJaBaixado(Action<bool, string> checar, string raiz)
+    {
+        var pasta = Pasta(raiz, "ja-baixado");
+        var bytes = FabricarExe(2_000_000);
+        var m = new Atualizacao.Manifesto("9.9.9", "https://pdv.mmtech.software/x.exe", null, false,
+            Sha256De(bytes), bytes.Length);
+
+        checar(Atualizacao.JaBaixado(m, pasta) is null, "já baixado: pasta vazia = nada pronto");
+
+        File.WriteAllBytes(Path.Combine(pasta, "InstalarPdv-9.9.9.exe"), bytes);
+        checar(Atualizacao.JaBaixado(m, pasta) is not null,
+            "já baixado: o instalador desta versão é encontrado pelo nome que o download grava");
+
+        // Confere de novo em vez de confiar no arquivo existir: entre o download de
+        // ontem e a janela de hoje o disco passou por uma noite, e o que está ali vai
+        // rodar como administrador.
+        var outroHash = m with { Sha256 = new string('b', 64) };
+        checar(Atualizacao.JaBaixado(outroHash, pasta) is null,
+            "já baixado: arquivo que não confere com o hash NÃO conta como pronto — ele é reconferido, não só encontrado");
+
+        var outraVersao = m with { Versao = "9.9.8" };
+        checar(Atualizacao.JaBaixado(outraVersao, pasta) is null,
+            "já baixado: o pronto de OUTRA versão não serve para esta");
+    }
+
     // ═══ APOIO ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Uma instrução do painel, montada pelo mesmo leitor que o caixa usa —
+    /// e não pelo construtor. Assim o teste exercita a leitura do JSON de verdade.</summary>
+    private static Atualizacao.Instrucao? DoPainel(
+        string? versao, (string Inicio, string Fim)? janela = null,
+        bool obrigatoria = false, bool atualizarAgora = false)
+    {
+        var campos = new List<string> { "\"produto\":\"pdv\"" };
+        if (versao is not null)
+        {
+            campos.Add($"\"versao\":\"{versao}\"");
+            campos.Add("\"url\":\"https://pdv.mmtech.software/download/InstalarPdv.exe\"");
+            if (obrigatoria) campos.Add("\"obrigatoria\":true");
+        }
+        if (janela is { } j)
+        {
+            campos.Add($"\"janela_inicio\":\"{j.Inicio}\"");
+            campos.Add($"\"janela_fim\":\"{j.Fim}\"");
+        }
+        if (atualizarAgora) campos.Add("\"atualizar_agora\":true");
+        return Atualizacao.LerInstrucao("{" + string.Join(",", campos) + "}", UrlManifesto).Ok;
+    }
+
 
     private static Atualizacao.Manifesto Manifesto(string? sha = null, long? tamanho = null) =>
         new("9.9.9", "https://pdv.mmtech.software/download/InstalarPdv.exe", null, false, sha, tamanho);
