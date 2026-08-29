@@ -94,7 +94,8 @@ public sealed record DadosCupom(
     bool Recibo = false);
 
 /// <summary>
-/// Impressão do cupom da NFC-e em bobina de 80 mm, SEM diálogo nenhum.
+/// Impressão do cupom da NFC-e na bobina configurada em <c>config['papel_mm']</c>
+/// (58, 80 ou 100 mm; 80 quando não há escolha), SEM diálogo nenhum.
 ///
 /// Caminho escolhido: montar um visual WPF e entregá-lo ao spooler por
 /// <c>XpsDocumentWriter</c>. Quem abre janela é <c>PrintDialog.ShowDialog()</c>;
@@ -112,21 +113,146 @@ public static class Impressao
     /// <summary>1 mm em DIP — o WPF mede em 1/96 de polegada, a bobina em milímetros.</summary>
     private const double MM = 96.0 / 25.4;
 
-    /// <summary>Largura física da bobina.</summary>
-    public const double LarguraBobinaMm = 80.0;
+    // ── BOBINA (largura configurável) ────────────────────────────────────────────
 
     /// <summary>
-    /// Área imprimível. As térmicas de 80 mm imprimem 72 mm (576 pontos a 203 dpi) —
-    /// o resto é margem mecânica e o que cair lá simplesmente não sai no papel.
-    /// Bobina de 58 mm exigiria mexer nestes dois números e em <see cref="Colunas"/>.
+    /// Área imprimível de cada bobina que a loja pode escolher. TABELA, e não fórmula, de
+    /// propósito: a área útil é o número de pontos da cabeça térmica (203 dpi = 8 pontos/mm)
+    /// e ele NÃO é proporcional à bobina — 58 mm imprime 48 mm (384 pontos, 5 mm de margem
+    /// mecânica de cada lado) e 80 mm imprime 72 mm (576 pontos, 4 mm de cada lado). Não
+    /// existe fórmula que acerte as duas, e errar para MAIS é texto cortado no papel — que
+    /// é exatamente o defeito que a largura configurável existe para não ter.
     /// </summary>
-    public const double LarguraUtilMm = 72.0;
+    private static readonly (double Bobina, double Util)[] AreaImprimivel =
+    {
+        (58.0, 48.0),    // 384 pontos
+        (80.0, 72.0),    // 576 pontos — a única largura que este PDV imprimiu até aqui
+        (100.0, 90.0),   // 720 pontos
+    };
 
     /// <summary>
-    /// Colunas de texto monoespaçado. 48 é o clássico de 80 mm (Font A, 12×24) e é o
-    /// que cabe em 72 mm com Consolas em <see cref="Corpo"/>: 48 × 0,55 × 10 ≈ 264 DIP.
+    /// Largura de UMA coluna de texto: a Font A da térmica tem 12 pontos de largura e, a
+    /// 203 dpi (8 pontos/mm), isso dá 1,5 mm por caractere. É a régua da IMPRESSORA, e é
+    /// ela que explica os dois clássicos com a mesma conta — 72 ÷ 1,5 = as 48 colunas de
+    /// 80 mm, 48 ÷ 1,5 = as 32 colunas de 58 mm. A fonte da montagem (Consolas em
+    /// <see cref="Corpo"/>) mede ~1,45 mm por caractere, ou seja, cabe dentro da coluna:
+    /// quem aperta é o papel, e é o papel que manda. <see cref="LarguraDoTextoMm"/> é o
+    /// que permite conferir isso na fonte de verdade em vez de acreditar nesta conta.
     /// </summary>
-    private const int Colunas = 48;
+    private const double ColunaMm = 1.5;
+
+    /// <summary>
+    /// A geometria de UM papel: a bobina, quanto dela a cabeça térmica alcança, e quantas
+    /// colunas de texto cabem lá. Os três andam juntos de propósito — coluna que não deriva
+    /// da MESMA largura que desenha a página é como o texto sai cortado.
+    /// </summary>
+    public readonly record struct Papel(double BobinaMm, double UtilMm, int Colunas)
+    {
+        /// <summary>
+        /// Traduz o valor cru de <c>config['papel_mm']</c>. Ausente, ilegível ou de bobina
+        /// fora da tabela cai em <see cref="PapelPadrao"/>: 80 mm é o que este PDV sempre
+        /// imprimiu, então valor estranho na configuração não faz ninguém regredir — e
+        /// <see cref="PapelAtual"/> manda o valor estranho para a auditoria.
+        /// </summary>
+        public static Papel De(string? papelMm)
+        {
+            var pedida = Milimetros(papelMm);
+            foreach (var (bobina, util) in AreaImprimivel)
+                // Meio milímetro de tolerância: "80", "80.0" e "80,0" são a mesma bobina.
+                if (Math.Abs(bobina - pedida) < 0.5)
+                    // PISO, nunca arredondamento: meia coluna a mais é meia coluna fora do papel.
+                    return new Papel(bobina, util, (int)(util / ColunaMm));
+            return PapelPadrao;
+        }
+    }
+
+    /// <summary>
+    /// Papel de 80 mm — 72 mm úteis, 48 colunas. É exatamente o que estava fixo no código
+    /// antes de a largura virar configuração, e é para cá que cai quem não escolheu bobina
+    /// nenhuma (a esmagadora maioria hoje) ou escolheu uma que não existe.
+    /// </summary>
+    public static readonly Papel PapelPadrao = new(80.0, 72.0, 48);
+
+    /// <summary>
+    /// As bobinas que a tela de Configuração deve oferecer. Sai da MESMA tabela que decide
+    /// a área imprimível para o combo nunca oferecer largura que a impressão não sabe montar.
+    /// </summary>
+    public static IReadOnlyList<double> BobinasSuportadas { get; } =
+        AreaImprimivel.Select(a => a.Bobina).ToArray();
+
+    /// <summary>
+    /// Largura da bobina como está em <c>config['papel_mm']</c> — texto cru, do jeito que
+    /// saiu do banco (pode vir nulo, com vírgula ou com lixo; quem valida é <see cref="Papel.De"/>).
+    ///
+    /// Injetada, e não recebida por parâmetro, pelo mesmo motivo de <see cref="Auditar"/>:
+    /// esta classe não abre o banco — e nem podia, porque o cupom é montado numa thread STA
+    /// própria. E porque a largura é atributo da IMPRESSORA, não do documento: passá-la em
+    /// cada uma das chamadas de impressão espalhadas pelas telas é convidar a que uma delas
+    /// esqueça, e a que esquecer imprime 48 colunas numa bobina de 58 mm, ou seja, cortado.
+    ///
+    /// O app liga na abertura e quando a Configuração grava:
+    ///     Impressao.PapelMm = Vendas.Config(cx, "papel_mm");
+    /// </summary>
+    public static string? PapelMm { get; set; }
+
+    /// <summary>
+    /// A geometria em vigor. Cada trabalho de impressão tira UM retrato disto e usa o mesmo
+    /// do começo ao fim: mudar a configuração no meio de um cupom trocaria a largura da
+    /// página sem trocar as colunas do texto — e aí sim sairia cortado.
+    /// </summary>
+    public static Papel PapelAtual
+    {
+        get
+        {
+            var bruto = PapelMm;                 // um retrato: a propriedade é mutável
+            var papel = Papel.De(bruto);
+
+            // Bobina que não existe na tabela não pode sumir em silêncio: a loja escolheu
+            // 58 mm, o papel continua saindo em 48 colunas e ninguém tem por onde descobrir.
+            // Só avisa quando o valor MUDA — isto é lido a cada impressão e um aviso por
+            // cupom viraria ruído. (Sem trava: corrida aqui custa uma linha repetida na
+            // auditoria, nada mais.)
+            if (!string.IsNullOrWhiteSpace(bruto)
+                && Math.Abs(Milimetros(bruto) - papel.BobinaMm) >= 0.5
+                && Interlocked.Exchange(ref _papelRecusado, bruto) != bruto)
+                Avisar($"config papel_mm = '{bruto}' não é uma bobina conhecida " +
+                       $"({string.Join("/", BobinasSuportadas.Select(b => b.ToString("0", CultureInfo.InvariantCulture)))} mm); " +
+                       $"imprimindo em {papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture)} mm.");
+            return papel;
+        }
+    }
+
+    /// <summary>Último valor de <see cref="PapelMm"/> já denunciado — evita repetir o aviso a cada cupom.</summary>
+    private static string? _papelRecusado;
+
+    /// <summary>
+    /// Lê o número da configuração. Aceita vírgula E ponto porque o valor pode ter sido
+    /// digitado à mão no banco (suporte, script de instalação) e "58,0" é o que um teclado
+    /// brasileiro produz. Ilegível devolve 0, que não casa com bobina nenhuma e cai no padrão.
+    /// </summary>
+    private static double Milimetros(string? bruto)
+    {
+        var s = (bruto ?? "").Trim().Replace(',', '.');
+        return double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var mm) ? mm : 0;
+    }
+
+    /// <summary>
+    /// Quanto ocupa, em milímetros, uma linha cheia de <paramref name="colunas"/> caracteres
+    /// na fonte do corpo do cupom. MEDIDO na fonte de verdade, não estimado: <see cref="ColunaMm"/>
+    /// é a régua da cabeça térmica, e o que garante que o texto cabe é a fonte caber dentro
+    /// dela. É por aqui que a suíte confere, bobina a bobina, que as colunas derivadas não
+    /// estouram a área imprimível — conta que antes vivia só num comentário.
+    /// </summary>
+    public static double LarguraDoTextoMm(int colunas)
+    {
+        if (colunas <= 0) return 0;
+        var linha = new FormattedText(new string('0', colunas), Br, FlowDirection.LeftToRight,
+            new Typeface(Mono, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+            Corpo, Brushes.Black, 1.0);
+        return linha.WidthIncludingTrailingWhitespace / MM;
+    }
+
+    // ── TIPOGRAFIA ───────────────────────────────────────────────────────────────
 
     private const double Corpo = 10;
     private const double Miudo = 8.5;
@@ -134,6 +260,12 @@ public static class Impressao
 
     /// <summary>Avanço depois do conteúdo, pra o cupom passar da faca/serrilha antes de ser cortado.</summary>
     private const double AvancoMm = 12.0;
+
+    /// <summary>
+    /// Lado do QR do consumidor. 40 mm é o tamanho que lê bem em celular sobre impressão
+    /// térmica; não acompanha a bobina de propósito — QR maior não lê melhor, só come papel.
+    /// </summary>
+    private const double QrLadoMm = 40.0;
 
     private static readonly CultureInfo Br = new("pt-BR");
     private static readonly FontFamily Mono = new("Consolas");
@@ -274,8 +406,13 @@ public static class Impressao
             // pagamento com a venda já paga.
             return Task.FromResult<string?>($"Cupom inconsistente, não imprimi: {ex.Message}");
         }
+        // UM retrato da bobina por cupom, tirado AQUI e não lá dentro: a montagem do
+        // visual e a declaração do tamanho da página são dois lugares diferentes, e ler a
+        // configuração duas vezes permitiria que uma troca no meio do caminho desenhasse
+        // 48 colunas numa página de 58 mm.
+        var papel = PapelAtual;
         return NaFilaAsync(PrioridadeImpressao.Alta,
-            () => ComPrazoAsync(EmThreadStaAsync(() => Imprimir(dados, nomeImpressora))));
+            () => ComPrazoAsync(EmThreadStaAsync(() => Imprimir(dados, nomeImpressora, papel))));
     }
 
     /// <summary>Quem tem preferência na impressora quando dois papéis disputam a bobina.</summary>
@@ -422,8 +559,8 @@ public static class Impressao
         return tcs.Task;
     }
 
-    private static string? Imprimir(DadosCupom dados, string? nomeImpressora)
-        => ImprimirVisual(() => MontarCupom(dados),
+    private static string? Imprimir(DadosCupom dados, string? nomeImpressora, Papel papel)
+        => ImprimirVisual(papel, () => MontarCupom(dados, papel),
             // Nomear o trabalho é o que permite reconhecê-lo depois na fila do Windows.
             // O sufixo torna o nome único POR TENTATIVA e não é enfeite: a fase
             // ErroImpressao tem botão "Reimprimir", e o nome antigo era IDÊNTICO entre a
@@ -439,6 +576,11 @@ public static class Impressao
     /// Imprime blocos de texto monoespaçado — um trabalho de impressão por bloco, para cada
     /// via sair destacável. É o comprovante do TEF: as vias vêm prontas da rede (≤ 40 colunas)
     /// e saem como estão, inclusive os espaços à esquerda que centralizam o texto.
+    ///
+    /// ⚠️ Quem monta estes blocos (a rede do TEF, <c>Kds.ComandaLinhas</c>) escolhe a largura
+    /// sozinho e não sabe qual bobina está configurada. Em 58 mm (32 colunas) as 40 colunas
+    /// desses blocos passam do papel; aqui elas QUEBRAM em vez de sumir cortadas (ver
+    /// <see cref="MontarTexto"/>), o que preserva o conteúdo e estraga o alinhamento.
     ///
     /// Mesmo contrato do cupom: <c>null</c> = saiu tudo; string = mensagem pronta pra tela
     /// (do primeiro bloco que não saiu). Nunca lança. NÃO passa por <see cref="Conferir"/> —
@@ -460,6 +602,9 @@ public static class Impressao
     {
         if (blocos is null || blocos.Count == 0 || blocos.All(b => b is null || b.Count == 0))
             return ("Não há texto para imprimir.", 0);
+        // Um retrato só para o conjunto de vias: elas são o mesmo comprovante partido em
+        // pedaços destacáveis e não podem sair com larguras diferentes uma da outra.
+        var papel = PapelAtual;
         var n = 0;
         var sairam = 0;
         foreach (var bloco in blocos)
@@ -470,7 +615,7 @@ public static class Impressao
             var linhas = bloco;
             var nome = $"{descricao} {n}/{blocos.Count} #{Environment.TickCount64:x}";
             var erro = await NaFilaAsync(prioridade,
-                () => ComPrazoAsync(EmThreadStaAsync(() => ImprimirVisual(() => MontarTexto(linhas), nome, nomeImpressora))));
+                () => ComPrazoAsync(EmThreadStaAsync(() => ImprimirVisual(papel, () => MontarTexto(linhas, papel), nome, nomeImpressora))));
             if (erro is not null) return (erro, sairam);
             sairam++;
         }
@@ -478,12 +623,13 @@ public static class Impressao
     }
 
     /// <summary>
-    /// Bloco de texto: a MESMA Border/bobina do cupom (fundo branco, margem mecânica), uma
-    /// linha Mono por item. Linha vazia vira " " (StackPanel pula TextBlock vazio e o
-    /// comprovante perderia o espaçamento que a rede desenhou). `quebra: true` protege uma
-    /// linha maior que as 48 colunas — quebra em vez de sumir cortada pela Border.
+    /// Bloco de texto: a MESMA bobina do cupom (ver <see cref="Folha"/>), uma linha Mono por
+    /// item. Linha vazia vira " " (StackPanel pula TextBlock vazio e o comprovante perderia
+    /// o espaçamento que a rede desenhou). `quebra: true` protege a linha maior que a bobina
+    /// — quebra em vez de sumir cortada pela Border, e isso vale ainda mais desde que a
+    /// largura é escolhida: em 58 mm cabem 32 colunas e estes blocos vêm com até 40.
     /// </summary>
-    private static FrameworkElement MontarTexto(IReadOnlyList<string> linhas)
+    private static FrameworkElement MontarTexto(IReadOnlyList<string> linhas, Papel papel)
     {
         var pilha = new StackPanel();
         foreach (var bruta in linhas)
@@ -494,23 +640,33 @@ public static class Impressao
             pilha.Children.Add(Texto(string.IsNullOrEmpty(l) ? " " : l, Corpo * escala,
                 negrito: escala > 1.0, quebra: true));
         }
-        return new Border
-        {
-            Width = LarguraBobinaMm * MM,
-            Background = Brushes.White,
-            Padding = new Thickness(
-                (LarguraBobinaMm - LarguraUtilMm) / 2 * MM, 3 * MM,
-                (LarguraBobinaMm - LarguraUtilMm) / 2 * MM, 3 * MM),
-            Child = pilha,
-        };
+        return Folha(papel, pilha);
     }
+
+    /// <summary>
+    /// A bobina desenhada: fundo branco e a margem mecânica reservada por dentro, de modo
+    /// que o conteúdo caia todo dentro da área que a cabeça térmica alcança. Uma função só
+    /// para o cupom e para o texto livre porque as duas margens têm que ser IGUAIS — sai
+    /// tudo na mesma impressora, e comprovante deslocado do cupom denuncia a diferença.
+    /// </summary>
+    private static Border Folha(Papel papel, UIElement conteudo) => new()
+    {
+        Width = papel.BobinaMm * MM,
+        // Branco explícito: o app é escuro, e herdar o tema imprimiria um retângulo preto.
+        Background = Brushes.White,
+        Padding = new Thickness(
+            (papel.BobinaMm - papel.UtilMm) / 2 * MM, 3 * MM,
+            (papel.BobinaMm - papel.UtilMm) / 2 * MM, 3 * MM),
+        Child = conteudo,
+    };
 
     /// <summary>
     /// Miolo comum de impressão (roda na thread STA): resolve a fila, monta o visual NESTA
     /// thread, declara a página do tamanho do conteúdo, nomeia o trabalho e vigia a saída.
     /// Serve ao cupom fiscal e ao texto livre — o que muda é só o que se desenha.
     /// </summary>
-    private static string? ImprimirVisual(Func<FrameworkElement> montar, string descricao, string? nomeImpressora)
+    private static string? ImprimirVisual(Papel papel, Func<FrameworkElement> montar,
+        string descricao, string? nomeImpressora)
     {
         LocalPrintServer? servidor = null;
         PrintQueue? fila = null;
@@ -539,7 +695,7 @@ public static class Impressao
             }
 
             var visual = montar();
-            var largura = LarguraBobinaMm * MM;
+            var largura = papel.BobinaMm * MM;
             visual.Measure(new Size(largura, double.PositiveInfinity));
             visual.Arrange(new Rect(new Point(0, 0), visual.DesiredSize));
             visual.UpdateLayout();
@@ -740,15 +896,19 @@ public static class Impressao
     public static Task<string?> PreVisualizarAsync(DadosCupom dados, string caminhoPng)
     {
         if (dados is null) return Task.FromResult<string?>("Não há cupom para desenhar.");
+        // A prévia só serve se for a MESMA bobina que iria para o papel — é para conferir
+        // largura que ela existe, e prévia de 80 mm com a loja configurada em 58 esconderia
+        // justamente o corte que se quer ver.
+        var papel = PapelAtual;
         return EmThreadStaAsync(() =>
         {
-            var visual = MontarCupom(dados);
+            var visual = MontarCupom(dados, papel);
             // MESMA largura da impressão (bobina inteira, não a área útil). Medir contra
             // a área útil parece certo e não é: a montagem já tem Width = bobina e reserva
             // a margem por dentro, e o WPF corta o DesiredSize no limite que recebe — o
-            // desenho continua saindo 8 mm mais largo e a prévia mente dizendo que o
-            // cupom está cortado quando quem está errado é a régua.
-            var largura = LarguraBobinaMm * MM;
+            // desenho continua saindo mais largo que a régua e a prévia mente dizendo que
+            // o cupom está cortado quando quem está errado é a régua.
+            var largura = papel.BobinaMm * MM;
             visual.Measure(new Size(largura, double.PositiveInfinity));
             visual.Arrange(new Rect(new Point(0, 0), visual.DesiredSize));
             visual.UpdateLayout();
@@ -769,7 +929,7 @@ public static class Impressao
         });
     }
 
-    private static FrameworkElement MontarCupom(DadosCupom d)
+    private static FrameworkElement MontarCupom(DadosCupom d, Papel papel)
     {
         var pilha = new StackPanel();
 
@@ -813,10 +973,11 @@ public static class Impressao
         pilha.Children.Add(Regua());
 
         // ── itens ──
-        // Duas linhas por item: a de cima identifica, a de baixo faz a conta. É o
-        // arranjo que cabe em 48 colunas sem picotar nome de produto.
+        // Duas linhas por item: a de cima identifica, a de baixo faz a conta. É o arranjo
+        // que cabe nas colunas da bobina sem picotar nome de produto — e é por isso que a
+        // linha da conta pode sair sem quebra: Colunado a fecha na largura exata do papel.
         pilha.Children.Add(Texto("ITEM CÓDIGO DESCRIÇÃO", Corpo));
-        pilha.Children.Add(Texto(Colunado("     QTD UN X VL UNIT", "VL TOTAL"), Corpo,
+        pilha.Children.Add(Texto(Colunado("     QTD UN X VL UNIT", "VL TOTAL", papel.Colunas), Corpo,
             margemBaixo: 2));
 
         var seq = 1;
@@ -826,7 +987,8 @@ public static class Impressao
             if (codigo.Length > 12) codigo = codigo[..12];
             pilha.Children.Add(Texto($"{seq:000} {codigo} {i.Descricao}".Trim(), Corpo, quebra: true));
             pilha.Children.Add(Texto(
-                Colunado($"     {i.Qtd.Formatada()} {i.Unidade} X {Valor(i.Unitario)}", Valor(i.Total)),
+                Colunado($"     {i.Qtd.Formatada()} {i.Unidade} X {Valor(i.Unitario)}", Valor(i.Total),
+                    papel.Colunas),
                 Corpo));
             seq++;
         }
@@ -927,7 +1089,11 @@ public static class Impressao
 
         // ── QR (recibo não tem QR nem deve disparar o alerta de "cupom sem QR") ──
         if (d.Recibo) { /* nada */ }
-        else if (Qr(d.QrCode, 40 * MM) is { } qr)
+        // O QR nunca pode passar da área útil: fora dela ele sai com um lado faltando, e
+        // QR aparado não lê. Hoje o Math.Min não corta nada (a bobina mais estreita da
+        // tabela ainda tem 48 mm úteis) — é a garantia de que continua assim se aparecer
+        // bobina menor.
+        else if (Qr(d.QrCode, Math.Min(QrLadoMm, papel.UtilMm) * MM) is { } qr)
         {
             qr.Margin = new Thickness(0, 5 * MM, 0, 0);
             pilha.Children.Add(qr);
@@ -953,16 +1119,7 @@ public static class Impressao
         pilha.Children.Add(Texto($"Operador: {d.Operador ?? ""}", Miudo, centro: true, quebra: true));
         pilha.Children.Add(Texto($"Impresso em {DateTime.Now:dd/MM/yyyy HH:mm:ss}", Miudo, centro: true));
 
-        return new Border
-        {
-            Width = LarguraBobinaMm * MM,
-            // Branco explícito: o app é escuro, e herdar o tema imprimiria um retângulo preto.
-            Background = Brushes.White,
-            Padding = new Thickness(
-                (LarguraBobinaMm - LarguraUtilMm) / 2 * MM, 3 * MM,
-                (LarguraBobinaMm - LarguraUtilMm) / 2 * MM, 3 * MM),
-            Child = pilha,
-        };
+        return Folha(papel, pilha);
     }
 
     // ── PEÇAS DO VISUAL ──────────────────────────────────────────────────────────
@@ -1120,12 +1277,18 @@ public static class Impressao
         return string.Join(" ", partes);
     }
 
-    /// <summary>Cola o valor na coluna 48 preenchendo o meio com espaços (fonte monoespaçada).</summary>
-    private static string Colunado(string esquerda, string direita)
+    /// <summary>
+    /// Cola o valor na ÚLTIMA coluna da bobina, preenchendo o meio com espaços (fonte
+    /// monoespaçada). Devolve sempre uma linha de exatamente <paramref name="colunas"/>
+    /// caracteres — é o que permite imprimi-la sem quebra automática: ela não tem como
+    /// passar do papel, porque foi montada na medida dele. A esquerda é aparada quando não
+    /// cabe; o valor, nunca (cortar dinheiro no papel é pior do que cortar a descrição).
+    /// </summary>
+    private static string Colunado(string esquerda, string direita, int colunas)
     {
         var d = direita ?? "";
-        if (d.Length >= Colunas) return d;
-        var espaco = Colunas - d.Length;
+        if (d.Length >= colunas) return d;
+        var espaco = colunas - d.Length;
         var e = esquerda ?? "";
         if (e.Length > espaco) e = e[..espaco];
         return e.PadRight(espaco) + d;

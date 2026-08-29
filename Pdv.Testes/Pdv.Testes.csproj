@@ -1,7 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- net8.0-windows (era net8.0) para poder referenciar o projeto WPF: a geometria da
+         bobina mora em Impressao, e sem esta referência a única "prova" possível sobre ela
+         seria procurar texto no fonte — que passa com o código errado desde que a linha
+         esteja escrita. Continua sendo um console: `dotnet run` roda igual. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
@@ -11,5 +15,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Pdv.Nucleo\Pdv.Nucleo.csproj" />
+    <!-- Impressao (largura do papel, colunas do cupom). ⚠️ Isto faz `dotnet run` da suíte
+         compilar o app WPF junto: com o Pdv.exe ABERTO na máquina, o build falha por
+         arquivo em uso — feche o PDV antes de rodar a suíte. -->
+    <ProjectReference Include="..\Pdv.csproj" />
   </ItemGroup>
 </Project>

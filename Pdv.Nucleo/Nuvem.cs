@@ -159,6 +159,13 @@ public sealed class Nuvem
         var agora = DateTime.Now.ToString("o");
         var n = 0;
 
+        // FOTO do catalogo ANTES de gravar. O relatorio da sincronizacao dizia
+        // "83 produtos" — verdade e inutil: quem trocou UM preco quer ver O
+        // preco. Com o retrato anterior em memoria da para dizer o que mudou.
+        var antes = cx.Query("SELECT id, nome, preco_cent, ativo FROM produto")
+            .ToDictionary(r => (string)r.id, r => ((string)r.nome, (long)r.preco_cent, (long)r.ativo));
+        MudancasDoCatalogo.Clear();
+
         using var tx = cx.BeginTransaction();
         // Some da lista = inativo aqui. Não apaga: venda antiga referencia o produto,
         // e apagar quebraria o histórico.
@@ -172,6 +179,20 @@ public sealed class Nuvem
             var precoTxt = S("unit_price") ?? "0";
             if (!decimal.TryParse(precoTxt, System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out var preco) || preco <= 0) continue;
+
+            var idProd = S("id") ?? "";
+            var nomeProd = S("name") ?? "PRODUTO";
+            var precoCent = Dinheiro.DeReais(preco).Centavos;
+            if (antes.TryGetValue(idProd, out var velho))
+            {
+                if (velho.Item2 != precoCent)
+                    MudancasDoCatalogo.Add($"{nomeProd}: {new Dinheiro(velho.Item2).Formatado()} → {new Dinheiro(precoCent).Formatado()}");
+                else if (velho.Item1 != nomeProd)
+                    MudancasDoCatalogo.Add($"{velho.Item1} → {nomeProd}");
+                else if (velho.Item3 == 0)
+                    MudancasDoCatalogo.Add($"{nomeProd}: voltou ao cardapio");
+            }
+            else MudancasDoCatalogo.Add($"{nomeProd}: novo no cardapio");
 
             cx.Execute("""
                 INSERT INTO produto (id, plu, ean, nome, categoria, preco_cent, unidade, foto_local,
@@ -192,9 +213,25 @@ public sealed class Nuvem
                 }, tx);
             n++;
         }
+        // Quem sumiu da lista foi desativado la em cima; so vale contar quem
+        // ESTAVA ativo — produto inativo que continua inativo nao e novidade.
+        var sumiram = cx.Query<string>(
+            "SELECT nome FROM produto WHERE ativo = 0 AND atualizado <> @Em", new { Em = agora },
+            transaction: tx).ToList();
+        foreach (var nome in sumiram)
+            if (antes.Values.Any(v => v.Item1 == nome && v.Item3 == 1))
+                MudancasDoCatalogo.Add($"{nome}: saiu do cardapio");
+
         tx.Commit();
         return n;
     }
+
+    /// <summary>
+    /// O que mudou no catalogo na ULTIMA descida — preenchido por
+    /// BaixarCatalogoAsync e lido pela tela. Lista curta de propósito: o
+    /// operador quer conferir o que pediu, nao auditar 83 linhas.
+    /// </summary>
+    public static readonly List<string> MudancasDoCatalogo = new();
 
     /// <summary>
     /// Traz os operadores do painel para o caixa. O hash da senha vem PRONTO no

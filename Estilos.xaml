@@ -200,6 +200,46 @@
         </Setter>
     </Style>
 
+    <!-- TRILHA DO ASSISTENTE: os 5 passos da Configuração. É barra de progresso E
+         índice — a barrinha diz onde o instalador está e o rótulo diz o que vem
+         depois, que é a pergunta de quem nunca instalou um caixa ("falta muito?").
+
+         Desabilitado NÃO é apagado aqui: na 1ª instalação a trilha não é clicável
+         (a tela tira o hit-test), mas continua sendo o único lugar que mostra o
+         caminho inteiro — apagá-la esconderia justamente a informação que ela dá. -->
+    <Style x:Key="PassoTrilha" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextoFraco}"/>
+        <Setter Property="FontSize" Value="12.5"/>
+        <Setter Property="Margin" Value="0,0,8,0"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="VerticalAlignment" Value="Top"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <StackPanel Background="Transparent">
+                        <Border x:Name="barra" Height="5" CornerRadius="3"
+                                Background="{DynamicResource Borda}"/>
+                        <TextBlock x:Name="rotulo" Text="{TemplateBinding Content}" Margin="0,7,0,0"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{TemplateBinding Foreground}"
+                                   FontSize="{TemplateBinding FontSize}"/>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="barra" Property="Background" Value="{DynamicResource TextoFraco}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="barra" Property="Background" Value="{DynamicResource Marca}"/>
+                            <Setter TargetName="barra" Property="Height" Value="6"/>
+                            <Setter TargetName="rotulo" Property="Foreground" Value="{DynamicResource Texto}"/>
+                            <Setter TargetName="rotulo" Property="FontWeight" Value="Bold"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- COMBOBOX: sem template próprio o WPF desenha o chrome cinza do sistema, que
          no meio das telas escuras parece caixa de diálogo antiga. Mesma linguagem do
          TextBox acima: painel, borda hairline, canto 12, marca no foco. -->

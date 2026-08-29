@@ -83,6 +83,11 @@ public partial class App : Application
             Banco.Migrar();
             using var cx = Banco.Abrir();
             Aparencia.Aplicar(Aparencia.Resolver(cx));
+            // Bobina escolhida na configuracao. Sem esta linha o valor gravado so
+            // valeria enquanto a tela de config estivesse aberta: reabrir o PDV
+            // voltava para 80 mm, e uma loja de 58 mm imprimiria cortado sem
+            // ninguem entender por que "estava certo ontem".
+            Impressao.PapelMm = Vendas.Config(cx, "papel_mm");
         }
         catch { /* banco indisponível aqui vira erro de verdade logo adiante, com mensagem melhor */ }
 

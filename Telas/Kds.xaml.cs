@@ -24,7 +24,6 @@ public partial class Kds : UserControl
 
     private readonly string _loja;
     private DispatcherTimer? _timer;
-    private int _batidas;
     private bool _puxando;
 
     public Kds(string loja)
@@ -85,7 +84,6 @@ public partial class Kds : UserControl
     // Pedido de delivery que chega sai NO PAPEL sem dedo de ninguém, na
     // impressora escolhida na Configuração (chave própria da cozinha —
     // pode ser outra bobina, não a do caixa). Opt-in: nasce desligado.
-    private bool _imprimindo;
 
     /// <summary>
     /// Delega para <see cref="Servicos.ImprimirComandasPendentesAsync"/> — a

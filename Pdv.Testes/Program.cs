@@ -1193,6 +1193,10 @@ Console.WriteLine("--- TEF PayGo (troca de arquivos simulada) ---");
 TestesPayGo.Rodar((cond, nome) => Check("paygo: " + nome, cond));
 Console.WriteLine("--- TEF ControlPay (WebService simulado) ---");
 TestesControlPay.Rodar((cond, nome) => Check("controlpay: " + nome, cond));
+// Rede digitada errada = cobranca recusada com o cliente no balcao (o PIX C6 BANK da
+// homologacao que ficou em producao, onde o Pix e ITAU). A lista e fechada por isso.
+Console.WriteLine("--- Credenciadoras do PayGo (lista fechada) ---");
+TestesRedesPayGo.Rodar((cond, nome) => Check("redes: " + nome, cond));
 
 // -- FILA: o que a nuvem RECUSA para sempre ----------------------------------
 // Dead-letter carimbava enviado_em: R$ 102.626,50 sumiram do contador com tudo verde.
@@ -1213,6 +1217,22 @@ TestesRascunho.Rodar((cond, nome) => Check("rascunho: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Instancia unica (2o Pdv.exe na mesma maquina) ---");
 TestesInstanciaUnica.Rodar((cond, nome) => Check("instancia: " + nome, cond));
+
+// -- LARGURA DO PAPEL: 58 / 80 / 100 mm --------------------------------------
+// A largura da bobina era constante de compilacao (80 mm / 48 colunas). Numa
+// bobina de 58 mm cabem 32 colunas, e a linha do item sai SEM quebra automatica:
+// o que passa do papel nao quebra, some -- e some no fim, onde esta o valor.
+Console.WriteLine();
+Console.WriteLine("--- Largura do papel (bobina configuravel) ---");
+await TestesImpressao.RodarAsync((cond, nome) => Check("papel: " + nome, cond));
+
+// -- ASSISTENTE DE CONFIGURACAO: os 5 passos da instalacao --------------------
+// A configuracao era um formulario unico de 8 secoes: o que faltava so aparecia
+// no popup do Salvar, depois de rolar tudo. Agora cada passo diz o que bloqueia,
+// na tela, e o Salvar pula pro passo culpado -- continua sendo a porta unica.
+Console.WriteLine();
+Console.WriteLine("--- Assistente de configuracao (5 passos) ---");
+TestesAssistente.Rodar((cond, nome) => Check("config: " + nome, cond));
 
 // -- AUTORIZACAO DE ESTORNO: token de WhatsApp, PIN como saida ----------------
 // Estorno e o unico ponto onde dinheiro VOLTA sem venda. Ate hoje bastava o PIN

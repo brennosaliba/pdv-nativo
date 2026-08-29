@@ -2,304 +2,440 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="{DynamicResource Fundo}">
-    <Grid Margin="0">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,24,0,24">
-            <StackPanel Width="560" HorizontalAlignment="Center">
+    <!-- ASSISTENTE DE 5 PASSOS (era um formulário único de 8 seções e ~2.000 px de
+         rolagem). Cada passo é um StackPanel na MESMA célula do Grid; só um está
+         visível por vez (IrPara). Três razões para a troca:
+           · quem instala o caixa faz isso UMA vez e não sabe o que pode ficar em
+             branco — a rolagem infinita não diz onde termina a obrigação;
+           · o que BLOQUEIA fica no rodapé, sempre à vista, e não num popup que
+             aparece só depois de clicar Salvar;
+           · o Salvar continua sendo a porta ÚNICA de escrita: os passos só coletam. -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-                <TextBlock Text="Configuração do caixa" Style="{StaticResource Titulo}"/>
-                <TextBlock Text="Preenchido uma vez. Depois disso o caixa abre direto no login."
-                           Style="{StaticResource Rotulo}" Margin="0,4,0,22"/>
+        <!-- ── CABEÇALHO + TRILHA ─────────────────────────────────────────── -->
+        <StackPanel Grid.Row="0" Width="620" HorizontalAlignment="Center" Margin="0,20,0,0">
+            <TextBlock x:Name="TxtPassoNumero" Text="Passo 1 de 5"
+                       Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
+            <TextBlock x:Name="TxtTitulo" Text="Loja" Style="{StaticResource Titulo}"/>
+            <TextBlock x:Name="TxtSubtitulo" Style="{StaticResource Rotulo}" TextWrapping="Wrap" Margin="0,4,0,14"/>
+            <!-- A trilha é indicador E atalho. Na 1ª instalação as abas ficam
+                 DESLIGADAS (só indicam): pular passo é como se instala um caixa pela
+                 metade. Reconfigurando, cada aba é clicável — ver Configuracao.xaml.cs.
+                 O estilo não apaga o desligado de propósito: mesmo sem clique, a trilha
+                 é o único lugar que mostra o caminho inteiro. -->
+            <UniformGrid x:Name="Trilha" Columns="5" Margin="0,0,-8,16">
+                <RadioButton x:Name="AbaLoja" GroupName="passo" Style="{StaticResource PassoTrilha}"
+                             Content="1 · Loja" Tag="0" Checked="AbaEscolhida"/>
+                <RadioButton x:Name="AbaFiscal" GroupName="passo" Style="{StaticResource PassoTrilha}"
+                             Content="2 · Nota fiscal" Tag="1" Checked="AbaEscolhida"/>
+                <RadioButton x:Name="AbaImpressora" GroupName="passo" Style="{StaticResource PassoTrilha}"
+                             Content="3 · Impressora" Tag="2" Checked="AbaEscolhida"/>
+                <RadioButton x:Name="AbaMaquininha" GroupName="passo" Style="{StaticResource PassoTrilha}"
+                             Content="4 · Maquininha" Tag="3" Checked="AbaEscolhida"/>
+                <RadioButton x:Name="AbaPareamento" GroupName="passo" Style="{StaticResource PassoTrilha}"
+                             Content="5 · Pareamento" Tag="4" Checked="AbaEscolhida"/>
+            </UniformGrid>
+        </StackPanel>
 
-                <TextBlock Text="LOJA" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
-                <TextBlock Text="Nome da loja" Style="{StaticResource Rotulo}"/>
-                <TextBox x:Name="TxtLoja" Margin="0,4,0,12"/>
-                <TextBlock Text="CNPJ" Style="{StaticResource Rotulo}"/>
-                <TextBox x:Name="TxtCnpj" Margin="0,4,0,2" MaxLength="18" TextChanged="FormatarCnpj"/>
-                <TextBlock x:Name="TxtStatusCnpj" Foreground="{DynamicResource TextoFraco}" FontSize="12"
-                           TextWrapping="Wrap" MinHeight="16" Margin="0,0,0,12"/>
+        <!-- ── CONTEÚDO DO PASSO ──────────────────────────────────────────── -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <Grid Width="620" HorizontalAlignment="Center" Margin="0,0,0,10">
 
-                <TextBlock Text="FISCAL" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
-                <TextBlock Text="Série deste caixa" Style="{StaticResource Rotulo}"/>
-                <TextBox x:Name="TxtSerie" Margin="0,4,0,2" MaxLength="3"/>
-                <TextBlock Text="Cada caixa precisa de uma série só dele — duas fontes na mesma série geram numeração duplicada e a SEFAZ rejeita."
-                           Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <!-- 1 · LOJA ─────────────────────────────────────────────── -->
+                <StackPanel x:Name="PassoLoja">
+                    <TextBlock Text="Nome da loja" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtLoja" Margin="0,4,0,12" TextChanged="CampoMudou"/>
 
-                <TextBlock Text="Ambiente" Style="{StaticResource Rotulo}"/>
-                <ComboBox x:Name="CmbAmbiente" Margin="0,4,0,12" FontSize="18" Padding="10,8"
-                          SelectionChanged="AmbienteMudou">
-                    <ComboBoxItem Content="Homologação (teste — sem valor fiscal)" IsSelected="True"/>
-                    <ComboBoxItem Content="Produção (nota vale de verdade)"/>
-                    <ComboBoxItem Content="Sem emissão — só recibo (sem NFC-e)"/>
-                </ComboBox>
-                <TextBlock Text="Dá pra mudar aqui a qualquer momento (com a senha de administrador) — ex.: começar em homologação ou só recibo e ligar a produção depois."
-                           Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,-8,0,12"/>
+                    <TextBlock Text="CNPJ" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtCnpj" Margin="0,4,0,2" MaxLength="18" TextChanged="FormatarCnpj"/>
+                    <TextBlock x:Name="TxtStatusCnpj" Foreground="{DynamicResource TextoFraco}" FontSize="12"
+                               TextWrapping="Wrap" MinHeight="16" Margin="0,0,0,12"/>
 
-                <TextBlock Text="Endereço do servidor (IP ou domínio)" Style="{StaticResource Rotulo}"/>
-                <TextBox x:Name="TxtApi" Margin="0,4,0,12"/>
-
-                <!-- Revelação progressiva: no modo "Sem emissão — só recibo" estes
-                     campos não fazem sentido e SOMEM (AmbienteMudou controla). -->
-                <StackPanel x:Name="BlocoCertificado">
-                    <TextBlock Text="Certificado digital A1 (.pfx)" Style="{StaticResource Rotulo}"/>
-                    <Grid Margin="0,4,0,12">
+                    <!-- IE: campo novo. Vai para `config` e não para a tabela `terminal`
+                         porque Migrar() não faz ALTER — coluna nova só existiria em
+                         máquina nova, e a que já roda ficaria sem. -->
+                    <TextBlock Text="Inscrição estadual" Style="{StaticResource Rotulo}"/>
+                    <Grid Margin="0,4,0,2">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="TxtPfx" Grid.Column="0" IsReadOnly="True" Margin="0,0,8,0"/>
-                        <Button x:Name="BtnPfx" Grid.Column="1" Content="Escolher" Click="EscolherPfx"
-                                Style="{StaticResource BotaoBase}" MinHeight="48" FontSize="15" Padding="18,0"/>
+                        <TextBox x:Name="TxtIe" Grid.Column="0" Margin="0,0,8,0" MaxLength="20"
+                                 Tag="só os números" TextChanged="CampoMudou"/>
+                        <!-- Botão e não checkbox: "ISENTO" é o VALOR do campo (é o que sai
+                             impresso no cupom), não uma opção paralela a ele. -->
+                        <Button x:Name="BtnIsento" Grid.Column="1" Content="ISENTO" Click="MarcarIsento"
+                                Style="{StaticResource BotaoBase}" MinHeight="52" FontSize="15" Padding="20,0"/>
                     </Grid>
-                    <TextBlock Text="Senha do certificado" Style="{StaticResource Rotulo}"/>
-                    <PasswordBox x:Name="TxtSenhaPfx" Margin="0,4,0,2" FontSize="18" Padding="12,10"
-                                 Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
-                                 BorderBrush="{DynamicResource Borda}" PasswordChanged="ConferirCert"/>
-                    <TextBlock x:Name="TxtStatusCert" Foreground="{DynamicResource TextoFraco}" FontSize="12"
-                               TextWrapping="Wrap" MinHeight="18" Margin="0,0,0,12"/>
+                    <TextBlock x:Name="TxtStatusIe" Foreground="{DynamicResource TextoFraco}" FontSize="12"
+                               TextWrapping="Wrap" MinHeight="16" Margin="0,0,0,16"/>
 
-                    <TextBlock Text="CSC (código de segurança do contribuinte)" Style="{StaticResource Rotulo}"/>
-                    <PasswordBox x:Name="TxtCsc" Margin="0,4,0,12" FontSize="18" Padding="12,10"
-                                 Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
-                                 BorderBrush="{DynamicResource Borda}"/>
-                    <TextBlock Text="ID do CSC" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtIdCsc" Margin="0,4,0,12" MaxLength="6"/>
+                    <TextBlock Text="O que sai no papel" Style="{StaticResource Rotulo}" Margin="0,0,0,6"/>
+                    <UniformGrid Columns="2" Margin="0,0,-8,0">
+                        <RadioButton x:Name="OpFiscalNfce" GroupName="fiscal" Style="{StaticResource BotaoOpcao}"
+                                     MinHeight="104" Checked="ModoFiscalMudou">
+                            <StackPanel>
+                                <TextBlock Text="Cupom fiscal" FontWeight="Bold" FontSize="19"/>
+                                <TextBlock Text="NFC-e autorizada pela SEFAZ, com QR do consumidor. Exige certificado e CSC."
+                                           FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
+                                           Foreground="{DynamicResource TextoFraco}"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="OpFiscalRecibo" GroupName="fiscal" Style="{StaticResource BotaoOpcao}"
+                                     MinHeight="104" Checked="ModoFiscalMudou">
+                            <StackPanel>
+                                <TextBlock Text="Só recibo" FontWeight="Bold" FontSize="19"/>
+                                <TextBlock Text="Papel SEM VALOR FISCAL: nenhuma nota é emitida. Dá pra ligar o cupom fiscal depois."
+                                           FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
+                                           Foreground="{DynamicResource TextoFraco}"/>
+                            </StackPanel>
+                        </RadioButton>
+                    </UniformGrid>
                 </StackPanel>
 
-                <!-- O teste vem AQUI, colado no fim da parte fiscal: ele confere a
-                     COMUNICAÇÃO (CNPJ, certificado, CSC, emissor, servidor). O
-                     pareamento é outra etapa — é a última e é obrigatória. -->
-                <TextBlock Text="TESTE GERAL" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
-                <Button x:Name="BtnTestarTudo" Content="🧪 Testar configuração" Click="TestarConfiguracao"
-                        Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
-                <TextBlock x:Name="TxtStatusTeste"
-                           Text="Confere a comunicação de uma vez: CNPJ, certificado, CSC, emissor fiscal e servidor."
-                           Foreground="{DynamicResource TextoFraco}" FontSize="12.5" FontFamily="Consolas"
-                           TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <!-- 2 · NOTA FISCAL ──────────────────────────────────────── -->
+                <StackPanel x:Name="PassoFiscal" Visibility="Collapsed">
+                    <TextBlock Text="Série deste caixa" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtSerie" Margin="0,4,0,2" MaxLength="3" TextChanged="CampoMudou"/>
+                    <TextBlock Text="Cada caixa precisa de uma série só dele — duas fontes na mesma série geram numeração duplicada e a SEFAZ rejeita. O pareamento (passo 5) traz a série que o painel reservou."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
-                <TextBlock Text="IMPRESSORA" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
-                <TextBlock Text="Impressora do cupom" Style="{StaticResource Rotulo}"/>
-                <ComboBox x:Name="CboImpressora" Margin="0,4,0,6" FontSize="16" Padding="12,10"/>
-                <TextBlock Text="Bobina de 80mm. Em branco, usa a impressora padrão do Windows."
-                           Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                <CheckBox x:Name="ChkImprimirAuto" Content="Imprimir cupom/recibo automaticamente ao concluir a venda"
-                          IsChecked="True" FontSize="14" Margin="0,0,0,8"/>
-                <Button x:Name="BtnTesteImpressao" Content="Imprimir cupom de teste" Click="TestarImpressao"
-                        Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                    <!-- Em "Só recibo" nada aqui é exigido: dizer isso é melhor que
+                         mostrar campos mortos ou uma tela vazia sem explicação. -->
+                    <Border x:Name="AvisoRecibo" Visibility="Collapsed" CornerRadius="12" Padding="14,12" Margin="0,0,0,10"
+                            Background="{DynamicResource AvisoFundo}" BorderBrush="{DynamicResource AvisoBorda}" BorderThickness="1">
+                        <TextBlock Foreground="{DynamicResource Texto}" FontSize="13.5" TextWrapping="Wrap"
+                                   Text="Este caixa está em SÓ RECIBO: nenhuma nota é emitida, então certificado e CSC não são pedidos. Para ligar a NFC-e, volte ao passo 1 e escolha Cupom fiscal."/>
+                    </Border>
 
-                <TextBlock Text="COMANDA DA COZINHA (KDS)" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,18,0,8"/>
-                <CheckBox x:Name="ChkComandaAuto" Content="Imprimir a comanda automaticamente quando o pedido de delivery chegar"
-                          IsChecked="False" FontSize="14" Margin="0,0,0,8"/>
-                <TextBlock Text="Impressora da comanda" Style="{StaticResource Rotulo}"/>
-                <ComboBox x:Name="CboImpressoraComanda" Margin="0,4,0,6" FontSize="16" Padding="12,10"/>
-                <TextBlock Text="A cozinha pode ter a própria bobina — escolha aqui qual imprime a comanda. Em branco, usa a impressora padrão do Windows. Cada card do KDS também tem o botão 🖨 pra reimprimir."
-                           Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                <TextBlock x:Name="TxtStatusImpressao" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
-                           TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <StackPanel x:Name="BlocoCertificado">
+                        <TextBlock Text="Certificado digital A1 (.pfx)" Style="{StaticResource Rotulo}"/>
+                        <Grid Margin="0,4,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TxtPfx" Grid.Column="0" IsReadOnly="True" Margin="0,0,8,0"/>
+                            <Button x:Name="BtnPfx" Grid.Column="1" Content="Escolher" Click="EscolherPfx"
+                                    Style="{StaticResource BotaoBase}" MinHeight="48" FontSize="15" Padding="18,0"/>
+                        </Grid>
+                        <TextBlock Text="Senha do certificado" Style="{StaticResource Rotulo}"/>
+                        <PasswordBox x:Name="TxtSenhaPfx" Margin="0,4,0,2" FontSize="18" Padding="12,10"
+                                     Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
+                                     BorderBrush="{DynamicResource Borda}" PasswordChanged="ConferirCert"/>
+                        <TextBlock x:Name="TxtStatusCert" Foreground="{DynamicResource TextoFraco}" FontSize="12"
+                                   TextWrapping="Wrap" MinHeight="18" Margin="0,0,0,12"/>
 
-                <!-- TEF: como este caixa cobra cartão/PIX. É configuração da MÁQUINA (vai
-                     na tabela config, que é o que Servicos.Tef() lê). O PayGo Windows é
-                     troca de arquivos local: a pasta aqui tem que ser a MESMA configurada
-                     no PayGo; o registro 738 a PayGo entrega na certificação. -->
-                <TextBlock Text="TEF (CARTÃO / PIX)" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
-                <TextBlock Text="Como o caixa cobra cartão e PIX" Style="{StaticResource Rotulo}"/>
-                <UniformGrid Columns="2" Margin="0,4,-8,-2">
-                    <RadioButton x:Name="OpTefControlPay" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
-                        <StackPanel>
-                            <TextBlock Text="ControlPay" FontWeight="Bold" FontSize="15"/>
-                            <TextBlock Text="WebService da PayGo" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
-                        </StackPanel>
-                    </RadioButton>
-                    <RadioButton x:Name="OpTefPayGo" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
-                        <StackPanel>
-                            <TextBlock Text="PayGo Windows" FontWeight="Bold" FontSize="15"/>
-                            <TextBlock Text="troca de arquivos, nesta máquina" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
-                        </StackPanel>
-                    </RadioButton>
-                    <RadioButton x:Name="OpTefNuvem" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
-                        <StackPanel>
-                            <TextBlock Text="Smart TEF" FontWeight="Bold" FontSize="15"/>
-                            <TextBlock Text="maquininha Rede pela nuvem" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
-                        </StackPanel>
-                    </RadioButton>
-                    <RadioButton x:Name="OpTefNenhum" GroupName="tef" Style="{StaticResource BotaoOpcao}" Checked="TefMudou">
-                        <StackPanel>
-                            <TextBlock Text="Sem TEF" FontWeight="Bold" FontSize="15"/>
-                            <TextBlock Text="cartão registrado na mão" FontSize="11.5" Foreground="{DynamicResource TextoFraco}"/>
-                        </StackPanel>
-                    </RadioButton>
-                </UniformGrid>
-                <StackPanel x:Name="BlocoPayGo" Visibility="Collapsed">
-                    <TextBlock Text="Pasta do PayGo (a mesma configurada no PayGo Windows)" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtPayGoPasta" Margin="0,4,0,8" Tag="C:\PAYGO"/>
-                    <TextBlock Text="Registro de certificação (campo 738) — a PayGo fornece; em branco no sandbox" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtPayGoRegistro" Margin="0,4,0,8"/>
-                    <TextBlock Text="Razão social da automação (campo 716)" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtPayGoEmpresa" Margin="0,4,0,8" Tag="AMERICAN DAY"/>
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="Rede pré-selecionada p/ cartão (010)" Style="{StaticResource Rotulo}"/>
-                            <TextBox x:Name="TxtPayGoRede" Margin="0,4,0,0" Tag="vazio = menu do PayGo"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="Rede p/ PIX (010)" Style="{StaticResource Rotulo}"/>
-                            <TextBox x:Name="TxtPayGoRedePix" Margin="0,4,0,0" Tag="ex.: PIX C6 BANK"/>
-                        </StackPanel>
-                    </Grid>
-                    <Grid Margin="0,0,0,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Button Grid.Column="0" x:Name="BtnTestarPayGo" Content="Testar PayGo (ATV)" Click="TestarPayGo"
-                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16"/>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="CSC (código de segurança do contribuinte)" Style="{StaticResource Rotulo}"/>
+                                <PasswordBox x:Name="TxtCsc" Margin="0,4,0,0" FontSize="18" Padding="12,10"
+                                             Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
+                                             BorderBrush="{DynamicResource Borda}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="ID do CSC" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtIdCsc" Margin="0,4,0,0" MaxLength="6"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
 
-                    </Grid>
+                    <!-- O teste fica AQUI, colado na parte fiscal: ele confere a
+                         COMUNICAÇÃO (CNPJ, certificado, CSC, emissor). O pareamento é
+                         outra etapa — é a última e é obrigatória. -->
+                    <Button x:Name="BtnTestarTudo" Content="🧪 Testar configuração fiscal" Click="TestarConfiguracao"
+                            Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,4,0,4"/>
+                    <TextBlock x:Name="TxtStatusTeste"
+                               Text="Confere de uma vez: CNPJ, certificado, CSC e o emissor fiscal desta máquina."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12.5" FontFamily="Consolas"
+                               TextWrapping="Wrap" Margin="0,0,0,8"/>
                 </StackPanel>
-                <StackPanel x:Name="BlocoControlPay" Visibility="Collapsed">
-                    <TextBlock Text="O PayGo Windows desta máquina precisa estar ativado como terminal ControlPay (é ele quem fala com o pinpad). O PDV cria a venda na API e acompanha o status."
-                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                    <TextBlock Text="Ambiente" Style="{StaticResource Rotulo}"/>
-                    <ComboBox x:Name="CmbCpayAmbiente" Margin="0,4,0,8" FontSize="16" Padding="12,10">
-                        <ComboBoxItem Content="Sandbox (homologação) — sandbox.controlpay.com.br"/>
-                        <ComboBoxItem Content="Produção — api.controlpay.com.br"/>
-                    </ComboBox>
-                    <TextBlock Text="Chave de integração (portal ControlPay → Integrações/Config. → Chaves de integração)" Style="{StaticResource Rotulo}"/>
-                    <PasswordBox x:Name="PwdCpayChave" Margin="0,4,0,8" FontSize="18" Padding="12,10"
-                                 Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
-                                 BorderBrush="{DynamicResource Borda}"/>
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="ID do terminal" Style="{StaticResource Rotulo}"/>
-                            <TextBox x:Name="TxtCpayTerminal" Margin="0,4,0,0" Tag="ex.: 6408"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="ID da pessoa" Style="{StaticResource Rotulo}"/>
-                            <TextBox x:Name="TxtCpayPessoa" Margin="0,4,0,0" Tag="ex.: 12247"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="4">
-                            <TextBlock Text="Senha técnica" Style="{StaticResource Rotulo}"/>
-                            <PasswordBox x:Name="PwdCpaySenha" Margin="0,4,0,0" FontSize="18" Padding="12,10"
-                                         Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
-                                         BorderBrush="{DynamicResource Borda}"/>
-                        </StackPanel>
-                    </Grid>
-                    <!-- Rede pré-selecionada. Estes dois valores existiam SÓ no banco e não
-                         apareciam em lugar nenhum: a homologação deixou "PIX C6 BANK" gravado
-                         (autorizador de TESTE) e em produção o PIX passou a ser recusado, sem
-                         o dono ter como ver nem mudar. Configuração invisível que muda o
-                         comportamento é armadilha — agora está na tela. -->
-                    <Grid Margin="0,4,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="Rede pré-selecionada p/ cartão" Style="{StaticResource Rotulo}"/>
-                            <TextBox x:Name="TxtCpayAdquirente" Margin="0,4,0,0" Tag="vazio = a PayGo escolhe"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="Rede p/ PIX" Style="{StaticResource Rotulo}"/>
-                            <TextBox x:Name="TxtCpayAdquirentePix" Margin="0,4,0,0" Tag="vazio = a PayGo escolhe"/>
-                        </StackPanel>
-                    </Grid>
-                    <TextBlock Text="Deixe os dois em branco em produção: quem escolhe a rede é a PayGo. Nome de rede de teste aqui faz a cobrança ser recusada."
-                               Foreground="{DynamicResource TextoFraco}" FontSize="11.5" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
-                    <!-- Só o teste de vínculo. O menu administrativo saiu daqui (28/08): o
-                         ControlPay tem o painel web para isso, e no WebService a chamada
-                         voltava 404 — botão que não funciona é pior que botão que não existe. -->
-                    <Button x:Name="BtnTestarCpay" Content="Testar conexão com a PayGo" Click="TestarControlPay"
+                <!-- 3 · IMPRESSORA ───────────────────────────────────────── -->
+                <StackPanel x:Name="PassoImpressora" Visibility="Collapsed">
+                    <TextBlock Text="Impressora do cupom" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboImpressora" Margin="0,4,0,12"/>
+
+                    <!-- Largura da bobina: o que decide as colunas do cupom. 48 colunas
+                         numa bobina de 58 mm saem CORTADAS — e cortadas no fim da linha,
+                         onde está o valor. Ver Impressao.Papel. -->
+                    <TextBlock Text="Largura do papel" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPapel" Margin="0,4,0,4" SelectionChanged="PapelMudou"/>
+                    <TextBlock x:Name="TxtStatusPapel" Foreground="{DynamicResource TextoFraco}" FontSize="12"
+                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+                    <CheckBox x:Name="ChkImprimirAuto" Content="Imprimir cupom/recibo automaticamente ao concluir a venda"
+                              IsChecked="True" FontSize="14" Margin="0,0,0,10"/>
+                    <Button x:Name="BtnTesteImpressao" Content="Imprimir cupom de teste" Click="TestarImpressao"
                             Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
-                </StackPanel>
-                <StackPanel x:Name="BlocoTefNuvem" Visibility="Collapsed">
-                    <TextBlock Text="Serial da maquininha (vazio = terminal padrão da conta)" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtTefSerial" Margin="0,4,0,8"/>
-                </StackPanel>
-                <StackPanel x:Name="BlocoTefOpcoes" Visibility="Collapsed">
-                    <CheckBox x:Name="ChkPayGoVias" IsChecked="True" FontSize="14" Margin="0,0,0,8"
-                              Content="Imprimir as vias do comprovante (cliente e estabelecimento) na impressora do cupom"/>
-                    <CheckBox x:Name="ChkTefParcelas" IsChecked="False" FontSize="14" Margin="0,0,0,8"
-                              Content="Perguntar o número de parcelas no crédito (desligado: crédito sai à vista)"/>
-                </StackPanel>
-                <TextBlock x:Name="TxtStatusTef" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
-                           TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <TextBlock x:Name="TxtStatusImpressao" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
+                               TextWrapping="Wrap" Margin="0,0,0,14"/>
 
-                <TextBlock Text="APARÊNCIA" Foreground="{DynamicResource Marca}"
-                           FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
-                <TextBlock Text="Tema da tela" Style="{StaticResource Rotulo}"/>
-                <ComboBox x:Name="CboTema" Margin="0,4,0,6" FontSize="16" Padding="12,10"
-                          SelectionChanged="TemaSelecionado">
-                    <ComboBoxItem Content="Escuro (noturno)"/>
-                    <ComboBoxItem Content="Claro (diurno)"/>
-                    <ComboBoxItem Content="Automático por horário"/>
-                </ComboBox>
-                <StackPanel x:Name="BlocoJanelaTema" Orientation="Horizontal" Visibility="Collapsed"
-                            Margin="0,0,0,6">
-                    <TextBlock Text="Claro de" Style="{StaticResource Rotulo}" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtTemaDe" Width="110" Margin="8,0,0,0" Tag="06:00"
-                             LostFocus="JanelaTemaMudou"/>
-                    <TextBlock Text="até" Style="{StaticResource Rotulo}" VerticalAlignment="Center" Margin="10,0,0,0"/>
-                    <TextBox x:Name="TxtTemaAte" Width="110" Margin="8,0,0,0" Tag="18:00"
-                             LostFocus="JanelaTemaMudou"/>
-                </StackPanel>
-                <TextBlock Text="A escolha vale para ESTA máquina (é a luz do balcão que decide, não a pessoa logada). No automático a tela clareia dentro da janela e escurece fora — mas nunca troca com uma venda aberta."
-                           Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <TextBlock Text="COMANDA DA COZINHA (KDS)" Foreground="{DynamicResource Marca}"
+                               FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="ChkComandaAuto" Content="Imprimir a comanda quando o pedido de delivery chegar"
+                              IsChecked="False" FontSize="14" Margin="0,0,0,8"/>
+                    <ComboBox x:Name="CboImpressoraComanda" Margin="0,0,0,4"/>
+                    <TextBlock Text="A cozinha pode ter a própria bobina. Em branco, usa a impressora padrão do Windows — cada card do KDS também tem o botão 🖨 pra reimprimir."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
-                <!-- Sem bloco NUVEM e sem senha de admin aqui, por decisão do dono:
-                     o catálogo desce pela chave pública (botão Sincronizar) e a senha
-                     de administrador passa a ser gerida pelo painel. Menos campo na
-                     tela do caixa = menos jeito de configurar errado. -->
-
-                <TextBlock x:Name="TxtPrimeiroOperador" Text="ADMINISTRADOR DA LOJA (DONO)" Foreground="{DynamicResource Marca}"
-                           FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
-                <StackPanel x:Name="BlocoOperador">
-                    <TextBlock Text="Nome" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtOpNome" Margin="0,4,0,12"/>
-                    <TextBlock Text="CPF (é o login dele no caixa)" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtOpCpf" Margin="0,4,0,12" MaxLength="14"/>
-                    <TextBlock Text="Senha (4 a 6 dígitos)" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtOpPin" Margin="0,4,0,2" MaxLength="6"/>
-                    <TextBlock Text="O primeiro cadastro é sempre o ADMINISTRADOR (dono): entra com todos os privilégios — autoriza sangria, cancelamento e a própria tela de configuração passa a abrir com a senha dele."
-                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <!-- Tema mora aqui porque é a outra coisa desta MÁQUINA (a luz do
+                         balcão, como a bobina), e porque grava na hora: não passa pelo
+                         Salvar nem pelo pareamento. -->
+                    <TextBlock Text="TEMA DA TELA" Foreground="{DynamicResource Marca}"
+                               FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
+                    <ComboBox x:Name="CboTema" Margin="0,0,0,6" SelectionChanged="TemaSelecionado">
+                        <ComboBoxItem Content="Escuro (noturno)"/>
+                        <ComboBoxItem Content="Claro (diurno)"/>
+                        <ComboBoxItem Content="Automático por horário"/>
+                    </ComboBox>
+                    <StackPanel x:Name="BlocoJanelaTema" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,0,6">
+                        <TextBlock Text="Claro de" Style="{StaticResource Rotulo}" VerticalAlignment="Center"/>
+                        <TextBox x:Name="TxtTemaDe" Width="110" Margin="8,0,0,0" Tag="06:00" LostFocus="JanelaTemaMudou"/>
+                        <TextBlock Text="até" Style="{StaticResource Rotulo}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                        <TextBox x:Name="TxtTemaAte" Width="110" Margin="8,0,0,0" Tag="18:00" LostFocus="JanelaTemaMudou"/>
+                    </StackPanel>
+                    <TextBlock Text="Vale para ESTA máquina (é a luz do balcão que decide, não a pessoa logada) e muda na hora."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                 </StackPanel>
 
-                <!-- ÚLTIMA etapa e OBRIGATÓRIA: sem parear não salva. A integração
-                     com o painel é o que faz vendas e notas subirem. -->
-                <TextBlock Text="INTEGRAÇÃO / PAREAMENTO (obrigatório)" Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,10,0,8"/>
-                <Button x:Name="BtnParear" Content="Parear com o painel (código de 6 dígitos)" Click="Parear"
-                        Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
-                <TextBlock x:Name="TxtStatusPareamento"
-                           Text="Obrigatório: o pareamento é o que sobe vendas e notas pro painel. Sem ele, o Salvar não conclui."
-                           Foreground="{DynamicResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <!-- 4 · MAQUININHA ───────────────────────────────────────── -->
+                <StackPanel x:Name="PassoMaquininha" Visibility="Collapsed">
+                    <!-- Quatro cartões, SEM parágrafo embaixo: o texto antigo dizia que
+                         "Sem TEF" era "cartão registrado na mão", o que está errado — a
+                         forma cartão continua existindo, o que muda é que a cobrança não
+                         sai daqui. Nome errado no cartão é pior que nome curto. -->
+                    <TextBlock Text="Como este caixa cobra cartão e PIX" Style="{StaticResource Rotulo}" Margin="0,0,0,6"/>
+                    <UniformGrid Columns="2" Margin="0,0,-8,6">
+                        <RadioButton x:Name="OpTefNenhum" GroupName="tef" Style="{StaticResource BotaoOpcao}"
+                                     MinHeight="66" Checked="TefMudou">
+                            <TextBlock Text="Sem maquininha" FontWeight="Bold" FontSize="17"/>
+                        </RadioButton>
+                        <RadioButton x:Name="OpTefNuvem" GroupName="tef" Style="{StaticResource BotaoOpcao}"
+                                     MinHeight="66" Checked="TefMudou">
+                            <TextBlock Text="Venda no POS" FontWeight="Bold" FontSize="17"/>
+                        </RadioButton>
+                        <RadioButton x:Name="OpTefPayGo" GroupName="tef" Style="{StaticResource BotaoOpcao}"
+                                     MinHeight="66" Checked="TefMudou">
+                            <TextBlock Text="PayGo (pinpad no caixa)" FontWeight="Bold" FontSize="17"/>
+                        </RadioButton>
+                        <RadioButton x:Name="OpTefControlPay" GroupName="tef" Style="{StaticResource BotaoOpcao}"
+                                     MinHeight="66" Checked="TefMudou">
+                            <TextBlock Text="ControlPay" FontWeight="Bold" FontSize="17"/>
+                        </RadioButton>
+                    </UniformGrid>
 
+                    <StackPanel x:Name="BlocoPayGo" Visibility="Collapsed">
+                        <TextBlock Text="Pasta do PayGo (a mesma configurada no PayGo Windows)" Style="{StaticResource Rotulo}"/>
+                        <TextBox x:Name="TxtPayGoPasta" Margin="0,4,0,8" Tag="C:\PAYGO" TextChanged="CampoMudou"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Registro de certificação (738)" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtPayGoRegistro" Margin="0,4,0,0" Tag="a PayGo fornece"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Razão social da automação (716)" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtPayGoEmpresa" Margin="0,4,0,0" Tag="AMERICAN DAY"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Rede do cartão" Style="{StaticResource Rotulo}"/>
+                                <ComboBox x:Name="CboPayGoRede" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Rede do PIX" Style="{StaticResource Rotulo}"/>
+                                <ComboBox x:Name="CboPayGoRedePix" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                        <Button x:Name="BtnTestarPayGo" Content="Testar PayGo (ATV)" Click="TestarPayGo"
+                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="BlocoControlPay" Visibility="Collapsed">
+                        <TextBlock Text="O PayGo Windows desta máquina precisa estar ativado como terminal ControlPay (é ele quem fala com o pinpad). O PDV cria a venda na API e acompanha o status."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <TextBlock Text="Chave de integração (portal ControlPay → Integrações → Chaves de integração)" Style="{StaticResource Rotulo}"/>
+                        <PasswordBox x:Name="PwdCpayChave" Margin="0,4,0,8" FontSize="18" Padding="12,10"
+                                     Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
+                                     BorderBrush="{DynamicResource Borda}" PasswordChanged="CampoMudouSenha"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="ID do terminal" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtCpayTerminal" Margin="0,4,0,0" Tag="ex.: 6408" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="ID da pessoa" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtCpayPessoa" Margin="0,4,0,0" Tag="ex.: 12247" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Text="Senha técnica" Style="{StaticResource Rotulo}"/>
+                                <PasswordBox x:Name="PwdCpaySenha" Margin="0,4,0,0" FontSize="18" Padding="12,10"
+                                             Background="{DynamicResource Painel}" Foreground="{DynamicResource Texto}"
+                                             BorderBrush="{DynamicResource Borda}"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Rede do cartão" Style="{StaticResource Rotulo}"/>
+                                <ComboBox x:Name="CboCpayRede" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Rede do PIX" Style="{StaticResource Rotulo}"/>
+                                <ComboBox x:Name="CboCpayRedePix" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                        <!-- Ambiente: DESLIGADO por padrão (a loja opera em produção, e o
+                             caixa novo tem que nascer cobrando de verdade). Continua na
+                             tela, e não como valor fixo, porque a homologação do ControlPay
+                             roda no sandbox: sem este controle, a máquina que está em
+                             sandbox não tem como sair — e a que está em produção não tem
+                             como entrar — a não ser mexendo no banco à mão. O resumo do
+                             fim repete o aviso; config invisível que muda o que acontece
+                             com o dinheiro é armadilha. -->
+                        <CheckBox x:Name="ChkCpaySandbox" IsChecked="False" FontSize="14" Margin="0,0,0,8"
+                                  Content="Ambiente de TESTE (sandbox) — nenhuma cobrança é de verdade"/>
+                        <Button x:Name="BtnTestarCpay" Content="Testar conexão com a PayGo" Click="TestarControlPay"
+                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="BlocoTefNuvem" Visibility="Collapsed">
+                        <TextBlock Text="Serial da maquininha (vazio = terminal padrão da conta)" Style="{StaticResource Rotulo}"/>
+                        <TextBox x:Name="TxtTefSerial" Margin="0,4,0,8"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="BlocoTefOpcoes" Visibility="Collapsed" Margin="0,6,0,0">
+                        <CheckBox x:Name="ChkPayGoVias" IsChecked="True" FontSize="14" Margin="0,0,0,8"
+                                  Content="Imprimir as vias do comprovante (cliente e estabelecimento)"/>
+                        <CheckBox x:Name="ChkTefParcelas" IsChecked="False" FontSize="14" Margin="0,0,0,8"
+                                  Content="Perguntar o número de parcelas no crédito (desligado: crédito à vista)"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TxtStatusTef" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
+                               TextWrapping="Wrap" Margin="0,0,0,8"/>
+                </StackPanel>
+
+                <!-- 5 · PAREAMENTO ───────────────────────────────────────── -->
+                <StackPanel x:Name="PassoPareamento" Visibility="Collapsed">
+                    <Button x:Name="BtnParear" Content="Parear com o painel (código de 6 dígitos)" Click="Parear"
+                            Style="{StaticResource BotaoBase}" MinHeight="56" FontSize="16" Margin="0,0,0,6"/>
+                    <TextBlock x:Name="TxtStatusPareamento"
+                               Text="O pareamento é o que sobe vendas e notas pro painel — e é ele que traz CNPJ e série certos. Sem ele o Salvar não conclui."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                    <TextBlock x:Name="TxtPrimeiroOperador" Text="ADMINISTRADOR DA LOJA (DONO)"
+                               Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
+                    <StackPanel x:Name="BlocoOperador">
+                        <TextBlock Text="Nome" Style="{StaticResource Rotulo}"/>
+                        <TextBox x:Name="TxtOpNome" Margin="0,4,0,10" TextChanged="CampoMudou"/>
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="CPF (é o login dele no caixa)" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtOpCpf" Margin="0,4,0,0" MaxLength="14" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Senha (4 a 6 dígitos)" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtOpPin" Margin="0,4,0,0" MaxLength="6" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="O primeiro cadastro é sempre o ADMINISTRADOR (dono): entra com todos os privilégios — autoriza sangria e cancelamento, e a senha dele passa a abrir esta tela."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- FIM · RESUMO ─────────────────────────────────────────── -->
+                <StackPanel x:Name="PassoResumo" Visibility="Collapsed">
+                    <ItemsControl x:Name="ListaResumo">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{DynamicResource Painel}" BorderBrush="{DynamicResource Borda}"
+                                        BorderThickness="1" CornerRadius="12" Padding="14,11" Margin="0,0,0,8">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Titulo}" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"/>
+                                        <TextBlock x:Name="valor" Text="{Binding Valor}" Foreground="{DynamicResource Texto}"
+                                                   FontSize="16" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                                <DataTemplate.Triggers>
+                                    <!-- Atenção não é erro: é o que a loja escolheu e precisa
+                                         saber que escolheu (homologação, só recibo, sandbox). -->
+                                    <DataTrigger Binding="{Binding Atencao}" Value="True">
+                                        <Setter TargetName="valor" Property="Foreground" Value="{DynamicResource Amarelo}"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <!-- ── RODAPÉ: O QUE BLOQUEIA + NAVEGAÇÃO ─────────────────────────── -->
+        <Border Grid.Row="2" Background="{DynamicResource Painel}" BorderBrush="{DynamicResource Borda}"
+                BorderThickness="0,1,0,0">
+            <StackPanel Width="620" HorizontalAlignment="Center" Margin="0,12,0,14">
+                <!-- Fica NA TELA, não num popup: motivo escondido é motivo que o
+                     instalador descobre clicando. -->
+                <TextBlock x:Name="TxtBloqueio" Foreground="{DynamicResource Amarelo}" FontSize="13.5"
+                           TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed"/>
                 <TextBlock x:Name="TxtErro" Foreground="{DynamicResource Erro}" FontSize="14"
-                           TextWrapping="Wrap" MinHeight="30" Margin="0,6,0,0"/>
-
-                <Grid Margin="0,10,0,0">
+                           TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed"/>
+                <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="2*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" x:Name="BtnVoltar" Content="Voltar" Click="Voltar"
-                            Style="{StaticResource BotaoBase}" Margin="0,0,5,0" Visibility="Collapsed"/>
-                    <Button Grid.Column="1" x:Name="BtnSalvar" Content="Salvar e continuar" Click="Salvar"
-                            Style="{StaticResource BotaoPrincipal}"/>
+                    <Button Grid.Column="0" x:Name="BtnSair" Content="Sair" Click="Sair"
+                            Style="{StaticResource BotaoBase}" MinHeight="52" FontSize="15" Padding="22,0"
+                            Margin="0,0,8,0" Visibility="Collapsed"/>
+                    <Button Grid.Column="1" x:Name="BtnVoltar" Content="Voltar" Click="Voltar"
+                            Style="{StaticResource BotaoBase}" MinHeight="52" FontSize="15" Padding="22,0"/>
+                    <Button Grid.Column="3" x:Name="BtnSalvar" Content="Salvar" Click="Salvar"
+                            Style="{StaticResource BotaoBase}" MinHeight="52" FontSize="15" Padding="22,0"
+                            Margin="0,0,8,0" Visibility="Collapsed"/>
+                    <Button Grid.Column="4" x:Name="BtnAvancar" Content="Avançar" Click="Avancar"
+                            Style="{StaticResource BotaoPrincipal}" MinHeight="52" MinWidth="200" Padding="26,0"/>
                 </Grid>
             </StackPanel>
-        </ScrollViewer>
+        </Border>
     </Grid>
 </UserControl>
