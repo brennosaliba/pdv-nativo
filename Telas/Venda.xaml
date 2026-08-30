@@ -40,12 +40,28 @@
         <Border Grid.Row="0" Background="{DynamicResource BarraDegrade}" Padding="18,10"
                 BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,0,1">
             <Grid>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- DUAS COLUNAS, e a ordem de prioridade importa.
+                     Antes este Grid não tinha ColumnDefinitions: os dois StackPanel
+                     ocupavam a MESMA célula, um ancorado à esquerda e outro à direita.
+                     Em tela estreita eles se sobrepunham — os botões eram pintados por
+                     cima do nome do operador, e sobrava só um pedaço de texto espremido
+                     entre "Sangria" e "Suprimento".
+                     Com Auto na direita, os BOTÕES nunca encolhem: num caixa, a ação
+                     vale mais que a decoração. Quem cede espaço é a identidade, e ela
+                     corta com reticências em vez de vazar por baixo. -->
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="0"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
+                            ClipToBounds="True">
                     <!-- Logo da loja quando houver arquivo; senão o nome dela. O mesmo
                          executável atende qualquer cliente: nada de marca fixa aqui. -->
                     <Image x:Name="ImgLogo" Height="34" Margin="0,0,4,0" Visibility="Collapsed"
                            VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
                     <TextBlock x:Name="TxtLoja" FontSize="20" FontWeight="Black" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
                                Foreground="{DynamicResource Ciano}"/>
                     <Ellipse x:Name="PontoLogo" Width="7" Height="7" Fill="{DynamicResource Rosa}"
                              Margin="6,0,0,4" VerticalAlignment="Bottom"/>
@@ -58,14 +74,15 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="TxtOperador" Foreground="{DynamicResource Texto}"
+                        <TextBlock x:Name="TxtOperador" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Texto}"
                                    FontSize="16" FontWeight="Bold"/>
-                        <TextBlock x:Name="TxtSessao" Foreground="{DynamicResource TextoFraco}"
+                        <TextBlock x:Name="TxtSessao" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextoFraco}"
                                    FontSize="12" Margin="0,2,0,0"/>
                     </StackPanel>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <WrapPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                           VerticalAlignment="Center">
                     <!-- Sincronizar é ato EXPLÍCITO: o gerente mexe no painel, o caixa
                          aperta o botão. O PDV nunca fica esperando a nuvem para vender. -->
                     <Button x:Name="BtnSync" Click="Sincronizar" Style="{StaticResource BotaoBarra}">
@@ -161,15 +178,25 @@
                     <Button Content="Sair" Click="Sair" Style="{StaticResource BotaoBarra}"
                             Background="{DynamicResource RosaDegrade}" Foreground="{DynamicResource SobreMarca}"
                             BorderThickness="0" FontWeight="Bold" Margin="14,0,0,0"/>
-                </StackPanel>
+                </WrapPanel>
             </Grid>
         </Border>
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="272"/>   <!-- categorias (2 por linha, quase quadradas) -->
-                <ColumnDefinition Width="*"/>     <!-- produtos -->
-                <ColumnDefinition Width="404"/>   <!-- comanda -->
+                <!-- LARGURA PROPORCIONAL, não fixa. Antes eram 272 e 404 PIXELS travados:
+                     676 px presos nas laterais em qualquer tela. Num monitor pequeno
+                     sobrava tão pouco para os produtos que só cabiam 2 por linha — e é
+                     daí que vinha a rolagem sem fim, não do tamanho do cartão (a grade
+                     já é responsiva, ~178 px por produto). Num monitor grande, o oposto:
+                     as laterais não cresciam e o meio ficava esticado.
+                     Os limites existem porque nem tudo é elástico: abaixo de ~188 px a
+                     categoria não cabe em 3 colunas, e abaixo de ~300 px a comanda perde
+                     o botão de finalizar. Acima do teto é só desperdício — espaço extra
+                     tem que ir para o PRODUTO, que é o que o operador olha. -->
+                <ColumnDefinition Width="1*"   MinWidth="188" MaxWidth="272"/>  <!-- categorias -->
+                <ColumnDefinition Width="3.4*"/>                                <!-- produtos  -->
+                <ColumnDefinition Width="1.2*" MinWidth="300" MaxWidth="360"/>  <!-- comanda   -->
             </Grid.ColumnDefinitions>
 
             <!-- ══ ESQUERDA: categorias ══ -->
