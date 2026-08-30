@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -414,7 +414,12 @@ public sealed class Nuvem
                     e.TryGetProperty("recebido_em", out var rc) && rc.ValueKind == JsonValueKind.String
                         ? rc.GetString() : null,
                     e.TryGetProperty("preparo_ate", out var pa) && pa.ValueKind == JsonValueKind.String
-                        ? pa.GetString() : null));
+                        ? pa.GetString() : null,
+                    // ENTREGA ou RETIRADA. A RPC passou a devolver isto para o card
+                    // parar de afirmar "esperando o entregador" em pedido de retirada.
+                    // Servidor antigo nao manda o campo: ausencia = entrega, que e o
+                    // padrao seguro (o balcao continua esperando o motoboy).
+                    e.TryGetProperty("retirada", out var rt) && rt.ValueKind == JsonValueKind.True));
             }
             return r;
         }

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Microsoft.Data.Sqlite;
 
 namespace Pdv.Nucleo;
@@ -100,6 +100,12 @@ public static class Banco
             "ALTER TABLE kds_ticket ADD COLUMN entregue_em TEXT",
             // prazo estimado do iFood (dueAt): o relogio que o Gestor mostra
             "ALTER TABLE kds_ticket ADD COLUMN preparo_ate TEXT",
+            // ENTREGA ou RETIRADA. Sem isto o rodape do card escolhia o texto so
+            // pela ORIGEM e dizia "ESPERANDO O ENTREGADOR" em pedido de retirada —
+            // onde nao existe entregador nenhum. 0 = entrega (padrao seguro: errar
+            // para "entregador" e chato; errar para "retirada" faz o balcao parar
+            // de esperar o motoboy que esta a caminho).
+            "ALTER TABLE kds_ticket ADD COLUMN retirada INTEGER NOT NULL DEFAULT 0",
             // TEF PayGo (troca de arquivos): two-phase commit precisa do código de
             // controle (027) e da identificação (001) para CNF/NCN no religamento; as
             // vias e a resposta crua ficam para reimpressão e auditoria.

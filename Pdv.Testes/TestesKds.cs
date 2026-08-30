@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 
@@ -454,6 +454,24 @@ public static class TestesKds
                 "expiracao de 4h limpa pedido de 5h que NINGUEM tocou");
             Kds.Liberar(tVelho!); Kds.Entregar(tVelho!);
             checar(!RealtimeKds.EhSino("lixo{{{"), "quadro ilegivel nao derruba o cliente");
+
+            // ── ENTREGA x RETIRADA ─────────────────────────────────────────
+            // O rodape do card dizia "ESPERANDO O ENTREGADOR" escolhendo so pela
+            // ORIGEM. Num pedido de RETIRADA isso e falso: nao ha entregador, ha
+            // cliente vindo buscar — e o dono viu acontecer no pedido 6976. A
+            // modalidade agora desce da RPC e fica gravada no ticket.
+            var tRet = Kds.DoDelivery("order-RET", "6976", "Brenno", itens,
+                                      retirada: true);
+            var tEnt = Kds.DoDelivery("order-ENT", "6977", "Brenno", itens);
+
+            var lidos = Kds.Abertos();
+            var eRet = lidos.FirstOrDefault(t => t.Id == tRet);
+            var eEnt = lidos.FirstOrDefault(t => t.Id == tEnt);
+
+            checar(eRet is { Retirada: true },
+                   "pedido de RETIRADA volta do banco marcado como retirada");
+            checar(eEnt is { Retirada: false },
+                   "pedido de ENTREGA volta como entrega — ausencia de dado nao vira retirada");
         }
         finally
         {

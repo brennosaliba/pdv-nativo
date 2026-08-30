@@ -261,16 +261,17 @@ public partial class Kds : UserControl
         var (acaoTexto, acaoCor, acaoFundo) = t.Status switch
         {
             Nucleo.Kds.Preparando => ("TOQUE QUANDO FICAR PRONTO", "Ok", "ChipOkFundo"),
-            // "sai sozinho" evita o operador caçando um botão que não existe:
-            // O card nao sabe se o pedido e ENTREGA ou RETIRADA: a RPC do KDS nao
-            // devolve a modalidade (o cardapio tem p.modalidade e o iFood tem
-            // payload->orderType, mas nenhum dos dois chega ate aqui). Dizer
-            // "ESPERANDO O ENTREGADOR" num pedido de retirada e afirmar o que nao
-            // se sabe — e o dono viu isso acontecer. Ate a modalidade descer, o
-            // texto diz o que e VERDADE nos dois casos: o card sai sozinho quando
-            // a saida for confirmada la fora, seja pelo entregador ou pelo balcao.
+            // Agora o card SABE: a RPC pdv_kds_pedidos devolve `retirada`
+            // (cardapio_digital_pedidos.modalidade e ifood_orders.payload->orderType),
+            // o SQLite guarda, e o texto para de adivinhar. Antes ele escolhia so
+            // pela ORIGEM e dizia "ESPERANDO O ENTREGADOR" em pedido de retirada,
+            // onde nao existe entregador nenhum.
+            // Em ambos os casos o card sai sozinho: a saida e fato do MUNDO — quem
+            // declara e o entregador (via API) ou o balcao entregando ao cliente.
+            Nucleo.Kds.Pronto when t.Origem == "ifood" && t.Retirada
+                                  => ("AGUARDANDO O CLIENTE RETIRAR", "TextoFraco", "VeuElevado"),
             Nucleo.Kds.Pronto when t.Origem == "ifood"
-                                  => ("SAI SOZINHO QUANDO FOR RETIRADO", "TextoFraco", "VeuElevado"),
+                                  => ("AGUARDANDO O ENTREGADOR", "TextoFraco", "VeuElevado"),
             Nucleo.Kds.Pronto     => ("TOQUE QUANDO O CLIENTE LEVAR", "Texto", "VeuElevado"),
             _                     => ("TOQUE PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
         };

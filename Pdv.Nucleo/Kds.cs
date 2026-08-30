@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Dapper;
 
 namespace Pdv.Nucleo;
@@ -17,7 +17,9 @@ public sealed record Ticket(
     DateTime CriadoEm,
     DateTime? PreparoEm,
     DateTime? ProntoEm,
-    DateTime? PreparoAte = null)
+    DateTime? PreparoAte = null,
+    /// <summary>true = o CLIENTE vem buscar; false = sai com entregador.</summary>
+    bool Retirada = false)
 {
     /// <summary>Há quanto tempo esse pedido está esperando. É o que decide a cor do card.</summary>
     public TimeSpan Espera => (ProntoEm ?? DateTime.Now) - CriadoEm;
@@ -46,7 +48,7 @@ public sealed record TicketItem(string Descricao, int Qtd, string? Observacao,
 /// nasce mostrando "agora" e a cozinha prioriza errado.</param>
 public sealed record PedidoDelivery(string OrderId, string Numero, string? Cliente,
                                     string ItensJson, string Status, string? RecebidoEm = null,
-                                    string? PreparoAte = null);
+                                    string? PreparoAte = null, bool Retirada = false);
 
 /// <summary>
 /// A fila de preparo do balcão.
@@ -103,12 +105,14 @@ public static class Kds
     /// <summary>Cria (ou reaproveita) o ticket de um pedido de delivery.</summary>
     public static string? DoDelivery(string orderId, string numeroVisivel,
                                      string? cliente, IEnumerable<TicketItem> itens,
-                                     DateTime? chegadaReal = null, DateTime? preparoAte = null)
-        => Criar("ifood", orderId, numeroVisivel, cliente, itens.ToList(), chegadaReal, preparoAte);
+                                     DateTime? chegadaReal = null, DateTime? preparoAte = null,
+                                     bool retirada = false)
+        => Criar("ifood", orderId, numeroVisivel, cliente, itens.ToList(), chegadaReal, preparoAte, retirada);
 
     private static string? Criar(string origem, string refId, string numero,
                                  string? cliente, List<TicketItem> itens,
-                                 DateTime? chegadaReal = null, DateTime? preparoAte = null)
+                                 DateTime? chegadaReal = null, DateTime? preparoAte = null,
+                                 bool retirada = false)
     {
         if (itens.Count == 0) return null;
 
@@ -120,8 +124,8 @@ public static class Kds
 
         var id = Guid.NewGuid().ToString();
         cx.Execute(
-            @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em, preparo_ate)
-              VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pa)
+            @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em, preparo_ate, retirada)
+              VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pa, @ret)
               ON CONFLICT(origem, ref_id) DO NOTHING",
             new
             {
@@ -130,6 +134,7 @@ public static class Kds
                 // o relógio do card conta da CHEGADA no iFood quando conhecida
                 t = (chegadaReal ?? DateTime.Now).ToString("o"),
                 pa = preparoAte?.ToString("o"),
+                ret = retirada ? 1 : 0,
             });
 
         // O ON CONFLICT pode ter engolido o insert numa corrida com o polling do
@@ -507,7 +512,7 @@ public static class Kds
                 var itensPr = ItensDeJson(p.ItensJson);
                 if (itensPr.Count > 0)
                     DoDelivery(p.OrderId, p.Numero, p.Cliente, itensPr,
-                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte));
+                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada);
                 PromoverProntoDelivery(p.OrderId);
                 continue;
             }
@@ -521,7 +526,7 @@ public static class Kds
             if (!existia)
             {
                 if (DoDelivery(p.OrderId, p.Numero, p.Cliente, itens,
-                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte)) is not null)
+                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada) is not null)
                     novos++;
             }
             else
@@ -648,5 +653,7 @@ public static class Kds
         DateTime.Parse((string)r.criado_em),
         r.preparo_em is string p ? DateTime.Parse(p) : null,
         r.pronto_em  is string q ? DateTime.Parse(q) : null,
-        r.preparo_ate is string pa ? DateTime.Parse(pa) : (DateTime?)null);
+        r.preparo_ate is string pa ? DateTime.Parse(pa) : (DateTime?)null,
+        // coluna nova: banco antigo nao tem, e a leitura tolera (null = entrega)
+        r.retirada is long rt && rt == 1);
 }
