@@ -262,9 +262,15 @@ public partial class Kds : UserControl
         {
             Nucleo.Kds.Preparando => ("TOQUE QUANDO FICAR PRONTO", "Ok", "ChipOkFundo"),
             // "sai sozinho" evita o operador caçando um botão que não existe:
-            // este card só some quando o entregador declara a coleta lá fora.
+            // O card nao sabe se o pedido e ENTREGA ou RETIRADA: a RPC do KDS nao
+            // devolve a modalidade (o cardapio tem p.modalidade e o iFood tem
+            // payload->orderType, mas nenhum dos dois chega ate aqui). Dizer
+            // "ESPERANDO O ENTREGADOR" num pedido de retirada e afirmar o que nao
+            // se sabe — e o dono viu isso acontecer. Ate a modalidade descer, o
+            // texto diz o que e VERDADE nos dois casos: o card sai sozinho quando
+            // a saida for confirmada la fora, seja pelo entregador ou pelo balcao.
             Nucleo.Kds.Pronto when t.Origem == "ifood"
-                                  => ("ESPERANDO O ENTREGADOR · sai sozinho", "TextoFraco", "VeuElevado"),
+                                  => ("SAI SOZINHO QUANDO FOR RETIRADO", "TextoFraco", "VeuElevado"),
             Nucleo.Kds.Pronto     => ("TOQUE QUANDO O CLIENTE LEVAR", "Texto", "VeuElevado"),
             _                     => ("TOQUE PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
         };
@@ -285,8 +291,16 @@ public partial class Kds : UserControl
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         // ── cabeçalho: número + origem + espera ─────────────────────────────
+        // TRES colunas, e a do meio e a unica que encolhe.
+        // Antes eram duas — numero+chip numa coluna elastica e relogio+botoes em
+        // Auto. Em quadro estreito (o KDS divide a tela em 3, entao a 800x600 cada
+        // coluna fica com ~266 px) a elastica era espremida e o NUMERO DO PEDIDO
+        // sumia: sobrava so o "#" colado no relogio. O numero e a identidade do
+        // pedido — e a unica coisa que o operador grita para o cliente. Ele vai
+        // para Auto e nunca corta. Quem cede espaco e o CHIP de origem, decoracao.
         var cab = new Grid { Margin = new Thickness(11, 8, 11, 3) };
-        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 0 });
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var esq = new StackPanel { Orientation = Orientation.Horizontal };
@@ -296,10 +310,14 @@ public partial class Kds : UserControl
             VerticalAlignment = VerticalAlignment.Center,
         };
         numero.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
-        esq.Children.Add(numero);
-        esq.Children.Add(Chip(t.Origem == "ifood" ? "iFOOD" : "BALCÃO",
-                              t.Origem == "ifood" ? "Ciano" : "Rosa"));
-        cab.Children.Add(esq);
+        Grid.SetColumn(numero, 0);
+        cab.Children.Add(numero);
+
+        var chip = Chip(t.Origem == "ifood" ? "iFOOD" : "BALCAO",
+                        t.Origem == "ifood" ? "Ciano" : "Rosa");
+        chip.ClipToBounds = true;
+        Grid.SetColumn(chip, 1);
+        cab.Children.Add(chip);
 
         // O relógio é O MESMO do Gestor do iFood: o PRAZO (dueAt). "12 min"
         // = falta isso pro prometido; "+3 min" = estourou. Pedido sem prazo
@@ -332,7 +350,7 @@ public partial class Kds : UserControl
             VerticalAlignment = VerticalAlignment.Center,
         };
         espera.SetResourceReference(TextBlock.ForegroundProperty, corEspera);
-        Grid.SetColumn(espera, 1);
+        Grid.SetColumn(espera, 0);
 
         var dir = new StackPanel { Orientation = Orientation.Horizontal };
         dir.Children.Add(espera);
@@ -391,7 +409,7 @@ public partial class Kds : UserControl
             };
             dir.Children.Add(imprime);
         }
-        Grid.SetColumn(dir, 1);
+        Grid.SetColumn(dir, 2);
         cab.Children.Add(dir);
         raiz.Children.Add(cab);
 
@@ -445,12 +463,16 @@ public partial class Kds : UserControl
         raiz.Children.Add(corpo);
 
         // ── rodapé: o que o toque faz aqui ──────────────────────────────────
-        var rodape = new Border { Padding = new Thickness(0, 8, 0, 9), CornerRadius = new CornerRadius(0, 0, 13, 13) };
+        var rodape = new Border { Padding = new Thickness(8, 8, 8, 9), CornerRadius = new CornerRadius(0, 0, 13, 13) };
         rodape.SetResourceReference(Border.BackgroundProperty, acaoFundo);
         var acao = new TextBlock
         {
             Text = acaoTexto, FontSize = 12, FontWeight = FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center,
+            // Sem isto o texto vazava dos DOIS lados do card e o operador lia
+            // "NDO O ENTREGADOR · sai". Num quadro de 3 colunas a 800x600 o card
+            // tem ~250 px: instrucao de operacao tem que caber, nem que quebre.
+            TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
         };
         acao.SetResourceReference(TextBlock.ForegroundProperty, acaoCor);
         rodape.Child = acao;

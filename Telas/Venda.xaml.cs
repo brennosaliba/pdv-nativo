@@ -665,7 +665,13 @@ public partial class Venda : UserControl
         if (emPromo > 0) _quantosPorCategoria[CategoriaPromo] = emPromo;
         _categoriaMini = cats.Count > 12;
         ColunasCategorias = _categoriaMini ? 3 : 2;
-        _categoriaAtual = cats.FirstOrDefault() ?? "";
+        // A vitrine de PROMOÇÃO fica no topo por ser o atalho mais valioso, mas ela
+        // NÃO é uma boa tela de abertura: são seções empilhadas, cada uma com poucos
+        // produtos, e o operador cai numa tela cheia de rolagem antes de ver o
+        // cardápio. Abrir na primeira categoria de PRODUTO é o começo natural do
+        // atendimento — a Promoção continua a um toque de distância.
+        _categoriaAtual = cats.FirstOrDefault(c => c != CategoriaPromo)
+                          ?? cats.FirstOrDefault() ?? "";
         foreach (var c in cats) ListaCategorias.Items.Add(BotaoCategoria(c));
         RepintarCategorias();
         PintarProdutos();
