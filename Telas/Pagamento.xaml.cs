@@ -140,6 +140,9 @@ public partial class Pagamento : UserControl
             b.Click += (_, _) => Escolheu(escolhida);
             GradeFormas.Children.Add(b);
         }
+        // 03/09: com o voucher são 5 formas; em 2 colunas viravam 3 linhas espremidas
+        // na mesma altura e os cartões saíam cortados. Acima de 4, 3 colunas (2 linhas).
+        GradeFormas.Columns = GradeFormas.Children.Count > 4 ? 3 : 2;
     }
 
     private void Escolheu(string forma)
