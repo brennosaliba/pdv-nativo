@@ -826,7 +826,7 @@ Check("com TEF, só o dinheiro é contado pelo operador",
     Caixa.FormasContadas(cx) is ["dinheiro"]);
 Vendas.GravarConfig(cx, "tef_habilitado", "0");
 Check("sem TEF (POS avulsa), cartão e PIX também são contados",
-    Caixa.FormasContadas(cx).Length == 4);
+    Caixa.FormasContadas(cx) is ["dinheiro", "debito", "credito", "pix", "voucher"]);
 Vendas.GravarConfig(cx, "tef_habilitado", "1");   // os testes abaixo assumem TEF ligado
 
 var soDinheiro = new Dictionary<string, Dinheiro> { ["dinheiro"] = Dinheiro.DeReais(1000) };

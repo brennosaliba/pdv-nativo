@@ -126,5 +126,34 @@ public static class TestesPromocoes
         // janela de hora controla o cinza
         vitrine = Promocoes.ProdutosEmPromocao(new[] { happy }, new DateTime(2026, 8, 20, 19, 0, 0));
         checar(vitrine.Count == 0, "promo de alvo 'todos' nao lista produto (viraria ruido)");
+
+        // ── 03/09/2026 (Savassi): "donuts do dia" com um produto POR DIA ────────
+        // A vitrine do caixa pintava a seção inteira com a regra do PRIMEIRO
+        // produto do grupo: na quinta, brigadeiro (quarta) puxava "só vale qua"
+        // sobre o ovomaltine (quinta). O motor sempre soube a verdade POR
+        // PRODUTO; este teste a fixa para a tela não voltar a ignorá-la.
+        const string brig = "BRIG", ovo = "OVO";
+        var porDia = Promocoes.Parsear("""
+            {"id": "pd", "fim": "2026-12-31", "alvo": "produtos", "nome": "donuts do dia", "tipo": "percentual", "ativa": true,
+             "lojas": ["American Day Savassi"], "inicio": "2026-08-06", "hora_fim": null, "hora_inicio": null,
+             "categorias": null, "percentual": null, "dias_semana": null, "produto_ids": ["BRIG", "OVO"],
+             "regras_semana": [
+               {"dias": [3], "precos_cent": {"BRIG": 1450}, "produto_ids": ["BRIG"]},
+               {"dias": [4], "precos_cent": {"OVO": 1450},  "produto_ids": ["OVO"]}
+             ], "valor_desconto_cent": null}
+            """)!;
+        vitrine = Promocoes.ProdutosEmPromocao(new[] { porDia }, quinta);
+        checar(vitrine.TryGetValue(ovo, out var vOvo) && vOvo.AtivaAgora,
+            "quinta: o produto da regra de quinta (ovomaltine) vale AGORA");
+        checar(vitrine.TryGetValue(brig, out var vBrig) && !vBrig.AtivaAgora,
+            "quinta: o produto da regra de quarta (brigadeiro) NAO vale agora");
+        checar(vOvo?.Quando == "qui" && vBrig?.Quando == "qua",
+            "cada produto descreve o SEU dia (qui / qua), nao o do primeiro do grupo");
+        checar(Promocoes.PrecoEfetivoCent(new[] { porDia }, ovo, "Donuts", 1800, quinta).Cent == 1450
+            && Promocoes.PrecoEfetivoCent(new[] { porDia }, brig, "Donuts", 1800, quinta).Cent == 1800,
+            "quinta: ovomaltine sai a 14,50 e brigadeiro fica no preco cheio");
+        vitrine = Promocoes.ProdutosEmPromocao(new[] { porDia }, quarta);
+        checar(vitrine[brig].AtivaAgora && !vitrine[ovo].AtivaAgora,
+            "quarta: inverte (brigadeiro vale, ovomaltine nao)");
     }
 }

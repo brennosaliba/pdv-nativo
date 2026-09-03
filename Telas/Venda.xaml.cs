@@ -857,15 +857,24 @@ public partial class Venda : UserControl
             // SEGMENTADO por promoção (pedido do dono): cabeçalho com nome e
             // regra, itens da promoção embaixo — nada de misturar vitrines.
             // Ativas primeiro; as fora de dia/horário descem, em cinza.
+            // 03/09 (Savassi): cada produto obedece a SUA regra. Antes a seção
+            // inteira copiava a regra do PRIMEIRO produto do grupo: "donuts do
+            // dia" (brigadeiro na quarta, ovomaltine na quinta) aparecia, na
+            // quinta, toda cinza com "só vale qua", ovomaltine incluso. Agora
+            // só entra na vitrine o que vale AGORA; o resto nem aparece.
             var grupos = lista
                 .GroupBy(p => _promoVitrine[p.Id].Nome)
                 .OrderByDescending(g => g.Any(p => _promoVitrine[p.Id].AtivaAgora))
                 .ThenBy(g => g.Key);
+            var visiveis = 0;
             foreach (var g in grupos)
             {
-                var info = _promoVitrine[g.First().Id];
-                ListaProdutos.Items.Add(SecaoPromo(g.Key, info, g.ToList()));
+                var ativos = g.Where(p => _promoVitrine[p.Id].AtivaAgora).ToList();
+                var outros = g.Where(p => !_promoVitrine[p.Id].AtivaAgora).ToList();
+                visiveis += ativos.Count;
+                ListaProdutos.Items.Add(SecaoPromo(g.Key, ativos, outros));
             }
+            TxtContagem.Text = visiveis == 1 ? "1 item" : $"{visiveis} itens";
         }
         else
         {
@@ -876,80 +885,61 @@ public partial class Venda : UserControl
     }
 
     /// <summary>
-    /// Uma promoção = uma seção: cabeçalho (nome + quando + estado) e a grade
-    /// dos produtos dela embaixo. Fora do dia/horário: tudo em cinza, sem vender.
+    /// Uma promoção = uma seção: o nome e, embaixo, o dia e o horário em que
+    /// vale HOJE. Só os produtos válidos agora entram na grade e podem ser
+    /// vendidos. Quando nada vale agora, a seção fica cinza e diz o que vale
+    /// em que dia, sem card: o operador não vende o que não vale.
     /// </summary>
-    private StackPanel SecaoPromo(string nomePromo, Nucleo.Promocoes.ProdutoPromo info,
-                                  List<Produto> produtos)
+    private StackPanel SecaoPromo(string nomePromo, List<Produto> ativos, List<Produto> outros)
     {
+        var ativa = ativos.Count > 0;
         var sec = new StackPanel { Margin = new Thickness(2, 6, 2, 10) };
-
         var cab = new Border
         {
             CornerRadius = new CornerRadius(12), Padding = new Thickness(14, 8, 14, 9),
             Margin = new Thickness(2, 0, 2, 6), BorderThickness = new Thickness(1),
         };
-        // VERDE quando valendo: o vermelho da 1a versao lia como "negativo/
-        // erro" (reclamacao do dono) - promocao ativa e coisa BOA acontecendo
-        cab.SetResourceReference(Border.BackgroundProperty,
-            info.AtivaAgora ? "ChipOkFundo" : "VeuElevado");
-        cab.SetResourceReference(Border.BorderBrushProperty,
-            info.AtivaAgora ? "ChipOkBorda" : "Borda");
-        var linhaCab = new StackPanel { Orientation = Orientation.Horizontal };
+        cab.SetResourceReference(Border.BackgroundProperty, ativa ? "ChipOkFundo" : "VeuElevado");
+        cab.SetResourceReference(Border.BorderBrushProperty, ativa ? "ChipOkBorda" : "Borda");
+        var colunaCab = new StackPanel();
         var titulo = new TextBlock
         {
             Text = "🏷️ " + Capitalizar(nomePromo), FontSize = 17, FontWeight = FontWeights.Bold,
-            VerticalAlignment = VerticalAlignment.Center,
         };
-        titulo.SetResourceReference(TextBlock.ForegroundProperty,
-            info.AtivaAgora ? "Ok" : "TextoFraco");
-        linhaCab.Children.Add(titulo);
+        titulo.SetResourceReference(TextBlock.ForegroundProperty, ativa ? "Ok" : "TextoFraco");
+        colunaCab.Children.Add(titulo);
+        // linha de baixo: a regra dos produtos que valem agora ("qui" ou
+        // "qui · 18:00–20:00"), ou o aviso de que hoje não tem
+        var quandoHoje = string.Join("  ·  ", ativos.Select(p => _promoVitrine[p.Id].Quando).Distinct());
         var detalhe = new TextBlock
         {
-            Text = info.AtivaAgora ? $"  ·  {info.Quando}" : $"  ·  não vale agora — só {info.Quando}",
-            FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
+            Text = ativa ? $"Vale hoje: {quandoHoje}" : "Não vale agora",
+            FontSize = 13, Margin = new Thickness(0, 2, 0, 0), TextWrapping = TextWrapping.Wrap,
         };
         detalhe.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-        linhaCab.Children.Add(detalhe);
-        cab.Child = linhaCab;
+        colunaCab.Children.Add(detalhe);
+        if (!ativa && outros.Count > 0)
+        {
+            var porDia = outros
+                .GroupBy(p => _promoVitrine[p.Id].Quando)
+                .Select(gr => $"{gr.Key}: {string.Join(", ", gr.Select(p => Capitalizar(p.Nome)))}");
+            var linhaOutros = new TextBlock
+            {
+                Text = string.Join("  ·  ", porDia),
+                FontSize = 12, Margin = new Thickness(0, 2, 0, 0), TextWrapping = TextWrapping.Wrap,
+            };
+            linhaOutros.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+            colunaCab.Children.Add(linhaOutros);
+        }
+        cab.Child = colunaCab;
         sec.Children.Add(cab);
-
-        var grade = new System.Windows.Controls.Primitives.UniformGrid { Columns = Math.Max(1, _colunasProdutosSecao) };
-        foreach (var p in produtos) grade.Children.Add(ItemVitrine(p, info.AtivaAgora, info));
-        sec.Children.Add(grade);
+        if (ativa)
+        {
+            var grade = new System.Windows.Controls.Primitives.UniformGrid { Columns = Math.Max(1, _colunasProdutosSecao) };
+            foreach (var p in ativos) grade.Children.Add(_modoLista ? LinhaProduto(p) : CartaoProduto(p));
+            sec.Children.Add(grade);
+        }
         return sec;
-    }
-
-    /// <summary>Card da vitrine: normal quando a promoção vale AGORA; cinza,
-    /// desabilitado e com a regra escrita quando fora do dia/horário.</summary>
-    private UIElement ItemVitrine(Produto p, bool ativa, Nucleo.Promocoes.ProdutoPromo info)
-    {
-        var el = _modoLista ? LinhaProduto(p) : CartaoProduto(p);
-        if (ativa) return el;
-
-        el.IsEnabled = false;
-        el.ToolTip = $"{info.Nome} — só vale {info.Quando}";
-        var moldura = new Grid();
-        moldura.Children.Add(el);
-        var faixa = new Border
-        {
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Padding = new Thickness(0, 3, 0, 4),
-            CornerRadius = new CornerRadius(0, 0, 13, 13),
-            IsHitTestVisible = false,
-        };
-        faixa.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
-        var aviso = new TextBlock
-        {
-            Text = $"só vale {info.Quando}",
-            FontSize = 11, FontWeight = FontWeights.Bold,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        };
-        aviso.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-        faixa.Child = aviso;
-        moldura.Children.Add(faixa);
-        return moldura;
     }
 
     // ── GRADE x LISTA ───────────────────────────────────────────────────────
