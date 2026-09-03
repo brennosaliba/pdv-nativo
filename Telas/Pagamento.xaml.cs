@@ -101,7 +101,7 @@ public partial class Pagamento : UserControl
 
     private static bool VoucherLigado()
     {
-        try { using var cx = Banco.Abrir(); return Vendas.Config(cx, "forma_voucher", "0") == "1"; }
+        try { using var cx = Banco.Abrir(); return Vendas.Config(cx, "forma_voucher", "1") == "1"; }   // 03/09: ligado por padrao (trilho Voucher obrigatorio para PAT desde 03/11/2025)
         catch { return false; }
     }
 

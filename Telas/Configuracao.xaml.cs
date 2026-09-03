@@ -170,7 +170,7 @@ public partial class Configuracao : UserControl
         TxtPayGoEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
         ChkPayGoVias.IsChecked = Vendas.Config(cx, "tef_paygo_imprimir_vias", "1") != "0";
         ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
-        ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "0") == "1";
+        ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "1") == "1";
         TxtTefSerial.Text = Vendas.Config(cx, "tef_serial_pos", "");
         // Rede é lista FECHADA (RedesPayGo), não mais texto livre: a loja entrou em
         // produção com o "PIX C6 BANK" da homologação gravado e toda cobrança PIX voltava
