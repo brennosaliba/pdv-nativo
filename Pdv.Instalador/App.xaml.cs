@@ -59,6 +59,10 @@ public partial class App : Application
     {
         if (!File.Exists(Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe")))
             return "o caixa não está instalado nesta máquina";
+        // O caixa se fecha logo depois de nos chamar; sem o assistente no meio, a
+        // cópia podia começar antes de ele sair. Espera até 30 s pelo processo.
+        for (var i = 0; i < 60 && System.Diagnostics.Process.GetProcessesByName("Pdv").Length > 0; i++)
+            System.Threading.Thread.Sleep(500);
         string? temporaria = null;
         try
         {
