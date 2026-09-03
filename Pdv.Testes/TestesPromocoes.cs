@@ -239,7 +239,17 @@ public static class TestesPromocoes
         var carrinho = new[] { It("A", 2190), It("B", 2190), It("C", 1350), It("D", 800) };
         av = Promocoes.AvaliarCarrinho(new[] { P(Cg("qualquer_item")) }, carrinho, sexta);
         checar(av.TotalCent == 2190 && av.DescontoCent[1] == 2190 && av.UnidadesGratis[1] == 1,
-            "qualquer_item: o brinde mais caro possivel (B 21,90) sai gratis");
+            "qualquer_item (legado): o brinde mais caro de valor IGUAL ou menor (B 21,90) sai gratis");
+        // REGRA DO DONO: brinde nunca mais caro que a compra, em nenhuma regra
+        var caro = new[] { It("A", 1350), It("B", 2190), It("C", 1350), It("D", 800) };   // A (alvo) custa 13,50
+        av = Promocoes.AvaliarCarrinho(new[] { P(Cg("qualquer_item")) }, caro, sexta);
+        checar(av.TotalCent == 1350 && av.DescontoCent[2] == 1350 && av.DescontoCent[1] == 0,
+            "qualquer_item: B (21,90) e mais caro que a compra (13,50) e NAO sai; sai C (13,50)");
+        av = Promocoes.AvaliarCarrinho(new[] { P(Cg("lista", ",\"ganha\":[\"B\"]")) }, caro, sexta);
+        checar(av.TotalCent == 0 && av.Dica is { Length: > 0 } && av.Dica.Contains("13,50"),
+            "lista [B] com B mais caro que a compra: nada, e a dica diz o teto (13,50)");
+        av = Promocoes.AvaliarCarrinho(new[] { P(Cg("lista", ",\"ganha\":[\"B\",\"D\"]")) }, caro, sexta);
+        checar(av.TotalCent == 800 && av.DescontoCent[3] == 800, "lista [B, D]: so D (8,00) cabe abaixo da compra");
         av = Promocoes.AvaliarCarrinho(new[] { P(Cg("mesmo_valor")) }, carrinho, sexta);
         checar(av.TotalCent == 2190 && av.DescontoCent[1] == 2190, "mesmo_valor: B (21,90) sai gratis");
         av = Promocoes.AvaliarCarrinho(new[] { P(Cg("qualquer_mais_barato")) }, carrinho, sexta);

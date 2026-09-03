@@ -392,6 +392,9 @@ public static class Promocoes
     /// regra admite. Pareia do brinde mais caro para o mais barato com a compra
     /// livre mais barata que a regra aceita. Devolve a dica quando há compra
     /// mas nenhum brinde possível (a comanda explica o que falta).
+    /// REGRA DO DONO (03/09/2026): o brinde é SEMPRE de valor igual ou menor que
+    /// o item comprado, em qualquer regra. "Qualquer item" (legado) vale como
+    /// "qualquer item de valor igual ou menor".
     /// </summary>
     private static string? Parear(Promo p, IReadOnlyList<ItemCarrinho> itens, long[] d, int[] g)
     {
@@ -411,12 +414,14 @@ public static class Promocoes
             foreach (var c in compras.OrderBy(u => u.PrecoCent).ThenBy(u => u.Linha))
             {
                 if (ReferenceEquals(c, b) || usada.Contains(c)) continue;
+                // brinde nunca mais caro que a compra, em nenhuma regra
+                if (b.PrecoCent > c.PrecoCent) continue;
                 var ok = p.GanhaRegra switch
                 {
                     GanhaRegra.Lista => true,
                     GanhaRegra.MesmoProduto => c.ProdutoId == b.ProdutoId,
                     GanhaRegra.MesmoValor => c.PrecoCent == b.PrecoCent,
-                    GanhaRegra.QualquerMaisBarato => b.PrecoCent <= c.PrecoCent,
+                    GanhaRegra.QualquerMaisBarato => true,
                     GanhaRegra.QualquerItem => true,
                     _ => false,
                 };
@@ -436,8 +441,8 @@ public static class Promocoes
             GanhaRegra.MesmoProduto => "Compre e ganhe: leve mais 1 do mesmo produto e o segundo sai grátis",
             GanhaRegra.MesmoValor => $"Compre e ganhe: o brinde precisa custar {new Dinheiro(c0.PrecoCent).Formatado()}",
             GanhaRegra.QualquerMaisBarato => $"Compre e ganhe: o brinde precisa custar até {new Dinheiro(c0.PrecoCent).Formatado()}",
-            GanhaRegra.Lista => "Compre e ganhe: falta o brinde da lista na comanda",
-            _ => "Compre e ganhe: falta o brinde na comanda",
+            GanhaRegra.Lista => $"Compre e ganhe: falta o brinde da lista (de até {new Dinheiro(c0.PrecoCent).Formatado()})",
+            _ => $"Compre e ganhe: o brinde precisa custar até {new Dinheiro(c0.PrecoCent).Formatado()}",
         };
     }
 
@@ -452,11 +457,10 @@ public static class Promocoes
         {
             GanhaRegra.MesmoProduto => "Compre 1 e ganhe 1 do mesmo produto",
             GanhaRegra.MesmoValor => "Compre 1 e ganhe 1 do mesmo valor",
-            GanhaRegra.QualquerMaisBarato => "Compre 1 e ganhe 1 de valor igual ou menor",
-            GanhaRegra.QualquerItem => p.TetoCent is long t
-                ? $"Compre 1 e ganhe 1 de até {new Dinheiro(t).Formatado()}"
-                : "Compre 1 e ganhe 1, qualquer item",
-            GanhaRegra.Lista => "Compre 1 e ganhe 1 da lista",
+            GanhaRegra.QualquerMaisBarato or GanhaRegra.QualquerItem => p.TetoCent is long t
+                ? $"Compre 1 e ganhe 1 de valor igual ou menor (até {new Dinheiro(t).Formatado()})"
+                : "Compre 1 e ganhe 1 de valor igual ou menor",
+            GanhaRegra.Lista => "Compre 1 e ganhe 1 da lista (valor igual ou menor)",
             _ => "Compre e ganhe (regra desconhecida)",
         },
         "percentual" when p.Percentual is decimal pp => $"{pp:0.#}% de desconto",
