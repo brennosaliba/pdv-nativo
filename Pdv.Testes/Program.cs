@@ -1464,6 +1464,16 @@ Check("voucher vira tPag 11 (vale-refeicao) na NFC-e", Fiscal.TPagDaForma("vouch
         pagFiscal) is null);
     var metade = ItemFiscal.DaVenda(new[] { Linha("A", "DONUT", 1200, 2000, 1200, "p", 1000) }, false);
     Check("transitorio: 2 x 12,00 com 1 gratis vira vUnit 6,00 e total 12,00", metade[0].VUnit == 6.00m && Fiscal.TotalDaNota(metade) == 12.00m);
+    // exe novo x RPC antiga: a resposta sem desconto_itens com payload que levou desconto e sinalizada
+    using (var okVelho = System.Text.Json.JsonDocument.Parse("""{"ok":true,"sale_id":"s1"}"""))
+    using (var okNovo = System.Text.Json.JsonDocument.Parse("""{"ok":true,"sale_id":"s1","desconto_itens":21.90}"""))
+    {
+        Check("RPC antiga + desconto por item: sinaliza", Drenagem.NuvemSemRegistroPromocao(payloadF, okVelho.RootElement));
+        Check("RPC nova (desconto_itens presente): nao sinaliza", !Drenagem.NuvemSemRegistroPromocao(payloadF, okNovo.RootElement));
+        var payloadSem = cxF.ExecuteScalar<string>("SELECT payload FROM outbox WHERE ref_id = @i", new { i = vg2.Id }) ?? "";
+        Check("RPC antiga sem desconto no payload: nao sinaliza", !Drenagem.NuvemSemRegistroPromocao(payloadSem, okVelho.RootElement));
+        Check("payload que nao parseia: nao sinaliza nem explode", !Drenagem.NuvemSemRegistroPromocao("{nao-e-json", okVelho.RootElement));
+    }
     Caixa.Fechar(cxF, sF, new Dictionary<string, Dinheiro> { ["dinheiro"] = Dinheiro.DeReais(131.90m) }, opF, Dinheiro.DeReais(2), null);
     cxF.Dispose();
     try { File.Delete(arquivoF); } catch { }

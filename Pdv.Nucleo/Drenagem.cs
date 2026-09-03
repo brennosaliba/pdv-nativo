@@ -272,6 +272,41 @@ public sealed class Drenagem : IDisposable
     }
 
     /// <summary>(true,_) confirmada · (false,motivo) recusa permanente · (null,motivo) transitório.</summary>
+    /// <summary>
+    /// Verdadeiro quando o payload levou desconto por item (promoção de carrinho) e a
+    /// resposta da nuvem veio sem <c>desconto_itens</c>: a RPC do servidor é anterior à
+    /// migration 20260903130000 e não registrou a aplicação da promoção.
+    /// </summary>
+    internal static bool NuvemSemRegistroPromocao(string payload, JsonElement resposta)
+    {
+        if (resposta.TryGetProperty("desconto_itens", out _)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            if (!doc.RootElement.TryGetProperty("p_itens", out var itens) || itens.ValueKind != JsonValueKind.Array) return false;
+            foreach (var it in itens.EnumerateArray())
+                if (it.TryGetProperty("desconto", out var d) && d.ValueKind == JsonValueKind.Number && d.GetDecimal() > 0)
+                    return true;
+        }
+        catch { /* payload que não parseia não é caso deste aviso */ }
+        return false;
+    }
+
+    private static void AuditarNuvemSemPromocao()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            var hoje = DateTime.Now.Date.ToString("o");
+            var ja = cx.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM auditoria WHERE evento = 'nuvem_sem_registro_promocao' AND criado_em >= @D", new { D = hoje });
+            if (ja > 0) return;
+            Caixa.Auditar(cx, null, "nuvem_sem_registro_promocao", null, null,
+                "a nuvem aceitou a venda mas não registrou a promoção aplicada (RPC antiga). Aplicar a migration 20260903130000 no ERP.");
+        }
+        catch { /* auditoria não pode derrubar o envio */ }
+    }
+
     private async Task<(bool? Ok, string? Erro)> EnviarVendaAsync(string payload, string refId,
         Dictionary<string, string> vendaNaNuvem, string token, CancellationToken ct)
     {
@@ -285,6 +320,10 @@ public sealed class Drenagem : IDisposable
             {
                 if (r.TryGetProperty("sale_id", out var sid) && sid.GetString() is { } s)
                     vendaNaNuvem[refId] = s;
+                // 03/09: exe novo contra RPC antiga. A venda sobe certa, mas a promoção
+                // não é registrada na nuvem (relatório cego). Fica na auditoria, uma
+                // vez por dia, em vez de sumir.
+                if (NuvemSemRegistroPromocao(payload, r)) AuditarNuvemSemPromocao();
                 return (true, null);
             }
             // erro de negócio (ex.: sem_caixa_aberto): registrar e não travar a fila
