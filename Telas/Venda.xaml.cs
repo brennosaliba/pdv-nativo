@@ -1538,6 +1538,7 @@ public partial class Venda : UserControl
 
         var unitario = new TextBlock
         {
+            TextWrapping = TextWrapping.Wrap,   // "1 × R$ 16,50 · -R$ 2,00 (Donuts do dia)" não cabe numa linha
             Text = $"{item.Qtd.Formatada()} × {item.Produto.Preco.Formatado()}"
                  + (item.UnidadesGratis > 0 ? $" · {item.UnidadesGratis} grátis"
                     : item.DescontoCent > 0 ? $" · -{new Dinheiro(item.DescontoCent).Formatado()}" : "")
