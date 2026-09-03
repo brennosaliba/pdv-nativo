@@ -575,6 +575,33 @@ public partial class Venda : UserControl
         }
     }
 
+    private int _quantasCategorias;
+    private double _larguraCategorias;
+
+    private void CategoriasRedimensionou(object sender, SizeChangedEventArgs e)
+    {
+        _larguraCategorias = e.NewSize.Width;
+        AjustarColunasCategorias();
+    }
+
+    /// <summary>
+    /// Quantas categorias por linha: pela LARGURA da coluna, nao so pela contagem.
+    /// 03/09 (Savassi, 1024x768): 14 categorias em 188px viravam 3 por linha com
+    /// 56px cada — "Bebida s Qu...", "Cookie s Cla...". Card mini so faz sentido
+    /// quando cabe: 3 por linha a partir de ~250px; abaixo disso, 2; abaixo de
+    /// ~150px, 1 (a coluna inteira e o card). O nome inteiro vale mais que a
+    /// densidade quando a densidade e ilegivel.
+    /// </summary>
+    private void AjustarColunasCategorias()
+    {
+        var w = _larguraCategorias - 20; // margens do ItemsControl
+        int cols;
+        if (w <= 0) cols = _categoriaMini ? 3 : 2;
+        else if (_categoriaMini) cols = w >= 250 ? 3 : (w >= 150 ? 2 : 1);
+        else cols = w >= 150 ? 2 : 1;
+        if (ColunasCategorias != cols) ColunasCategorias = cols;
+    }
+
     private void GradeRedimensionou(object sender, SizeChangedEventArgs e)
     {
         _larguraGrade = e.NewSize.Width;
@@ -664,7 +691,8 @@ public partial class Venda : UserControl
         // catálogo alguma promoção vigente alcança, não quantos têm essa categoria (zero).
         if (emPromo > 0) _quantosPorCategoria[CategoriaPromo] = emPromo;
         _categoriaMini = cats.Count > 12;
-        ColunasCategorias = _categoriaMini ? 3 : 2;
+        _quantasCategorias = cats.Count;
+        AjustarColunasCategorias();
         // A vitrine de PROMOÇÃO fica no topo por ser o atalho mais valioso, mas ela
         // NÃO é uma boa tela de abertura: são seções empilhadas, cada uma com poucos
         // produtos, e o operador cai numa tela cheia de rolagem antes de ver o

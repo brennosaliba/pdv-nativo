@@ -49,13 +49,19 @@
                      Com Auto na direita, os BOTÕES nunca encolhem: num caixa, a ação
                      vale mais que a decoração. Quem cede espaço é a identidade, e ela
                      corta com reticências em vez de vazar por baixo. -->
+                <!-- 03/09 (Savassi, 1024x768): com Auto na direita o WrapPanel recebe
+                     largura INFINITA e nunca quebra linha — a fila de botoes saia da
+                     tela ("Impre..."), e a identidade, na coluna *, ficava com ZERO.
+                     Invertido: a identidade e Auto (limitada por MaxWidth, corta com
+                     reticencias) e os botoes ficam na coluna *, que e finita — em tela
+                     estreita eles quebram em duas linhas em vez de sumir. -->
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" MinWidth="0"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*" MinWidth="0"/>
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
-                            ClipToBounds="True">
+                            ClipToBounds="True" MaxWidth="360" Margin="0,0,12,0">
                     <!-- Logo da loja quando houver arquivo; senão o nome dela. O mesmo
                          executável atende qualquer cliente: nada de marca fixa aqui. -->
                     <Image x:Name="ImgLogo" Height="34" Margin="0,0,4,0" Visibility="Collapsed"
@@ -194,13 +200,18 @@
                      categoria não cabe em 3 colunas, e abaixo de ~300 px a comanda perde
                      o botão de finalizar. Acima do teto é só desperdício — espaço extra
                      tem que ir para o PRODUTO, que é o que o operador olha. -->
-                <ColumnDefinition Width="1*"   MinWidth="188" MaxWidth="272"/>  <!-- categorias -->
-                <ColumnDefinition Width="3.4*"/>                                <!-- produtos  -->
-                <ColumnDefinition Width="1.2*" MinWidth="300" MaxWidth="360"/>  <!-- comanda   -->
+                <!-- 03/09 (1024 de largura): a comanda com MinWidth 300 engolia a tela
+                     e sobrava 188 para as categorias, com 3 por linha e nome quebrado.
+                     O dono pediu: centro = produtos (maior), direita = comanda + total
+                     (menor). MinWidth 250 cabe TOTAL, cupom e os dois botoes. -->
+                <ColumnDefinition Width="1*"   MinWidth="172" MaxWidth="272"/>  <!-- categorias -->
+                <ColumnDefinition Width="3.8*"/>                                <!-- produtos  -->
+                <ColumnDefinition Width="1.1*" MinWidth="250" MaxWidth="340"/>  <!-- comanda   -->
             </Grid.ColumnDefinitions>
 
             <!-- ══ ESQUERDA: categorias ══ -->
-            <Border Grid.Column="0" Background="{DynamicResource FundoAfundado}" BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,1,0">
+            <Border Grid.Column="0" x:Name="ColunaCategorias" SizeChanged="CategoriasRedimensionou"
+                    Background="{DynamicResource FundoAfundado}" BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,1,0">
                 <ScrollViewer VerticalScrollBarVisibility="Hidden">
                     <ItemsControl x:Name="ListaCategorias" Margin="10,10,10,14" VerticalAlignment="Top">
                         <ItemsControl.ItemsPanel>
@@ -366,7 +377,7 @@
                                 <Button Grid.Column="1" x:Name="BtnFinalizar" Click="Finalizar"
                                         Style="{StaticResource BotaoPrincipal}" MinHeight="62" IsEnabled="False">
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="Finalizar venda" FontSize="20" FontWeight="Bold" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Finalizar" FontSize="19" FontWeight="Bold" VerticalAlignment="Center"/>
                                         <TextBlock Text="→" FontSize="21" FontWeight="Bold" Margin="12,0,0,0" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Button>
