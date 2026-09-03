@@ -1311,6 +1311,15 @@ Console.WriteLine();
 Console.WriteLine("--- Largura do papel (bobina configuravel) ---");
 await TestesImpressao.RodarAsync((cond, nome) => Check("papel: " + nome, cond));
 
+// -- POLITICA DE IMPRESSAO POR DOCUMENTO -------------------------------------
+// Quatro papeis (cupom, comanda do delivery, via do cliente e via do
+// estabelecimento) e tres respostas para cada: sai sozinho, botao na tela, ou
+// nao sai. O que nao pode quebrar e o fallback: loja que nunca abrir a opcao
+// tem que continuar imprimindo o que imprime hoje.
+Console.WriteLine();
+Console.WriteLine("--- Politica de impressao por documento ---");
+TestesPoliticaImpressao.Rodar((cond, nome) => Check("politica: " + nome, cond));
+
 // -- ASSISTENTE DE CONFIGURACAO: os 5 passos da instalacao --------------------
 // A configuracao era um formulario unico de 8 secoes: o que faltava so aparecia
 // no popup do Salvar, depois de rolar tudo. Agora cada passo diz o que bloqueia,

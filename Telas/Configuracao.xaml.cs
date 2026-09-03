@@ -115,7 +115,14 @@ public partial class Configuracao : UserControl
         _ = CarregarImpressorasAsync(Vendas.Config(cx, "impressora"));
         var impComandaGravada = Vendas.Config(cx, "kds_comanda_impressora");
         _ = CarregarImpressorasComandaAsync(impComandaGravada);
-        ChkComandaAuto.IsChecked = Vendas.Config(cx, "kds_comanda_auto") == "1";
+        // As quatro políticas de impressão, carregadas SEMPRE (inclusive em caixa novo):
+        // com três estados, deixar o combo no valor do XAML gravaria uma escolha que
+        // ninguém fez na primeira instalação. O padrão de cada papel vem de Impressoes,
+        // que é quem sabe o que cada um fazia antes de esta tela existir.
+        EncherPolitica(CboPolCupom, Impressoes.Politica(cx, Impressoes.Cupom));
+        EncherPolitica(CboPolComanda, Impressoes.Politica(cx, Impressoes.Comanda));
+        EncherPolitica(CboPolViaCliente, Impressoes.Politica(cx, Impressoes.ViaCliente));
+        EncherPolitica(CboPolViaLoja, Impressoes.Politica(cx, Impressoes.ViaEstabelecimento));
         // Caixinha DESMARCADA é o estado de quem nunca abriu a opção — e desmarcada
         // significa "a comanda sai onde o cupom sai". Quem já tinha escolhido uma
         // impressora de comanda antes de a caixinha existir reabre com ela MARCADA:
@@ -168,7 +175,6 @@ public partial class Configuracao : UserControl
         TxtPayGoPasta.Text = Vendas.Config(cx, "tef_paygo_pasta", "");
         TxtPayGoRegistro.Text = Vendas.Config(cx, "tef_paygo_registro", "");
         TxtPayGoEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
-        ChkPayGoVias.IsChecked = Vendas.Config(cx, "tef_paygo_imprimir_vias", "1") != "0";
         ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
         ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "1") == "1";
         TxtTefSerial.Text = Vendas.Config(cx, "tef_serial_pos", "");
@@ -195,7 +201,6 @@ public partial class Configuracao : UserControl
             _apiBase = t.api_base as string;
             // modo recibo (sem emissão) vive na config, por cima do ambiente da SEFAZ
             ModoRecibo = Vendas.Config(cx, "modo_fiscal") == "recibo";
-            ChkImprimirAuto.IsChecked = Vendas.Config(cx, "imprimir_automatico", "1") != "0";
             BtnSair.Visibility = Visibility.Visible;
             // reabrir vem preenchido: reconfigurar não pode ser redigitar tudo
             var seg = LerSegredos();
@@ -334,10 +339,12 @@ public partial class Configuracao : UserControl
         SerieEmissorLocal = _serieEmissorLocal,
         UltimaRecusa = _ultimaRecusa,
         Impressora = ImpressoraEscolhida(),
-        ImprimirAuto = ChkImprimirAuto.IsChecked != false,
         PapelMm = PapelEscolhido(),
         ImpressoraComanda = ImpressoraComandaEscolhida(),
-        ComandaAuto = ChkComandaAuto.IsChecked == true,
+        PoliticaCupomEscolhida = PoliticaDe(CboPolCupom),
+        PoliticaComandaEscolhida = PoliticaDe(CboPolComanda),
+        PoliticaViaCliente = PoliticaDe(CboPolViaCliente),
+        PoliticaViaEstabelecimento = PoliticaDe(CboPolViaLoja),
         ComandaSeparada = ChkComandaSeparada.IsChecked == true,
         ComandaPapelMm = PapelComandaEscolhido(),
         Tef = TefModo,
@@ -560,6 +567,23 @@ public partial class Configuracao : UserControl
         }
         finally { BtnTesteImpressao.IsEnabled = true; }
     }
+
+    // ── PASSO 3: A POLÍTICA DE CADA PAPEL ───────────────────────────────────
+
+    /// <summary>
+    /// Enche um combo de política com os três rótulos de <see cref="Impressoes.Rotulos"/>
+    /// e marca o que está valendo. Os rótulos vêm de lá, e não do XAML, para que a tela e
+    /// o núcleo não possam discordar sobre quantos estados existem.
+    /// </summary>
+    private static void EncherPolitica(ComboBox combo, PoliticaImpressao p)
+    {
+        combo.Items.Clear();
+        foreach (var rotulo in Impressoes.Rotulos) combo.Items.Add(rotulo);
+        combo.SelectedIndex = Impressoes.Indice(p);
+    }
+
+    /// <summary>O que está escolhido no combo agora.</summary>
+    private static PoliticaImpressao PoliticaDe(ComboBox combo) => Impressoes.DeIndice(combo.SelectedIndex);
 
     // ── PASSO 3: COMANDA DO DELIVERY (impressora e bobina próprias) ──────────
 
@@ -1284,14 +1308,23 @@ public partial class Configuracao : UserControl
             Impressao.PapelMm = AssistenteConfig.TextoPapel(PapelEscolhido());
             _papelGravado = true;   // gravada no banco: o Sair não devolve mais a antiga
             Vendas.GravarConfig(cx, "modo_fiscal", modoRecibo ? "recibo" : "nfce");
-            Vendas.GravarConfig(cx, "imprimir_automatico", ChkImprimirAuto.IsChecked == false ? "0" : "1");
+            // A política de CADA papel passa por Impressoes.Gravar, que escreve a chave
+            // nova e alinha a antiga. É a mesma porta que o diálogo 🖨 da barra da venda
+            // usa: duas telas gravando a mesma escolha por caminhos diferentes é como o
+            // terceiro estado seria achatado de volta em sim e não no primeiro uso.
+            Impressoes.Gravar(cx, Impressoes.Cupom, PoliticaDe(CboPolCupom));
             var impComanda = ImpressoraComandaEscolhida();
             if (AssistenteConfig.PodeGravarImpressora(_comandasProntas, impComanda))
             {
                 if (impComanda is null) cx.Execute("DELETE FROM config WHERE chave='kds_comanda_impressora'");
                 else Vendas.GravarConfig(cx, "kds_comanda_impressora", impComanda);
             }
-            Vendas.GravarConfig(cx, "kds_comanda_auto", ChkComandaAuto.IsChecked == true ? "1" : "0");
+            Impressoes.Gravar(cx, Impressoes.Comanda, PoliticaDe(CboPolComanda));
+            // As duas vias do cartão. Gravadas AQUI, no bloco da impressora, e não no
+            // GravarTef: são escolha de papel, valem para PayGo e ControlPay e não podem
+            // depender de o operador ter passado pelo passo da maquininha.
+            Impressoes.Gravar(cx, Impressoes.ViaCliente, PoliticaDe(CboPolViaCliente));
+            Impressoes.Gravar(cx, Impressoes.ViaEstabelecimento, PoliticaDe(CboPolViaLoja));
             // A caixinha é gravada SEMPRE, inclusive desmarcada: gravar "0" é o que
             // distingue "o dono desligou a impressora separada" de "ninguém nunca abriu
             // isto" — e é a segunda que herda a impressora de comanda antiga (ver
@@ -1431,7 +1464,9 @@ public partial class Configuracao : UserControl
         Chave("tef_paygo_empresa", TxtPayGoEmpresa.Text);
         Chave("tef_paygo_rede", RedeEscolhida(CboPayGoRede));
         Chave("tef_paygo_rede_pix", RedeEscolhida(CboPayGoRedePix));
-        Vendas.GravarConfig(cx, "tef_paygo_imprimir_vias", ChkPayGoVias.IsChecked == false ? "0" : "1");
+        // `tef_paygo_imprimir_vias` NÃO é gravada aqui: quem manda nela agora são as duas
+        // políticas de via do passo Impressora (Impressoes.Gravar a mantém em sincronia).
+        // Ela continua em ChavesTef porque o Sair sem salvar tem que devolvê-la.
         Vendas.GravarConfig(cx, "tef_perguntar_parcelas", ChkTefParcelas.IsChecked == true ? "1" : "0");
         Vendas.GravarConfig(cx, "forma_voucher", ChkTefVoucher.IsChecked == true ? "1" : "0");
         Chave("tef_serial_pos", TxtTefSerial.Text);
@@ -1676,10 +1711,40 @@ public sealed record DadosAssistente
 
     // 3 · Impressora
     public string? Impressora { get; init; }
-    public bool ImprimirAuto { get; init; } = true;
     public double PapelMm { get; init; } = 80;
     public string? ImpressoraComanda { get; init; }
+
+    /// <summary>
+    /// O cupom sai sozinho? Era a caixinha de dois estados, e continua aqui porque é o
+    /// que a bateria antiga afirma. Com três políticas ela virou um ATALHO: quem só diz
+    /// <c>ImprimirAuto = false</c> está dizendo "perguntar", que é o que a caixinha
+    /// desmarcada sempre significou. Quem quer o terceiro estado preenche
+    /// <see cref="PoliticaCupomEscolhida"/>.
+    /// </summary>
+    public bool ImprimirAuto { get; init; } = true;
+
+    /// <summary>Idem para a comanda, que nascia desligada (opt-in).</summary>
     public bool ComandaAuto { get; init; }
+
+    /// <summary>Política do cupom escolhida na tela. Null = deriva de <see cref="ImprimirAuto"/>.</summary>
+    public PoliticaImpressao? PoliticaCupomEscolhida { get; init; }
+
+    /// <summary>Política da comanda escolhida na tela. Null = deriva de <see cref="ComandaAuto"/>.</summary>
+    public PoliticaImpressao? PoliticaComandaEscolhida { get; init; }
+
+    /// <summary>O que vale para o cupom, com o atalho já resolvido.</summary>
+    public PoliticaImpressao PoliticaCupom => PoliticaCupomEscolhida
+        ?? (ImprimirAuto ? PoliticaImpressao.Automatico : PoliticaImpressao.Perguntar);
+
+    /// <summary>O que vale para a comanda, com o atalho já resolvido.</summary>
+    public PoliticaImpressao PoliticaComanda => PoliticaComandaEscolhida
+        ?? (ComandaAuto ? PoliticaImpressao.Automatico : PoliticaImpressao.Perguntar);
+
+    /// <summary>Via do CLIENTE do comprovante do cartão. Nasce saindo sozinha, como sempre saiu.</summary>
+    public PoliticaImpressao PoliticaViaCliente { get; init; } = PoliticaImpressao.Automatico;
+
+    /// <summary>Via do ESTABELECIMENTO do comprovante do cartão.</summary>
+    public PoliticaImpressao PoliticaViaEstabelecimento { get; init; } = PoliticaImpressao.Automatico;
 
     /// <summary>
     /// A comanda do delivery sai numa impressora PRÓPRIA. Falso = sai na mesma do cupom,
@@ -2063,18 +2128,49 @@ public static class AssistenteConfig
             new("Impressora do cupom fiscal / recibo",
                 $"{d.Impressora ?? "padrão do Windows"} · bobina de {papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture)} mm "
                 + $"({papel.Colunas} colunas)"
-                + (d.ImprimirAuto ? "" : " · impressão automática DESLIGADA"),
-                !d.ImprimirAuto),
+                + d.PoliticaCupom switch
+                {
+                    PoliticaImpressao.Automatico => "",
+                    PoliticaImpressao.Perguntar => " · impressão automática DESLIGADA: só pelo botão da tela",
+                    _ => " · o cupom NÃO É IMPRESSO nesta caixa",
+                },
+                d.PoliticaCupom != PoliticaImpressao.Automatico),
             // "tela Delivery" é o nome do BOTÃO que abre o quadro da cozinha no
             // caixa. Mandar procurar "a tela da cozinha" é mandar procurar um
             // botão que não existe com esse nome.
-            new("Comanda do delivery (papel da cozinha)", ResumoComanda(d)),
+            new("Comanda do delivery (papel da cozinha)", ResumoComanda(d),
+                d.PoliticaComanda == PoliticaImpressao.Nao),
             new("Maquininha", ResumoTef(d), d.Tef == 3 && d.CpaySandbox),
             new("Pareamento", d.Pareado
                 ? "✓ Pareado com o painel. As vendas e as notas sobem no Sincronizar."
                 : "Ainda NÃO pareado: sem isso não dá para concluir.", !d.Pareado),
         };
+        // As vias do cartão só entram na revisão quando a maquininha é de cabo: na avulsa
+        // o terminal imprime sozinho e não existe via nenhuma para este caixa decidir.
+        // Linha sobre o que não acontece é linha que ensina errado.
+        if (d.Tef is 2 or 3)
+            linhas.Insert(linhas.Count - 1, new LinhaResumo("Comprovante do cartão", ResumoVias(d),
+                d.PoliticaViaCliente != PoliticaImpressao.Automatico
+                || d.PoliticaViaEstabelecimento != PoliticaImpressao.Automatico));
         return linhas;
+    }
+
+    /// <summary>
+    /// As duas vias do cartão em uma linha, cada uma com o seu desfecho. Separadas porque
+    /// o pedido do dono foi exatamente esse: a via do cliente e a da loja deixaram de ser
+    /// a mesma escolha.
+    /// </summary>
+    private static string ResumoVias(DadosAssistente d)
+    {
+        static string Como(PoliticaImpressao p) => p switch
+        {
+            PoliticaImpressao.Automatico => "sai sozinha",
+            PoliticaImpressao.Perguntar => "só em TEF, Reimprimir",
+            _ => "NÃO SAI",
+        };
+        return $"Via do cliente: {Como(d.PoliticaViaCliente)} · "
+             + $"via do estabelecimento: {Como(d.PoliticaViaEstabelecimento)}. "
+             + "As duas na impressora do cupom.";
     }
 
     /// <summary>
@@ -2084,7 +2180,9 @@ public static class AssistenteConfig
     /// </summary>
     private static string ResumoComanda(DadosAssistente d)
     {
-        var quando = d.ComandaAuto
+        if (d.PoliticaComanda == PoliticaImpressao.Nao)
+            return "NÃO É IMPRESSA: nem sozinha, nem pelo botão. A cozinha lê o pedido na tela Delivery.";
+        var quando = d.PoliticaComanda == PoliticaImpressao.Automatico
             ? "Imprime sozinha quando o pedido chega"
             : "Só pelo botão 🖨 da tela Delivery";
         if (!d.ComandaSeparada) return quando + ", na MESMA impressora do cupom.";

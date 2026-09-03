@@ -1922,17 +1922,22 @@ public partial class Venda : UserControl
         combo.SelectedIndex = atual is { Length: > 0 } && combo.Items.Contains(atual)
             ? combo.Items.IndexOf(atual) : 0;
         painel.Children.Add(combo);
-        // Impressão automática mora aqui também (decisão operacional, sem admin):
-        // balcão com fila desliga, quem quer papel sempre liga.
-        var chkAuto = new CheckBox
+        // A política do cupom mora aqui também (decisão operacional, sem admin): balcão
+        // com fila desliga, quem quer papel sempre liga. É um COMBO de três estados, o
+        // mesmo da Configuração: com uma caixinha de sim e não, abrir este diálogo e
+        // clicar em OK achataria "não imprimir" de volta para "perguntar" sem ninguém
+        // pedir — a escolha some no primeiro uso.
+        painel.Children.Add(new TextBlock
         {
-            Content = "Imprimir o cupom sozinho ao fim de cada venda",
-            IsChecked = Vendas.Config(cx, "imprimir_automatico", "1") != "0",
+            Text = "Quando imprimir o cupom",
             FontSize = 14,
-            Foreground = (Brush)Application.Current.Resources["Texto"],
-            Margin = new Thickness(0, 12, 0, 0),
-        };
-        painel.Children.Add(chkAuto);
+            Foreground = (Brush)Application.Current.Resources["TextoFraco"],
+            Margin = new Thickness(0, 14, 0, 4),
+        });
+        var comboPolitica = new ComboBox { FontSize = 16, Padding = new Thickness(10, 8, 10, 8) };
+        foreach (var rotulo in Impressoes.Rotulos) comboPolitica.Items.Add(rotulo);
+        comboPolitica.SelectedIndex = Impressoes.Indice(Impressoes.Politica(cx, Impressoes.Cupom));
+        painel.Children.Add(comboPolitica);
         var ok = new Button
         {
             Content = "Usar esta impressora",
@@ -1948,9 +1953,11 @@ public partial class Venda : UserControl
         if (escolhida is null || escolhida.StartsWith("(padrão"))
             cx.Execute("DELETE FROM config WHERE chave='impressora'");
         else Vendas.GravarConfig(cx, "impressora", escolhida);
-        Vendas.GravarConfig(cx, "imprimir_automatico", chkAuto.IsChecked == false ? "0" : "1");
+        var politica = Impressoes.DeIndice(comboPolitica.SelectedIndex);
+        // MESMA porta da Configuração: grava a chave nova e alinha a antiga.
+        Impressoes.Gravar(cx, Impressoes.Cupom, politica);
         Caixa.Auditar(cx, null, "impressora_trocada", _operador.Id, null,
-            (escolhida ?? "padrão do Windows") + (chkAuto.IsChecked == false ? " · impressão automática OFF" : ""));
+            (escolhida ?? "padrão do Windows") + " · cupom: " + Impressoes.Rotulos[Impressoes.Indice(politica)]);
         Dialogo.Avisar(dono, "Impressora",
             $"Os cupons passam a sair em {escolhida ?? "impressora padrão do Windows"}.", "ok");
     }

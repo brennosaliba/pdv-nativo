@@ -198,8 +198,12 @@
                     <TextBlock x:Name="TxtStatusPapel" Foreground="{DynamicResource TextoFraco}" FontSize="12"
                                TextWrapping="Wrap" Margin="0,0,0,10"/>
 
-                    <CheckBox x:Name="ChkImprimirAuto" Content="Imprimir o papel da venda assim que ela fecha"
-                              IsChecked="True" FontSize="14" Margin="0,0,0,10"/>
+                    <!-- 03/09 — pedido do dono: cada papel com TRÊS respostas, não com uma
+                         caixinha de sim e não. "Perguntar na tela" é o estado que a
+                         caixinha desmarcada já significava (não sai sozinho, o botão fica
+                         à mão); "Não imprimir" é o estado novo, que antes não existia. -->
+                    <TextBlock Text="Quando imprimir o cupom da venda" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolCupom" Margin="0,4,0,10"/>
                     <Button x:Name="BtnTesteImpressao" Content="Imprimir cupom de teste" Click="TestarImpressao"
                             Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
                     <TextBlock x:Name="TxtStatusImpressao" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
@@ -216,8 +220,10 @@
                                FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
                     <TextBlock Text="A comanda é o OUTRO papel: os itens e as observações do pedido, para quem produz. Não tem valor fiscal e não vai para o cliente."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                    <CheckBox x:Name="ChkComandaAuto" Content="Imprimir a comanda quando o pedido de delivery chegar"
-                              IsChecked="False" FontSize="14" Margin="0,0,0,8"/>
+                    <TextBlock Text="Quando imprimir a comanda de delivery" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolComanda" Margin="0,4,0,4"/>
+                    <TextBlock Text="Em Perguntar na tela a comanda sai pelo 🖨 de cada pedido, na tela Delivery."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     <CheckBox x:Name="ChkComandaSeparada" Content="Usar outra impressora só para a comanda da cozinha"
                               IsChecked="False" FontSize="14" Margin="0,0,0,4"
                               Checked="ComandaSeparadaMudou" Unchecked="ComandaSeparadaMudou"/>
@@ -246,6 +252,21 @@
                                Text="Isto também se troca na tela Delivery, no botão 🖨 do cabeçalho: é lá que a cozinha procura. E cada pedido tem o seu 🖨 para reimprimir a comanda."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                    <!-- COMPROVANTE DO CARTÃO — as duas vias, separadas (pedido do dono,
+                         03/09). Antes era UMA caixinha para as duas, e ela morava no passo
+                         da maquininha. Aqui é onde quem instala procura: é escolha de
+                         PAPEL, e o papel sai na impressora do cupom. -->
+                    <TextBlock Text="COMPROVANTE DO CARTÃO: AS DUAS VIAS" Foreground="{DynamicResource Marca}"
+                               FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
+                    <TextBlock Text="Vale para a maquininha ligada no caixa por cabo. As duas vias saem na impressora do cupom."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <TextBlock Text="Via do cliente (cartão)" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolViaCliente" Margin="0,4,0,8"/>
+                    <TextBlock Text="Via do estabelecimento (cartão)" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolViaLoja" Margin="0,4,0,4"/>
+                    <TextBlock Text="Em Perguntar na tela a via não sai sozinha: tire no menu TEF, em Reimprimir o último comprovante."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                     <!-- Tema mora aqui porque é a outra coisa desta MÁQUINA (a luz do
                          balcão, como a bobina), e porque grava na hora: não passa pelo
@@ -422,8 +443,8 @@
                     </StackPanel>
 
                     <StackPanel x:Name="BlocoTefOpcoes" Visibility="Collapsed" Margin="0,6,0,0">
-                        <CheckBox x:Name="ChkPayGoVias" IsChecked="True" FontSize="14" Margin="0,0,0,8"
-                                  Content="Imprimir as vias do comprovante (cliente e estabelecimento)"/>
+                        <!-- A caixinha das vias saiu daqui: virou duas escolhas de três
+                             estados no passo Impressora, uma por via. -->
                         <CheckBox x:Name="ChkTefParcelas" IsChecked="False" FontSize="14" Margin="0,0,0,8"
                                   Content="Perguntar as parcelas no crédito (desligado, todo crédito sai à vista)"/>
                         <CheckBox x:Name="ChkTefVoucher" IsChecked="False" FontSize="14" Margin="0,0,0,8"

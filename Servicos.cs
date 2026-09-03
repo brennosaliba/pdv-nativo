@@ -497,13 +497,15 @@ public static class Servicos
         if (!await UmaComandaPorVez.WaitAsync(0).ConfigureAwait(false)) return null;
         try
         {
-            Impressao.Destino destino; bool auto;
+            Impressao.Destino destino; PoliticaImpressao politica;
             using (var cx = Banco.Abrir())
             {
-                auto = Vendas.Config(cx, "kds_comanda_auto") == "1";
+                politica = Impressoes.Politica(cx, Impressoes.Comanda);
                 destino = DestinoDaComanda(cx);
             }
-            if (!auto) return null;
+            // Só "imprimir sozinho" tira papel aqui. Em "perguntar" quem tira é o 🖨 do
+            // card na tela Delivery, e em "não imprimir" nada sai e o 🖨 some.
+            if (politica != PoliticaImpressao.Automatico) return null;
 
             string? falha = null;
             foreach (var t in Pdv.Nucleo.Kds.ParaImprimir())
@@ -526,36 +528,80 @@ public static class Servicos
         finally { UmaComandaPorVez.Release(); }
     }
 
-    public static IReadOnlyList<IReadOnlyList<string>> ViasParaImprimir(RespostaPayGo r)
+    /// <summary>
+    /// De quem é a via que saiu da rede. <see cref="Unica"/> é o caso em que não veio nem
+    /// 713 nem 715 e sobrou um bloco só (cupom reduzido 711 ou via única 029): a rede não
+    /// diz de quem ele é, e o papel que sobra é o que vai para a MÃO DO CLIENTE.
+    /// </summary>
+    public enum ViaTef { Cliente, Estabelecimento, Unica }
+
+    /// <summary>
+    /// As vias com dono, na ordem em que saem. É daqui que a política por via consegue
+    /// separar o que a rede mandou junto — antes disto existia só a lista sem rótulo, e
+    /// "imprimir só a do cliente" não tinha como ser dito.
+    /// </summary>
+    public static IReadOnlyList<(ViaTef Qual, IReadOnlyList<string> Linhas)> ViasRotuladas(RespostaPayGo r)
     {
         var vias = r.Vias ?? 3;
-        var b = new List<IReadOnlyList<string>>();
+        var b = new List<(ViaTef, IReadOnlyList<string>)>();
         if (vias == 0) return b;   // 737 = 0: "não há comprovante" — nada sai, e o CNF não depende de papel
-        if (vias != 2 && r.ViaCliente.Count > 0) b.Add(r.ViaCliente);
-        if (vias != 1 && r.ViaEstabelecimento.Count > 0) b.Add(r.ViaEstabelecimento);
-        if (b.Count == 0 && r.CupomReduzido.Count > 0) b.Add(r.CupomReduzido);
-        if (b.Count == 0 && r.ViaUnica.Count > 0) b.Add(r.ViaUnica);
+        if (vias != 2 && r.ViaCliente.Count > 0) b.Add((ViaTef.Cliente, r.ViaCliente));
+        if (vias != 1 && r.ViaEstabelecimento.Count > 0) b.Add((ViaTef.Estabelecimento, r.ViaEstabelecimento));
+        if (b.Count == 0 && r.CupomReduzido.Count > 0) b.Add((ViaTef.Unica, r.CupomReduzido));
+        if (b.Count == 0 && r.ViaUnica.Count > 0) b.Add((ViaTef.Unica, r.ViaUnica));
         return b;
     }
+
+    /// <summary>
+    /// A lista sem rótulo, como sempre foi. Continua sendo o que a reimpressão manual usa
+    /// (Venda → TEF → Reimprimir), onde quem escolhe a via é o operador, não a política.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<string>> ViasParaImprimir(RespostaPayGo r)
+        => ViasRotuladas(r).Select(v => v.Linhas).ToList();
+
+    /// <summary>
+    /// As vias que saem SOZINHAS, filtradas pela política de cada uma.
+    ///
+    /// "Perguntar" e "não imprimir" tiram a via daqui: a diferença entre as duas é o que
+    /// a tela oferece depois (TEF → Reimprimir o último comprovante continua à mão nas
+    /// duas — reimpressão é dedo humano, não automação).
+    ///
+    /// ⚠️ A via ÚNICA (sem 713 nem 715) obedece à política da via do CLIENTE: é o papel
+    /// que o cliente leva, e chutar "estabelecimento" tiraria o comprovante da mão de
+    /// quem pagou.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<string>> ViasAutomaticas(
+        RespostaPayGo r, PoliticaImpressao cliente, PoliticaImpressao estabelecimento)
+        => ViasRotuladas(r)
+            .Where(v => (v.Qual == ViaTef.Estabelecimento ? estabelecimento : cliente) == PoliticaImpressao.Automatico)
+            .Select(v => v.Linhas)
+            .ToList();
 
     /// <summary>
     /// Hook do two-phase do PayGo: imprime as vias do comprovante e diz se SAÍRAM. Falhou →
     /// pergunta ao operador se tenta de novo; "desistir" devolve false e o cliente manda NCN
     /// (o cliente não é cobrado; a tela mostra "Transação TEF cancelada: Rede/NSU/Valor").
-    /// `tef_paygo_imprimir_vias = 0` → este terminal não imprime comprovante (devolve true:
-    /// nada pode falhar). Roda FORA da thread de UI (dentro do cliente) — diálogo via Dispatcher.
+    /// Cada via tem política própria (`imp_via_cliente` / `imp_via_estabelecimento`): fora de
+    /// "imprimir sozinho" a via não entra na lista e, sem lista, devolve true — nada pode
+    /// falhar. Roda FORA da thread de UI (dentro do cliente) — diálogo via Dispatcher.
     /// </summary>
     private static async Task<bool> ImprimirComprovantePayGoAsync(TransacaoPayGo t)
     {
-        bool liga;
+        PoliticaImpressao pCliente, pEstabelecimento;
         string? impressora;
         using (var cx = Banco.Abrir())
         {
-            liga = Vendas.Config(cx, "tef_paygo_imprimir_vias", "1") != "0";
+            pCliente = Impressoes.Politica(cx, Impressoes.ViaCliente);
+            pEstabelecimento = Impressoes.Politica(cx, Impressoes.ViaEstabelecimento);
             impressora = Vendas.Config(cx, "impressora");
         }
-        if (!liga || t.Resposta is null) return true;
-        var blocos = ViasParaImprimir(t.Resposta);
+        if (t.Resposta is null) return true;
+        // ⚠️ NO TWO-PHASE O PAPEL DECIDE O CNF. Por isso "perguntar" NÃO segura a
+        // transação esperando dedo humano: ele sai daqui como "nada a imprimir" (devolve
+        // true, o CNF sai) e a via fica em TEF → Reimprimir o último comprovante. Prender
+        // o CNF num botão viraria transação rasgada ou NCN indevido com o cliente na
+        // frente. Mesma conta de quando `tef_paygo_imprimir_vias` era 0.
+        var blocos = ViasAutomaticas(t.Resposta, pCliente, pEstabelecimento);
         if (blocos.Count == 0) return true;
 
         var descricao = $"Comprovante TEF{(t.EhCancelamento ? " (cancelamento)" : "")} {t.Resposta.Nsu ?? t.Identificacao}";

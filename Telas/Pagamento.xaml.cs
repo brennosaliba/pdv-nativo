@@ -728,18 +728,22 @@ public partial class Pagamento : UserControl
     {
         Servicos.Dreno()?.Cutucar();
 
-        bool autoImp;
+        PoliticaImpressao politica;
         string? cnpj;
         string? impressora;
         using (var cx = Banco.Abrir())
         {
-            autoImp = Vendas.Config(cx, "imprimir_automatico", "1") != "0";
+            politica = Impressoes.Politica(cx, Impressoes.Cupom);
             impressora = Vendas.Config(cx, "impressora");
             cnpj = cx.ExecuteScalar<string>("SELECT cnpj FROM terminal LIMIT 1");
         }
+        // A MESMA decisão dos dois modos fiscais, escrita uma vez só (Impressoes.DecidirCupom).
+        // Antes eram duas cópias, uma aqui e outra em ImprimirEConcluirAsync, e elas já
+        // tinham divergido no auto-avanço.
+        var decisao = Impressoes.DecidirCupom(politica, forcarImpressao);
 
         string? erro = null;
-        if (autoImp || forcarImpressao)
+        if (decisao.Imprime)
         {
             var dados = new DadosCupom(
                 EmitenteNome: _loja, EmitenteCnpj: cnpj, EmitenteIe: null, EmitenteEndereco: null,
@@ -757,12 +761,15 @@ public partial class Pagamento : UserControl
 
         var troco = new Dinheiro(_partes.Sum(p => p.Troco.Centavos));
         var detalhe = "Este caixa não emite nota fiscal: o papel sai como recibo.";
-        if (!autoImp && !forcarImpressao) detalhe += "\nImpressão automática desligada: toque em Imprimir recibo se o cliente quiser.";
+        if (decisao.MostraBotao) detalhe += "\nImpressão automática desligada: toque em Imprimir recibo se o cliente quiser.";
         if (erro is not null) detalhe += $"\n\nO recibo não saiu: {erro}";
 
+        // O botão de ERRO ganha do botão de política: com o recibo entalado, "Reimprimir"
+        // aparece em qualquer política, inclusive "não imprimir" — senão papel travado
+        // vira venda sem saída nenhuma na tela.
         var acaoImpressao = erro is not null
             ? ("Reimprimir", (Action)(() => _ = ConcluirReciboAsync(true)))
-            : !autoImp && !forcarImpressao
+            : decisao.MostraBotao
                 ? ("Imprimir recibo", (Action)(() => _ = ConcluirReciboAsync(true)))
                 : default;
         // ícone honesto: com o recibo entalado na impressora, o ✅ dizia "pronto" bem
@@ -779,7 +786,12 @@ public partial class Pagamento : UserControl
         }
 
         _avanco?.Stop();
-        if (erro is null && (autoImp || !forcarImpressao))
+        // ⚠️ Gate DIFERENTE do gêmeo fiscal (lá é só `erro is null`), e de propósito: no
+        // recibo, quem toca em "Imprimir recibo" fica com a tela parada para conferir o
+        // papel. Mantido como estava — mudar isto é outra decisão, não esta.
+        // "Não imprimir" cai no `!forcarImpressao` e avança normalmente: não há papel para
+        // esperar.
+        if (erro is null && (politica == PoliticaImpressao.Automatico || !forcarImpressao))
         {
             _avanco = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(troco.Positivo ? 4000 : 1600) };
             _avanco.Tick += (_, _) => { _avanco?.Stop(); Encerrou?.Invoke(DesfechoVenda.Concluida); };
@@ -873,13 +885,15 @@ public partial class Pagamento : UserControl
 
     private async Task ImprimirEConcluirAsync(ResultadoEmissao r, bool forcarImpressao = false)
     {
-        // Impressão automática é escolha da loja (Configuração/botão 🖨). Desligada,
-        // a venda conclui sem papel e o botão "Imprimir cupom" fica à mão.
-        bool autoImp;
+        // A política do cupom é escolha da loja (Configuração ou o botão 🖨 da barra):
+        // sai sozinho, aparece o botão "Imprimir cupom", ou não sai. MESMA função do modo
+        // recibo — a regra mora em Impressoes.DecidirCupom, fora do WPF.
+        PoliticaImpressao politica;
         using (var cxImp = Banco.Abrir())
-            autoImp = Vendas.Config(cxImp, "imprimir_automatico", "1") != "0";
-        var erro = autoImp || forcarImpressao ? await ImprimirAsync(r) : null;
-        var semImpressao = !autoImp && !forcarImpressao;
+            politica = Impressoes.Politica(cxImp, Impressoes.Cupom);
+        var decisao = Impressoes.DecidirCupom(politica, forcarImpressao);
+        var erro = decisao.Imprime ? await ImprimirAsync(r) : null;
+        var semImpressao = decisao.MostraBotao;
 
         var troco = new Dinheiro(_partes.Sum(p => p.Troco.Centavos));
         // "nota pendente" é como a tela de venda chama esta nota quando ela aparece de

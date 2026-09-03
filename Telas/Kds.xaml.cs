@@ -199,9 +199,19 @@ public partial class Kds : UserControl
         Alerta.PedidoNovo();   // chama atencao: papel nao saiu
     }
 
+    /// <summary>
+    /// A política da comanda, relida a cada pintura do quadro. É ela que decide se o 🖨
+    /// do card existe: em "não imprimir" a loja disse que este papel não sai, e um botão
+    /// que a loja desligou não pode ficar convidando o toque. Lido uma vez por pintura,
+    /// não por card: são vários cards por vez.
+    /// </summary>
+    private PoliticaImpressao _politicaComanda = PoliticaImpressao.Perguntar;
+
     // ── pintura do quadro ───────────────────────────────────────────────────
     private void Pintar()
     {
+        using (var cxp = Banco.Abrir()) _politicaComanda = Impressoes.Politica(cxp, Impressoes.Comanda);
+
         var abertos = Nucleo.Kds.Abertos();
 
         Encher(ColPreparar, abertos.Where(t => t.Status == Nucleo.Kds.Recebido));
@@ -378,10 +388,14 @@ public partial class Kds : UserControl
             };
             dir.Children.Add(desfaz);
         }
-        if (t.Origem == "ifood")
+        if (t.Origem == "ifood" && Impressoes.MostraBotaoComanda(_politicaComanda))
         {
             // Reimprimir a comanda: papel atolou/acabou, ou a automática falhou.
             // Imprime DIRETO (sem claim — reimpressão é decisão de gente).
+            // Este 🖨 é TAMBÉM o "perguntar na tela" da comanda: com a política em
+            // perguntar ele é o único jeito de tirar o papel, e por isso continua
+            // visível na política automática (socorro de quando ela falha). Só a
+            // política "não imprimir" o apaga.
             var imprime = new Button
             {
                 Content = "🖨", FontSize = 16, MinHeight = 46, MinWidth = 46,
