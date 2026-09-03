@@ -37,6 +37,9 @@ public static class FotoVenda
         var itens = args.Length > 6
             ? args[6].Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : Array.Empty<string>();
+        // "pagar:4,00" abre o pagamento e lança uma parte em dinheiro (foto da tela de pagamento)
+        decimal? pagar = args.Length > 7 && args[7].StartsWith("pagar:", StringComparison.OrdinalIgnoreCase)
+            ? decimal.Parse(args[7][6..].Replace(',', '.'), System.Globalization.CultureInfo.InvariantCulture) : null;
 
         // ── banco: cópia do banco real desta máquina, nuvem morta ───────────────
         var origem = Banco.Arquivo;
@@ -66,7 +69,7 @@ public static class FotoVenda
         {
             try
             {
-                codigo = Fotografar(saida, w, h, categoria, tema, itens, operador, sessao);
+                codigo = Fotografar(saida, w, h, categoria, tema, itens, operador, sessao, pagar);
             }
             catch (Exception ex)
             {
@@ -82,7 +85,7 @@ public static class FotoVenda
     }
 
     private static int Fotografar(string saida, int w, int h, string categoria, string tema,
-                                  string[] itens, Operador operador, Sessao sessao)
+                                  string[] itens, Operador operador, Sessao sessao, decimal? pagar)
     {
         // Os recursos (tema + estilos) vivem no App.xaml do Pdv.exe. Sem passar pelo
         // App de verdade (trava de instância única, migração, serviços), montamos
@@ -158,7 +161,24 @@ public static class FotoVenda
                         }
                     }
                 }
-                else if (etapa >= 3)
+                else if (pagar is decimal valorPagar && etapa == 2)
+                {
+                    // abre o pagamento como o botão Finalizar faria
+                    var tipo = typeof(Pdv.Telas.Venda);
+                    const BindingFlags P = BindingFlags.NonPublic | BindingFlags.Instance;
+                    tipo.GetMethod("Finalizar", P)!.Invoke(tela, new object?[] { null, new RoutedEventArgs() });
+                }
+                else if (pagar is decimal valorParte && etapa == 3)
+                {
+                    var tipo = typeof(Pdv.Telas.Venda);
+                    const BindingFlags P = BindingFlags.NonPublic | BindingFlags.Instance;
+                    var painel = (System.Windows.Controls.ContentControl)tipo.GetField("PainelPagamento", P)!.GetValue(tela)!;
+                    if (painel.Content is Pdv.Telas.Pagamento pg)
+                        typeof(Pdv.Telas.Pagamento).GetMethod("AdicionarParte", P)!
+                            .Invoke(pg, new object[] { new PagamentoVenda("dinheiro", Dinheiro.DeReais(valorParte), Dinheiro.Zero) });
+                    else erros.Add("a tela de pagamento não abriu");
+                }
+                else if (etapa >= (pagar is null ? 3 : 5))
                 {
                     relogio.Stop();
                     var alvo = (Visual)janela.Content;

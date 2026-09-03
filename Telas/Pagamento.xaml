@@ -17,6 +17,8 @@
                     <TextBlock x:Name="TxtEtapa" Text="Como o cliente vai pagar?" Foreground="{DynamicResource TextoFraco}"
                                FontSize="13" FontWeight="Bold"/>
                     <TextBlock x:Name="TxtResumo" Foreground="{DynamicResource Texto}" FontSize="15" Margin="0,4,0,0"/>
+                    <!-- 03/09: cada parte lançada vira um chip com ✕ (tirar lançamento por engano) -->
+                    <WrapPanel x:Name="PainelPartes" Margin="0,6,0,0"/>
                 </StackPanel>
                 <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center">
                     <TextBlock x:Name="TxtRotuloTotal" Text="TOTAL" Foreground="{DynamicResource TextoFraco}"

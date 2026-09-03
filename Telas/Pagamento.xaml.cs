@@ -179,12 +179,11 @@ public partial class Pagamento : UserControl
             TxtTotal.Text = _total.Formatado();
             TxtTotal.Foreground = (Brush)Application.Current.Resources["Texto"];
             TxtContaPagamento.Visibility = Visibility.Collapsed;
+            PainelPartes.Children.Clear();
             return;
         }
-
-        var pagas = string.Join("  ·  ", _partes.Select(p =>
-            $"✓ {Rotulo(p.Forma)} {new Dinheiro(p.Valor.Centavos - p.Troco.Centavos).Formatado()}"));
-        TxtResumo.Text = pagas;
+        TxtResumo.Text = "Já lançado (toque no ✕ para tirar um lançamento por engano):";
+        PintarChipsDasPartes();
 
         var pago = new Dinheiro(_partes.Sum(p => p.Valor.Centavos - p.Troco.Centavos));
         TxtRotuloTotal.Text = "FALTA";
@@ -192,6 +191,75 @@ public partial class Pagamento : UserControl
         TxtTotal.Foreground = (Brush)Application.Current.Resources["Amarelo"];
         TxtContaPagamento.Text = $"{_total.Formatado()} no total  ·  {pago.Formatado()} já pago";
         TxtContaPagamento.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Cada parte lançada vira um chip com ✕. 03/09/2026: o dono lançou R$ 4,00 em
+    /// dinheiro por engano numa conta de R$ 10,00 e não tinha como tirar. Dinheiro e
+    /// POS avulsa saem na hora (com confirmação); cartão/PIX aprovado no TEF não sai
+    /// daqui: o dinheiro já andou e só volta por estorno, como no cancelamento.
+    /// </summary>
+    private void PintarChipsDasPartes()
+    {
+        PainelPartes.Children.Clear();
+        foreach (var p in _partes)
+        {
+            var parte = p;
+            var valor = new Dinheiro(parte.Valor.Centavos - parte.Troco.Centavos);
+            var chip = new Border
+            {
+                CornerRadius = new CornerRadius(10), Padding = new Thickness(10, 3, 4, 3),
+                Margin = new Thickness(0, 0, 8, 6), BorderThickness = new Thickness(1),
+            };
+            chip.SetResourceReference(Border.BackgroundProperty, "ChipOkFundo");
+            chip.SetResourceReference(Border.BorderBrushProperty, "ChipOkBorda");
+            var linha = new StackPanel { Orientation = Orientation.Horizontal };
+            var txt = new TextBlock
+            {
+                Text = $"✓ {Rotulo(parte.Forma)} {valor.Formatado()}",
+                FontSize = 14, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center,
+            };
+            txt.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
+            linha.Children.Add(txt);
+            var tirar = new Button
+            {
+                Content = "✕", Width = 32, Height = 32, MinHeight = 32, FontSize = 13, Padding = new Thickness(0),
+                Margin = new Thickness(8, 0, 0, 0), Style = (Style)Application.Current.Resources["BotaoBase"],
+                ToolTip = "Tirar este pagamento",
+            };
+            System.Windows.Automation.AutomationProperties.SetName(tirar, $"Tirar {Rotulo(parte.Forma)} {valor.Formatado()}");
+            tirar.Click += (_, _) => TirarParte(parte);
+            linha.Children.Add(tirar);
+            chip.Child = linha;
+            PainelPartes.Children.Add(chip);
+        }
+    }
+
+    private void TirarParte(PagamentoVenda parte)
+    {
+        var dono = Window.GetWindow(this)!;
+        var valor = new Dinheiro(parte.Valor.Centavos - parte.Troco.Centavos);
+        if (parte.Forma != "dinheiro" && (parte.Nsu is not null || parte.Aut is not null))
+        {
+            Dialogo.Avisar(dono, "Pagamento já aprovado",
+                $"Os {valor.Formatado()} em {Rotulo(parte.Forma)} já foram aprovados: o dinheiro saiu da conta do cliente. " +
+                "Termine a venda e use Cartão → Estornar (precisa de autorização do gerente) para devolver e cancelar.", "erro");
+            return;
+        }
+        var aviso = parte.Forma == "dinheiro"
+            ? $"Tirar os {valor.Formatado()} em dinheiro? Se o cliente já entregou, devolva."
+            : $"Tirar os {valor.Formatado()} em {Rotulo(parte.Forma)}? Se já passou na maquininha, cancele lá também, senão o cliente paga duas vezes.";
+        if (!Dialogo.Confirmar(dono, "Tirar pagamento", aviso, "Tirar", "Voltar")) return;
+        _partes.Remove(parte);
+        try
+        {
+            using var cx = Banco.Abrir();
+            Caixa.Auditar(cx, null, "pagamento_removido", _operador.Id, null,
+                $"forma={parte.Forma} valor={valor.Formatado()} falta_agora={Falta.Formatado()}");
+        }
+        catch { /* auditoria não pode travar o balcão */ }
+        Ir(Fase.Forma);
+        PintarPartes();
     }
 
     /// <summary>
