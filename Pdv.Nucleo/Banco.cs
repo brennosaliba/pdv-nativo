@@ -139,6 +139,11 @@ public static class Banco
             // Reivindicação atômica (UPDATE ... WHERE impresso_em IS NULL) — o timer
             // de 10s e o sino podem se sobrepor, e comanda dupla é donut duplo.
             "ALTER TABLE kds_ticket ADD COLUMN impresso_em TEXT",
+            // 03/09/2026: promoção de carrinho (desconto por linha com motivo)
+            "ALTER TABLE venda ADD COLUMN promo_id TEXT",
+            "ALTER TABLE venda ADD COLUMN promo_nome TEXT",
+            "ALTER TABLE venda_item ADD COLUMN promo_id TEXT",
+            "ALTER TABLE venda_item ADD COLUMN gratis_milesimo INTEGER NOT NULL DEFAULT 0",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

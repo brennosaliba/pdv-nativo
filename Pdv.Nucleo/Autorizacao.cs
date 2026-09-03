@@ -253,9 +253,9 @@ public static class Autorizacao
     /// </summary>
     public static string Trilha(DesfechoAutorizacao d) => d.Via switch
     {
-        ViaAutorizacao.Token => $" — autorizado por {d.AprovadoPor} (token {Curto(d.TokenId)})",
-        ViaAutorizacao.Pin => $" — SEM APROVAÇÃO REMOTA ({d.Motivo}); liberado pelo PIN do supervisor",
-        ViaAutorizacao.Homologacao => " — SEM APROVAÇÃO REMOTA (modo homologação)",
+        ViaAutorizacao.Token => $" · autorizado por {d.AprovadoPor} (token {Curto(d.TokenId)})",
+        ViaAutorizacao.Pin => $" · SEM APROVAÇÃO REMOTA ({d.Motivo}); liberado pelo PIN do supervisor",
+        ViaAutorizacao.Homologacao => " · SEM APROVAÇÃO REMOTA (modo homologação)",
         _ => "",
     };
 
@@ -296,7 +296,7 @@ public static class Autorizacao
         var t = tx ?? propria!;
 
         Caixa.Auditar(cx, t, EventoSemAprovacaoRemota, operadorId, d.Autorizador,
-            $"{detalhe} — o token de WhatsApp não autorizou este estorno: {d.Motivo}");
+            $"{detalhe} · o token de WhatsApp não autorizou este estorno: {d.Motivo}");
 
         // O QUE VIAJA: só o suficiente para o painel montar a linha sem ligar para
         // a loja. O código de 6 dígitos NÃO está aqui (nem em lugar nenhum fora do

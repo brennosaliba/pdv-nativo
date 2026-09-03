@@ -198,7 +198,7 @@ public static class Rascunho
             : cobrado.Value.Positivo
                 ? $"⚠️ Atenção: passou {cobrado.Value.Formatado()} na maquininha neste turno, "
                 + "e essa venda não chegou a ser finalizada. Confira no PayGo antes de continuar: "
-                + "se o cliente já pagou, NÃO cobre de novo — estorne em TEF → Estornar."
+                + "se o cliente já pagou, NÃO cobre de novo: estorne em TEF → Estornar."
                 : "Fique tranquilo: nenhum valor foi cobrado e a venda não foi finalizada.";
 
     /// <summary>

@@ -586,7 +586,7 @@ public static class Servicos
                 await NaUiAsync<object?>(() =>
                 {
                     Dialogo.Avisar(System.Windows.Application.Current.MainWindow, "Comprovante não saiu",
-                        $"{erro}\n\nA transação está efetivada — a venda seguiu normalmente. " +
+                        $"{erro}\n\nA transação está efetivada: a venda seguiu normalmente. " +
                         "Reimprima em TEF → Reimprimir o último comprovante quando a impressora estiver pronta.", "erro");
                     return null;
                 }).ConfigureAwait(false);

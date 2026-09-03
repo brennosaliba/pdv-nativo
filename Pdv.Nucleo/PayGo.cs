@@ -305,7 +305,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
         return id;
     }
 
-    public const string MsgTefNaoResponde = "TEF não responde — abra o PayGo Windows e tente de novo";
+    public const string MsgTefNaoResponde = "TEF não responde: abra o PayGo Windows e tente de novo";
 
     /// <summary>Mensagem padronizada da spec quando a resposta não tem o campo esperado.</summary>
     public static string MsgInconsistencia(string campo, string arquivo = "intpos.001")
@@ -435,7 +435,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                 // pela identificação e desfeita). O aviso da maquininha aqui é INFORMAÇÃO.
                 Guardar(new TransacaoPayGo(chargeId, id, tipo, valor.Centavos, parc, "orfa", null, "PayGo não respondeu após o cancelamento"));
                 return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, null,
-                    "cobrança cancelada pelo operador — confira no PayGo se o cliente concluiu", true)
+                    "cobrança cancelada pelo operador: confira no PayGo se o cliente concluiu", true)
                 { Codigo = CodigoTef.Cancelado };
             }
 
@@ -480,8 +480,8 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                 if (conhecida) await ConfirmarAsync(pend, "confirmada").ConfigureAwait(false);
                 else await DesfazerAsync(pend, "desfeita").ConfigureAwait(false);
                 var motivo = r.Mensagem + (conhecida
-                    ? " — pendência anterior confirmada; cobre de novo"
-                    : " — pendência anterior desfeita; cobre de novo");
+                    ? " · pendência anterior confirmada; cobre de novo"
+                    : " · pendência anterior desfeita; cobre de novo");
                 Guardar(new TransacaoPayGo(chargeId, id, tipo, valor.Centavos, parc, "recusado", r, motivo));
                 return new DesfechoTef(SituacaoTef.Erro, id, chargeId, null, motivo, false) { Codigo = CodigoTef.Pendencia, Desfeita = true };
             }
@@ -501,7 +501,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
             if (ct.IsCancellationRequested)
             {
                 await DesfazerAsync(tx with { Motivo = "cancelada pelo operador (NCN)" }, "desfeita").ConfigureAwait(false);
-                return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, null, "cobrança cancelada pelo operador — transação desfeita", false)
+                return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, null, "cobrança cancelada pelo operador: transação desfeita", false)
                 { Codigo = CodigoTef.Cancelado, Desfeita = true };
             }
 
@@ -511,7 +511,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                 // Desfazer é o único caminho que não deixa dinheiro sem venda.
                 await DesfazerAsync(tx with { Motivo = "valor divergente (NCN)" }, "desfeita").ConfigureAwait(false);
                 return new DesfechoTef(SituacaoTef.Erro, id, chargeId, Cartao(r),
-                    $"o TEF aprovou {new Dinheiro(cobrado).Formatado()} e a venda é de {valor.Formatado()} — transação desfeita, cobre de novo", false)
+                    $"o TEF aprovou {new Dinheiro(cobrado).Formatado()} e a venda é de {valor.Formatado()}: transação desfeita, cobre de novo", false)
                 { Codigo = CodigoTef.ValorDivergente, Desfeita = true };
             }
 
@@ -523,7 +523,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
             {
                 await DesfazerAsync(tx with { Motivo = "não gravou no caixa (NCN)" }, "desfeita").ConfigureAwait(false);
                 return new DesfechoTef(SituacaoTef.Erro, id, chargeId, cartao,
-                    "não consegui gravar a transação no caixa — transação desfeita, cobre de novo", false)
+                    "não consegui gravar a transação no caixa: transação desfeita, cobre de novo", false)
                 { Codigo = CodigoTef.Plataforma, Desfeita = true };
             }
 
@@ -535,7 +535,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                 if (!await ImprimirSeguroAsync(tx).ConfigureAwait(false))
                 {
                     await DesfazerAsync(tx with { Motivo = "comprovante não impresso (NCN)" }, "desfeita").ConfigureAwait(false);
-                    Auditar?.Invoke($"paygo: {chargeId} desfeita — comprovante não saiu");
+                    Auditar?.Invoke($"paygo: {chargeId} desfeita (comprovante não saiu)");
                     return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, cartao,
                         MsgCancelada(r.Rede, r.Nsu, r.ValorCent ?? valor.Centavos), false)
                     { Codigo = CodigoTef.Cancelado, Desfeita = true };
@@ -550,7 +550,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                 Guardar(tx with { Situacao = "pago" });
                 // 729 = 1: a rede já efetivou; o papel é melhor-esforço (não existe NCN aqui).
                 if (!await ImprimirSeguroAsync(tx).ConfigureAwait(false))
-                    Auditar?.Invoke($"paygo: {chargeId} paga (729=1) com comprovante não impresso — reimprimir pelas vias");
+                    Auditar?.Invoke($"paygo: {chargeId} paga (729=1) com comprovante não impresso, reimprimir pelas vias");
             }
 
             return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, null, false)
@@ -573,7 +573,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
         var id = NovaId();
         var chargeId = "paygo-cnc-" + id;
         if (r0 is null || string.IsNullOrWhiteSpace(r0.Nsu))
-            return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "transação original sem NSU — cancele pelo menu do PayGo");
+            return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "transação original sem NSU: cancele pelo menu do PayGo");
 
         await _um.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -612,7 +612,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
             if (!gravou)
             {
                 await DesfazerAsync(tx with { Motivo = "não gravou o cancelamento (NCN)" }, "desfeita").ConfigureAwait(false);
-                return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "não consegui gravar o cancelamento — desfeito");
+                return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "não consegui gravar o cancelamento (desfeito)");
             }
             var sit = "estornado";
             if (r.RequerConfirmacao)
@@ -681,7 +681,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                 if (!gravou)
                 {
                     await DesfazerAsync(tx with { Motivo = "não gravou (NCN)" }, "desfeita").ConfigureAwait(false);
-                    return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "não consegui gravar a operação — desfeita");
+                    return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "não consegui gravar a operação (desfeita)");
                 }
                 if (!await ImprimirSeguroAsync(tx).ConfigureAwait(false))
                 {
@@ -726,7 +726,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                 {
                     // Sem 027 o PayGo entende CNF/NCN como "a ÚLTIMA transação" — que pode ser
                     // outra. Nunca enviar às cegas: fica órfã para estorno/conferência manual.
-                    Auditar?.Invoke($"paygo: pendência {tx.ChargeId} sem 027 — não dá para CNF/NCN; marcada órfã");
+                    Auditar?.Invoke($"paygo: pendência {tx.ChargeId} sem 027, não dá para CNF/NCN; marcada órfã");
                     GuardarSeguro(tx with { Situacao = "orfa", Motivo = "aprovada sem código de controle (027); confira no PayGo" });
                     n++;
                     continue;
@@ -780,7 +780,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
             if (!File.Exists(caminho)) return false;
             if (relogio.ElapsedMilliseconds > TempoEstavelMs + 2_000)
             {
-                Auditar?.Invoke("paygo: órfã em Resp nunca ficou inteira/estável — lida como está (fallback)");
+                Auditar?.Invoke("paygo: órfã em Resp nunca ficou inteira/estável, lida como está (fallback)");
                 texto = LerComRetentativa(caminho);
                 break;
             }
@@ -812,12 +812,12 @@ public sealed class ClientePayGo : IProvedorTefOperavel
         }
         if (!r.RequerConfirmacao)
         {
-            GuardarSeguro(tx with { Situacao = "orfa", Motivo = $"resposta {origem} aprovada sem confirmação pendente — dinheiro entrou sem venda; estornar" });
+            GuardarSeguro(tx with { Situacao = "orfa", Motivo = $"resposta {origem} aprovada sem confirmação pendente: dinheiro entrou sem venda; estornar" });
             return false;
         }
         if (string.IsNullOrWhiteSpace(r.CodigoControle))
         {
-            GuardarSeguro(tx with { Situacao = "orfa", Motivo = $"resposta {origem} aprovada sem 027 — não dá para desfazer às cegas; confira no PayGo" });
+            GuardarSeguro(tx with { Situacao = "orfa", Motivo = $"resposta {origem} aprovada sem 027: não dá para desfazer às cegas; confira no PayGo" });
             return false;
         }
         await DesfazerAsync(tx with { Motivo = $"resposta {origem} sem venda (NCN)" }, "desfeita").ConfigureAwait(false);
@@ -960,7 +960,7 @@ public sealed class ClientePayGo : IProvedorTefOperavel
             {
                 desdeCancelamento = Stopwatch.StartNew();
                 andamento?.Report(new AndamentoTef(FaseTef.Recado, chargeId, id,
-                    "Cancelamento pedido — o TEF não pode ser interrompido pelo caixa; aguardando o pinpad…"));
+                    "Cancelamento pedido: o TEF não pode ser interrompido pelo caixa; aguardando o pinpad…"));
             }
             if (desdeCancelamento is not null && desdeCancelamento.ElapsedMilliseconds >= TempoDesistirAposCancelarMs)
                 return null;

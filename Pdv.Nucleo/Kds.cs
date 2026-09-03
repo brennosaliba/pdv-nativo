@@ -93,9 +93,10 @@ public static class Kds
         if (v is null) return null;
 
         var itens = cx.Query(
-            @"SELECT descricao, qtd_milesimo FROM venda_item
+            @"SELECT descricao, qtd_milesimo, gratis_milesimo FROM venda_item
                WHERE venda_id = @id AND cancelado = 0 ORDER BY seq", new { id = vendaId })
-            .Select(i => new TicketItem((string)i.descricao, (int)(long)i.qtd_milesimo, null))
+            .Select(i => new TicketItem((string)i.descricao, (int)(long)i.qtd_milesimo,
+                (long)i.gratis_milesimo > 0 ? "brinde" : null))
             .ToList();
         if (itens.Count == 0) return null;
 

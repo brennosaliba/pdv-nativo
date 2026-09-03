@@ -48,7 +48,7 @@ public sealed record OpcaoRede(string Valor, string Rotulo, bool Conhecida)
 public static class RedesPayGo
 {
     /// <summary>Rótulo da opção vazia — primeira da lista e a recomendada em produção.</summary>
-    public const string RotuloAutomatico = "(automático — a PayGo escolhe a rede)";
+    public const string RotuloAutomatico = "(automático: a PayGo escolhe a rede)";
 
     /// <summary>Credenciadoras de CARTÃO, com a grafia e a ordem da lista oficial da PayGo.</summary>
     public static readonly IReadOnlyList<string> Cartao = new[]
@@ -146,7 +146,7 @@ public static class RedesPayGo
         // Pista no rótulo: campo trocado é o erro mais provável (os dois ficam lado a lado na
         // tela) e o rótulo é o único lugar onde o dono vai reparar nisso.
         var pista = Achar(outra, bruto) is not null ? $"é rede de {nomeDaOutra}" : "confira";
-        ops.Add(new OpcaoRede(bruto, $"{bruto} — fora da lista ({pista})", false));
+        ops.Add(new OpcaoRede(bruto, $"{bruto}: fora da lista ({pista})", false));
         return ops;
     }
 

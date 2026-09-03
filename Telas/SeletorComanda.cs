@@ -106,7 +106,7 @@ public static class SeletorComanda
 
         pilha.Children.Add(new TextBlock
         {
-            Text = "Vale no próximo pedido — não precisa reiniciar o caixa. Para conferir no "
+            Text = "Vale no próximo pedido: não precisa reiniciar o caixa. Para conferir no "
                  + "papel antes, toque no 🖨 de um pedido do quadro.",
             FontSize = 13, Foreground = R("TextoFraco"),
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 16, 0, 20),

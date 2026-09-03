@@ -50,7 +50,7 @@ public partial class ChatIfood : UserControl
             Web.CoreWebView2.Settings.IsStatusBarEnabled = false;
 
             Web.CoreWebView2.NavigationCompleted += (_, e) =>
-                TxtEstado.Text = e.IsSuccess ? "" : "sem conexão — toque em Recarregar";
+                TxtEstado.Text = e.IsSuccess ? "" : "sem conexão: toque em Recarregar";
 
             Web.Source = new Uri(UrlGestor);
             Web.Visibility = Visibility.Visible;
@@ -65,7 +65,7 @@ public partial class ChatIfood : UserControl
             TxtErro.Text =
                 "O componente de navegação do Windows (WebView2) não está disponível " +
                 "nesta máquina. Instale o \"WebView2 Runtime\" da Microsoft e abra o " +
-                "chat de novo — o restante do PDV segue funcionando normalmente.\n\n" +
+                "chat de novo. O restante do PDV segue funcionando normalmente.\n\n" +
                 "Detalhe técnico: " + ex.Message;
         }
     }

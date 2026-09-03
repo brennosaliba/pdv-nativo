@@ -42,7 +42,8 @@ namespace Pdv.Nucleo;
 /// </summary>
 public sealed record ItemFiscal(
     string Codigo, string Descricao, string? Ncm, string? Cest, string? Csosn,
-    string? Cfop, string Unidade, decimal Qtd, decimal VUnit, int? Origem = null)
+    string? Cfop, string Unidade, decimal Qtd, decimal VUnit, int? Origem = null,
+    decimal VDesc = 0)
 {
     /// <summary>
     /// Ponte a partir dos tipos da casa — use esta e não o construtor, pra a conversão nascer certa.
@@ -61,12 +62,25 @@ public sealed record ItemFiscal(
     /// </summary>
     public static ItemFiscal De(string codigo, string descricao, string? ncm, string? cest,
         string? csosn, string? cfop, string unidade, Quantidade qtd, Dinheiro vUnit,
-        Dinheiro? totalLinha = null, int? origem = null)
+        Dinheiro? totalLinha = null, int? origem = null, Dinheiro? desconto = null)
     {
         var total = totalLinha ?? vUnit.VezesQtd(qtd.Milesimos);
         return new(codigo, descricao, ncm, cest, csosn, cfop, unidade,
-            qtd.Valor, UnitarioQueReproduz(total, qtd, vUnit), origem);
+            qtd.Valor, UnitarioQueReproduz(total, qtd, vUnit), origem, desconto?.Reais ?? 0m);
     }
+
+    /// <summary>
+    /// Itens da nota a partir das linhas da venda (03/09/2026, promoção de carrinho).
+    /// vdescPorItem = true: vProd cheio (preço de tabela) e vDesc por item, a forma
+    /// canônica. false (transitório, enquanto o assinador não distribui vDesc por
+    /// item): o unitário já sai líquido, como a promoção de preço sempre saiu.
+    /// </summary>
+    public static IReadOnlyList<ItemFiscal> DaVenda(IReadOnlyList<LinhaVenda> itens, bool vdescPorItem)
+        => itens.Select(i => vdescPorItem && i.Desconto.Centavos > 0
+            ? De(i.Codigo ?? i.ProdutoId ?? "", i.Descricao, i.Ncm, i.Cest, i.Csosn, i.Cfop,
+                 i.Unidade, i.Qtd, i.Preco, i.Bruto, i.Origem, i.Desconto)
+            : De(i.Codigo ?? i.ProdutoId ?? "", i.Descricao, i.Ncm, i.Cest, i.Csosn, i.Cfop,
+                 i.Unidade, i.Qtd, i.Preco, i.Total, i.Origem)).ToList();
 
     /// <summary>
     /// vUnit em até 10 casas tal que <c>round(qtd × vUnit, 2) == total</c>.
@@ -355,7 +369,7 @@ public static class Fiscal
             ? t
             : throw new InvalidOperationException(
                 $"Forma de pagamento '{forma}' não é emitível. Use exatamente dinheiro|credito|debito|pix " +
-                "(minúsculas, sem acento — é contrato com o fechamento de caixa). " +
+                "(minúsculas, sem acento: é contrato com o fechamento de caixa). " +
                 "Cair em tPag 99 gera rejeição certa e queima numeração.");
 
     public static string Digitos(string? s)
@@ -395,7 +409,8 @@ public static class Fiscal
     public static decimal TotalDaNota(IReadOnlyList<ItemFiscal> itens)
     {
         decimal total = 0;
-        for (var i = 0; i < itens.Count; i++) total += TotalDaLinha(itens[i].Qtd, itens[i].VUnit);
+        for (var i = 0; i < itens.Count; i++)
+            total += TotalDaLinha(itens[i].Qtd, itens[i].VUnit) - Math.Round(itens[i].VDesc, 2, MidpointRounding.AwayFromZero);
         return total;
     }
 
@@ -414,6 +429,8 @@ public static class Fiscal
             if (string.IsNullOrWhiteSpace(i.Descricao)) return $"item {i.Codigo} sem descrição";
             if (i.Qtd <= 0) return $"quantidade inválida no item {i.Descricao}";
             if (i.VUnit < 0) return $"valor unitário inválido no item {i.Descricao}";
+            if (i.VDesc < 0 || i.VDesc > TotalDaLinha(i.Qtd, i.VUnit))
+                return $"desconto inválido no item {i.Descricao} ({Moeda(i.VDesc)} num item de {Moeda(TotalDaLinha(i.Qtd, i.VUnit))})";
         }
 
         decimal soma = 0;
@@ -438,7 +455,7 @@ public static class Fiscal
         var vNF = TotalDaNota(itens);
         if (soma != vNF)
             return $"a soma dos pagamentos ({Moeda(soma)}) não fecha com o total da nota ({Moeda(vNF)}). " +
-                   "Em dinheiro, o pagamento da nota é o TOTAL, nunca o valor recebido — o troco vive só no " +
+                   "Em dinheiro, o pagamento da nota é o TOTAL, nunca o valor recebido: o troco vive só no " +
                    "cupom e em venda_pagamento.troco_cent.";
 
         return null;
@@ -717,9 +734,9 @@ public sealed class EmissorNuvem : IEmissorFiscal
 {
     public const string Caminho = "nuvem";
 
-    private const string MsgSemSessao = "sem sessão válida com a nuvem — entre no sistema de novo";
+    private const string MsgSemSessao = "sem sessão válida com a nuvem: entre no sistema de novo";
     private const string MsgSemPapel =
-        "esta conta não tem permissão para emitir na nuvem (papel do usuário) — é erro de configuração, relogar não resolve";
+        "esta conta não tem permissão para emitir na nuvem (papel do usuário): é erro de configuração, relogar não resolve";
 
     private static readonly TimeSpan TempoSonda = TimeSpan.FromMilliseconds(1200);
 
@@ -1163,8 +1180,8 @@ public sealed class EmissorResolvido : IEmissorFiscal, IDisposable
         else if (nuvem.Bloqueio)
             impedimento = nuvem.Erro ?? "a nuvem recusou este caixa";
         else if (!nuvem.Ok && barrada is not null)
-            impedimento = $"nenhum caminho de emissão disponível — nuvem: {nuvem.Erro ?? "fora"} · " +
-                          $"contingência local: {barrada}";
+            impedimento = $"nenhum caminho de emissão disponível (nuvem: {nuvem.Erro ?? "fora"} · " +
+                          $"contingência local: {barrada})";
 
         // Trava só o que é PROVA de dano fiscal (série igual, ambiente trocado). Nuvem fora
         // por rede não pode travar o boot da loja: para isso existe a contingência.
@@ -1178,7 +1195,7 @@ public sealed class EmissorResolvido : IEmissorFiscal, IDisposable
             aviso = $"sem contingência local: {barrada}. Se a internet cair, a venda para.";
         else if (naoConferida is not null)
             aviso = $"contingência local ligada SEM conferência de série: {naoConferida}. " +
-                    "Preencha SerieNuvem (nfce_config.serie) — é o que impede Rejeição 539 em cascata.";
+                    "Preencha SerieNuvem (nfce_config.serie): é o que impede Rejeição 539 em cascata.";
 
         return new ConferenciaDeBoot(impedimento is null, impedimento, aviso, nuvem, agente);
     }
@@ -1352,7 +1369,7 @@ public sealed class EmissorResolvido : IEmissorFiscal, IDisposable
 
         if (agente.TpAmb is int ta && TpAmbEsperado is int te && ta != te)
             return $"o emissor local está em {Ambiente(ta)} e este terminal está configurado para {Ambiente(te)}. " +
-                   "Nota emitida em produção por engano não se desfaz — só se cancela, e em até 30 min.";
+                   "Nota emitida em produção por engano não se desfaz: só se cancela, e em até 30 min.";
 
         return null;
     }
@@ -1401,7 +1418,9 @@ file sealed record ItemDto(
     // O motor lê `it.origem` por item e, sem ele, TODO item cai no default do emitente
     // (0 = nacional): item importado sairia com <orig>0</orig> no ICMSSN, divergindo do
     // que o PDV gravou em venda_item.origem. A edge ignora o campo — corpo continua válido.
-    [property: JsonPropertyName("origem")] int? Origem);
+    [property: JsonPropertyName("origem")] int? Origem,
+    // 03/09: desconto por item (promoção de carrinho). Só vai quando > 0.
+    [property: JsonPropertyName("vDesc"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? VDesc = null);
 
 file sealed record CardDto(
     [property: JsonPropertyName("cAut")] string CAut,
@@ -1473,7 +1492,8 @@ file static class Wire
                 Cest: Nulo(Fiscal.Digitos(i.Cest)),
                 Csosn: Nulo(Fiscal.Digitos(i.Csosn)),
                 Cfop: Nulo(Fiscal.Digitos(i.Cfop)),
-                Origem: i.Origem));
+                Origem: i.Origem,
+                VDesc: i.VDesc > 0 ? i.VDesc : null));
         }
         return lista;
     }

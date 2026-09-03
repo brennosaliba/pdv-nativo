@@ -92,7 +92,7 @@ public static class CancelamentoFiscal
             return new ResultadoCancelamento(false, 0, "chave da NFC-e inválida", null, false);
         if (string.IsNullOrWhiteSpace(protocolo))
             return new ResultadoCancelamento(false, 0,
-                "esta nota não tem protocolo de autorização (emitida em contingência?) — cancele pelo ERP", null, false);
+                "esta nota não tem protocolo de autorização (emitida em contingência?). Cancele pelo ERP", null, false);
         if (!JustificativaValida(justificativa))
             return new ResultadoCancelamento(false, 0,
                 $"a justificativa precisa de {JustificativaMinima} a {JustificativaMaxima} caracteres", null, false);

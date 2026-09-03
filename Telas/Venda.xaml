@@ -378,6 +378,13 @@
                                 <TextBlock x:Name="TxtTotal" Text="R$ 0,00" Foreground="{DynamicResource Texto}"
                                            FontSize="42" FontWeight="Bold" HorizontalAlignment="Right"/>
                             </Grid>
+                            <!-- promoção de carrinho (03/09): a vencedora e o que não valeu junto -->
+                            <TextBlock x:Name="TxtPromo" Visibility="Collapsed" Foreground="{DynamicResource Ok}"
+                                       FontSize="13" FontWeight="Bold" HorizontalAlignment="Right"
+                                       TextTrimming="CharacterEllipsis" Margin="0,-6,0,4"/>
+                            <TextBlock x:Name="TxtPromoObs" Visibility="Collapsed" Foreground="{DynamicResource TextoFraco}"
+                                       FontSize="12" HorizontalAlignment="Right" TextWrapping="Wrap"
+                                       TextAlignment="Right" Margin="0,0,0,6"/>
 
                             <Button x:Name="BtnCortesia" Click="AplicarCortesia" Style="{StaticResource BotaoBase}"
                                     MinHeight="46" Margin="0,0,0,10" IsEnabled="False" HorizontalContentAlignment="Center">

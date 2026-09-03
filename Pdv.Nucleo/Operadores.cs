@@ -53,7 +53,7 @@ public static class Operadores
         // repetido, a atribuição desmorona igualzinho ao PIN repetido.
         var cpfLimpo = string.IsNullOrWhiteSpace(cpf) ? null : CpfChave(cpf);
         if (!string.IsNullOrWhiteSpace(cpf) && cpfLimpo is null)
-            throw new InvalidOperationException("CPF inválido — confira os dígitos.");
+            throw new InvalidOperationException("CPF inválido: confira os dígitos.");
         if (cpfLimpo is not null)
         {
             // A comparação limpa a pontuação DOS DOIS LADOS: build antigo gravava o CPF
@@ -80,7 +80,7 @@ public static class Operadores
                         $"{(string)dono.nome} já vem do PAINEL com este CPF. Criar de novo aqui faria " +
                         "nascer um segundo cadastro para a mesma pessoa, e o painel recusa toda venda " +
                         "assinada por alguém que ele não conhece. O QUE FAZER: quem vem do painel entra " +
-                        "no caixa com o CPF e a senha dele — não precisa cadastrar. Para trocar nome, " +
+                        "no caixa com o CPF e a senha dele: não precisa cadastrar. Para trocar nome, " +
                         "perfil ou senha, mexa no cadastro do painel e toque em Sincronizar.");
                 throw new InvalidOperationException($"Esse CPF já é de {(string)dono.nome}.");
             }
@@ -301,7 +301,7 @@ public static class Operadores
                 new { H = (string)l.pin_hash, S = (string)l.pin_salt, Id = idNuvem, Em = agora }, tx);
 
             Caixa.Auditar(cx, tx, "operador_reconciliado", idNuvem, null,
-                $"{idLocal} (criado no caixa) e {idNuvem} (painel) têm o mesmo CPF — mesma pessoa. " +
+                $"{idLocal} (criado no caixa) e {idNuvem} (painel) têm o mesmo CPF: mesma pessoa. " +
                 "A senha usada no caixa foi preservada; o histórico continua apontando para a linha antiga.");
             n++;
         }
@@ -338,7 +338,7 @@ public static class Operadores
         // CPF é o login: sem ele, a abertura de caixa não tem dono de verdade
         var chave = CpfChave(cpf);
         if (chave is null)
-            throw new InvalidOperationException("CPF do administrador inválido — é com ele que o dono entra no caixa.");
+            throw new InvalidOperationException("CPF do administrador inválido: é com ele que o dono entra no caixa.");
         if (!PinValido(pin))
             throw new InvalidOperationException("A senha do administrador deve ter de 4 a 6 dígitos.");
 
@@ -363,7 +363,7 @@ public static class Operadores
             cx.Execute("UPDATE operador SET pin_hash=@H, pin_salt=@S, atualizado=@Em WHERE id=@Id",
                 new { H = h, S = s, Id = doPainel, Em = agora }, tx);
             Caixa.Auditar(cx, tx, "admin_adotado_do_painel", doPainel, null,
-                $"{nome} já vinha do painel com este CPF — nenhum cadastro local foi criado " +
+                $"{nome} já vinha do painel com este CPF: nenhum cadastro local foi criado " +
                 "(dois ids para a mesma pessoa é o que faz a nuvem recusar as vendas)");
             return (doPainel, true);
         }

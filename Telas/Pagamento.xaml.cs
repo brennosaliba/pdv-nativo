@@ -209,15 +209,15 @@ public partial class Pagamento : UserControl
         var dono = Window.GetWindow(this)!;
         if (posPodeEstarOcupado &&
             !Dialogo.Confirmar(dono, "Risco de cobrança em dobro",
-                "A cobrança de agora pode ter ficado presa na maquininha. Cancele lá primeiro — " +
+                "A cobrança de agora pode ter ficado presa na maquininha. Cancele lá primeiro: " +
                 "se passar por cima, o cliente paga duas vezes.",
-                "Já cancelei — continuar", "Voltar"))
+                "Já cancelei · continuar", "Voltar"))
             return;
 
         if (!Dialogo.Confirmar(dono,
                 $"Cobrança de {valor.Formatado()}",
                 $"Passe {valor.Formatado()} em {Rotulo(forma)} na maquininha e confirme aqui.\n\nO pagamento foi aprovado?",
-                "Aprovado — registrar", "Voltar"))
+                "Aprovado · registrar", "Voltar"))
             return;
         AdicionarParte(new PagamentoVenda(forma, valor, Dinheiro.Zero));
     }
@@ -434,7 +434,7 @@ public partial class Pagamento : UserControl
             // TEF caiu antes de armar a maquininha: registrar como POS é seguro.
             Estado("⚠️", "Maquininha fora do ar",
                 "Não consegui falar com a maquininha. O cliente NÃO foi cobrado.\n\n" +
-                "Confira se ela está ligada e o programa dela aberto, e tente de novo — " +
+                "Confira se ela está ligada e o programa dela aberto, e tente de novo, " +
                 "ou passe o valor direto nela." +
                 $"\n\nDetalhe: {ex.Message}",
                 ("Tentar de novo", () => _ = CobrarNoTefAsync(forma, valor, parcelas)),
@@ -489,7 +489,7 @@ public partial class Pagamento : UserControl
             : d.Desfeita ? "A cobrança foi desfeita: o cliente não pagou nada."
             : d.Situacao == SituacaoTef.Recusado ? "O cliente NÃO foi cobrado. Tente outro cartão ou outra forma."
             : d.Situacao == SituacaoTef.Cancelado ? "O cliente NÃO foi cobrado."
-            : d.Situacao == SituacaoTef.Timeout ? "Pode ter sobrado uma cobrança na maquininha — confira lá antes de cobrar de novo."
+            : d.Situacao == SituacaoTef.Timeout ? "Pode ter sobrado uma cobrança na maquininha. Confira lá antes de cobrar de novo."
             : "Confira na maquininha se a cobrança passou antes de cobrar de novo.";
 
         Estado(d.Situacao == SituacaoTef.Cancelado ? "↩️" : "⚠️",
@@ -525,7 +525,7 @@ public partial class Pagamento : UserControl
         try { janelas = JanelaPayGo.EnviarEsc(); } catch { janelas = 0; }
         TxtDetalheEstado.Text = janelas > 0
             ? "Pedi o cancelamento. Espere a maquininha confirmar…"
-            : "Não achei a janela do PayGo — aperte Esc nela para cancelar a cobrança.";
+            : "Não achei a janela do PayGo. Aperte Esc nela para cancelar a cobrança.";
         _cobranca?.Cancel();
     }
 
@@ -597,15 +597,15 @@ public partial class Pagamento : UserControl
         if (cartoes > 0 && _partes.Any(p => p.Forma != "dinheiro" && (p.Nsu is not null || p.Aut is not null)))
         {
             Dialogo.Avisar(Window.GetWindow(this)!, "Pagamento já aprovado",
-                $"O cliente já pagou {new Dinheiro(cartoes).Formatado()} no cartão/PIX — o dinheiro saiu da conta dele.\n\n" +
+                $"O cliente já pagou {new Dinheiro(cartoes).Formatado()} no cartão/PIX: o dinheiro saiu da conta dele.\n\n" +
                 "Termine a venda. Para devolver, use o botão Cartão → Estornar (precisa de autorização do gerente): " +
                 "devolve o dinheiro e cancela a venda no mesmo passo.", "erro");
             return;
         }
 
         var aviso = "Esta venda já tem pagamento recebido:";
-        if (cartoes > 0) aviso += $"\n• {new Dinheiro(cartoes).Formatado()} no cartão/PIX — estorne na maquininha";
-        if (dinheiro > 0) aviso += $"\n• {new Dinheiro(dinheiro).Formatado()} em dinheiro — devolva ao cliente";
+        if (cartoes > 0) aviso += $"\n• {new Dinheiro(cartoes).Formatado()} no cartão/PIX: estorne na maquininha";
+        if (dinheiro > 0) aviso += $"\n• {new Dinheiro(dinheiro).Formatado()} em dinheiro: devolva ao cliente";
 
         if (Dialogo.Confirmar(Window.GetWindow(this)!, "Pagamento já recebido",
                 aviso, "Cancelar mesmo assim", "Voltar", perigo: true))
@@ -615,7 +615,7 @@ public partial class Pagamento : UserControl
     // ── 4. GRAVA, EMITE, IMPRIME ────────────────────────────────────────────
     private async Task ConcluirTudoAsync()
     {
-        Estado("🧾", "Emitindo a nota", "Leva alguns segundos — não desligue o caixa.");
+        Estado("🧾", "Emitindo a nota", "Leva alguns segundos. Não desligue o caixa.");
         Ir(Fase.Emitindo);
 
         // Gravar ANTES de emitir. Se o dinheiro entrou, a venda tem que existir mesmo
@@ -631,7 +631,7 @@ public partial class Pagamento : UserControl
         catch (Exception ex)
         {
             var extra = _partes.All(p => p.Forma == "dinheiro") ? "" :
-                "\n\nO cliente JÁ PAGOU no cartão/PIX — não cobre de novo. Anote o valor.";
+                "\n\nO cliente JÁ PAGOU no cartão/PIX: não cobre de novo. Anote o valor.";
             Estado("⛔", "Venda não gravada",
                 "O dinheiro já entrou, mas a venda não foi salva. Toque em Tentar de novo antes de liberar o cliente." +
                 extra + $"\n\nDetalhe: {ex.Message}",
@@ -673,19 +673,20 @@ public partial class Pagamento : UserControl
             var dados = new DadosCupom(
                 EmitenteNome: _loja, EmitenteCnpj: cnpj, EmitenteIe: null, EmitenteEndereco: null,
                 Numero: 0, Serie: 0, Chave: null, Emissao: DateTime.Now, QrCode: null, TpAmb: null,
-                Itens: _itens.Select(i => new ItemCupom(i.Codigo ?? "", i.Descricao, i.Qtd, i.Unidade, i.Preco, i.Total)).ToList(),
+                Itens: ItensDoCupom(descontoNoItem: true),
                 Total: _total, VNf: null,
                 Pagamentos: _partes.Select(p => new PagamentoCupom(Rotulo(p.Forma),
                     new Dinheiro(p.Valor.Centavos - p.Troco.Centavos))).ToList(),
                 Recebido: new Dinheiro(_partes.Sum(p => p.Valor.Centavos)),
                 Documento: _documento, Contingencia: false, Operador: _operador.Nome,
                 Recibo: true);
+            dados = dados with { PromoNome = PromoDaVenda, DescontoPromo = DescontoDaVenda, DescontoNoPreco = !VDescPorItem() && dados.VNf is not null };
             erro = await Impressao.ImprimirAsync(dados, impressora);
         }
 
         var troco = new Dinheiro(_partes.Sum(p => p.Troco.Centavos));
-        var detalhe = "Este caixa não emite nota fiscal — o papel sai como recibo.";
-        if (!autoImp && !forcarImpressao) detalhe += "\nImpressão automática desligada — toque em Imprimir recibo se o cliente quiser.";
+        var detalhe = "Este caixa não emite nota fiscal: o papel sai como recibo.";
+        if (!autoImp && !forcarImpressao) detalhe += "\nImpressão automática desligada: toque em Imprimir recibo se o cliente quiser.";
         if (erro is not null) detalhe += $"\n\nO recibo não saiu: {erro}";
 
         var acaoImpressao = erro is not null
@@ -723,7 +724,7 @@ public partial class Pagamento : UserControl
         // 06/08 uma venda de teste consumiu 18 números da série 2 assim.
         if (_emitindo) return;
         _emitindo = true;
-        Estado("🧾", "Emitindo a nota", "Leva alguns segundos — não desligue o caixa.");
+        Estado("🧾", "Emitindo a nota", "Leva alguns segundos. Não desligue o caixa.");
         Ir(Fase.Emitindo);
         try { await EmitirDeVerdadeAsync(); }
         finally { _emitindo = false; }
@@ -737,9 +738,7 @@ public partial class Pagamento : UserControl
         // O total da linha vai junto: é ele que faz o vUnit enviado reproduzir, na conta
         // do motor, exatamente o valor que o PDV cobrou. Sem isso, item pesável diverge
         // de um centavo entre o papel e o XML autorizado.
-        var itensFiscais = _itens.Select(i => ItemFiscal.De(
-            i.Codigo ?? i.ProdutoId ?? "", i.Descricao, i.Ncm, i.Cest, i.Csosn, i.Cfop,
-            i.Unidade, i.Qtd, i.Preco, i.Total, i.Origem)).ToList();
+        var itensFiscais = ItemFiscal.DaVenda(_itens, VDescPorItem()).ToList();
 
         // Cada parte entra pelo valor APLICADO (valor − troco): a soma fecha com o vNF
         // por construção, sem depender da tag de troco que o motor não emite. O cartão
@@ -793,8 +792,8 @@ public partial class Pagamento : UserControl
                 // Não existe "relatório de vendas" no caixa: mandar o operador olhar lá
                 // é mandá-lo procurar um botão que não está na barra. Quem resolve nota
                 // é o gerente, e é isso que o texto diz.
-                ? "A venda está gravada — o dinheiro entrou. A nota pode ter saído mesmo assim: chame o gerente para conferir antes de emitir de novo, senão sai nota em dobro."
-                : "A venda está gravada e conta no caixa. Falta só a nota — avise o gerente para emitir depois.") +
+                ? "A venda está gravada: o dinheiro entrou. A nota pode ter saído mesmo assim: chame o gerente para conferir antes de emitir de novo, senão sai nota em dobro."
+                : "A venda está gravada e conta no caixa. Falta só a nota: avise o gerente para emitir depois.") +
             (r.Erro is { Length: > 0 } ? $"\n\nMotivo: {r.Erro}" : ""),
             ("Tentar emitir de novo", () => _ = EmitirAsync()),
             ("Concluir sem nota", () => _ = ImprimirEConcluirAsync(r)));
@@ -815,7 +814,7 @@ public partial class Pagamento : UserControl
         // "nota pendente" é como a tela de venda chama esta nota quando ela aparece de
         // novo (no estorno). "Sem internet" também nomeava errado: a nota sai assim
         // sempre que a SEFAZ não responde, com ou sem internet na loja.
-        var titulo = r.Contingencia ? "Venda concluída — nota pendente"
+        var titulo = r.Contingencia ? "Venda concluída, nota pendente"
                    : r.Sucesso ? "Venda concluída"
                    : "Venda concluída sem nota";
         var detalhe = r.Contingencia
@@ -823,7 +822,7 @@ public partial class Pagamento : UserControl
             : r.Sucesso ? $"Nota {r.Numero} (série {r.Serie}) autorizada."
             : "Avise o gerente: falta emitir a nota desta venda.";
         if (erro is not null) detalhe += $"\n\nO cupom não saiu: {erro}";
-        if (semImpressao) detalhe += "\nImpressão automática desligada — toque em Imprimir cupom se o cliente quiser.";
+        if (semImpressao) detalhe += "\nImpressão automática desligada: toque em Imprimir cupom se o cliente quiser.";
 
         var acaoImpressao = erro is not null
             ? ("Reimprimir", (Action)(() => _ = ImprimirEConcluirAsync(r, true)))
@@ -872,7 +871,7 @@ public partial class Pagamento : UserControl
             Emissao: DateTime.Now,
             QrCode: r.QrCode,
             TpAmb: r.TpAmb,
-            Itens: _itens.Select(i => new ItemCupom(i.Codigo ?? "", i.Descricao, i.Qtd, i.Unidade, i.Preco, i.Total)).ToList(),
+            Itens: ItensDoCupom(descontoNoItem: VDescPorItem()),
             Total: _total,
             VNf: r.VNF,
             // vPag da NOTA por parte (valor aplicado) — não o que o cliente entregou.
@@ -884,6 +883,7 @@ public partial class Pagamento : UserControl
             Contingencia: r.Contingencia,
             Operador: _operador.Nome,
             Protocolo: r.Protocolo);
+            dados = dados with { PromoNome = PromoDaVenda, DescontoPromo = DescontoDaVenda, DescontoNoPreco = !VDescPorItem() && dados.VNf is not null };
         return Impressao.ImprimirAsync(dados, impressora);
     }
 
@@ -946,4 +946,36 @@ public partial class Pagamento : UserControl
 
     /// <summary>Byte do tema atual (alphas de véu e borda).</summary>
     private static byte RB(string chave) => (byte)Application.Current.Resources[chave];
+
+    // ── promoção de carrinho (03/09/2026) ────────────────────────────────────
+    /// <summary>nfce_vdesc_item = 1 quando o assinador já distribui vDesc por item.</summary>
+    private static bool VDescPorItem()
+    {
+        using var cx = Banco.Abrir();
+        return Vendas.Config(cx, "nfce_vdesc_item") == "1";
+    }
+
+    /// <summary>
+    /// Itens do cupom espelhando a nota: com desconto no item, unitário de tabela e
+    /// a linha de desconto/grátis; sem (transitório), o unitário líquido que foi ao XML.
+    /// </summary>
+    private List<ItemCupom> ItensDoCupom(bool descontoNoItem)
+    {
+        var fiscais = ItemFiscal.DaVenda(_itens, descontoNoItem);
+        var r = new List<ItemCupom>(_itens.Count);
+        for (var k = 0; k < _itens.Count; k++)
+        {
+            var i = _itens[k];
+            r.Add(descontoNoItem || i.Desconto.Centavos == 0
+                ? new ItemCupom(i.Codigo ?? "", i.Descricao, i.Qtd, i.Unidade, i.Preco, i.Total,
+                    i.Desconto, i.PromoNome, (int)(i.GratisMilesimos / 1000))
+                : new ItemCupom(i.Codigo ?? "", i.Descricao, i.Qtd, i.Unidade,
+                    Dinheiro.DeReais(fiscais[k].VUnit), i.Total));
+        }
+        return r;
+    }
+
+    private string? PromoDaVenda => _itens.FirstOrDefault(i => i.PromoNome is { Length: > 0 })?.PromoNome;
+    private Dinheiro DescontoDaVenda => new(_itens.Sum(i => i.Desconto.Centavos));
+
 }

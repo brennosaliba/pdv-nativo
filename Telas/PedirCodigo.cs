@@ -105,8 +105,8 @@ public static class PedirCodigo
             // depois aperta "não recebi" sem precisar.
             Text = pedido.Reaproveitado
                 ? (quem.Length > 0
-                    ? $"O código que JÁ foi enviado no WhatsApp para {quem} continua valendo — não saiu mensagem nova. Digite o código que a pessoa passar."
-                    : "O código enviado antes no WhatsApp da gerência continua valendo — não saiu mensagem nova.")
+                    ? $"O código que JÁ foi enviado no WhatsApp para {quem} continua valendo: não saiu mensagem nova. Digite o código que a pessoa passar."
+                    : "O código enviado antes no WhatsApp da gerência continua valendo: não saiu mensagem nova.")
                 : quem.Length > 0
                 ? $"Um código de 6 dígitos foi enviado no WhatsApp para {quem}. Digite o código que a pessoa passar."
                 : "Digite o código de 6 dígitos enviado no WhatsApp da gerência.",
@@ -175,7 +175,7 @@ public static class PedirCodigo
         linha.Children.Add(cancelar); linha.Children.Add(confirmar);
         painel.Children.Add(linha);
 
-        var outro = PedirValor.Botao("Não recebi — enviar de novo", false);
+        var outro = PedirValor.Botao("Não recebi · enviar de novo", false);
         outro.Margin = new Thickness(0, 8, 0, 0);
         outro.FontSize = 15;
         outro.Click += (_, _) => { resposta = new RespostaCodigo(AcaoCodigo.NovoCodigo, null); janela.Close(); };
@@ -200,7 +200,7 @@ public static class PedirCodigo
             }
             else
             {
-                relogio.Text = "O código expirou — toque em \"Não recebi\" para pedir outro.";
+                relogio.Text = "O código expirou. Toque em \"Não recebi\" para pedir outro.";
                 relogio.Foreground = (Brush)Application.Current.Resources["Erro"];
             }
         }

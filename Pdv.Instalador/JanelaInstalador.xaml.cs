@@ -50,7 +50,7 @@ public partial class JanelaInstalador : Window
 
         _paygoExe = AcharPayGoAoLado();
         if (!noPacote && _paygoExe is null)
-            TxtItemPayGo.Text = "2.  (O PayGo, que fala com a maquininha, não veio junto — dá para instalar depois.)";
+            TxtItemPayGo.Text = "2.  (O PayGo, que fala com a maquininha, não veio junto. Dá para instalar depois.)";
 
         var versao = aoLado is not null && File.Exists(Path.Combine(aoLado, "Pdv.exe"))
             ? FileVersionInfo.GetVersionInfo(Path.Combine(aoLado, "Pdv.exe")).FileVersion
@@ -140,7 +140,7 @@ public partial class JanelaInstalador : Window
         {
             avisoPayGo = PayGo.Instalar(_paygoExe!)
                 ?? "O assistente do PayGo abriu numa janela separada. Siga até o fim dele. "
-                 + "Se você fechar sem terminar, o caixa continua funcionando — só o cartão fica para depois.";
+                 + "Se você fechar sem terminar, o caixa continua funcionando: só o cartão fica para depois.";
         }
         else if (acao == PayGo.Acao.JaInstalado)
         {

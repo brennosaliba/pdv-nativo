@@ -5,10 +5,19 @@ using Microsoft.Data.Sqlite;
 namespace Pdv.Nucleo;
 
 /// <summary>Uma linha da comanda, congelada no momento da venda.</summary>
+/// <summary>
+/// Uma linha da venda. Preco é o de TABELA; Desconto é o da promoção de carrinho
+/// (03/09/2026) e Total = Preco × Qtd − Desconto. Os 12 posicionais antigos
+/// continuam valendo (desconto zero).
+/// </summary>
 public sealed record LinhaVenda(
     string? ProdutoId, string? Codigo, string Descricao,
     Quantidade Qtd, Dinheiro Preco, Dinheiro Total,
-    string Unidade, string? Ncm, string? Cest, string? Csosn, string? Cfop, int Origem);
+    string Unidade, string? Ncm, string? Cest, string? Csosn, string? Cfop, int Origem,
+    Dinheiro Desconto = default, string? PromoId = null, string? PromoNome = null, long GratisMilesimos = 0)
+{
+    public Dinheiro Bruto => Preco.VezesQtd(Qtd.Milesimos);
+}
 
 /// <summary>
 /// Um pagamento da venda.
@@ -49,7 +58,29 @@ public static class Vendas
         if (itens.Count == 0) throw new InvalidOperationException("Não dá para finalizar uma comanda vazia.");
         if (pagamentos.Count == 0) throw new InvalidOperationException("Informe a forma de pagamento.");
 
+        // ── promoção de carrinho: invariantes por linha e por venda ──────────
+        string? promoId = null, promoNome = null;
+        foreach (var i in itens)
+        {
+            var bruto = i.Bruto.Centavos;
+            if (i.Desconto.Centavos < 0 || i.Desconto.Centavos > bruto)
+                throw new InvalidOperationException($"Desconto inválido em {i.Descricao}: {i.Desconto.Formatado()} num item de {i.Bruto.Formatado()}.");
+            if (i.Total.Centavos != bruto - i.Desconto.Centavos)
+                throw new InvalidOperationException($"O total de {i.Descricao} não fecha: {i.Bruto.Formatado()} menos {i.Desconto.Formatado()} não dá {i.Total.Formatado()}.");
+            if (i.PromoId is { Length: > 0 })
+            {
+                if (promoId is not null && promoId != i.PromoId)
+                    throw new InvalidOperationException("Duas promoções na mesma venda. Só uma vale por pedido.");
+                promoId = i.PromoId; promoNome ??= i.PromoNome;
+            }
+        }
+        var subtotal = new Dinheiro(itens.Sum(i => i.Bruto.Centavos));
+        var desconto = new Dinheiro(itens.Sum(i => i.Desconto.Centavos));
         var total = new Dinheiro(itens.Sum(i => i.Total.Centavos));
+        if (total.Centavos <= 0)
+            throw new InvalidOperationException("A venda ficou sem valor a cobrar. Brinde sozinho não é venda.");
+        if (total.Centavos <= 0)
+            throw new InvalidOperationException("A venda ficou sem valor a cobrar. Brinde sozinho não é venda.");
         var liquido = new Dinheiro(pagamentos.Sum(p => p.Valor.Centavos - p.Troco.Centavos));
         if (liquido.Centavos != total.Centavos)
             throw new InvalidOperationException(
@@ -85,26 +116,30 @@ public static class Vendas
         cx.Execute("""
             INSERT INTO venda (id, client_key, sessao_id, business_date, numero_local, operador_id,
                                subtotal_cent, desconto_cent, total_cent, documento, status,
-                               fiscal_status, criada_em, finalizada_em, homologacao)
-            VALUES (@Id,@Key,@Ses,@Bd,@Num,@Op,@Tot,0,@Tot,@Doc,'finalizada','pendente',@Em,@Em,@Homolog)
+                               fiscal_status, criada_em, finalizada_em, homologacao, promo_id, promo_nome)
+            VALUES (@Id,@Key,@Ses,@Bd,@Num,@Op,@Sub,@Desc,@Tot,@Doc,'finalizada','pendente',@Em,@Em,@Homolog,@PromoId,@PromoNome)
             """,
             new { Id = vendaId, Key = clientKey, Ses = sessao.Id, Bd = sessao.BusinessDate,
-                  Num = numero, Op = idAssina, Tot = total.Centavos, Doc = documento, Em = agora,
-                  Homolog = homologacao ? 1 : 0 }, tx);
+                  Num = numero, Op = idAssina, Sub = subtotal.Centavos, Desc = desconto.Centavos,
+                  Tot = total.Centavos, Doc = documento, Em = agora,
+                  Homolog = homologacao ? 1 : 0, PromoId = promoId, PromoNome = promoNome }, tx);
 
         var seq = 1;
         foreach (var i in itens)
             cx.Execute("""
                 INSERT INTO venda_item (id, venda_id, seq, produto_id, codigo, descricao,
                                         qtd_milesimo, preco_cent, desconto_cent, total_cent,
-                                        unidade, ncm, cest, csosn, cfop, origem, cancelado)
-                VALUES (@Id,@V,@Seq,@Prod,@Cod,@Desc,@Qtd,@Preco,0,@Tot,@Un,@Ncm,@Cest,@Csosn,@Cfop,@Orig,0)
+                                        unidade, ncm, cest, csosn, cfop, origem, cancelado,
+                                        promo_id, gratis_milesimo)
+                VALUES (@Id,@V,@Seq,@Prod,@Cod,@Desc,@Qtd,@Preco,@DescCent,@Tot,@Un,@Ncm,@Cest,@Csosn,@Cfop,@Orig,0,
+                        @PromoId,@Gratis)
                 """,
                 new { Id = Guid.NewGuid().ToString(), V = vendaId, Seq = seq++,
                       Prod = i.ProdutoId, Cod = i.Codigo, Desc = i.Descricao,
-                      Qtd = i.Qtd.Milesimos, Preco = i.Preco.Centavos, Tot = i.Total.Centavos,
+                      Qtd = i.Qtd.Milesimos, Preco = i.Preco.Centavos, DescCent = i.Desconto.Centavos,
+                      Tot = i.Total.Centavos,
                       Un = i.Unidade, Ncm = i.Ncm, Cest = i.Cest, Csosn = i.Csosn,
-                      Cfop = i.Cfop, Orig = i.Origem }, tx);
+                      Cfop = i.Cfop, Orig = i.Origem, PromoId = i.PromoId, Gratis = i.GratisMilesimos }, tx);
 
         foreach (var p in pagamentos)
             cx.Execute("""
@@ -117,7 +152,13 @@ public static class Vendas
                       Aut = p.Aut, Cnpj = p.CnpjCredenciadora, Band = p.Bandeira, Nsu = p.Nsu }, tx);
 
         Caixa.Auditar(cx, tx, "venda_finalizada", operador.Id, null,
-            $"venda={numero} total={total.Formatado()} formas={string.Join('+', pagamentos.Select(p => p.Forma))}");
+            $"venda={numero} total={total.Formatado()} formas={string.Join('+', pagamentos.Select(p => p.Forma))}"
+            + (desconto.Centavos > 0 ? $" desconto={desconto.Formatado()} promo={promoNome}" : ""));
+        if (desconto.Centavos > 0)
+            Caixa.Auditar(cx, tx, "promo_aplicada", operador.Id, null,
+                $"venda={numero} promo={promoId} ({promoNome}) desconto={desconto.Formatado()} " +
+                string.Join(" ", itens.Where(i => i.Desconto.Centavos > 0)
+                    .Select(i => $"[{i.Descricao}: -{i.Desconto.Formatado()}{(i.GratisMilesimos > 0 ? $" {i.GratisMilesimos / 1000} grátis" : "")}]")));
 
         // VENDA DE TESTE NÃO ENTRA NA FILA. Não enfileirar é diferente de filtrar na
         // drenagem: o que está na fila sobe no primeiro reenvio em que o filtro falhar,
@@ -131,7 +172,7 @@ public static class Vendas
         // na venda que não subiu.
         if (homologacao)
             Caixa.Auditar(cx, tx, "venda_homologacao", operador.Id, null,
-                $"venda={numero} total={total.Formatado()} ficou SÓ no caixa — modo de homologação ligado");
+                $"venda={numero} total={total.Formatado()} ficou SÓ no caixa (modo de homologação ligado)");
         else Caixa.Enfileirar(cx, tx, "venda", vendaId, clientKey, new
         {
             p_itens = itens.Select(i => new
@@ -144,6 +185,11 @@ public static class Vendas
                 unidade = i.Unidade,
                 qtd = i.Qtd.Milesimos / 1000m,
                 valor_unitario = i.Preco.Reais,
+                // 03/09: desconto por item (reais) e a promoção que o deu. A RPC
+                // pdv_registrar_venda lê `desconto` por item; quem não lê, ignora.
+                desconto = i.Desconto.Reais,
+                promocao_id = i.PromoId,
+                promocao_nome = i.PromoNome,
             }).ToArray(),
             p_pagamentos = pagamentos.Select(p => new { metodo = p.Forma, valor = (p.Valor.Centavos - p.Troco.Centavos) / 100m }).ToArray(),
             p_store = loja,
@@ -162,7 +208,9 @@ public static class Vendas
             p_documento = documento,
             p_session_id = (string?)null,
             p_exigir_caixa = false,
-            p_observacao = (string?)null,
+            // p_desconto fica em 0: o desconto de promoção vai POR ITEM. Mandar
+            // também no cabeçalho dobraria o desconto na nuvem.
+            p_observacao = promoNome is null ? (string?)null : "Promoção: " + promoNome,
             p_client_key = clientKey,
             p_business_date = sessao.BusinessDate,
         });
@@ -278,7 +326,7 @@ public static class Vendas
             """, new { Por = quemCancelou, Mot = motivo, Id = vendaId }, tx);
 
         Caixa.Auditar(cx, tx, "venda_cancelada", quemCancelou, autorizadoPor,
-            $"venda={v.numero_local} total={new Dinheiro((long)v.total_cent).Formatado()} — {motivo}");
+            $"venda={v.numero_local} total={new Dinheiro((long)v.total_cent).Formatado()} · {motivo}");
 
         // Cancelamento de venda que a nuvem nunca recebeu não tem o que cancelar lá.
         if ((long)v.homologacao != 1)

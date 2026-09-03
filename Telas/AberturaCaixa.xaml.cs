@@ -251,7 +251,7 @@ public partial class AberturaCaixa : UserControl
                 // O que ele garante é o registro dos dois valores; é só isso que a tela diz.
                 if (!Dialogo.Confirmar(Window.GetWindow(this)!, "Conferência do fundo de troco",
                         $"O último fechamento deixou {exp.Formatado()} na gaveta e a contagem " +
-                        $"de agora deu {new Dinheiro(_centavos).Formatado()} — {texto}.\n\n" +
+                        $"de agora deu {new Dinheiro(_centavos).Formatado()}: {texto}.\n\n" +
                         "Pode ser troco reposto, sangria de ontem ou erro na contagem. " +
                         "Vale conferir uma vez; os dois valores ficam anotados de qualquer jeito.",
                         "Registrar e abrir", "Recontar"))

@@ -143,7 +143,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// <summary>Trilha (sem chave!): intenção criada, status finais, cancelamentos, órfãs.</summary>
     public Action<string>? Auditar { get; init; }
 
-    public const string MsgTefNaoResponde = "TEF não responde — o PayGo Windows não recebeu a cobrança. Confira se ele está aberto e com o TEF verde.";
+    public const string MsgTefNaoResponde = "TEF não responde: o PayGo Windows não recebeu a cobrança. Confira se ele está aberto e com o TEF verde.";
 
     private readonly OpcoesControlPay _op;
     private readonly HttpClient _http;
@@ -251,7 +251,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             try { resp = await ChamarAsync(HttpMethod.Post, "Venda/Vender/", body, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception ex)
             {
-                Auditar?.Invoke("controlpay: Venda/Vender falhou — " + Sanitizar(ex.Message));
+                Auditar?.Invoke("controlpay: Venda/Vender falhou (" + Sanitizar(ex.Message) + ")");
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "ControlPay indisponível: " + Sanitizar(ex.Message));
             }
 
@@ -288,17 +288,17 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             {
                 // Passou do teto sem desfecho. A cobrança pode estar viva no pinpad: órfã +
                 // aviso, e o operador decide (conferir no PayGo / estornar / registrar).
-                var msg = $"a cobrança passou de {teto / 1000} s sem resposta — confira na janela do PayGo. " +
+                var msg = $"a cobrança passou de {teto / 1000} s sem resposta: confira na janela do PayGo. " +
                           "Se o cliente concluiu, NÃO cobre de novo: estorne em TEF → Estornar.";
                 Guardar(new TransacaoPayGo(chargeId, ident, tipo, valor.Centavos, parc, "orfa", null, msg));
-                Auditar?.Invoke($"controlpay: intenção {ident} sem desfecho em {teto / 1000} s — devolvida ao operador (órfã)");
+                Auditar?.Invoke($"controlpay: intenção {ident} sem desfecho em {teto / 1000} s, devolvida ao operador (órfã)");
                 return new DesfechoTef(SituacaoTef.Timeout, ident, chargeId, null, msg, true) { Codigo = CodigoTef.Timeout };
             }
             if (fim.Desistencia is not null)
             {
                 Guardar(new TransacaoPayGo(chargeId, ident, tipo, valor.Centavos, parc, "orfa", null, "operador cancelou e a intenção continua em pagamento no PayGo"));
                 return new DesfechoTef(SituacaoTef.Cancelado, ident, chargeId, null,
-                    "cobrança cancelada pelo operador — confira na janela do PayGo se o cliente concluiu", true) { Codigo = CodigoTef.Cancelado };
+                    "cobrança cancelada pelo operador: confira na janela do PayGo se o cliente concluiu", true) { Codigo = CodigoTef.Cancelado };
             }
             var (st, stNome, detalhe, _) = fim;
 
@@ -310,9 +310,9 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 {
                     // Aprovada no ControlPay e o caixa não conseguiu gravar: não há NCN aqui. Fica
                     // registrada como órfã no que der e a tela avisa — o fechamento acusa o TEF sem venda.
-                    Auditar?.Invoke($"controlpay: intenção {ident} APROVADA mas o caixa não gravou — conferir/estornar");
+                    Auditar?.Invoke($"controlpay: intenção {ident} APROVADA mas o caixa não gravou (conferir/estornar)");
                     return new DesfechoTef(SituacaoTef.Erro, ident, chargeId, Cartao(r),
-                        "o cartão foi APROVADO mas o caixa não conseguiu gravar a transação — NÃO cobre de novo; estorne pelo menu TEF ou registre como POS", true)
+                        "o cartão foi APROVADO mas o caixa não conseguiu gravar a transação. NÃO cobre de novo; estorne pelo menu TEF ou registre como POS", true)
                     { Codigo = CodigoTef.Plataforma };
                 }
                 // 'pago' ANTES de imprimir e a impressão FORA do caminho da venda: no ControlPay
@@ -388,7 +388,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             catch (Exception ex)
             {
                 // Rede oscilou: a intenção continua viva no ControlPay; insistir. Só audita de vez em quando.
-                if (++falhasSeguidas % 10 == 1) Auditar?.Invoke($"controlpay: consulta da intenção {ident} falhou ({Sanitizar(ex.Message)}) — tentando de novo");
+                if (++falhasSeguidas % 10 == 1) Auditar?.Invoke($"controlpay: consulta da intenção {ident} falhou ({Sanitizar(ex.Message)}), tentando de novo");
             }
 
             if (desdeCancelamento is null && ct.IsCancellationRequested)
@@ -413,7 +413,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                         andamento?.Report(new AndamentoTef(FaseTef.Recado, chargeId, ident,
                             (desdeCancelamento is null
                                 ? instrucao
-                                : "Cancelamento pedido — aperte Esc na janela do PayGo")
+                                : "Cancelamento pedido: aperte Esc na janela do PayGo")
                             + $" · {seg / 60}:{seg % 60:00} para o PDV desistir"));
                     }
                 }
@@ -433,7 +433,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
         var ident = original.Identificacao;
         var chargeId = "cpay-cnc-" + NovaReferencia();
         if (string.IsNullOrWhiteSpace(ident))
-            return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "transação original sem id de intenção — cancele pelo menu do PayGo");
+            return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "transação original sem id de intenção: cancele pelo menu do PayGo");
 
         await _um.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -450,7 +450,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             try { resp = await ChamarAsync(HttpMethod.Post, "Venda/CancelarVenda/", body, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception ex)
             {
-                Auditar?.Invoke($"controlpay: CancelarVenda {ident} falhou — " + Sanitizar(ex.Message));
+                Auditar?.Invoke($"controlpay: CancelarVenda {ident} falhou (" + Sanitizar(ex.Message) + ")");
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "ControlPay recusou o pedido de cancelamento: " + Sanitizar(ex.Message));
             }
             int st; string stNome;
@@ -469,7 +469,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             while (st != StatusIntencao.Cancelado)
             {
                 if (relogio.ElapsedMilliseconds > TempoMaxOperacaoMs)
-                    return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "o cancelamento não concluiu no PayGo — confira na janela dele e no menu TEF", true);
+                    return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "o cancelamento não concluiu no PayGo: confira na janela dele e no menu TEF", true);
                 await Task.Delay(IntervaloPollMs).ConfigureAwait(false);
                 try
                 {
@@ -497,7 +497,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             if (st != StatusIntencao.Cancelado)
             {
                 var msg = string.IsNullOrWhiteSpace(msgNegado) ? "cancelamento não autorizado" : msgNegado!;
-                Auditar?.Invoke($"controlpay: cancelamento da intenção {ident} NEGADO — {msg}");
+                Auditar?.Invoke($"controlpay: cancelamento da intenção {ident} NEGADO ({msg})");
                 return new DesfechoTef(msg.ToUpperInvariant().Contains("CANCELAD") ? SituacaoTef.Cancelado : SituacaoTef.Recusado,
                     ident, chargeId, null, msg, false) { Codigo = CodigoTef.Recusado };
             }
@@ -561,7 +561,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 GuardarSeguro(tx);
                 _ = ImprimirSeguroAsync(tx);
             }
-            Auditar?.Invoke($"controlpay: operação administrativa {peId} concluída — {msg}");
+            Auditar?.Invoke($"controlpay: operação administrativa {peId} concluída ({msg})");
             return new DesfechoTef(SituacaoTef.Pago, peId.ToString(CultureInfo.InvariantCulture), chargeId, null, msg, false) { Codigo = CodigoTef.Pago, PaymentStatus = "adm" };
         }
         finally { _um.Release(); }
@@ -608,16 +608,16 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                         // arrancar uma venda viva das mãos dele.
                         if (tx.Situacao == "orfa") continue;
                         if (criadaEm is null || !criadaEm.TryGetValue(tx.ChargeId, out var em) || em >= boot) continue;
-                        GuardarSeguro(tx with { Situacao = "orfa", Motivo = "religamento: intenção ainda em pagamento no ControlPay — confira no PayGo e estorne se aprovou" });
-                        Auditar?.Invoke($"controlpay: religamento — intenção {tx.Identificacao} continua '{nome}'; devolvida ao operador (órfã)");
+                        GuardarSeguro(tx with { Situacao = "orfa", Motivo = "religamento: intenção ainda em pagamento no ControlPay. Confira no PayGo e estorne se aprovou" });
+                        Auditar?.Invoke($"controlpay: religamento · intenção {tx.Identificacao} continua '{nome}'; devolvida ao operador (órfã)");
                         n++;
                         continue;
                     }
                     if (st == StatusIntencao.Creditado)
                     {
                         var r = await RespostaDaIntencaoAsync(tx.Identificacao, tx.ValorCent, tx.Tipo, 5).ConfigureAwait(false);
-                        GuardarSeguro(tx with { Situacao = "pago", Resposta = r, Motivo = "APROVADA SEM VENDA (religamento) — estornar pelo menu TEF" });
-                        Auditar?.Invoke($"controlpay: religamento — intenção {tx.Identificacao} estava APROVADA sem venda; marcada para estorno");
+                        GuardarSeguro(tx with { Situacao = "pago", Resposta = r, Motivo = "APROVADA SEM VENDA (religamento): estornar pelo menu TEF" });
+                        Auditar?.Invoke($"controlpay: religamento · intenção {tx.Identificacao} estava APROVADA sem venda; marcada para estorno");
                     }
                     else
                     {
@@ -783,7 +783,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             {
                 string msg;
                 try { using var d = JsonDocument.Parse(texto); msg = Mensagem(d); } catch { msg = texto.Length > 200 ? texto[..200] : texto; }
-                if (resp.StatusCode == HttpStatusCode.Unauthorized) msg = "chave de integração recusada (401) — " + msg;
+                if (resp.StatusCode == HttpStatusCode.Unauthorized) msg = "chave de integração recusada (401): " + msg;
                 throw new HttpRequestException($"HTTP {(int)resp.StatusCode} em {Rota(caminhoEQuery)}: {Sanitizar(msg)}", null, resp.StatusCode);
             }
             try { return JsonDocument.Parse(texto); }
@@ -899,7 +899,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     {
         if (ImprimirComprovante is null || t.Resposta is null || !t.Resposta.TemVias) return true;
         try { return await ImprimirComprovante(t).ConfigureAwait(false); }
-        catch (Exception ex) { Auditar?.Invoke("controlpay: impressão do comprovante falhou — " + Sanitizar(ex.Message)); return false; }
+        catch (Exception ex) { Auditar?.Invoke("controlpay: impressão do comprovante falhou (" + Sanitizar(ex.Message) + ")"); return false; }
     }
 
     private static DesfechoTef Falha(SituacaoTef s, string chargeId, string codigo, string motivo, bool posOcupado = false)

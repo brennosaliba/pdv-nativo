@@ -270,7 +270,7 @@ public sealed class ClienteTef : IProvedorTef
     public const int TempoTotalMs = 180_000;
 
     public const string SufixoPosOcupado =
-        " · ⚠️ a cobrança pode ter ficado na maquininha — cancele por lá antes de tentar de novo";
+        " · ⚠️ a cobrança pode ter ficado na maquininha: cancele por lá antes de tentar de novo";
 
     private const int TempoCriarMs = 25_000;      // armar o POS pode demorar
     private const int TempoStatusMs = 10_000;     // consulta curta: ela roda a cada 2 s
@@ -300,10 +300,10 @@ public sealed class ClienteTef : IProvedorTef
     /// <summary>Quantas vezes perguntar por `charge_id` quando a criação não devolveu resposta.</summary>
     private const int TentativasResgate = 2;
 
-    private const string MsgSessao = "sessão expirada — saia e entre no sistema novamente";
+    private const string MsgSessao = "sessão expirada: saia e entre no sistema novamente";
     private const string MsgSemPermissao = "esta conta não tem permissão para operar o TEF";
     private const string MsgSemRede = "sem conexão com o TEF";
-    private const string MsgTimeout = "tempo esgotado — o cliente não concluiu na maquininha";
+    private const string MsgTimeout = "tempo esgotado: o cliente não concluiu na maquininha";
     private const string MsgCancelado = "cobrança cancelada pelo operador";
     private const string MsgRecusado = "pagamento não aprovado";
 
@@ -518,7 +518,7 @@ public sealed class ClienteTef : IProvedorTef
                 // não é "três 401 seguidos", é intermitência. Sem este zero, a cobrança abortava com
                 // "sessão expirada" enquanto a maquininha ainda estava com o cliente.
                 seguidas401 = 0;
-                andamento?.Report(Recado(chargeId, pid, "Sem resposta do TEF — tentando de novo…"));
+                andamento?.Report(Recado(chargeId, pid, "Sem resposta do TEF, tentando de novo…"));
                 continue;
             }
 
@@ -546,7 +546,7 @@ public sealed class ClienteTef : IProvedorTef
                     seguidas401 = 0;   // 500/404 no meio de 401s quebra a sequência — ver acima
                 }
 
-                andamento?.Report(Recado(chargeId, pid, "Sem resposta do TEF — tentando de novo…"));
+                andamento?.Report(Recado(chargeId, pid, "Sem resposta do TEF, tentando de novo…"));
                 continue;
             }
 
@@ -588,7 +588,7 @@ public sealed class ClienteTef : IProvedorTef
     private async Task<DesfechoTef> ResgatarCriacaoAsync(TipoTef tipo, Dinheiro valor, string chargeId,
         IProgress<AndamentoTef>? andamento, CancellationToken ct)
     {
-        andamento?.Report(Recado(chargeId, null, "Sem resposta do TEF — conferindo se a cobrança foi armada…"));
+        andamento?.Report(Recado(chargeId, null, "Sem resposta do TEF, conferindo se a cobrança foi armada…"));
 
         for (var tentativa = 0; tentativa < TentativasResgate; tentativa++)
         {
@@ -874,7 +874,7 @@ public sealed class ClienteTef : IProvedorTef
         decimal cobrado, Dinheiro esperado, string? paymentStatus)
         => new(SituacaoTef.Erro, pid, chargeId, cartao,
             $"a maquininha concluiu {Dinheiro.DeReais(cobrado).Formatado()} e a venda é de " +
-            $"{esperado.Formatado()} — NÃO emita a nota: confira e estorne na maquininha" +
+            $"{esperado.Formatado()}. NÃO emita a nota: confira e estorne na maquininha" +
             (string.IsNullOrWhiteSpace(pid) ? "" : $" (id {pid})"),
             false)
         { Codigo = CodigoTef.ValorDivergente, PaymentStatus = paymentStatus };

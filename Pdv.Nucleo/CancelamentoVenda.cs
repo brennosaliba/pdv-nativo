@@ -93,7 +93,7 @@ public static class CancelamentoVenda
     /// estorno é na maquininha, na mão dele.
     /// </summary>
     public const string AvisoDoDinheiro =
-        "NENHUM dinheiro volta sozinho neste cancelamento — o PDV só registra que ele foi feito.";
+        "NENHUM dinheiro volta sozinho neste cancelamento: o PDV só registra que ele foi feito.";
 
     /// <summary>Como o cliente chama a forma de pagamento (é o que está no comprovante dele).</summary>
     public static string RotuloDaForma(string forma) => (forma ?? "").Trim().ToLowerInvariant() switch
@@ -141,10 +141,10 @@ public static class CancelamentoVenda
             if (!EstornoEletronico(g.Forma))
                 linhas.Add($"{quanto} em {rotulo}: devolva ao cliente na mão, da gaveta.");
             else if (estornoPeloPdv)
-                linhas.Add($"{quanto} em {rotulo}: a maquininha deste caixa estorna sozinha — volte e use " +
+                linhas.Add($"{quanto} em {rotulo}: a maquininha deste caixa estorna sozinha. Volte e use " +
                            "\"Estornar o cartão/PIX\", que devolve o dinheiro e cancela a venda no mesmo ato.");
             else
-                linhas.Add($"{quanto} em {rotulo}: ESTORNE NA MAQUININHA, na mão. O PDV não devolve isso — " +
+                linhas.Add($"{quanto} em {rotulo}: ESTORNE NA MAQUININHA, na mão. O PDV não devolve isso: " +
                            "aqui ele só cancela a nota e a venda.");
         }
         return linhas;
@@ -186,15 +186,15 @@ public static class CancelamentoVenda
         var impedimento = s switch
         {
             SituacaoDaNota.SemProtocolo =>
-                "A nota desta venda saiu sem aprovação da SEFAZ (contingência) e não tem protocolo — " +
+                "A nota desta venda saiu sem aprovação da SEFAZ (contingência) e não tem protocolo: " +
                 "o cancelamento exige um. A nota precisa ser resolvida primeiro: chame o gerente.",
             SituacaoDaNota.SemDados =>
-                "Esta venda tem nota aprovada, mas os dados dela não estão neste caixa — o cancelamento " +
+                "Esta venda tem nota aprovada, mas os dados dela não estão neste caixa: o cancelamento " +
                 "da nota não pode sair daqui. Chame o gerente para cancelar pelo sistema.",
             SituacaoDaNota.SemResposta =>
                 "Não dá para saber se esta venda tem nota: o emissor não respondeu na hora da emissão, " +
                 "e a nota PODE ter sido autorizada mesmo assim. Cancelar a venda agora deixaria uma nota " +
-                "viva sem venda. Chame o gerente para conferir na SEFAZ antes — e depressa, porque o " +
+                "viva sem venda. Chame o gerente para conferir na SEFAZ antes, e depressa, porque o " +
                 "prazo de cancelamento da nota corre a partir da autorização dela.",
             _ => null,
         };
@@ -204,9 +204,9 @@ public static class CancelamentoVenda
             SituacaoDaNota.SemNota =>
                 "Esta venda não gerou nota fiscal: só a venda será cancelada.",
             SituacaoDaNota.SemResposta =>
-                "A emissão desta venda ficou sem resposta — não dá para afirmar que ela não tem nota.",
+                "A emissão desta venda ficou sem resposta: não dá para afirmar que ela não tem nota.",
             SituacaoDaNota.JaCancelada =>
-                "A nota desta venda JÁ está cancelada na SEFAZ — falta cancelar a venda.",
+                "A nota desta venda JÁ está cancelada na SEFAZ: falta cancelar a venda.",
             SituacaoDaNota.DentroDoPrazo when restante is null =>
                 "A nota vai ser cancelada na SEFAZ (evento 110111).",
             SituacaoDaNota.DentroDoPrazo =>
@@ -214,7 +214,7 @@ public static class CancelamentoVenda
                 "do prazo de 30 minutos.",
             SituacaoDaNota.ForaDoPrazo =>
                 $"PRAZO VENCIDO: a nota foi autorizada há {Duracao(agora - notaAutorizadaEm!.Value)} e a SEFAZ " +
-                "só aceita cancelamento de NFC-e até 30 minutos. Ela deve recusar — e nesse caso o caminho " +
+                "só aceita cancelamento de NFC-e até 30 minutos. Ela deve recusar, e nesse caso o caminho " +
                 "é uma NOTA DE DEVOLUÇÃO com o contador, feita fora do PDV.",
             _ => impedimento!,
         };

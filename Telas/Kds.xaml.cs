@@ -138,7 +138,7 @@ public partial class Kds : UserControl
         // Vale AGORA: quem imprime (Servicos.DestinoDaComanda) relê o config a cada
         // comanda. Sem reiniciar o caixa e sem fechar a tela.
         var agora = PintarDestinoComanda();
-        TxtStatus.Text = $"Comanda do delivery agora sai em {agora} — toque no 🖨 de um "
+        TxtStatus.Text = $"Comanda do delivery agora sai em {agora}. Toque no 🖨 de um "
                        + "pedido para conferir no papel.";
     }
 
@@ -169,7 +169,7 @@ public partial class Kds : UserControl
         {
             // O que muda pra quem está na cozinha: pedido de delivery para de
             // entrar. O quadro em si continua igual — por isso não é "erro".
-            TxtStatus.Text = "Sem internet — pedido do delivery não entra. " +
+            TxtStatus.Text = "Sem internet: pedido do delivery não entra. " +
                              $"Confira o wi-fi. {DateTime.Now:HH:mm:ss}";
         }
         finally
@@ -195,7 +195,7 @@ public partial class Kds : UserControl
     {
         var falha = await Servicos.ImprimirComandasPendentesAsync();
         if (falha is null) return;
-        TxtStatus.Text = falha + " — confira papel e impressora e toque no 🖨 do pedido.";
+        TxtStatus.Text = falha + ". Confira papel e impressora e toque no 🖨 do pedido.";
         Alerta.PedidoNovo();   // chama atencao: papel nao saiu
     }
 
@@ -405,7 +405,7 @@ public partial class Kds : UserControl
                 // entre parênteses, pra quem for atrás da impressora.
                 TxtStatus.Text = erro is null
                     ? $"Comanda do #{t.Numero} saiu na impressora"
-                    : $"A comanda do #{t.Numero} não saiu — confira papel e impressora " +
+                    : $"A comanda do #{t.Numero} não saiu. Confira papel e impressora " +
                       $"e toque no 🖨 de novo. ({erro})";
             };
             dir.Children.Add(imprime);

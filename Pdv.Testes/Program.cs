@@ -1399,6 +1399,75 @@ Check("voucher tem codigo estavel", TipoTef.Voucher.Codigo() == "voucher");
 Check("voucher e contado no fechamento SEM TEF", Caixa.FormasContadas(cxT).Contains("voucher"));
 Check("voucher vira tPag 11 (vale-refeicao) na NFC-e", Fiscal.TPagDaForma("voucher") == "11");
 
+// ── 03/09/2026 (2): promoção de carrinho na gravação e na nota ────────────
+{
+    var arquivoF = Path.Combine(Path.GetTempPath(), $"pdv-teste-promo-{Guid.NewGuid():N}.db");
+    Banco.Migrar(arquivoF);
+    using var cxF = Banco.Abrir(arquivoF);
+    var opF = new Operador("t-promo", "Promo", "operador");
+    Operadores.Salvar(cxF, opF.Id, opF.Nome, "7777", "operador");
+    var sF = Caixa.Abrir(cxF, opF, Dinheiro.DeReais(100));
+    LinhaVenda Linha(string id, string nome, long preco, long qtdMil, long desconto = 0, string? promo = null, long gratis = 0)
+        => new(id, id, nome, new Quantidade(qtdMil), new Dinheiro(preco),
+               new Dinheiro(new Dinheiro(preco).VezesQtd(qtdMil).Centavos - desconto),
+               "UN", "19053100", null, "102", null, 0,
+               new Dinheiro(desconto), promo, promo is null ? null : "compre e ganhe", gratis);
+    var pagos2190 = new[] { new PagamentoVenda("dinheiro", Dinheiro.DeReais(21.90m), Dinheiro.Zero) };
+    var linhasBrinde = new[] { Linha("A", "DONUT NUTELLA", 2190, 1000), Linha("B", "DONUT NINHO", 2190, 1000, 2190, "cg", 1000) };
+    var vg = Vendas.Finalizar(cxF, sF, opF, linhasBrinde, pagos2190, null, "Loja Teste", null);
+    var v = cxF.QueryFirst("SELECT subtotal_cent, desconto_cent, total_cent, promo_id, promo_nome FROM venda WHERE id = @i", new { i = vg.Id });
+    Check("venda com brinde: subtotal e o BRUTO (43,80)", (long)v.subtotal_cent == 4380);
+    Check("venda com brinde: desconto 21,90 e total 21,90", (long)v.desconto_cent == 2190 && (long)v.total_cent == 2190);
+    Check("venda com brinde: promo_id e nome gravados", (string)v.promo_id == "cg" && (string)v.promo_nome == "compre e ganhe");
+    var itB = cxF.QueryFirst("SELECT desconto_cent, total_cent, promo_id, gratis_milesimo FROM venda_item WHERE venda_id = @i AND produto_id = 'B'", new { i = vg.Id });
+    Check("item brinde: desconto 21,90, total 0, promo, 1 gratis",
+        (long)itB.desconto_cent == 2190 && (long)itB.total_cent == 0 && (string)itB.promo_id == "cg" && (long)itB.gratis_milesimo == 1000);
+    var itA = cxF.QueryFirst("SELECT desconto_cent, total_cent, promo_id, gratis_milesimo FROM venda_item WHERE venda_id = @i AND produto_id = 'A'", new { i = vg.Id });
+    Check("item pago: sem desconto, sem promo, sem gratis", (long)itA.desconto_cent == 0 && (long)itA.total_cent == 2190 && itA.promo_id is null && (long)itA.gratis_milesimo == 0);
+    var payloadF = cxF.ExecuteScalar<string>("SELECT payload FROM outbox ORDER BY rowid DESC LIMIT 1") ?? "";
+    Check("payload da nuvem: desconto por item e promocao_id", payloadF.Contains("\"desconto\":21.9") && payloadF.Contains("\"promocao_id\":\"cg\""));
+    Check("payload da nuvem: p_desconto continua 0 (desconto vai POR item, nao dobra)", payloadF.Contains("\"p_desconto\":0"));
+    Check("payload da nuvem: observacao nomeia a promocao", payloadF.Contains("\"p_observacao\":\"Promo"));
+    var aud = cxF.ExecuteScalar<long>("SELECT COUNT(*) FROM auditoria WHERE evento = 'promo_aplicada'");
+    Check("auditoria promo_aplicada gravada", aud == 1);
+    Recusa("desconto maior que o item e recusado",
+        () => Vendas.Finalizar(cxF, sF, opF, new[] { Linha("A", "X", 1000, 1000, 1500, "p") },
+            new[] { new PagamentoVenda("dinheiro", Dinheiro.DeReais(-5m), Dinheiro.Zero) }, null, "Loja", null), "Desconto inválido");
+    Recusa("duas promocoes na mesma venda e recusado",
+        () => Vendas.Finalizar(cxF, sF, opF, new[] { Linha("A", "X", 1000, 1000, 100, "p1"), Linha("B", "Y", 1000, 1000, 100, "p2") },
+            new[] { new PagamentoVenda("dinheiro", Dinheiro.DeReais(18m), Dinheiro.Zero) }, null, "Loja", null), "Duas promoções");
+    Recusa("venda so com brinde (total zero) e recusada",
+        () => Vendas.Finalizar(cxF, sF, opF, new[] { Linha("B", "Y", 1000, 1000, 1000, "p1", 1000) },
+            new[] { new PagamentoVenda("dinheiro", Dinheiro.Zero, Dinheiro.Zero) }, null, "Loja", null), "sem valor");
+    // os 12 posicionais antigos continuam valendo (desconto zero)
+    var vg2 = Vendas.Finalizar(cxF, sF, opF,
+        new[] { new LinhaVenda("A", "A", "DONUT", Quantidade.Um, new Dinheiro(1000), new Dinheiro(1000), "UN", null, null, null, null, 0) },
+        new[] { new PagamentoVenda("dinheiro", Dinheiro.DeReais(10m), Dinheiro.Zero) }, null, "Loja", null);
+    var vSem = cxF.QueryFirst("SELECT subtotal_cent, desconto_cent, total_cent, promo_id FROM venda WHERE id = @i", new { i = vg2.Id });
+    Check("linha sem desconto: subtotal = total, desconto 0, sem promo", (long)vSem.subtotal_cent == 1000 && (long)vSem.desconto_cent == 0 && (long)vSem.total_cent == 1000 && vSem.promo_id is null);
+
+    // ── nota fiscal: vDesc por item x transitório ──
+    var fA = ItemFiscal.De("B", "DONUT NINHO", "19053100", null, "102", null, "UN", Quantidade.Um, new Dinheiro(2190), new Dinheiro(2190), 0, new Dinheiro(2190));
+    Check("ItemFiscal com desconto: vUnit de tabela (21,90) e vDesc 21,90", fA.VUnit == 21.90m && fA.VDesc == 21.90m);
+    var comV = ItemFiscal.DaVenda(linhasBrinde, true);
+    Check("DaVenda com vDesc: vProd cheio nos dois itens e total da nota liquido 21,90",
+        comV[1].VUnit == 21.90m && comV[1].VDesc == 21.90m && Fiscal.TotalDaNota(comV) == 21.90m);
+    var pagFiscal = new[] { PagamentoFiscal.De("dinheiro", Dinheiro.DeReais(21.90m), null) };
+    Check("Conferir aceita pagamento liquido quando ha vDesc", Fiscal.Conferir(comV, pagFiscal) is null);
+    Check("Conferir recusa pagamento no bruto quando ha vDesc", Fiscal.Conferir(comV, new[] { PagamentoFiscal.De("dinheiro", Dinheiro.DeReais(43.80m), null) }) is not null);
+    var semV = ItemFiscal.DaVenda(linhasBrinde, false);
+    Check("DaVenda transitorio: brinde sai com vUnit 0, sem vDesc, e a nota fecha em 21,90",
+        semV[1].VUnit == 0m && semV[1].VDesc == 0m && Fiscal.TotalDaNota(semV) == 21.90m && Fiscal.Conferir(semV, pagFiscal) is null);
+    Check("Conferir recusa vDesc maior que o item", Fiscal.Conferir(new[] { fA with { VDesc = 30m } }, pagFiscal) is not null);
+    Check("produto de preco zero sem desconto continua passando", Fiscal.Conferir(
+        new[] { ItemFiscal.De("Z", "BRINDE INSTITUCIONAL", null, null, "102", null, "UN", Quantidade.Um, Dinheiro.Zero), fA with { VDesc = 0m } },
+        pagFiscal) is null);
+    var metade = ItemFiscal.DaVenda(new[] { Linha("A", "DONUT", 1200, 2000, 1200, "p", 1000) }, false);
+    Check("transitorio: 2 x 12,00 com 1 gratis vira vUnit 6,00 e total 12,00", metade[0].VUnit == 6.00m && Fiscal.TotalDaNota(metade) == 12.00m);
+    Caixa.Fechar(cxF, sF, new Dictionary<string, Dinheiro> { ["dinheiro"] = Dinheiro.DeReais(131.90m) }, opF, Dinheiro.DeReais(2), null);
+    cxF.Dispose();
+    try { File.Delete(arquivoF); } catch { }
+}
 cxT.Dispose();
 try { File.Delete(arquivoT); } catch { }
 cx.Dispose();

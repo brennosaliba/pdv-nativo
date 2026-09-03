@@ -86,8 +86,8 @@ public sealed record VendasParadas(
                 "NENHUMA VENDA FOI PERDIDA.",
                 "O cliente levou o produto e o dinheiro entrou na gaveta.",
                 Desistidas == 0
-                    ? $"Falta só o REGISTRO de {Aguardando} venda(s) subir para o painel — {quanto}."
-                    : $"O que não subiu para o painel foi o REGISTRO de {Total} venda(s) — {quanto}.",
+                    ? $"Falta só o REGISTRO de {Aguardando} venda(s) subir para o painel ({quanto})."
+                    : $"O que não subiu para o painel foi o REGISTRO de {Total} venda(s) ({quanto}).",
             };
 
             // Quais. Separadas quando há dos dois tipos: uma metade precisa de gente,
@@ -95,14 +95,14 @@ public sealed record VendasParadas(
             if (Desistidas > 0 && Aguardando > 0)
             {
                 if (Nomear("Paradas de vez", v => v.Desistiu, Desistidas) is string d) l.Add(d);
-                if (Nomear("Ainda na fila", v => !v.Desistiu, Aguardando, " — essas sobem sozinhas")
+                if (Nomear("Ainda na fila", v => !v.Desistiu, Aguardando, ", e essas sobem sozinhas")
                     is string a) l.Add(a);
             }
             else if (Nomear("Quais", _ => true, Total) is string todas) l.Add(todas);
 
             if (Desistidas > 0)
             {
-                var porque = Motivo is { Length: > 0 } m ? $" — {m}" : "";
+                var porque = Motivo is { Length: > 0 } m ? $" ({m})" : "";
                 l.Add(Aguardando == 0
                     ? $"O envio DESISTIU delas{porque}."
                     : $"Em {Desistidas} delas o envio DESISTIU{porque}.");
@@ -112,7 +112,7 @@ public sealed record VendasParadas(
             // segunda metade o operador inventa a dele — e a dele é sempre pior:
             // no susto se cancela venda que estava certa e se mexe em caixa fechado.
             l.Add($"SÓ MUDA NO PAINEL: faturamento e DRE ficam {quanto} menores até elas subirem.");
-            l.Add("NÃO MUDA: a venda, o caixa deste turno e o cupom do cliente — tudo certo.");
+            l.Add("NÃO MUDA: a venda, o caixa deste turno e o cupom do cliente. Tudo certo.");
 
             l.Add(Desistidas == 0
                 ? "O QUE FAZER: nada no caixa. Elas sobem sozinhas na próxima sincronização."
@@ -155,7 +155,7 @@ public sealed record VendasParadas(
             var dias = completa
                 ? vendas.Skip(MaxListadas).Select(v => v.Dia).Distinct().OrderBy(d => d).ToList()
                 : new List<string>();
-            texto += $" — e mais {restam}"
+            texto += $", e mais {restam}"
                 + dias switch
                 {
                     { Count: 0 } => "",

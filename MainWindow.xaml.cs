@@ -95,7 +95,7 @@ public partial class MainWindow : Window
         {
             var assume = Dialogo.Confirmar(this, "Caixa de outro operador",
                 $"Este caixa foi aberto por {_sessao.OperadorNome} às {_sessao.AberturaEm:HH:mm} " +
-                "e continua aberto. Ao entrar, você passa a operar o turno dele — e a " +
+                "e continua aberto. Ao entrar, você passa a operar o turno dele, e a " +
                 "conferência do fechamento também vira responsabilidade sua.",
                 "Assumir este caixa", "Voltar ao login");
             if (!assume) { _operador = null; Roteia(); return; }

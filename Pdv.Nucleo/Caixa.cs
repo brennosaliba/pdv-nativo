@@ -83,7 +83,7 @@ public static class Caixa
             var msg = aberta.BusinessDate == DiaOperacional()
                 ? $"Já existe caixa aberto por {aberta.OperadorNome}. Feche antes de abrir outro."
                 : $"O caixa de {aberta.BusinessDate} ficou aberto ({aberta.OperadorNome}). " +
-                  "Feche aquele turno antes de começar o dia — senão as vendas dos dois dias se misturam.";
+                  "Feche aquele turno antes de começar o dia, senão as vendas dos dois dias se misturam.";
             throw new InvalidOperationException(msg);
         }
 
@@ -156,7 +156,7 @@ public static class Caixa
             """,
             new { Id = id, Ses = sessao.Id, Tipo = tipo, Val = valor.Centavos, Mot = motivo.Trim(),
                   Dest = destino, Op = idAssina, Aut = idAutoriza, Em = Agora }, tx);
-        Auditar(cx, tx, $"caixa_{tipo}", idAssina, idAutoriza, $"{valor.Reais:F2} — {motivo}");
+        Auditar(cx, tx, $"caixa_{tipo}", idAssina, idAutoriza, $"{valor.Reais:F2} · {motivo}");
         Enfileirar(cx, tx, "movimento", id, id, new { id, sessao = sessao.Id, tipo, valor_cent = valor.Centavos, motivo, destino, autorizadoPor = idAutoriza });
         tx.Commit();
     }
@@ -417,7 +417,7 @@ public static class Caixa
             // informacao do operador — "tolerancia R$ 2,00" na tela do caixa ensina
             // que R$ 2,00 por dia passam sem pergunta.
             throw new InvalidOperationException(
-                $"A conferência encontrou {desvio.Formatado()} de diferença — {detalhe}. " +
+                $"A conferência encontrou {desvio.Formatado()} de diferença ({detalhe}). " +
                 "Diferença acontece em qualquer operação; descreva o que houve. Justifique para fechar.");
         }
 
@@ -446,8 +446,8 @@ public static class Caixa
         var quebra = string.Join("; ", linhas.Where(l => l.Diferenca.Centavos != 0)
             .Select(l => $"{l.Forma}:{l.Situacao}:{l.Diferenca.Abs.Formatado()}"));
         Auditar(cx, tx, "caixa_fechado", idFecha, null,
-            $"desvio={desvio.Formatado()}{(quebra.Length == 0 ? " (conferiu)" : " — " + quebra)}" +
-            $"{(justificativa is null ? "" : " — " + justificativa)}");
+            $"desvio={desvio.Formatado()}{(quebra.Length == 0 ? " (conferiu)" : " · " + quebra)}" +
+            $"{(justificativa is null ? "" : " · " + justificativa)}");
         Enfileirar(cx, tx, "fechamento", sessao.Id, sessao.Id,
             new { sessao = sessao.Id, linhas = linhas.Select(l => new { l.Forma, l.Contada, l.Situacao, decl = l.Declarado.Centavos, apur = l.Apurado.Centavos, dif = l.Diferenca.Centavos }), justificativa });
         tx.Commit();
@@ -466,7 +466,7 @@ public static class Caixa
         Operador quemPula, Operador supervisor)
     {
         var apurado = Apurado(cx, sessao);
-        const string marca = "FECHADO SEM CONFERÊNCIA — caixa esquecido, contagem pulada com autorização do gerente";
+        const string marca = "FECHADO SEM CONFERÊNCIA: caixa esquecido, contagem pulada com autorização do gerente";
 
         using var tx = cx.BeginTransaction();
         foreach (var (forma, valor) in apurado)

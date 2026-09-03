@@ -65,7 +65,7 @@ public partial class Login : UserControl
     {
         if (_etapa == Etapa.Cpf)
         {
-            TxtEtapa.Text = "Digite seu CPF — ou o PIN antigo";
+            TxtEtapa.Text = "Digite seu CPF (ou o PIN antigo)";
             TxtPin.Text = FormatarCpfParcial(_cpf);
             TxtPin.FontSize = 34;
             BtnEntrar.IsEnabled = _cpf.Length == 11 || Operadores.PinValido(_cpf);

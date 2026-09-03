@@ -183,7 +183,7 @@
                          um diz QUE PAPEL sai ali. Nomear pelo papel, e não pelo lugar
                          ("do caixa", "da cozinha"), porque a loja pode ter as duas no
                          mesmo balcão — o papel é o que nunca muda. -->
-                    <TextBlock Text="CUPOM FISCAL E RECIBO — O PAPEL DO CLIENTE" Foreground="{DynamicResource Marca}"
+                    <TextBlock Text="CUPOM FISCAL E RECIBO: O PAPEL DO CLIENTE" Foreground="{DynamicResource Marca}"
                                FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
                     <TextBlock Text="Impressora do cupom fiscal / recibo" Style="{StaticResource Rotulo}"/>
                     <ComboBox x:Name="CboImpressora" Margin="0,4,0,4"/>
@@ -212,7 +212,7 @@
                          significa "tudo na impressora do cupom, como sempre foi". Quem
                          instala um caixa não pode ser obrigado a escolher duas
                          impressoras — os campos só aparecem para quem tem duas. -->
-                    <TextBlock Text="COMANDA DO DELIVERY — O PAPEL DA COZINHA" Foreground="{DynamicResource Marca}"
+                    <TextBlock Text="COMANDA DO DELIVERY: O PAPEL DA COZINHA" Foreground="{DynamicResource Marca}"
                                FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
                     <TextBlock Text="A comanda é o OUTRO papel: os itens e as observações do pedido, para quem produz. Não tem valor fiscal e não vai para o cliente."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
@@ -222,7 +222,7 @@
                               IsChecked="False" FontSize="14" Margin="0,0,0,4"
                               Checked="ComandaSeparadaMudou" Unchecked="ComandaSeparadaMudou"/>
                     <TextBlock x:Name="TxtComandaJunto"
-                               Text="Desmarcado, a comanda sai na mesma impressora e na mesma bobina do cupom — que é o que este caixa já faz hoje."
+                               Text="Desmarcado, a comanda sai na mesma impressora e na mesma bobina do cupom, que é o que este caixa já faz hoje."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="24,0,0,8"/>
 
                     <StackPanel x:Name="BlocoComandaSeparada" Visibility="Collapsed" Margin="24,2,0,8">
@@ -243,7 +243,7 @@
                     <Button x:Name="BtnTesteComanda" Content="Imprimir comanda de exemplo" Click="TestarComanda"
                             Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
                     <TextBlock x:Name="TxtStatusComanda"
-                               Text="Isto também se troca na tela Delivery, no botão 🖨 do cabeçalho — é lá que a cozinha procura. E cada pedido tem o seu 🖨 para reimprimir a comanda."
+                               Text="Isto também se troca na tela Delivery, no botão 🖨 do cabeçalho: é lá que a cozinha procura. E cada pedido tem o seu 🖨 para reimprimir a comanda."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
 
@@ -263,7 +263,7 @@
                         <TextBlock Text="até" Style="{StaticResource Rotulo}" VerticalAlignment="Center" Margin="10,0,0,0"/>
                         <TextBox x:Name="TxtTemaAte" Width="110" Margin="8,0,0,0" Tag="18:00" LostFocus="JanelaTemaMudou"/>
                     </StackPanel>
-                    <TextBlock Text="Vale para ESTA máquina, não para quem entra no caixa — quem decide é a luz do balcão. Muda na hora."
+                    <TextBlock Text="Vale para ESTA máquina, não para quem entra no caixa: quem decide é a luz do balcão. Muda na hora."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                 </StackPanel>
 
@@ -356,7 +356,7 @@
                     </StackPanel>
 
                     <StackPanel x:Name="BlocoControlPay" Visibility="Collapsed">
-                        <TextBlock Text="O PayGo Windows desta máquina precisa estar ativado como terminal ControlPay — é ele que fala com a maquininha. O caixa manda a cobrança e acompanha até o cliente passar o cartão."
+                        <TextBlock Text="O PayGo Windows desta máquina precisa estar ativado como terminal ControlPay: é ele que fala com a maquininha. O caixa manda a cobrança e acompanha até o cliente passar o cartão."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <TextBlock Text="Chave de integração (portal ControlPay → Integrações → Chaves de integração)" Style="{StaticResource Rotulo}"/>
                         <PasswordBox x:Name="PwdCpayChave" Margin="0,4,0,8" FontSize="18" Padding="12,10"
@@ -409,7 +409,7 @@
                              fim repete o aviso; config invisível que muda o que acontece
                              com o dinheiro é armadilha. -->
                         <CheckBox x:Name="ChkCpaySandbox" IsChecked="False" FontSize="14" Margin="0,0,0,8"
-                                  Content="Ambiente de TESTE (sandbox) — nenhuma cobrança é de verdade"/>
+                                  Content="Ambiente de TESTE (sandbox): nenhuma cobrança é de verdade"/>
                         <Button x:Name="BtnTestarCpay" Content="Testar conexão com a PayGo" Click="TestarControlPay"
                                 Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
                     </StackPanel>
@@ -427,7 +427,7 @@
                         <CheckBox x:Name="ChkTefParcelas" IsChecked="False" FontSize="14" Margin="0,0,0,8"
                                   Content="Perguntar as parcelas no crédito (desligado, todo crédito sai à vista)"/>
                         <CheckBox x:Name="ChkTefVoucher" IsChecked="False" FontSize="14" Margin="0,0,0,8"
-                                  Content="Aceitar vale-refeição (Alelo, Sodexo, VR, Ticket) pela maquininha — mostra o botão Refeição na venda"/>
+                                  Content="Aceitar vale-refeição (Alelo, Sodexo, VR, Ticket) pela maquininha (mostra o botão Refeição na venda)"/>
                     </StackPanel>
                     <TextBlock x:Name="TxtStatusTef" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,8"/>
@@ -461,7 +461,7 @@
                                 <TextBox x:Name="TxtOpPin" Margin="0,4,0,0" MaxLength="6" TextChanged="CampoMudou"/>
                             </StackPanel>
                         </Grid>
-                        <TextBlock Text="Este primeiro cadastro é o dono: ele pode tudo — autoriza sangria e cancelamento, e a senha dele passa a ser a senha desta tela."
+                        <TextBlock Text="Este primeiro cadastro é o dono: ele pode tudo: autoriza sangria e cancelamento, e a senha dele passa a ser a senha desta tela."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     </StackPanel>
                 </StackPanel>

@@ -14,7 +14,8 @@ namespace Pdv;
 /// <summary>Uma linha da tabela de itens do cupom.</summary>
 public sealed record ItemCupom(
     string Codigo, string Descricao, Quantidade Qtd, string Unidade,
-    Dinheiro Unitario, Dinheiro Total);
+    Dinheiro Unitario, Dinheiro Total,
+    Dinheiro Desconto = default, string? Motivo = null, int UnidadesGratis = 0);
 
 /// <summary>
 /// Uma linha do bloco de pagamento. `Forma` já vem legível ("Dinheiro", "Cartão de débito").
@@ -91,7 +92,11 @@ public sealed record DadosCupom(
     // RECIBO (sem emissão fiscal): loja optou por operar sem NFC-e — o papel sai
     // como recibo simples, SEM cabeçalho DANFE, chave, QR, protocolo ou carimbos
     // fiscais, e com o aviso "SEM VALOR FISCAL" explícito.
-    bool Recibo = false);
+    bool Recibo = false,
+    // 03/09/2026: promoção de carrinho. DescontoNoPreco = true quando os itens já
+    // saíram com o unitário líquido (nota sem vDesc por item): o cupom não pode
+    // mostrar desconto que o XML não tem, então avisa em bloco não fiscal.
+    string? PromoNome = null, Dinheiro DescontoPromo = default, bool DescontoNoPreco = false);
 
 /// <summary>
 /// Impressão do cupom da NFC-e na bobina configurada em <c>config['papel_mm']</c>
@@ -689,8 +694,17 @@ public static class Impressao
         // aqui é travar no balcão e chamar quem conserta, não escolher qual dos dois mente.
         if (d.VNf is { } vnf && Dinheiro.DeReais(vnf).Centavos != d.Total.Centavos)
             return $"O total da nota (R$ {Valor(Dinheiro.DeReais(vnf))}) não bate com o total da " +
-                   $"venda (R$ {Valor(d.Total)}). Não imprimi papel que contradiz o XML — chame o suporte.";
+                   $"venda (R$ {Valor(d.Total)}). Não imprimi papel que contradiz o XML. Chame o suporte.";
 
+        long itensSoma = 0;
+        foreach (var i in d.Itens)
+        {
+            if (i.Desconto.Centavos < 0 || i.Desconto.Centavos > i.Unitario.VezesQtd(i.Qtd.Milesimos).Centavos)
+                return $"Desconto do item {i.Descricao} maior que o item. Não imprimi.";
+            itensSoma += i.Total.Centavos;
+        }
+        if (d.Itens.Count > 0 && itensSoma != d.Total.Centavos)
+            return $"Os itens do cupom somam R$ {Valor(new Dinheiro(itensSoma))} e o total é R$ {Valor(d.Total)}. Não imprimi um cupom que não fecha.";
         return null;
     }
 
@@ -1189,6 +1203,12 @@ public static class Impressao
                 Colunado($"     {i.Qtd.Formatada()} {i.Unidade} X {Valor(i.Unitario)}", Valor(i.Total),
                     papel.Colunas),
                 Corpo));
+            if (i.Desconto.Centavos > 0)
+                pilha.Children.Add(Texto(
+                    Colunado(i.UnidadesGratis > 0
+                        ? $"     {i.UnidadesGratis} GRATIS ({i.Motivo ?? "promocao"})"
+                        : $"     desconto ({i.Motivo ?? "promocao"})", "-" + Valor(i.Desconto), papel.Colunas),
+                    Corpo));
             seq++;
         }
 
@@ -1205,6 +1225,16 @@ public static class Impressao
         // que sobra, e nesse caso o papel é a melhor aproximação disponível, não a verdade fiscal.
         var totalDaNota = d.VNf is { } vnf ? Dinheiro.DeReais(vnf) : d.Total;
         pilha.Children.Add(Duas("Qtd. total de itens", d.Itens.Count.ToString(Br), Corpo));
+        if (d.DescontoPromo.Centavos > 0 && !d.DescontoNoPreco)
+        {
+            pilha.Children.Add(Duas("Subtotal R$", Valor(new Dinheiro(totalDaNota.Centavos + d.DescontoPromo.Centavos)), Corpo));
+            pilha.Children.Add(Duas($"Desconto {d.PromoNome ?? "promocao"} R$", "-" + Valor(d.DescontoPromo), Corpo));
+        }
+        if (d.DescontoPromo.Centavos > 0 && !d.DescontoNoPreco)
+        {
+            pilha.Children.Add(Duas("Subtotal R$", Valor(new Dinheiro(totalDaNota.Centavos + d.DescontoPromo.Centavos)), Corpo));
+            pilha.Children.Add(Duas($"Desconto {d.PromoNome ?? "promocao"} R$", "-" + Valor(d.DescontoPromo), Corpo));
+        }
         pilha.Children.Add(Duas("VALOR TOTAL R$", Valor(totalDaNota), Destaque, negrito: true));
 
         // ── pagamento ──

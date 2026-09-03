@@ -389,7 +389,7 @@ public static class Atualizacao
     {
         Impedimento.ComandaAberta => ("Tem venda em andamento",
             $"A comanda está aberta com {Plural(e.ItensNaComanda, "item", "itens")}.\n\n"
-            + "Para trocar o programa o caixa precisa fechar e abrir de novo — e reiniciar "
+            + "Para trocar o programa o caixa precisa fechar e abrir de novo, e reiniciar "
             + "com o cliente no balcão é pior do que ficar mais um dia na versão atual.\n\n"
             + "O QUE FAZER: termine ou limpe a comanda e toque em Atualizar de novo."),
 
@@ -412,7 +412,7 @@ public static class Atualizacao
             "A fila da impressora não respondeu, então este caixa não consegue provar "
             + "que não tem cupom saindo agora.\n\n"
             + "A troca sozinha (na janela de atualização) fica para quando der. "
-            + "O QUE FAZER: toque em Atualizar — pelo botão, quem julga se a loja está "
+            + "O QUE FAZER: toque em Atualizar. Pelo botão, quem julga se a loja está "
             + "parada é você."),
 
         _ => ("", ""),
@@ -523,7 +523,7 @@ public static class Atualizacao
 
         if (estado.VendasPorSubir > 0)
             linhas.Add($"\n{Plural(estado.VendasPorSubir, "venda ainda não subiu", "vendas ainda não subiram")} "
-                     + "para o painel. Elas ficam guardadas neste caixa e sobem depois — "
+                     + "para o painel. Elas ficam guardadas neste caixa e sobem depois: "
                      + "a atualização não mexe nelas.");
 
         return new Veredito(Situacao.Disponivel,
@@ -678,7 +678,7 @@ public static class Atualizacao
         public int DuracaoMin => CruzaMeiaNoite ? 1440 - InicioMin + FimMin : FimMin - InicioMin;
 
         public override string ToString()
-            => $"{InicioMin / 60:00}:{InicioMin % 60:00}–{FimMin / 60:00}:{FimMin % 60:00}";
+            => $"{InicioMin / 60:00}:{InicioMin % 60:00} às {FimMin / 60:00}:{FimMin % 60:00}";
     }
 
     /// <summary>
@@ -908,7 +908,7 @@ public static class Atualizacao
         {
             if (instrucao.Janela is not { } j)
                 return new(Autonomia.SemJanela,
-                    "este caixa não tem janela de atualização — só troca pelo botão", m);
+                    "este caixa não tem janela de atualização: só troca pelo botão", m);
 
             // Sem relógio confiável a janela não abre. É a escolha entre dois defeitos:
             // uma janela que NUNCA abre deixa a loja um dia a mais na versão velha, e o
@@ -918,7 +918,7 @@ public static class Atualizacao
             // e o defeito invisível e caro, escolhe-se o visível.
             if (horaDaLoja is not { } hora)
                 return new(Autonomia.SemRelogio,
-                    "não dá para saber que horas são na loja — a janela não abre no escuro", m);
+                    "não dá para saber que horas são na loja: a janela não abre no escuro", m);
 
             minutos = MinutosAteFechar(j, hora);
             if (minutos <= 0)
@@ -1220,7 +1220,7 @@ public static class Atualizacao
             if (r.StatusCode == HttpStatusCode.NotFound)
                 return new Baixa(null,
                     "O instalador não está publicado no servidor (erro 404). "
-                    + "A versão foi anunciada mas o arquivo não subiu — avise o suporte.");
+                    + "A versão foi anunciada mas o arquivo não subiu. Avise o suporte.");
 
             if (r.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
             {
@@ -1261,12 +1261,12 @@ public static class Atualizacao
             if (m.Tamanho is { } prometido && total is { } t2 && t2 != prometido)
                 return new Baixa(null,
                     $"O servidor está oferecendo um arquivo de {t2} bytes, mas anunciou {prometido}. "
-                    + "Nada foi instalado — avise o suporte.");
+                    + "Nada foi instalado. Avise o suporte.");
 
             if (total is { } t3 && t3 < TamanhoMinimoPlausivel)
                 return new Baixa(null,
                     "O que o servidor está oferecendo é pequeno demais para ser o instalador. "
-                    + "Pode ser uma página de erro — avise o suporte.");
+                    + "Pode ser uma página de erro. Avise o suporte.");
 
             using (var origem = await r.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false))
             using (var arquivo = new FileStream(parcial,

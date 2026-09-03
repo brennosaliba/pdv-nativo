@@ -168,7 +168,7 @@ public static class PedirDocumento
             }
             else if (completo)
             {
-                estado.Text = "o dígito verificador não fecha — confira os números";
+                estado.Text = "o dígito verificador não fecha: confira os números";
                 estado.Foreground = (Brush)Application.Current.Resources["Erro"];
             }
             else

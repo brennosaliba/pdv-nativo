@@ -83,7 +83,7 @@ public static class PayGo
     public static string Explicar(Acao a) => a switch
     {
         Acao.Instalar => "Vou instalar o PayGo agora. Leva alguns minutos e a tela pode piscar.",
-        Acao.JaInstalado => "O PayGo já está instalado nesta máquina — vou deixar como está.",
+        Acao.JaInstalado => "O PayGo já está instalado nesta máquina. Vou deixar como está.",
         Acao.FecharTefPrimeiro => "Feche o PayGo antes de continuar: a instalação dele fecha o programa "
                                 + "à força, e se houver uma venda no pinpad ela se perde.",
         Acao.SemArquivo => "O PayGo não veio junto neste instalador. O caixa funciona; "

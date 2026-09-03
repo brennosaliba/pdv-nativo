@@ -395,11 +395,11 @@ public partial class Configuracao : UserControl
         var ie = AssistenteConfig.NormalizarIe(TxtIe.Text);
         string texto, cor;
         if (ie.Length == 0) { texto = ""; cor = "TextoFraco"; }
-        else if (ie == AssistenteConfig.IeIsento) { texto = "✓ Sem inscrição estadual — sai \"ISENTO\" no cupom."; cor = "Ok"; }
+        else if (ie == AssistenteConfig.IeIsento) { texto = "✓ Sem inscrição estadual: sai \"ISENTO\" no cupom."; cor = "Ok"; }
         else if (AssistenteConfig.IeValida(ie)) { texto = "✓ Inscrição estadual ok."; cor = "Ok"; }
         // "curta demais" estava errado para os dois lados: esta linha também aparece
         // quando a IE passa de 14 dígitos.
-        else { texto = "✗ Inscrição estadual fora do tamanho — são de 8 a 14 dígitos. Se a loja não tem, toque em ISENTO."; cor = "Erro"; }
+        else { texto = "✗ Inscrição estadual fora do tamanho: são de 8 a 14 dígitos. Se a loja não tem, toque em ISENTO."; cor = "Erro"; }
         TxtStatusIe.Text = texto;
         TxtStatusIe.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[cor];
     }
@@ -622,7 +622,7 @@ public partial class Configuracao : UserControl
             var mm = destino.Papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture);
             TxtStatusComanda.Text = erro is null
                 ? $"Mandei a comanda de exemplo para {onde}, em {mm} mm"
-                  + (separada ? "." : " — a MESMA impressora do cupom.")
+                  + (separada ? "." : ", a MESMA impressora do cupom.")
                   + " Confira no papel: nada pode sair cortado no fim da linha."
                 : $"Não imprimiu em {onde}. Confira se ela está ligada e com papel. Detalhe: {erro}";
             TxtStatusComanda.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[
@@ -820,10 +820,10 @@ public partial class Configuracao : UserControl
         // "HOMOLOGAÇÃO" sozinho não diz nada a quem instala: o que importa é que a nota
         // emitida assim não vale. "MODO TESTE" é a mesma palavra que o rodapé do caixa
         // usa o dia inteiro — o mesmo estado não pode ter dois nomes.
-        if (ambiente == 2) partes.Add("MODO TESTE — as notas não valem");
+        if (ambiente == 2) partes.Add("MODO TESTE: as notas não valem");
         return partes.Count == 0
             ? "As vendas e as notas passam a subir no Sincronizar."
-            : string.Join(" · ", partes) + " — confira e salve.";
+            : string.Join(" · ", partes) + ". Confira e salve.";
     }
 
     // ── PASSO 2: NOTA FISCAL — SÉRIE ────────────────────────────────────────
@@ -959,7 +959,7 @@ public partial class Configuracao : UserControl
             }
             else
             {
-                TxtStatusCnpj.Text = "✗ Este CNPJ tem erro de digitação — confira número por número.";
+                TxtStatusCnpj.Text = "✗ Este CNPJ tem erro de digitação. Confira número por número.";
                 TxtStatusCnpj.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Erro"];
             }
             // CNPJ mudou: se já há certificado carregado, refaz a comparação
@@ -1010,7 +1010,7 @@ public partial class Configuracao : UserControl
             var dias = (int)(c.NotAfter - DateTime.Now).TotalDays;
             if (dias < 0)
             {
-                TxtStatusCert.Text = $"✗ Certificado VENCIDO em {c.NotAfter:dd/MM/yyyy} — nenhuma nota sai com ele. Peça um novo ao contador.";
+                TxtStatusCert.Text = $"✗ Certificado VENCIDO em {c.NotAfter:dd/MM/yyyy}: nenhuma nota sai com ele. Peça um novo ao contador.";
                 TxtStatusCert.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Erro"];
                 return;
             }
@@ -1027,10 +1027,10 @@ public partial class Configuracao : UserControl
             {
                 if (cnpjCert == cnpjLoja) texto += " · CNPJ confere com a loja";
                 else if (cnpjCert[..8] == cnpjLoja[..8])
-                    texto += $" · certificado da matriz/outra filial ({Documentos.Formatar(cnpjCert)}) — mesma empresa, a SEFAZ aceita";
+                    texto += $" · certificado da matriz/outra filial ({Documentos.Formatar(cnpjCert)}): mesma empresa, a SEFAZ aceita";
                 else
                 {
-                    texto += $"\n✗ Este certificado é de outra empresa ({Documentos.Formatar(cnpjCert)}). A nota sairia em nome dela — confira o CNPJ do passo 1 ou peça o certificado certo ao contador.";
+                    texto += $"\n✗ Este certificado é de outra empresa ({Documentos.Formatar(cnpjCert)}). A nota sairia em nome dela. Confira o CNPJ do passo 1 ou peça o certificado certo ao contador.";
                     chave = "Erro";
                 }
             }
@@ -1065,8 +1065,8 @@ public partial class Configuracao : UserControl
             var cnpj = new string(TxtCnpj.Text.Where(char.IsDigit).ToArray());
             if (cnpj.Length == 14 && Documentos.CnpjValido(cnpj)) Add(0, "✓ CNPJ válido");
             else Add(2, cnpj.Length == 14
-                ? "✗ CNPJ digitado errado — volte ao passo 1 e confira número por número"
-                : "✗ CNPJ incompleto — volte ao passo 1");
+                ? "✗ CNPJ digitado errado: volte ao passo 1 e confira número por número"
+                : "✗ CNPJ incompleto: volte ao passo 1");
 
             // 1b. SÉRIE. Entra na bateria porque é o campo desta tela cujo erro só
             // aparecia LÁ NA FRENTE, como uma rejeição de duplicidade que não dizia de
@@ -1087,7 +1087,7 @@ public partial class Configuracao : UserControl
             else
             if (caminhoCert is null || TxtSenhaPfx.Password.Length == 0)
                 Add(producao ? 2 : 1, producao
-                    ? "✗ Falta o certificado ou a senha dele — sem os dois este caixa não emite nota"
+                    ? "✗ Falta o certificado ou a senha dele: sem os dois este caixa não emite nota"
                     : "⚠ Sem certificado. Dá para deixar o caixa pronto assim, mas para emitir nota de verdade ele é obrigatório");
             else
             {
@@ -1095,19 +1095,19 @@ public partial class Configuracao : UserControl
                 {
                     using var c = new X509Certificate2(caminhoCert, TxtSenhaPfx.Password);
                     var dias = (int)(c.NotAfter - DateTime.Now).TotalDays;
-                    if (dias < 0) Add(2, $"✗ Certificado VENCIDO em {c.NotAfter:dd/MM/yyyy} — peça um novo ao contador");
-                    else if (dias <= 30) Add(1, $"⚠ Certificado {ContagemVencimento(dias)} ({c.NotAfter:dd/MM/yyyy}) — peça um novo ao contador");
+                    if (dias < 0) Add(2, $"✗ Certificado VENCIDO em {c.NotAfter:dd/MM/yyyy}: peça um novo ao contador");
+                    else if (dias <= 30) Add(1, $"⚠ Certificado {ContagemVencimento(dias)} ({c.NotAfter:dd/MM/yyyy}): peça um novo ao contador");
                     else Add(0, $"✓ Certificado ok (válido até {c.NotAfter:dd/MM/yyyy})");
                     var cnpjCert = CnpjDoCertificado(c);
                     if (cnpjCert is not null && cnpj.Length == 14)
                     {
                         if (cnpjCert == cnpj) Add(0, "✓ CNPJ do certificado confere com a loja");
                         else if (cnpjCert[..8] == cnpj[..8])
-                            Add(0, $"✓ Certificado da matriz/outra filial ({Documentos.Formatar(cnpjCert)}) — mesma empresa, aceito");
-                        else Add(2, $"✗ Este certificado é de outra empresa ({Documentos.Formatar(cnpjCert)}) — confira o CNPJ do passo 1");
+                            Add(0, $"✓ Certificado da matriz/outra filial ({Documentos.Formatar(cnpjCert)}): mesma empresa, aceito");
+                        else Add(2, $"✗ Este certificado é de outra empresa ({Documentos.Formatar(cnpjCert)}): confira o CNPJ do passo 1");
                     }
                 }
-                catch { Add(2, "✗ Não abri o certificado com essa senha — confira a senha"); }
+                catch { Add(2, "✗ Não abri o certificado com essa senha: confira a senha"); }
             }
 
             // 3. CSC + ID (a SEFAZ só valida o CSC de verdade na 1ª emissão)
@@ -1116,9 +1116,9 @@ public partial class Configuracao : UserControl
                 if (TxtCsc.Password.Length >= 16) Add(0, "✓ CSC preenchido. Se estiver errado, só a primeira nota vai dizer");
                 else Add(producao ? 2 : 1, TxtCsc.Password.Length == 0
                     ? (producao
-                        ? "✗ CSC vazio — sem ele o cupom sai sem QR Code e a SEFAZ recusa a nota"
-                        : "⚠ CSC vazio — vai precisar dele para emitir nota")
-                    : "⚠ CSC curto demais — copie de novo do portal da SEFAZ");
+                        ? "✗ CSC vazio: sem ele o cupom sai sem QR Code e a SEFAZ recusa a nota"
+                        : "⚠ CSC vazio: vai precisar dele para emitir nota")
+                    : "⚠ CSC curto demais: copie de novo do portal da SEFAZ");
                 if (!TxtIdCsc.Text.Trim().All(char.IsDigit) || TxtIdCsc.Text.Trim().Length == 0)
                     Add(1, "⚠ O ID do CSC é só número (ex.: 000001)");
             }
@@ -1129,7 +1129,7 @@ public partial class Configuracao : UserControl
             else if (!File.Exists(@"C:\kiosk\agent\pdv-agent.cjs"))
             {
                 Add(1, "⚠ O programa que emite a nota não está instalado nesta máquina. É normal num PC que não "
-                     + "é o caixa da loja. Se as vendas forem sair DAQUI, chame o suporte para instalar — senão "
+                     + "é o caixa da loja. Se as vendas forem sair DAQUI, chame o suporte para instalar, senão "
                      + "a venda grava e a nota não sai.");
             }
             else
@@ -1195,7 +1195,7 @@ public partial class Configuracao : UserControl
             if (cnpj.Length != 14) throw new InvalidOperationException("O CNPJ precisa ter 14 dígitos.");
             // Dígito verificador AQUI, não na Rejeição 207 da SEFAZ com cliente no balcão.
             if (!Documentos.CnpjValido(cnpj))
-                throw new InvalidOperationException("CNPJ inválido — os dígitos verificadores não conferem.");
+                throw new InvalidOperationException("CNPJ inválido: os dígitos verificadores não conferem.");
             if (!int.TryParse(TxtSerie.Text.Trim(), out var serie) || serie < 1 || serie > 999)
                 throw new InvalidOperationException("A série deste caixa é um número de 1 a 999.");
             // "Só recibo": a venda NÃO chama o emissor e o papel sai como recibo (SEM VALOR
@@ -1238,7 +1238,7 @@ public partial class Configuracao : UserControl
                     VALUES ('_admin_',@N,@H,@S,'gerente',0,@Em)
                     ON CONFLICT(id) DO UPDATE SET nome=@N, pin_hash=@H, pin_salt=@S, atualizado=@Em
                     """, new { N = "Administrador (" + nome + ")", H = h, S = s, Em = DateTime.Now.ToString("o") }, tx);
-                Caixa.Auditar(cx, tx, "admin_definido", null, null, $"dono {nome} — senha da configuração é a dele");
+                Caixa.Auditar(cx, tx, "admin_definido", null, null, $"dono {nome}: senha da configuração é a dele");
             }
             else if (!temAdmin)
             {
@@ -1249,7 +1249,7 @@ public partial class Configuracao : UserControl
                     INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado)
                     VALUES ('_admin_','Administrador',@H,@S,'gerente',0,@Em)
                     """, new { H = h, S = s, Em = DateTime.Now.ToString("o") }, tx);
-                Caixa.Auditar(cx, tx, "senha_admin_padrao", null, null, "sem dono cadastrado — senha 1234");
+                Caixa.Auditar(cx, tx, "senha_admin_padrao", null, null, "sem dono cadastrado: senha 1234");
                 adminNasceuPadrao = true;
             }
 
@@ -1324,7 +1324,7 @@ public partial class Configuracao : UserControl
             }
             if (adminNasceuPadrao)
                 Dialogo.Avisar(Window.GetWindow(this)!, "Senha da configuração",
-                    "Esta tela ficou com a senha padrão 1234. Troque com o suporte assim que puder — "
+                    "Esta tela ficou com a senha padrão 1234. Troque com o suporte assim que puder: "
                     + "com ela qualquer um abre a configuração do caixa.", "ok");
             Concluiu?.Invoke();
         }
@@ -1486,7 +1486,7 @@ public partial class Configuracao : UserControl
         {
             var chave = PwdCpayChave.Password.Trim();
             if (chave.Contains('%')) { try { chave = Uri.UnescapeDataString(chave); } catch { } }
-            if (chave.Length == 0) { StatusTef("Falta a chave de integração — pegue no portal do ControlPay, em Integrações.", "Erro"); return; }
+            if (chave.Length == 0) { StatusTef("Falta a chave de integração: pegue no portal do ControlPay, em Integrações.", "Erro"); return; }
             if (TxtCpayPessoa.Text.Trim().Length == 0) { StatusTef("Falta o ID da pessoa. Ele fica no portal do ControlPay, junto do seu login.", "Erro"); return; }
 
             var producao = ChkCpaySandbox.IsChecked != true;
@@ -1517,7 +1517,7 @@ public partial class Configuracao : UserControl
             var escolhido = terminais.FirstOrDefault(t => t.Id == TxtCpayTerminal.Text.Trim());
 
             var lista = string.Join("\n", terminais.Select(t =>
-                $"   • {t.Id} — {t.Nome}" + (t.TerminalFisico is null
+                $"   • {t.Id}: {t.Nome}" + (t.TerminalFisico is null
                     ? "  (sem maquininha vinculada)"
                     : $"  ·  maquininha {t.TerminalFisico}  ·  instalação {t.InstalacaoId}")));
 
@@ -1547,7 +1547,7 @@ public partial class Configuracao : UserControl
                 (escolhido.TerminalFisico is null
                     ? ".\n"
                     : $",\nna maquininha {escolhido.TerminalFisico}, da instalação {escolhido.InstalacaoId}.\n") +
-                (trocou ? $"\nObs.: o campo estava com o número {digitado}, que não existe nesta conta — troquei pelo certo.\n" : "");
+                (trocou ? $"\nObs.: o campo estava com o número {digitado}, que não existe nesta conta. Troquei pelo certo.\n" : "");
 
             if (pendencias.Count == 0)
             {
@@ -1578,10 +1578,10 @@ public partial class Configuracao : UserControl
             if (TefModo != 2) { StatusTef("Escolha \"PayGo (maquininha no caixa)\" aqui em cima para testar.", "Erro"); return; }
             using (var cx = Banco.Abrir()) GravarTef(cx);
             _tefGravadoPeloTeste = true;
-            if (Servicos.PayGo() is not { } cli) { StatusTef("A maquininha não está ligada nesta tela — escolha o PayGo aqui em cima e tente de novo.", "Erro"); return; }
+            if (Servicos.PayGo() is not { } cli) { StatusTef("A maquininha não está ligada nesta tela. Escolha o PayGo aqui em cima e tente de novo.", "Erro"); return; }
             var ok = await cli.AtivoAsync(CancellationToken.None);
             StatusTef(ok
-                ? $"✓ O PayGo respondeu na pasta {cli.PastaReq}. Está pronto para cobrar — salve para manter."
+                ? $"✓ O PayGo respondeu na pasta {cli.PastaReq}. Está pronto para cobrar. Salve para manter."
                 : $"✗ {ClientePayGo.MsgTefNaoResponde} Pasta: {cli.PastaReq}. Confira se o PayGo Windows está aberto e se a pasta é a mesma configurada nele.",
                 ok ? "Ok" : "Erro");
         }
@@ -1781,7 +1781,7 @@ public static class AssistenteConfig
         PassoConfig.Fiscal => "O que a SEFAZ precisa para autorizar as notas deste caixa.",
         PassoConfig.Impressora => "Onde o cupom e a comanda do delivery saem, e em que largura de bobina.",
         PassoConfig.Maquininha => "Como este caixa cobra cartão e PIX.",
-        PassoConfig.Pareamento => "Ligar este caixa ao painel — é o que manda as vendas e as notas para lá.",
+        PassoConfig.Pareamento => "Ligar este caixa ao painel: é o que manda as vendas e as notas para lá.",
         _ => "Confira o que ficou configurado. Dá pra voltar em qualquer passo pela trilha aqui em cima.",
     };
 
@@ -1932,7 +1932,7 @@ public static class AssistenteConfig
         // instalação travada sem caminho é ligação para o suporte.
         var comoDescobrir = sugestao is null
             ? " Pegue a série deste caixa no painel: no passo 5, \"Parear com o painel\" traz " +
-              "a série já reservada para ele. Não escolha um número no palpite — série repetida " +
+              "a série já reservada para ele. Não escolha um número no palpite: série repetida " +
               "entre dois caixas só aparece na primeira venda, com cliente no balcão."
             : "";
 
@@ -1959,7 +1959,7 @@ public static class AssistenteConfig
             return new DiagnosticoSerie(2,
                 $"A última nota deste caixa foi recusada POR CAUSA DA SÉRIE {serie}: " +
                 $"a SEFAZ devolveu {Codigo(rec)}. Isso é outro caixa já emitindo na série {serie} com " +
-                "um número igual ou à frente do seu — a numeração desta série não é mais deste caixa." +
+                "um número igual ou à frente do seu: a numeração desta série não é mais deste caixa." +
                 Oferta(sugestao) + comoDescobrir,
                 sugestao);
 
@@ -1969,7 +1969,7 @@ public static class AssistenteConfig
         // único jeito de a troca não parecer que funcionou.
         if (doEmissor is int se && se != serie)
             return new DiagnosticoSerie(1,
-                $"Quem numera as notas deste PC é o emissor local, e ele está na série {se} — não na {serie}. " +
+                $"Quem numera as notas deste PC é o emissor local, e ele está na série {se}, não na {serie}. " +
                 $"Deixar {serie} aqui não muda a nota: o PDV volta a mostrar {se} sozinho. " +
                 $"Para emitir mesmo na {serie}, quem tem que mudar é o emissor (agent-config.json), com o suporte.",
                 se);
@@ -1984,7 +1984,7 @@ public static class AssistenteConfig
                 rr);
 
         return new DiagnosticoSerie(0,
-            $"Série {serie} — é ela que separa a numeração deste caixa da dos outros.", null);
+            $"Série {serie}: é ela que separa a numeração deste caixa da dos outros.", null);
 
         static string Oferta(int? sugestao) =>
             sugestao is int v ? $" A série {v} está reservada para este caixa; use ela." : "";
@@ -2004,7 +2004,7 @@ public static class AssistenteConfig
         3 when d.CpayChave.Trim().Length == 0 =>
             "Falta a chave de integração do ControlPay (portal → Integrações → Chaves de integração).",
         3 when d.CpayPessoa.Trim().Length == 0 =>
-            "Falta o ID da pessoa do ControlPay — ele fica no portal, junto do seu login.",
+            "Falta o ID da pessoa do ControlPay: ele fica no portal, junto do seu login.",
         3 when d.CpayTerminal.Trim().Length == 0 =>
             "Falta o ID do terminal. O botão \"Testar conexão com a PayGo\" lista os desta conta.",
         _ => null,
@@ -2019,7 +2019,7 @@ public static class AssistenteConfig
         if (!d.PedeAdmin) return null;
         if (d.AdminNome.Trim().Length < 2) return "Falta o nome do administrador (o dono da loja).";
         if (!Documentos.CpfValido(Documentos.SoDigitos(d.AdminCpf)))
-            return "CPF do administrador inválido — é com ele que o dono entra no caixa.";
+            return "CPF do administrador inválido: é com ele que o dono entra no caixa.";
         if (!Operadores.PinValido(d.AdminPin.Trim()))
             return "A senha do administrador deve ter de 4 a 6 dígitos.";
         return null;
@@ -2050,14 +2050,14 @@ public static class AssistenteConfig
         {
             new("Loja", identidade.Count > 0
                 ? string.Join(" · ", identidade)
-                : "Ainda em branco — volte ao passo 1.", identidade.Count == 0),
+                : "Ainda em branco: volte ao passo 1.", identidade.Count == 0),
             d.Recibo
                 ? new LinhaResumo("Nota fiscal",
-                    "SÓ RECIBO — nenhuma nota é emitida e o papel sai SEM VALOR FISCAL.", true)
+                    "SÓ RECIBO: nenhuma nota é emitida e o papel sai SEM VALOR FISCAL.", true)
                 : new LinhaResumo("Nota fiscal",
                     "Cupom fiscal (NFC-e) · "
                     + (serie.Length > 0 ? $"série {serie} · " : "série ainda em branco · ")
-                    + (d.Ambiente == 1 ? "produção" : "MODO TESTE — as notas não valem")
+                    + (d.Ambiente == 1 ? "produção" : "MODO TESTE: as notas não valem")
                     + (d.TemCertificado ? "" : " · sem certificado"),
                     d.Ambiente != 1 || !d.TemCertificado || serie.Length == 0),
             new("Impressora do cupom fiscal / recibo",
@@ -2072,7 +2072,7 @@ public static class AssistenteConfig
             new("Maquininha", ResumoTef(d), d.Tef == 3 && d.CpaySandbox),
             new("Pareamento", d.Pareado
                 ? "✓ Pareado com o painel. As vendas e as notas sobem no Sincronizar."
-                : "Ainda NÃO pareado — sem isso não dá para concluir.", !d.Pareado),
+                : "Ainda NÃO pareado: sem isso não dá para concluir.", !d.Pareado),
         };
         return linhas;
     }
@@ -2104,7 +2104,7 @@ public static class AssistenteConfig
             // que vai ACONTECER na venda, não o nome do produto. "Venda no POS" era nome
             // de fornecedor e custou caro: o dono marcou achando que era a maquininha da
             // mão, e o caixa ficou preso em "aguardando o cliente" com o cartão na mão.
-            1 => "Cobrança pela internet — o caixa manda o valor e ele acende na maquininha"
+            1 => "Cobrança pela internet: o caixa manda o valor e ele acende na maquininha"
                  + (d.PosSerial.Trim().Length > 0
                     ? $" {d.PosSerial.Trim()}" : " padrão da conta"),
             2 => $"PayGo (pinpad no cabo) · pasta {d.PayGoPasta.Trim()} · "
@@ -2112,7 +2112,7 @@ public static class AssistenteConfig
             3 => $"ControlPay (pinpad no cabo) · terminal {d.CpayTerminal.Trim()} · "
                  + Rede(d.CpayRedeCartao, "cartão") + " · " + Rede(d.CpayRedePix, "PIX")
                  + (d.CpaySandbox ? " · AMBIENTE DE TESTE (sandbox): nenhuma cobrança é de verdade" : ""),
-            _ => "Maquininha avulsa — o cliente passa o cartão na maquininha da mão. O caixa "
+            _ => "Maquininha avulsa: o cliente passa o cartão na maquininha da mão. O caixa "
                  + "registra que foi cartão e fecha a venda, mas não cobra nada por aqui.",
         };
     }

@@ -372,7 +372,7 @@ public static class AtualizarCaixa
         {
             Dialogo.Avisar(dono, "Já tem uma atualização em andamento",
                 "Este caixa está no meio de uma atualização iniciada agora há pouco.\n\n"
-                + "Espere ela terminar — nada foi alterado até aqui.", "erro");
+                + "Espere ela terminar. Nada foi alterado até aqui.", "erro");
             return false;
         }
         try
@@ -442,7 +442,7 @@ public static class AtualizarCaixa
             var (t, msg) = Atualizacao.Explicar(impede, agora);
             Dialogo.Avisar(dono, t,
                 "A versão nova já está baixada e guardada neste caixa.\n\n" + msg
-                + "\n\nQuando você tocar em Atualizar de novo, a troca é imediata — "
+                + "\n\nQuando você tocar em Atualizar de novo, a troca é imediata: "
                 + "não precisa baixar outra vez.", "erro");
             return false;
         }
@@ -501,7 +501,7 @@ public static class AtualizarCaixa
         }
         catch (Win32Exception w) when (w.NativeErrorCode == 1223)
         {
-            return "Você recusou a permissão do Windows. Nada foi alterado — "
+            return "Você recusou a permissão do Windows. Nada foi alterado: "
                  + "toque em Atualizar de novo e responda Sim à pergunta do Windows.";
         }
         catch (Exception ex) { return ex.Message; }
@@ -555,7 +555,7 @@ public static class AtualizarCaixa
 
         pilha.Children.Add(new TextBlock
         {
-            Text = "Pode cancelar a qualquer momento — o que já baixou fica guardado "
+            Text = "Pode cancelar a qualquer momento: o que já baixou fica guardado "
                  + "e a próxima tentativa continua de onde parou.",
             FontSize = 13, Foreground = (Brush)Application.Current.Resources["TextoFraco"],
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 14, 0, 18),
@@ -871,7 +871,7 @@ public static class AtualizarCaixa
                     Text = $"A versão {versao} já está baixada e conferida, e esta é a hora "
                          + "combinada para a troca.\n\n"
                          + "O caixa fecha e abre de novo sozinho. O turno continua aberto e o "
-                         + "fechamento não muda — quando ele voltar, entre com o seu PIN.\n\n"
+                         + "fechamento não muda. Quando ele voltar, entre com o seu PIN.\n\n"
                          + "Se tiver cliente chegando, toque em \"Agora não\".",
                     FontSize = 15, Foreground = (Brush)app.Resources["TextoFraco"],
                     TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 22),
