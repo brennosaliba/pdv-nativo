@@ -242,7 +242,7 @@ public static class TestesAtualizacao
                                   Atualizacao.Impedimento.CobrancaNoPinpad, Atualizacao.Impedimento.PapelNaFila })
         {
             var (t, m) = Atualizacao.Explicar(i, livre with { ItensNaComanda = 3, CobrancasNoPinpad = 1, PapeisNaFila = 1 });
-            checar(t.Length > 0 && m.Contains("O QUE FAZER"), $"portão: a recusa por {i} diz o que fazer para destravar");
+            checar(t.Length > 0 && m.Contains("Atualizar de novo"), $"portão: a recusa por {i} diz o que fazer para destravar");
         }
     }
 
@@ -262,8 +262,8 @@ public static class TestesAtualizacao
         checar(d.Mensagem.Contains("0.9.0") && d.Mensagem.Contains("0.10.0"),
             "decisão: o texto diz de onde para onde");
         checar(d.Mensagem.Contains("conserta o troco"), "decisão: as notas da versão chegam ao operador");
-        checar(d.Mensagem.Contains("fecha e abre"), "decisão: o operador fica sabendo que o caixa vai reiniciar");
-        checar(d.Mensagem.Contains("NÃO se perde"), "decisão: e que as vendas não se perdem");
+        checar(d.Mensagem.Contains("reinicia"), "decisão: o operador fica sabendo que o caixa vai reiniciar");
+        checar(d.Mensagem.Contains("ficam guardad"), "decisão: e que as vendas não se perdem");
 
         checar(Atualizacao.Decidir(livre, "0.10.0", nova).Situacao == Atualizacao.Situacao.EmDia,
             "decisão: mesma versão = em dia");
@@ -286,7 +286,7 @@ public static class TestesAtualizacao
             """, UrlManifesto);
         var o = Atualizacao.Decidir(livre, "0.9.0", obr);
         checar(o.Obrigatoria && o.Titulo.Contains("obrigatória"), "obrigatória: o título muda");
-        checar(o.Mensagem.Contains("OBRIGATÓRIA") && o.Mensagem.Contains("gerente"),
+        checar(o.Mensagem.Contains("obrigatória") && o.Mensagem.Contains("gerente"),
             "obrigatória: o texto diz o que é e a quem recorrer");
         checar(o.TextoNao == "Não posso agora",
             "obrigatória: recusar deixa de ser 'agora não' e vira uma frase que se leva ao gerente");
@@ -891,7 +891,7 @@ public static class TestesAtualizacao
             && Atualizacao.NomeDoImpedimento(Atualizacao.Impedimento.Nenhum) == "nenhum",
             "sozinho: o impedimento tem nome curto e estável para virar coluna no painel");
         var (t, msg) = Atualizacao.Explicar(Atualizacao.Impedimento.EstadoDesconhecido, filaIlegivel);
-        checar(t.Length > 0 && msg.Contains("O QUE FAZER"),
+        checar(t.Length > 0 && msg.Contains("Atualizar de novo"),
             "sozinho: até a recusa por 'não consegui conferir' diz o que fazer");
     }
 

@@ -370,9 +370,7 @@ public static class AtualizarCaixa
         // diálogo do vigia; no vigia, o próximo ciclo tenta de novo em 15 min.
         if (!await _umaDeCadaVez.WaitAsync(0).ConfigureAwait(true))
         {
-            Dialogo.Avisar(dono, "Já tem uma atualização em andamento",
-                "Este caixa está no meio de uma atualização iniciada agora há pouco.\n\n"
-                + "Espere ela terminar. Nada foi alterado até aqui.", "erro");
+            Dialogo.Avisar(dono, "Atualização em andamento", "Espere terminar.", "erro");
             return false;
         }
         try
@@ -426,8 +424,7 @@ public static class AtualizarCaixa
         {
             Auditar("atualizacao_falhou", baixa.Erro);
             Dialogo.Avisar(dono, "A atualização não terminou",
-                baixa.Erro + "\n\nO caixa NÃO foi alterado: ele continua na versão "
-                + Atualizacao.VersaoInstalada() + " e vendendo normalmente.", "erro");
+                baixa.Erro + "\nO caixa continua na versão " + Atualizacao.VersaoInstalada() + ".", "erro");
             return false;
         }
 
@@ -440,23 +437,16 @@ public static class AtualizarCaixa
         if (impede != Atualizacao.Impedimento.Nenhum)
         {
             var (t, msg) = Atualizacao.Explicar(impede, agora);
-            Dialogo.Avisar(dono, t,
-                "A versão nova já está baixada e guardada neste caixa.\n\n" + msg
-                + "\n\nQuando você tocar em Atualizar de novo, a troca é imediata: "
-                + "não precisa baixar outra vez.", "erro");
+            Dialogo.Avisar(dono, t, msg + "\nA versão nova já está baixada.", "erro");
             return false;
         }
 
         // 5. O PONTO SEM VOLTA, dito com todas as letras. Vale a segunda pergunta:
         //    entre o "sim" lá de cima e este instante passaram minutos, e sumir da
         //    tela sem avisar é diferente de fechar porque alguém mandou.
-        if (!Dialogo.Confirmar(dono, "Trocar agora",
-                $"A versão {v.Manifesto!.Versao} está baixada e conferida.\n\n"
-                + "Ao continuar, o caixa FECHA AGORA e o instalador abre para trocar o "
-                + "programa. O Windows vai pedir permissão de administrador.\n\n"
-                + "Ao terminar, clique em \"Abrir o caixa\" na tela do instalador e entre "
-                + "com o seu PIN.",
-                "Trocar agora e fechar", "Ainda não"))
+        // texto do dono (03/09): curto e direto
+        if (!Dialogo.Confirmar(dono, "Atualização concluída", "Deseja reiniciar o PDV?",
+                "Atualizar e reiniciar", "Ainda não"))
             return false;
 
         // 6. ENTREGA.
@@ -465,8 +455,7 @@ public static class AtualizarCaixa
         {
             Auditar("atualizacao_entrega_falhou", erro);
             Dialogo.Avisar(dono, "Não consegui abrir o instalador",
-                erro + "\n\nO caixa continua funcionando normalmente. "
-                + "O instalador baixado está em:\n" + baixa.Caminho, "erro");
+                erro + "\nO caixa continua funcionando. Arquivo: " + baixa.Caminho, "erro");
             return false;
         }
 
@@ -494,6 +483,9 @@ public static class AtualizarCaixa
             var p = Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
+                // 03/09: modo silencioso. O instalador troca o programa e reabre o
+                // caixa sem mostrar o assistente (ver Pdv.Instalador/App.xaml.cs).
+                Arguments = "--atualizar",
                 WorkingDirectory = System.IO.Path.GetDirectoryName(exe)!,
                 UseShellExecute = true,
             });
@@ -501,8 +493,7 @@ public static class AtualizarCaixa
         }
         catch (Win32Exception w) when (w.NativeErrorCode == 1223)
         {
-            return "Você recusou a permissão do Windows. Nada foi alterado: "
-                 + "toque em Atualizar de novo e responda Sim à pergunta do Windows.";
+            return "Permissão do Windows recusada. Toque em Atualizar de novo e responda Sim.";
         }
         catch (Exception ex) { return ex.Message; }
     }
@@ -555,8 +546,7 @@ public static class AtualizarCaixa
 
         pilha.Children.Add(new TextBlock
         {
-            Text = "Pode cancelar a qualquer momento: o que já baixou fica guardado "
-                 + "e a próxima tentativa continua de onde parou.",
+            Text = "Pode cancelar. O que já baixou fica guardado.",
             FontSize = 13, Foreground = (Brush)Application.Current.Resources["TextoFraco"],
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 14, 0, 18),
         });

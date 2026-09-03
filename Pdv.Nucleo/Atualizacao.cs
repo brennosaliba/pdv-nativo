@@ -387,34 +387,17 @@ public static class Atualizacao
     /// forma mais rápida de ensinar o operador a não ler a tela.</summary>
     public static (string Titulo, string Mensagem) Explicar(Impedimento i, EstadoDoCaixa e) => i switch
     {
-        Impedimento.ComandaAberta => ("Tem venda em andamento",
-            $"A comanda está aberta com {Plural(e.ItensNaComanda, "item", "itens")}.\n\n"
-            + "Para trocar o programa o caixa precisa fechar e abrir de novo, e reiniciar "
-            + "com o cliente no balcão é pior do que ficar mais um dia na versão atual.\n\n"
-            + "O QUE FAZER: termine ou limpe a comanda e toque em Atualizar de novo."),
-
-        Impedimento.MaquininhaOcupada => ("A maquininha está ocupada",
-            "Tem uma operação acontecendo na maquininha agora.\n\n"
-            + "O QUE FAZER: espere ela terminar na tela do pinpad e toque em Atualizar de novo."),
-
-        Impedimento.CobrancaNoPinpad => ("Tem cobrança na maquininha",
-            $"{Plural(e.CobrancasNoPinpad, "cobrança", "cobranças")} ainda sem resposta da maquininha.\n\n"
-            + "Fechar o caixa agora deixaria essa cobrança sem dono: o cliente pode ter pago "
-            + "e a venda não existir aqui.\n\n"
-            + "O QUE FAZER: termine ou cancele a cobrança no pinpad e toque em Atualizar de novo."),
-
-        Impedimento.PapelNaFila => ("Tem papel saindo",
-            $"{Plural(e.PapeisNaFila, "papel", "papéis")} na fila da impressora.\n\n"
-            + "O QUE FAZER: espere o cupom sair e toque em Atualizar de novo. "
-            + "Se a impressora estiver travada, resolva ela primeiro."),
-
-        Impedimento.EstadoDesconhecido => ("Não deu para conferir se é seguro",
-            "A fila da impressora não respondeu, então este caixa não consegue provar "
-            + "que não tem cupom saindo agora.\n\n"
-            + "A troca sozinha (na janela de atualização) fica para quando der. "
-            + "O QUE FAZER: toque em Atualizar. Pelo botão, quem julga se a loja está "
-            + "parada é você."),
-
+        // 03/09: uma frase de ação por impedimento (o dono pediu texto curto)
+        Impedimento.ComandaAberta => ("Venda em andamento",
+            "Termine ou limpe a comanda e toque em Atualizar de novo."),
+        Impedimento.MaquininhaOcupada => ("Maquininha ocupada",
+            "Espere a operação terminar e toque em Atualizar de novo."),
+        Impedimento.CobrancaNoPinpad => ("Cobrança na maquininha",
+            "Termine ou cancele a cobrança no pinpad e toque em Atualizar de novo."),
+        Impedimento.PapelNaFila => ("Impressora ocupada",
+            "Espere o cupom sair e toque em Atualizar de novo."),
+        Impedimento.EstadoDesconhecido => ("Impressora não respondeu",
+            "Confira a impressora e toque em Atualizar de novo."),
         _ => ("", ""),
     };
 
@@ -479,7 +462,7 @@ public static class Atualizacao
         if (leitura.Erro is { Length: > 0 })
             return new Veredito(Situacao.Erro, "Não consegui verificar",
                 leitura.Erro
-                + "\n\nO caixa continua funcionando normalmente. Tente de novo mais tarde.",
+                + "\nO caixa continua funcionando. Tente mais tarde.",
                 TextoSim: "Entendi", TextoNao: "");
 
         // Sem manifesto E sem erro = o PAINEL respondeu, e a resposta foi "não tenho
@@ -489,47 +472,38 @@ public static class Atualizacao
         // correto do sistema.
         if (leitura.Ok is null)
             return new Veredito(Situacao.EmDia, "Tudo em dia",
-                $"Este caixa está na versão {Mostrar(versaoInstalada)} e não tem nenhuma "
-                + "atualização liberada para ele.",
+                $"Versão {Mostrar(versaoInstalada)}. Nenhuma atualização liberada.",
                 TextoSim: "Entendi", TextoNao: "");
 
         var m2 = leitura.Ok;
         if (Comparar(versaoInstalada, m2.Versao) >= 0)
             return new Veredito(Situacao.EmDia, "Tudo em dia",
-                $"Este caixa já está na versão mais nova ({Mostrar(versaoInstalada)}). "
-                + "Não tem nada para atualizar.",
+                $"Versão {Mostrar(versaoInstalada)} é a mais nova.",
                 m2, TextoSim: "Entendi", TextoNao: "");
 
         var linhas = new List<string>
         {
-            $"Este caixa tem a versão {Mostrar(versaoInstalada)}. A nova é a {m2.Versao}.",
+            $"Versão {m2.Versao} disponível (atual: {Mostrar(versaoInstalada)}).",
         };
         if (m2.Notas is { Length: > 0 } notas) linhas.Add("\n" + notas.Trim());
 
         if (m2.Obrigatoria)
-            linhas.Add("\n⚠ ESTA ATUALIZAÇÃO É OBRIGATÓRIA. A versão que está aqui não deveria "
-                     + "mais estar rodando. Se você não puder parar agora, avise o gerente hoje.");
+            linhas.Add("\nAtualização obrigatória. Se não puder agora, avise o gerente.");
+        linhas.Add("\nO caixa reinicia. Vendas e caixa aberto ficam guardados.");
 
-        linhas.Add("\nO que vai acontecer: o caixa baixa a versão nova, fecha e abre de novo "
-                 + "sozinho. Leva alguns minutos, dependendo da internet da loja.");
-        linhas.Add("\nO que NÃO se perde: as vendas, as notas emitidas, a configuração da loja "
-                 + "e o caixa aberto. Nada disso mora junto do programa.");
 
         // Caixa aberto é AVISO, não bloqueio — o motivo está em Impede(). O que o
         // operador precisa saber é a única coisa que ele vai viver: o login de novo.
         if (estado.CaixaAberto)
-            linhas.Add("\nO turno continua aberto e o fechamento não muda. Quando o caixa "
-                     + "voltar, você entra de novo com o seu PIN.");
+            linhas.Add("\nO turno continua aberto. Entre com o PIN de novo.");
 
         if (estado.VendasPorSubir > 0)
-            linhas.Add($"\n{Plural(estado.VendasPorSubir, "venda ainda não subiu", "vendas ainda não subiram")} "
-                     + "para o painel. Elas ficam guardadas neste caixa e sobem depois: "
-                     + "a atualização não mexe nelas.");
+            linhas.Add($"\n{Plural(estado.VendasPorSubir, "venda ainda não subiu", "vendas ainda não subiram")} para o painel. Ficam guardadas.");
 
         return new Veredito(Situacao.Disponivel,
-            m2.Obrigatoria ? "Atualização obrigatória" : "Tem versão nova",
+            m2.Obrigatoria ? "Atualização obrigatória" : "Atualização disponível",
             string.Join("\n", linhas), m2, m2.Obrigatoria,
-            TextoSim: "Atualizar agora",
+            TextoSim: "Atualizar",
             TextoNao: m2.Obrigatoria ? "Não posso agora" : "Agora não");
     }
 

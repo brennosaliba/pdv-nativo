@@ -625,11 +625,33 @@ public partial class Venda : UserControl
         _estreita = estreita;
         _larguraAplicada = true;
 
-        // categorias: faixa no topo x coluna lateral
-        FaixaCategorias.Visibility = estreita ? Visibility.Visible : Visibility.Collapsed;
-        ColunaCategorias.Visibility = estreita ? Visibility.Collapsed : Visibility.Visible;
-        if (estreita) { ColCategorias.MinWidth = 0; ColCategorias.Width = new GridLength(0); }
-        else { ColCategorias.MinWidth = 172; ColCategorias.Width = new GridLength(1, GridUnitType.Star); }
+        // 03/09 (tarde): o dono reprovou a faixa no topo. Categorias ficam SEMPRE na
+        // coluna da esquerda; em tela estreita quem encolhe é a coluna da DIREITA
+        // (comanda, total, botões) e os cards de categoria ficam menores, 2 por linha.
+        FaixaCategorias.Visibility = Visibility.Collapsed;
+        ColunaCategorias.Visibility = Visibility.Visible;
+        ColCategorias.Width = new GridLength(1, GridUnitType.Star);
+        if (estreita)
+        {
+            ColCategorias.MinWidth = 200; ColCategorias.MaxWidth = 224;
+            ColComanda.MinWidth = 236; ColComanda.MaxWidth = 250;
+        }
+        else
+        {
+            ColCategorias.MinWidth = 172; ColCategorias.MaxWidth = 272;
+            ColComanda.MinWidth = 300; ColComanda.MaxWidth = 340;
+        }
+        _categoriaMini = estreita;
+        var catsAtuais = ListaCategorias.Items.Cast<Button>().Select(b => (string)b.Tag!).ToList();
+        if (catsAtuais.Count > 0) PreencherCategorias(catsAtuais);
+        AjustarColunasCategorias();
+
+        // rodapé da comanda mais magro
+        TxtTotal.FontSize = estreita ? 32 : 42;
+        TxtCupomRotulo.Text = estreita ? "Cupom de cortesia" : "Aplicar cupom de cortesia";
+        TxtLimparRotulo.Visibility = estreita ? Visibility.Collapsed : Visibility.Visible;
+        BtnLimpar.Padding = estreita ? new Thickness(14, 0, 14, 0) : new Thickness(18, 0, 18, 0);
+        TxtFinalizarRotulo.FontSize = estreita ? 17 : 19;
 
         // cabeçalho compacto: só quem está no caixa (avatar + nome), sem a linha
         // da sessão e sem repetir a loja (ela está na barra de baixo); botões menores
@@ -769,7 +791,7 @@ public partial class Venda : UserControl
         // PROMOÇÃO não é categoria de produto — a contagem dela é quantos produtos do
         // catálogo alguma promoção vigente alcança, não quantos têm essa categoria (zero).
         if (emPromo > 0) _quantosPorCategoria[CategoriaPromo] = emPromo;
-        _categoriaMini = false;   // 03/09: 3 por linha cortava os nomes; ver AjustarColunasCategorias
+        _categoriaMini = _estreita;   // 03/09: mini só em tela estreita (2 por linha, 3 linhas de nome)
         _quantasCategorias = cats.Count;
         AjustarColunasCategorias();
         // A vitrine de PROMOÇÃO fica no topo por ser o atalho mais valioso, mas ela
@@ -865,7 +887,7 @@ public partial class Venda : UserControl
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
             Margin = new Thickness(_categoriaMini ? 3 : 4),
-            MinHeight = _categoriaMini ? 88 : 124, Height = _categoriaMini ? 88 : 124,
+            MinHeight = _categoriaMini ? 100 : 124, Height = _categoriaMini ? 100 : 124,
             Padding = new Thickness(4, _categoriaMini ? 5 : 8, 4, _categoriaMini ? 5 : 8),
             Tag = categoria,
         };
@@ -899,7 +921,7 @@ public partial class Venda : UserControl
             FontSize = _categoriaMini ? 11.5 : 16, FontWeight = FontWeights.Bold,
             TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
             Margin = new Thickness(0, _categoriaMini ? 4 : 7, 0, 0),
-            MaxHeight = _categoriaMini ? 30 : 44,
+            MaxHeight = _categoriaMini ? 44 : 44,
             TextTrimming = TextTrimming.CharacterEllipsis,
             LineHeight = _categoriaMini ? 14 : 19,
         };
