@@ -1975,7 +1975,7 @@ public partial class Venda : UserControl
             return;
         }
 
-        static string Forma(string f) => f switch { "credito" => "Crédito", "debito" => "Débito", "pix" => "PIX", _ => f };
+        static string Forma(string f) => f switch { "credito" => "Crédito", "debito" => "Débito", "pix" => "PIX", "voucher" => "Refeição", _ => f };
         static string Hora(object? fe) => fe is string s && DateTime.TryParse(s, out var dt) ? dt.ToString("HH:mm") : "--:--";
         var rotulos = linhas.Select(l =>
             $"Venda #{l.numero_local} · {Hora(l.finalizada_em)} · {Forma((string)l.forma)} {new Dinheiro((long)l.valor_cent).Formatado()} · NSU {l.tef_nsu}")
@@ -2816,6 +2816,7 @@ public partial class Venda : UserControl
         "debito" => "Débito",
         "credito" => "Crédito",
         "pix" => "PIX",
+        "voucher" => "Refeição",
         _ => forma,
     };
 

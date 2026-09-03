@@ -1346,6 +1346,45 @@ Console.WriteLine();
 Console.WriteLine("--- Instalador (origem completa, copia por cima, dados intactos) ---");
 TestesInstalador.Rodar((cond, nome) => Check("instalador: " + nome, cond));
 
+
+// ── 03/09/2026: caixa da Savassi ──────────────────────────────────────────
+// (a) a tolerancia nao vai na mensagem do operador
+{
+    var opT = new Operador("t-tol", "Tolerancia", "operador");
+    var sT = Caixa.Abrir(cx, opT, Dinheiro.DeReais(100));
+    var contagem = new Dictionary<string, Dinheiro> { ["dinheiro"] = Dinheiro.DeReais(50) };
+    string? msg = null;
+    try { Caixa.Fechar(cx, sT, contagem, opT, Dinheiro.DeReais(2)); }
+    catch (InvalidOperationException e) { msg = e.Message; }
+    Check("fechamento com diferenca ainda pede justificativa", msg is not null && msg.Contains("Justifique"));
+    Check("a mensagem NAO revela a tolerancia", msg is not null && !msg.Contains("toler", StringComparison.OrdinalIgnoreCase));
+    Caixa.Fechar(cx, sT, contagem, opT, Dinheiro.DeReais(2), "teste");
+}
+// (b) pix do TEF com NSU e sem codigo de autorizacao NAO e contado no fechamento
+{
+    var opP = new Operador("t-pixnsu", "PixNsu", "operador");
+    Vendas.GravarConfig(cx, "tef_habilitado", "1");
+    var sP = Caixa.Abrir(cx, opP, Dinheiro.DeReais(100));
+    var vP = Guid.NewGuid().ToString();
+    cx.Execute("""
+        INSERT INTO venda (id, client_key, sessao_id, business_date, numero_local, operador_id,
+                           subtotal_cent, total_cent, status, criada_em, finalizada_em)
+        VALUES (@Id,@K,@S,@Bd,@N,@Op,@T,@T,'finalizada',@Em,@Em)
+        """,
+        new { Id = vP, K = vP, S = sP.Id, Bd = sP.BusinessDate,
+              N = cx.ExecuteScalar<int>("SELECT COALESCE(MAX(numero_local),0)+1 FROM venda WHERE business_date=@B", new { B = sP.BusinessDate }),
+              Op = opP.Id, T = Dinheiro.DeReais(10).Centavos, Em = DateTime.Now.ToString("o") });
+    cx.Execute("INSERT INTO venda_pagamento (id,venda_id,forma,valor_cent,troco_cent,tef_aut,tef_nsu) VALUES (@i,@v,'pix',1000,0,'NSU:123456','123456')",
+        new { i = Guid.NewGuid().ToString(), v = vP });
+    Check("pix com carimbo NSU nao volta para a contagem", !Caixa.FormasContadas(cx, sP).Contains("pix"));
+    Vendas.GravarConfig(cx, "tef_habilitado", "0");
+}
+// (c) voucher: tipo, codigo, tPag e formas contadas sem TEF
+Check("voucher analisa a partir de 'refeicao'/'vr'", TipoTefExtensoes.Analisar("refeicao") == TipoTef.Voucher && TipoTefExtensoes.Analisar("vr") == TipoTef.Voucher);
+Check("voucher tem codigo estavel", TipoTef.Voucher.Codigo() == "voucher");
+Check("voucher e contado no fechamento SEM TEF", Caixa.FormasContadas(cx).Contains("voucher"));
+Check("voucher vira tPag 11 (vale-refeicao) na NFC-e", Fiscal.TPagDaForma("voucher") == "11");
+
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }

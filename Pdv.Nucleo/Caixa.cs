@@ -264,7 +264,7 @@ public static class Caixa
     public static string[] FormasContadas(SqliteConnection cx)
         => Vendas.Config(cx, "tef_habilitado") == "1"
             ? new[] { "dinheiro" }
-            : new[] { "dinheiro", "debito", "credito", "pix" };
+            : new[] { "dinheiro", "debito", "credito", "pix", "voucher" };
 
     /// <summary>
     /// Versão que olha o TURNO, não só a configuração. Mesmo com TEF ligado, uma venda
@@ -413,9 +413,11 @@ public static class Caixa
                 .Select(l => $"{l.Forma}: {l.Situacao} de {l.Diferenca.Abs.Formatado()}"));
             // "Justifique" e o marcador que a tela usa pra abrir o campo de
             // justificativa (catch por Contains) - manter a palavra ao reescrever.
+            // 03/09: a tolerancia NAO vai na mensagem. Ela e regra do gestor, nao
+            // informacao do operador — "tolerancia R$ 2,00" na tela do caixa ensina
+            // que R$ 2,00 por dia passam sem pergunta.
             throw new InvalidOperationException(
-                $"A conferência encontrou {desvio.Formatado()} de diferença " +
-                $"(tolerância: {tolerancia.Formatado()}) — {detalhe}. " +
+                $"A conferência encontrou {desvio.Formatado()} de diferença — {detalhe}. " +
                 "Diferença acontece em qualquer operação; descreva o que houve. Justifique para fechar.");
         }
 

@@ -426,6 +426,8 @@
                                   Content="Imprimir as vias do comprovante (cliente e estabelecimento)"/>
                         <CheckBox x:Name="ChkTefParcelas" IsChecked="False" FontSize="14" Margin="0,0,0,8"
                                   Content="Perguntar as parcelas no crédito (desligado, todo crédito sai à vista)"/>
+                        <CheckBox x:Name="ChkTefVoucher" IsChecked="False" FontSize="14" Margin="0,0,0,8"
+                                  Content="Aceitar vale-refeição (Alelo, Sodexo, VR, Ticket) pela maquininha — mostra o botão Refeição na venda"/>
                     </StackPanel>
                     <TextBlock x:Name="TxtStatusTef" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,8"/>

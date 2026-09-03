@@ -101,6 +101,7 @@ public static class CancelamentoVenda
         "credito" => "Crédito",
         "debito" => "Débito",
         "pix" => "PIX",
+        "voucher" => "Refeição",
         "dinheiro" => "dinheiro",
         var outra => outra.Length == 0 ? "?" : char.ToUpperInvariant(outra[0]) + outra[1..],
     };

@@ -392,6 +392,14 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                     campos["731-000"] = "2";
                     campos["732-000"] = "1";
                     break;
+                case TipoTef.Voucher:
+                    // Modalidade 3 = voucher na Interface de Automacao PayGo. NAO
+                    // homologado ainda (a loja usa ControlPay); passo a incluir no
+                    // roteiro de homologacao — ver docs/TEF_PAYGO_homologacao.md.
+                    campos["749-000"] = "1";
+                    campos["731-000"] = "3";
+                    campos["732-000"] = "1";
+                    break;
                 default:
                     // Pix = carteira digital (749=8) com QR dinâmico (750=4). O QR aparece no
                     // pinpad (ou na tela do PayGo) — o PDV não desenha nada. Conferir no sandbox.

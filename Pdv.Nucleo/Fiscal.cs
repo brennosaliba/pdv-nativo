@@ -296,6 +296,7 @@ public static class Fiscal
     private static readonly Dictionary<string, string> _tPag = new(StringComparer.Ordinal)
     {
         ["dinheiro"] = "01", ["credito"] = "03", ["debito"] = "04", ["pix"] = "17",
+        ["voucher"] = "11",   // vale-refeicao (03/09)
     };
 
     // Só estes levam <card> (03,04,10..19). Dinheiro nunca — mandar card em tPag 01 é rejeição.
@@ -303,7 +304,7 @@ public static class Fiscal
     { "03", "04", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19" };
 
     /// <summary>Códigos que a fase 1 sabe emitir. Ver seção 4.1 antes de acrescentar qualquer um.</summary>
-    private static readonly HashSet<string> _tPagValidos = new(StringComparer.Ordinal) { "01", "03", "04", "17" };
+    private static readonly HashSet<string> _tPagValidos = new(StringComparer.Ordinal) { "01", "03", "04", "11", "17" };
 
     private static readonly CultureInfo PtBr = new("pt-BR");
 

@@ -9,7 +9,9 @@ using System.Text.Json.Serialization;
 namespace Pdv.Nucleo;
 
 /// <summary>Formas que passam pela maquininha. Dinheiro NÃO entra aqui (a edge devolve 400 para "dinheiro").</summary>
-public enum TipoTef { Credito, Debito, Pix }
+/// <summary>Voucher = vale-refeicao/alimentacao pela maquininha (Alelo, Sodexo, VR, Ticket).
+/// Entra em 03/09/2026 a pedido do dono; na NFC-e sai como tPag 11 (vale-refeicao).</summary>
+public enum TipoTef { Credito, Debito, Pix, Voucher }
 
 public static class TipoTefExtensoes
 {
@@ -23,6 +25,7 @@ public static class TipoTefExtensoes
         TipoTef.Credito => "credito",
         TipoTef.Debito => "debito",
         TipoTef.Pix => "pix",
+        TipoTef.Voucher => "voucher",
         _ => throw new ArgumentOutOfRangeException(nameof(t), t, "Forma sem mapeamento no TEF."),
     };
 
@@ -32,6 +35,7 @@ public static class TipoTefExtensoes
         "credito" or "crédito" or "credit" => TipoTef.Credito,
         "debito" or "débito" or "debit" => TipoTef.Debito,
         "pix" => TipoTef.Pix,
+        "voucher" or "vale" or "vr" or "va" or "refeicao" or "refeição" or "alimentacao" or "alimentação" or "vr_va" => TipoTef.Voucher,
         _ => null,
     };
 }

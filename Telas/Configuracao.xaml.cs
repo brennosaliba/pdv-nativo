@@ -170,6 +170,7 @@ public partial class Configuracao : UserControl
         TxtPayGoEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
         ChkPayGoVias.IsChecked = Vendas.Config(cx, "tef_paygo_imprimir_vias", "1") != "0";
         ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
+        ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "0") == "1";
         TxtTefSerial.Text = Vendas.Config(cx, "tef_serial_pos", "");
         // Rede é lista FECHADA (RedesPayGo), não mais texto livre: a loja entrou em
         // produção com o "PIX C6 BANK" da homologação gravado e toda cobrança PIX voltava
@@ -1339,7 +1340,7 @@ public partial class Configuracao : UserControl
     private static readonly string[] ChavesTef =
     {
         "tef_habilitado", "tef_provedor", "tef_paygo_pasta", "tef_paygo_registro", "tef_paygo_empresa",
-        "tef_paygo_rede", "tef_paygo_rede_pix", "tef_paygo_imprimir_vias", "tef_perguntar_parcelas", "tef_serial_pos",
+        "tef_paygo_rede", "tef_paygo_rede_pix", "tef_paygo_imprimir_vias", "tef_perguntar_parcelas", "forma_voucher", "tef_serial_pos",
         "tef_cpay_ambiente", "tef_cpay_terminal", "tef_cpay_pessoa",
         // As redes também: o Testar grava o que está na tela, e sair sem salvar tem que
         // devolver a rede que estava valendo — rede trocada é cobrança recusada.
@@ -1432,6 +1433,7 @@ public partial class Configuracao : UserControl
         Chave("tef_paygo_rede_pix", RedeEscolhida(CboPayGoRedePix));
         Vendas.GravarConfig(cx, "tef_paygo_imprimir_vias", ChkPayGoVias.IsChecked == false ? "0" : "1");
         Vendas.GravarConfig(cx, "tef_perguntar_parcelas", ChkTefParcelas.IsChecked == true ? "1" : "0");
+        Vendas.GravarConfig(cx, "forma_voucher", ChkTefVoucher.IsChecked == true ? "1" : "0");
         Chave("tef_serial_pos", TxtTefSerial.Text);
         Servicos.RecarregarTef();
     }

@@ -67,6 +67,7 @@ public partial class AberturaCaixa : UserControl
         "debito" => "Débito",
         "credito" => "Crédito",
         "pix" => "PIX",
+        "voucher" => "Refeição",
         _ => forma,
     };
 

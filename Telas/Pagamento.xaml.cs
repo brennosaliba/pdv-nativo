@@ -93,12 +93,24 @@ public partial class Pagamento : UserControl
         ("debito",   "Débito",   "💳", "Ciano"),
         ("credito",  "Crédito",  "💳", "Roxo"),
         ("pix",      "PIX",      "⚡", "Rosa"),
+        // 03/09: vale-refeicao (voucher) pelo TEF — so aparece quando a loja
+        // liga em Configuracao > TEF ("forma_voucher"). Loja sem convenio nao
+        // ganha um botao que so confunde.
+        ("voucher",  "Refeição", "🍽️", "Roxo"),
     };
+
+    private static bool VoucherLigado()
+    {
+        try { using var cx = Banco.Abrir(); return Vendas.Config(cx, "forma_voucher", "0") == "1"; }
+        catch { return false; }
+    }
 
     private void MontarFormas()
     {
+        var voucher = VoucherLigado();
         foreach (var (forma, rotulo, icone, cor) in Formas)
         {
+            if (forma == "voucher" && !voucher) continue;
             var c = ((SolidColorBrush)Application.Current.Resources[cor]).Color;
             var b = new Button
             {
@@ -387,6 +399,7 @@ public partial class Pagamento : UserControl
         {
             "credito" => TipoTef.Credito,
             "debito" => TipoTef.Debito,
+            "voucher" => TipoTef.Voucher,
             _ => TipoTef.Pix,
         };
 
@@ -435,8 +448,16 @@ public partial class Pagamento : UserControl
 
         if (d.Situacao == SituacaoTef.Pago)
         {
+            // 03/09 (Savassi): PIX pelo TEF volta APROVADO com NSU mas sem "codigo de
+            // autorizacao" (isso e coisa de cartao). O carimbo do fechamento e
+            // `tef_aut IS NULL` = manual — entao TODO pix do TEF era pedido na
+            // contagem (0 de 7 com carimbo). O NSU e a prova de que passou pela
+            // maquininha; vale como carimbo. O grupo <card> da NFC-e continua
+            // exigindo CNPJ da credenciadora, entao o pix nao ganha cAut no XML.
+            var carimbo = d.Cartao?.CAut
+                       ?? (d.Cartao?.Nsu is { Length: > 0 } nsu ? "NSU:" + nsu : null);
             AdicionarParte(new PagamentoVenda(forma, valor, Dinheiro.Zero,
-                d.Cartao?.CAut, d.Cartao?.Cnpj, d.Cartao?.Bandeira ?? d.Cartao?.TBand, d.Cartao?.Nsu));
+                carimbo, d.Cartao?.Cnpj, d.Cartao?.Bandeira ?? d.Cartao?.TBand, d.Cartao?.Nsu));
             return;
         }
 
@@ -869,7 +890,7 @@ public partial class Pagamento : UserControl
     private static string Rotulo(string forma) => forma switch
     {
         "dinheiro" => "Dinheiro", "debito" => "Débito",
-        "credito" => "Crédito", "pix" => "PIX", _ => forma,
+        "credito" => "Crédito", "pix" => "PIX", "voucher" => "Refeição", _ => forma,
     };
 
     // ── ESTADO DA TELA ──────────────────────────────────────────────────────

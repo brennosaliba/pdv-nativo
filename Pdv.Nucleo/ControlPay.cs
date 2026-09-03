@@ -81,6 +81,7 @@ public static class FormaControlPay
     {
         TipoTef.Credito => TefCredito,
         TipoTef.Debito => TefDebito,
+        TipoTef.Voucher => TefVoucher,
         _ => TefCarteiraDigital,
     };
 }
@@ -239,7 +240,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             // 1 parcela = À VISTA declarado (aVista): sem isso o pinpad ainda pergunta o
             // financiamento ao operador, e a loja não parcela. Parcelado (>1) vai pela LOJA.
             if (parc > 1) body["parcelamentoAdmin"] = false;
-            else if (tipo is TipoTef.Credito or TipoTef.Debito) body["aVista"] = true;
+            else if (tipo is TipoTef.Credito or TipoTef.Debito or TipoTef.Voucher) body["aVista"] = true;
             // Adquirente pré-selecionada: a doc recomenda deixar o roteamento decidir, mas na
             // HOMOLOGAÇÃO o roteiro exige um autorizador fixo (C6PAY / PIX C6 BANK) — sem isso o
             // PayGo abre o menu de redes e a venda cai na rede errada (que nega centavos).
@@ -699,7 +700,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
         Def("001-000", ident);
         Def("009-000", "0");
         Def("003-000", valorCent > 0 ? valorCent.ToString(CultureInfo.InvariantCulture) : null);
-        Def("731-000", tipo switch { TipoTef.Credito => "1", TipoTef.Debito => "2", _ => "0" });
+        Def("731-000", tipo switch { TipoTef.Credito => "1", TipoTef.Debito => "2", TipoTef.Voucher => "3", _ => "0" });
         if (pe.ValueKind == JsonValueKind.Object)
         {
             Def("012-000", Texto(pe, "nsuTid"));
