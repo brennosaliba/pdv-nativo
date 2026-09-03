@@ -95,6 +95,11 @@ if (args.Length >= 2 && args[0] == "--conferir-pacote")
     finally { try { if (Directory.Exists(tmp)) Directory.Delete(tmp, true); } catch { } }
 }
 
+// Modo FOTO: fotografa a tela de venda numa resolução (ver Pdv.Testes/FotoVenda.cs).
+//   Pdv.Testes.exe --foto-venda saida.png 1024 768 [categoria] [claro|escuro] [item;item]
+if (args.Length >= 4 && args[0] == "--foto-venda")
+    return FotoVenda.Rodar(args);
+
 if (args.Length >= 3 && args[0] == "--sonda-2a-instancia")
 {
     using var trava = InstanciaUnica.Tentar(args[2]);
@@ -1348,43 +1353,54 @@ TestesInstalador.Rodar((cond, nome) => Check("instalador: " + nome, cond));
 
 
 // ── 03/09/2026: caixa da Savassi ──────────────────────────────────────────
+// Banco PROPRIO: o `cx` da bateria chega aqui com a sessao da Maria aberta (a
+// suite deixa de proposito), e Caixa.Abrir recusa uma segunda sessao. Em 03/09 a
+// suite MORREU aqui em excecao nao tratada e a esteira nao viu (so procurava
+// "FALHA"): 0.3.3 e 0.3.4 sairam com o fim da bateria sem rodar.
+var arquivoT = Path.Combine(Path.GetTempPath(), $"pdv-teste-0309-{Guid.NewGuid():N}.db");
+Banco.Migrar(arquivoT);
+var cxT = Banco.Abrir(arquivoT);
 // (a) a tolerancia nao vai na mensagem do operador
 {
     var opT = new Operador("t-tol", "Tolerancia", "operador");
-    var sT = Caixa.Abrir(cx, opT, Dinheiro.DeReais(100));
+    Operadores.Salvar(cxT, opT.Id, opT.Nome, "1234", "operador");
+    var sT = Caixa.Abrir(cxT, opT, Dinheiro.DeReais(100));
     var contagem = new Dictionary<string, Dinheiro> { ["dinheiro"] = Dinheiro.DeReais(50) };
     string? msg = null;
-    try { Caixa.Fechar(cx, sT, contagem, opT, Dinheiro.DeReais(2)); }
+    try { Caixa.Fechar(cxT, sT, contagem, opT, Dinheiro.DeReais(2)); }
     catch (InvalidOperationException e) { msg = e.Message; }
     Check("fechamento com diferenca ainda pede justificativa", msg is not null && msg.Contains("Justifique"));
     Check("a mensagem NAO revela a tolerancia", msg is not null && !msg.Contains("toler", StringComparison.OrdinalIgnoreCase));
-    Caixa.Fechar(cx, sT, contagem, opT, Dinheiro.DeReais(2), "teste");
+    Caixa.Fechar(cxT, sT, contagem, opT, Dinheiro.DeReais(2), "teste");
 }
 // (b) pix do TEF com NSU e sem codigo de autorizacao NAO e contado no fechamento
 {
     var opP = new Operador("t-pixnsu", "PixNsu", "operador");
-    Vendas.GravarConfig(cx, "tef_habilitado", "1");
-    var sP = Caixa.Abrir(cx, opP, Dinheiro.DeReais(100));
+    Operadores.Salvar(cxT, opP.Id, opP.Nome, "4321", "operador");
+    Vendas.GravarConfig(cxT, "tef_habilitado", "1");
+    var sP = Caixa.Abrir(cxT, opP, Dinheiro.DeReais(100));
     var vP = Guid.NewGuid().ToString();
-    cx.Execute("""
+    cxT.Execute("""
         INSERT INTO venda (id, client_key, sessao_id, business_date, numero_local, operador_id,
                            subtotal_cent, total_cent, status, criada_em, finalizada_em)
         VALUES (@Id,@K,@S,@Bd,@N,@Op,@T,@T,'finalizada',@Em,@Em)
         """,
         new { Id = vP, K = vP, S = sP.Id, Bd = sP.BusinessDate,
-              N = cx.ExecuteScalar<int>("SELECT COALESCE(MAX(numero_local),0)+1 FROM venda WHERE business_date=@B", new { B = sP.BusinessDate }),
+              N = cxT.ExecuteScalar<int>("SELECT COALESCE(MAX(numero_local),0)+1 FROM venda WHERE business_date=@B", new { B = sP.BusinessDate }),
               Op = opP.Id, T = Dinheiro.DeReais(10).Centavos, Em = DateTime.Now.ToString("o") });
-    cx.Execute("INSERT INTO venda_pagamento (id,venda_id,forma,valor_cent,troco_cent,tef_aut,tef_nsu) VALUES (@i,@v,'pix',1000,0,'NSU:123456','123456')",
+    cxT.Execute("INSERT INTO venda_pagamento (id,venda_id,forma,valor_cent,troco_cent,tef_aut,tef_nsu) VALUES (@i,@v,'pix',1000,0,'NSU:123456','123456')",
         new { i = Guid.NewGuid().ToString(), v = vP });
-    Check("pix com carimbo NSU nao volta para a contagem", !Caixa.FormasContadas(cx, sP).Contains("pix"));
-    Vendas.GravarConfig(cx, "tef_habilitado", "0");
+    Check("pix com carimbo NSU nao volta para a contagem", !Caixa.FormasContadas(cxT, sP).Contains("pix"));
+    Vendas.GravarConfig(cxT, "tef_habilitado", "0");
 }
 // (c) voucher: tipo, codigo, tPag e formas contadas sem TEF
 Check("voucher analisa a partir de 'refeicao'/'vr'", TipoTefExtensoes.Analisar("refeicao") == TipoTef.Voucher && TipoTefExtensoes.Analisar("vr") == TipoTef.Voucher);
 Check("voucher tem codigo estavel", TipoTef.Voucher.Codigo() == "voucher");
-Check("voucher e contado no fechamento SEM TEF", Caixa.FormasContadas(cx).Contains("voucher"));
+Check("voucher e contado no fechamento SEM TEF", Caixa.FormasContadas(cxT).Contains("voucher"));
 Check("voucher vira tPag 11 (vale-refeicao) na NFC-e", Fiscal.TPagDaForma("voucher") == "11");
 
+cxT.Dispose();
+try { File.Delete(arquivoT); } catch { }
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }

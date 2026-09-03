@@ -19,6 +19,7 @@
          compilar o app WPF junto: com o Pdv.exe ABERTO na máquina, o build falha por
          arquivo em uso — feche o PDV antes de rodar a suíte. -->
     <ProjectReference Include="..\Pdv.csproj" />
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
   </ItemGroup>
 
   <ItemGroup>

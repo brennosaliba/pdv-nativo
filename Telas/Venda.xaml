@@ -29,15 +29,16 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid>
+    <Grid x:Name="Raiz" SizeChanged="RaizRedimensionou">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>   <!-- cabeçalho -->
+            <RowDefinition Height="Auto"/>   <!-- faixa de categorias (só em tela estreita) -->
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- ══ TOPO: quem está no caixa. Responsabilidade sobre dinheiro precisa ter cara. ══ -->
-        <Border Grid.Row="0" Background="{DynamicResource BarraDegrade}" Padding="18,10"
+        <Border Grid.Row="0" x:Name="Cabecalho" Background="{DynamicResource BarraDegrade}" Padding="18,10"
                 BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,0,1">
             <Grid>
                 <!-- DUAS COLUNAS, e a ordem de prioridade importa.
@@ -60,8 +61,8 @@
                     <ColumnDefinition Width="*" MinWidth="0"/>
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
-                            ClipToBounds="True" MaxWidth="360" Margin="0,0,12,0">
+                <StackPanel Grid.Column="0" x:Name="Identidade" Orientation="Horizontal" VerticalAlignment="Center"
+                            ClipToBounds="True" MaxWidth="470" Margin="0,0,12,0">
                     <!-- Logo da loja quando houver arquivo; senão o nome dela. O mesmo
                          executável atende qualquer cliente: nada de marca fixa aqui. -->
                     <Image x:Name="ImgLogo" Height="34" Margin="0,0,4,0" Visibility="Collapsed"
@@ -72,7 +73,7 @@
                     <Ellipse x:Name="PontoLogo" Width="7" Height="7" Fill="{DynamicResource Rosa}"
                              Margin="6,0,0,4" VerticalAlignment="Bottom"/>
 
-                    <Border Width="1" Background="{DynamicResource Borda}" Margin="20,4,20,4"/>
+                    <Border x:Name="Separador" Width="1" Background="{DynamicResource Borda}" Margin="20,4,20,4"/>
 
                     <Border Width="40" Height="40" CornerRadius="20" VerticalAlignment="Center"
                             Background="{DynamicResource AvatarDegrade}">
@@ -87,7 +88,7 @@
                     </StackPanel>
                 </StackPanel>
 
-                <WrapPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                <WrapPanel Grid.Column="1" x:Name="Botoes" Orientation="Horizontal" HorizontalAlignment="Right"
                            VerticalAlignment="Center">
                     <!-- Sincronizar é ato EXPLÍCITO: o gerente mexe no painel, o caixa
                          aperta o botão. O PDV nunca fica esperando a nuvem para vender. -->
@@ -188,7 +189,31 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1">
+        <!-- 03/09 (Savassi, 1024x768): em tela estreita as categorias saem da coluna
+             lateral e viram uma FAIXA no topo, com rolagem para o lado (dedo, roda do
+             mouse ou as setas). O centro fica inteiro para os produtos. Decisão em
+             AplicarLargura (Venda.xaml.cs). -->
+        <Border Grid.Row="1" x:Name="FaixaCategorias" Visibility="Collapsed"
+                Background="{DynamicResource FundoAfundado}" BorderBrush="{DynamicResource Borda}"
+                BorderThickness="0,0,0,1" Padding="6,6,6,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Content="◀" Width="40" Height="56" MinHeight="56" FontSize="14" Padding="0"
+                        Style="{StaticResource BotaoBase}" Click="FaixaEsquerda" ToolTip="Categorias anteriores"/>
+                <ScrollViewer Grid.Column="1" x:Name="RolagemFaixa" HorizontalScrollBarVisibility="Hidden"
+                              VerticalScrollBarVisibility="Disabled" PanningMode="HorizontalOnly"
+                              PreviewMouseWheel="FaixaRoda" Margin="4,0,4,0">
+                    <StackPanel x:Name="ListaCategoriasTopo" Orientation="Horizontal"/>
+                </ScrollViewer>
+                <Button Grid.Column="2" Content="▶" Width="40" Height="56" MinHeight="56" FontSize="14" Padding="0"
+                        Style="{StaticResource BotaoBase}" Click="FaixaDireita" ToolTip="Próximas categorias"/>
+            </Grid>
+        </Border>
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <!-- LARGURA PROPORCIONAL, não fixa. Antes eram 272 e 404 PIXELS travados:
                      676 px presos nas laterais em qualquer tela. Num monitor pequeno
@@ -204,9 +229,9 @@
                      e sobrava 188 para as categorias, com 3 por linha e nome quebrado.
                      O dono pediu: centro = produtos (maior), direita = comanda + total
                      (menor). MinWidth 250 cabe TOTAL, cupom e os dois botoes. -->
-                <ColumnDefinition Width="1*"   MinWidth="172" MaxWidth="272"/>  <!-- categorias -->
-                <ColumnDefinition Width="3.8*"/>                                <!-- produtos  -->
-                <ColumnDefinition Width="1.1*" MinWidth="250" MaxWidth="340"/>  <!-- comanda   -->
+                <ColumnDefinition x:Name="ColCategorias" Width="1*"   MinWidth="172" MaxWidth="272"/>  <!-- categorias (some em tela estreita) -->
+                <ColumnDefinition x:Name="ColProdutos"   Width="3.8*"/>                                <!-- produtos  -->
+                <ColumnDefinition x:Name="ColComanda"    Width="1.1*" MinWidth="300" MaxWidth="340"/>  <!-- comanda: 300 é o mínimo que cabe TOTAL, cupom, Limpar e Finalizar -->
             </Grid.ColumnDefinitions>
 
             <!-- ══ ESQUERDA: categorias ══ -->
@@ -358,7 +383,7 @@
                                     MinHeight="46" Margin="0,0,0,10" IsEnabled="False" HorizontalContentAlignment="Center">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="🎁" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                    <TextBlock Text="Aplicar cupom de cortesia" FontSize="15" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Aplicar cupom de cortesia" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                                 </StackPanel>
                             </Button>
                             <Grid>
@@ -395,7 +420,7 @@
 
         <!-- ══ RODAPÉ: estado do caixa. Offline muda o regime fiscal (contingência),
              então o operador precisa ver isso sem abrir menu nenhum. ══ -->
-        <Border Grid.Row="2" Background="{DynamicResource BarraDegrade}" Padding="16,7"
+        <Border Grid.Row="3" Background="{DynamicResource BarraDegrade}" Padding="16,7"
                 BorderBrush="{DynamicResource Borda}" BorderThickness="0,1,0,0">
             <Grid>
                 <Border x:Name="ChipRede" CornerRadius="11" Padding="11,4,13,5" HorizontalAlignment="Left"

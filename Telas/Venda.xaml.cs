@@ -174,8 +174,7 @@ public partial class Venda : UserControl
         // botões; reconstruir é imperceptível e elimina a classe inteira de
         // "sobrou cor do tema velho".
         var cats = ListaCategorias.Items.Cast<Button>().Select(b => (string)b.Tag!).ToList();
-        ListaCategorias.Items.Clear();
-        foreach (var c in cats) ListaCategorias.Items.Add(BotaoCategoria(c));
+        PreencherCategorias(cats);
         RepintarCategorias();
         PintarProdutos();
         PintarComanda();
@@ -602,6 +601,81 @@ public partial class Venda : UserControl
         if (ColunasCategorias != cols) ColunasCategorias = cols;
     }
 
+    // ── tela estreita (03/09/2026, Savassi 1024x768) ─────────────────────────
+    // Duas tentativas de "encolher a coluna" pioraram a tela: cabeçalho em três
+    // linhas, nomes de categoria cortados, nome do item invisível na comanda. A
+    // saída que o dono pediu: abaixo de ~1180 px as categorias vão para uma FAIXA
+    // no topo (rolagem lateral) e o centro fica inteiro para os produtos; o
+    // cabeçalho fica compacto. Acima disso, nada muda.
+    private const double LarguraEstreita = 1500;
+    private bool _estreita;
+    private bool _larguraAplicada;
+
+    private void RaizRedimensionou(object sender, SizeChangedEventArgs e) => AplicarLargura(e.NewSize.Width);
+
+    private void AplicarLargura(double largura)
+    {
+        var estreita = largura > 0 && largura < LarguraEstreita;
+        if (_larguraAplicada && estreita == _estreita) return;
+        _estreita = estreita;
+        _larguraAplicada = true;
+
+        // categorias: faixa no topo x coluna lateral
+        FaixaCategorias.Visibility = estreita ? Visibility.Visible : Visibility.Collapsed;
+        ColunaCategorias.Visibility = estreita ? Visibility.Collapsed : Visibility.Visible;
+        if (estreita) { ColCategorias.MinWidth = 0; ColCategorias.Width = new GridLength(0); }
+        else { ColCategorias.MinWidth = 172; ColCategorias.Width = new GridLength(1, GridUnitType.Star); }
+
+        // cabeçalho compacto: só quem está no caixa (avatar + nome), sem a linha
+        // da sessão e sem repetir a loja (ela está na barra de baixo); botões menores
+        Identidade.MaxWidth = estreita ? 240 : 470;
+        var marca = estreita ? Visibility.Collapsed : Visibility.Visible;
+        TxtLoja.Visibility = marca;
+        PontoLogo.Visibility = marca;
+        Separador.Visibility = marca;
+        if (estreita) ImgLogo.Visibility = Visibility.Collapsed; else CarregarIdentificacao();
+        TxtSessao.Visibility = marca;
+        TxtOperador.FontSize = estreita ? 15 : 16;
+        foreach (var b in Botoes.Children.OfType<Button>())
+        {
+            if (estreita)
+            {
+                b.FontSize = 12.5; b.Padding = new Thickness(10, 0, 10, 0);
+                b.MinHeight = 38; b.Margin = new Thickness(4, 2, 0, 2);
+            }
+            else
+            {
+                b.ClearValue(FontSizeProperty); b.ClearValue(PaddingProperty);
+                b.ClearValue(MinHeightProperty); b.ClearValue(MarginProperty);
+            }
+            if (b.Content is StackPanel sp && sp.Children.Count > 0 && sp.Children[0] is TextBlock icone)
+                icone.FontSize = estreita ? 14 : 17;
+        }
+        RepintarCategorias();
+    }
+
+    private void FaixaEsquerda(object sender, RoutedEventArgs e)
+        => RolagemFaixa.ScrollToHorizontalOffset(RolagemFaixa.HorizontalOffset - 320);
+    private void FaixaDireita(object sender, RoutedEventArgs e)
+        => RolagemFaixa.ScrollToHorizontalOffset(RolagemFaixa.HorizontalOffset + 320);
+    private void FaixaRoda(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        RolagemFaixa.ScrollToHorizontalOffset(RolagemFaixa.HorizontalOffset - e.Delta);
+        e.Handled = true;
+    }
+
+    /// <summary>As duas listas (coluna e faixa) nascem juntas; a largura decide qual aparece.</summary>
+    private void PreencherCategorias(IEnumerable<string> cats)
+    {
+        ListaCategorias.Items.Clear();
+        ListaCategoriasTopo.Children.Clear();
+        foreach (var c in cats)
+        {
+            ListaCategorias.Items.Add(BotaoCategoria(c));
+            ListaCategoriasTopo.Children.Add(BotaoCategoria(c, faixa: true));
+        }
+    }
+
     private void GradeRedimensionou(object sender, SizeChangedEventArgs e)
     {
         _larguraGrade = e.NewSize.Width;
@@ -617,13 +691,13 @@ public partial class Venda : UserControl
         var util = _larguraGrade - 20;
         _colunasProdutos = _modoLista
             ? Math.Clamp((int)(util / 420), 1, 3)
-            : Math.Clamp((int)(util / 178), 2, 8);
+            : Math.Clamp((int)(util / 165), 2, 8);
         // aba PROMOCAO: secoes lado a lado (1-3 pela largura, pedido do dono
         // no teste SaaS com 13 promocoes); a grade interna reparte o que sobra
         if (_categoriaAtual == CategoriaPromo)
         {
             Colunas = Math.Clamp((int)(util / 520), 1, 3);
-            _colunasProdutosSecao = Math.Clamp((int)((util / Colunas - 28) / 178), 1, 4);
+            _colunasProdutosSecao = Math.Clamp((int)((util / Colunas - 28) / 165), 1, 4);
         }
         else
         {
@@ -690,7 +764,7 @@ public partial class Venda : UserControl
         // PROMOÇÃO não é categoria de produto — a contagem dela é quantos produtos do
         // catálogo alguma promoção vigente alcança, não quantos têm essa categoria (zero).
         if (emPromo > 0) _quantosPorCategoria[CategoriaPromo] = emPromo;
-        _categoriaMini = cats.Count > 12;
+        _categoriaMini = false;   // 03/09: 3 por linha cortava os nomes; ver AjustarColunasCategorias
         _quantasCategorias = cats.Count;
         AjustarColunasCategorias();
         // A vitrine de PROMOÇÃO fica no topo por ser o atalho mais valioso, mas ela
@@ -700,7 +774,7 @@ public partial class Venda : UserControl
         // atendimento — a Promoção continua a um toque de distância.
         _categoriaAtual = cats.FirstOrDefault(c => c != CategoriaPromo)
                           ?? cats.FirstOrDefault() ?? "";
-        foreach (var c in cats) ListaCategorias.Items.Add(BotaoCategoria(c));
+        PreencherCategorias(cats);
         RepintarCategorias();
         PintarProdutos();
         PintarComanda();
@@ -733,9 +807,55 @@ public partial class Venda : UserControl
     /// o operador lê; o ícone só serve de âncora visual, então não precisa ocupar
     /// metade do botão. O contador ajuda a perceber quando o catálogo veio incompleto.
     /// </summary>
-    private Button BotaoCategoria(string categoria)
+    private Button BotaoCategoria(string categoria, bool faixa = false)
     {
         var (icone, cor) = Visual(categoria);
+        if (faixa)
+        {
+            // chip horizontal: ícone, nome inteiro numa linha e a contagem
+            var bf = new Button
+            {
+                Style = (Style)Application.Current.Resources["BotaoBase"],
+                Margin = new Thickness(3, 0, 3, 0), MinHeight = 56, Height = 56,
+                Padding = new Thickness(10, 0, 12, 0), Tag = categoria,
+            };
+            var linha = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            linha.Children.Add(new Border
+            {
+                Width = 28, Height = 28, CornerRadius = new CornerRadius(14),
+                Background = Degrade(cor, RD("FatorDegradeClaro"), RD("FatorDegradeEscuro")),
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 9, 0),
+                Child = new TextBlock
+                {
+                    Text = icone, FontSize = 14,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                },
+            });
+            var nomeF = new TextBlock
+            {
+                Text = Capitalizar(categoria), FontSize = 14, FontWeight = FontWeights.Bold,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            nomeF.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
+            linha.Children.Add(nomeF);
+            var contF = new TextBlock
+            {
+                Text = _quantosPorCategoria.GetValueOrDefault(categoria).ToString(),
+                FontSize = 11, FontWeight = FontWeights.Bold,
+            };
+            contF.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+            var seloF = new Border
+            {
+                CornerRadius = new CornerRadius(8), Padding = new Thickness(7, 0, 7, 1),
+                Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Child = contF,
+            };
+            seloF.SetResourceReference(Border.BackgroundProperty, "VeuElevado");
+            linha.Children.Add(seloF);
+            bf.Content = linha;
+            AutomationProperties.SetName(bf, categoria);
+            bf.Click += (_, _) => { _categoriaAtual = categoria; RepintarCategorias(); PintarProdutos(); };
+            return bf;
+        }
         var b = new Button
         {
             Style = (Style)Application.Current.Resources["BotaoBase"],
@@ -807,11 +927,12 @@ public partial class Venda : UserControl
     /// </summary>
     private void RepintarCategorias()
     {
-        foreach (Button b in ListaCategorias.Items)
+        foreach (var b in ListaCategorias.Items.Cast<Button>().Concat(ListaCategoriasTopo.Children.OfType<Button>()))
         {
             var cat = (string?)b.Tag ?? "";
             var (_, cor) = Visual(cat);
             var ativa = cat == _categoriaAtual;
+            if (ativa && _estreita && b.Parent == ListaCategoriasTopo) b.BringIntoView();
             // Alphas vêm do tema: os do escuro lavam sobre creme, os do claro
             // estouram sobre grafite. Byte por chave, calibrado por paleta.
             b.Background = new LinearGradientBrush(
@@ -1348,8 +1469,12 @@ public partial class Venda : UserControl
         };
 
         var g = new Grid();
-        g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        // 03/09: os botões de quantidade moravam na coluna Auto junto com o total,
+        // então a coluna Auto media ~190 px e o nome (coluna *) ficava com ~20 px:
+        // uma letra por linha, ou nada. Os controles agora têm a própria linha.
+        g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // nome · total
+        g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // qtd × unitário
+        g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // − qtd + 🗑
         g.ColumnDefinitions.Add(new ColumnDefinition());
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
@@ -1438,7 +1563,8 @@ public partial class Venda : UserControl
         lixeira.Click += (_, _) => { _comanda.Remove(item); PintarComanda(); };
         controles.Children.Add(lixeira);
 
-        Grid.SetRow(controles, 1); Grid.SetColumn(controles, 1);
+        controles.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetRow(controles, 2); Grid.SetColumn(controles, 0); Grid.SetColumnSpan(controles, 2);
         g.Children.Add(controles);
 
         borda.Child = g;
