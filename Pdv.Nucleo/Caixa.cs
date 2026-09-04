@@ -267,11 +267,19 @@ public static class Caixa
             : new[] { "dinheiro", "debito", "credito", "pix", "voucher" };
 
     /// <summary>
+    /// Pagamento INTEGRADO (aprovado pela maquininha do TEF), em SQL sobre `venda_pagamento p`:
+    /// tem carimbo, cAut ou NSU. É a MESMA regra de <see cref="PagamentoVenda.Integrado"/>;
+    /// o contrário é o POS avulso (cartão passado fora do TEF, sem linha em `tef_transacao`).
+    /// Uma definição só para os dois lados, senão a tela e o fechamento discordam.
+    /// </summary>
+    public const string SqlIntegrado = "(p.tef_aut IS NOT NULL OR p.tef_nsu IS NOT NULL)";
+
+    /// <summary>
     /// Versão que olha o TURNO, não só a configuração. Mesmo com TEF ligado, uma venda
-    /// pode ter saído como POS avulsa (o fallback de quando o TEF falha na hora) — e o
-    /// pagamento manual não tem autorização do TEF gravada. Nesse caso a forma volta a
-    /// ser CONTADA: o total do fechamento da maquininha cobre as duas (a integrada e a
-    /// manual passam na mesma máquina), então a conferência fecha naturalmente.
+    /// pode ter saído como POS avulsa (botão POS da grade, ou o fallback de quando o TEF
+    /// falha na hora) — e o pagamento manual não tem carimbo do TEF gravado. Nesse caso a
+    /// forma volta a ser CONTADA: o operador soma o fechamento das maquininhas (a
+    /// integrada e a avulsa) e confere contra o PDV, que tem as duas.
     /// </summary>
     public static string[] FormasContadas(SqliteConnection cx, Sessao sessao)
     {
@@ -281,13 +289,34 @@ public static class Caixa
         // Venda de teste não conta aqui pelo mesmo motivo de Apurado: ela não está no
         // fechamento da maquininha, então não pode puxar uma forma de volta para a
         // contagem — o operador digitaria o total da máquina e sobraria a diferença.
-        var manuais = cx.Query<string>("""
+        var manuais = cx.Query<string>($"""
             SELECT DISTINCT p.forma
               FROM venda_pagamento p JOIN venda v ON v.id = p.venda_id
              WHERE v.sessao_id = @S AND v.status = 'finalizada' AND v.homologacao = 0
-               AND p.forma <> 'dinheiro' AND p.tef_aut IS NULL
+               AND p.forma <> 'dinheiro' AND NOT {SqlIntegrado}
             """, new { S = sessao.Id }).ToList();
         return manuais.Count == 0 ? basicas : manuais.Prepend("dinheiro").Distinct().ToArray();
+    }
+
+    /// <summary>
+    /// O que as vendas do turno receberam PELA MAQUININHA INTEGRADA, por forma. É o único
+    /// lado do PDV que pode ser comparado com `tef_transacao`: o POS avulso passou em outra
+    /// máquina (ou na mesma, à mão) e não deixa linha no TEF — somá-lo aqui inventaria
+    /// divergência quando o TEF está certo e, pior, ESCONDERIA um cartão TEF que sumiu
+    /// (R$ 100 órfãos no TEF "batem" com R$ 100 de POS no PDV, e ninguém confere).
+    /// </summary>
+    public static Dictionary<string, Dinheiro> ApuradoIntegrado(SqliteConnection cx, Sessao sessao)
+    {
+        var r = new Dictionary<string, Dinheiro>();
+        var pagos = cx.Query($"""
+            SELECT p.forma, SUM(p.valor_cent - p.troco_cent) AS total
+              FROM venda_pagamento p JOIN venda v ON v.id = p.venda_id
+             WHERE v.sessao_id = @Ses AND v.status = 'finalizada' AND v.homologacao = 0
+               AND {SqlIntegrado}
+             GROUP BY p.forma
+            """, new { Ses = sessao.Id });
+        foreach (var p in pagos) r[(string)p.forma] = new Dinheiro((long)p.total);
+        return r;
     }
 
     /// <summary>
@@ -371,8 +400,14 @@ public static class Caixa
             """, new { Ses = sessao.Id, Desde = sessao.AberturaEm.ToString("o") })
             .ToDictionary(x => (string)x.forma, x => new Dinheiro((long)x.total));
 
-        var naVenda = Apurado(cx, sessao);
-        return noTef.Keys.Union(naVenda.Keys.Where(f => !FormasContadas(cx, sessao).Contains(f)))
+        // Do lado do PDV entra SÓ o que foi integrado (04/09). Antes entrava o Apurado
+        // inteiro e a forma era filtrada quando "contada": com POS avulso no turno, a
+        // forma virava contada e sumia da comparação — inclusive o cartão TEF que ficou
+        // sem transação — ou, quando o TEF também tinha aquela forma, o POS aparecia
+        // como divergência falsa. Sem filtro por forma contada: o integrado é sempre
+        // comparável com o TEF, haja ou não POS na mesma forma.
+        var naVenda = ApuradoIntegrado(cx, sessao);
+        return noTef.Keys.Union(naVenda.Keys)
             .Select(f => new DivergenciaTef(f,
                 noTef.TryGetValue(f, out var t) ? t : Dinheiro.Zero,
                 naVenda.TryGetValue(f, out var v) ? v : Dinheiro.Zero))

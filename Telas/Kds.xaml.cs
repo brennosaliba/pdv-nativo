@@ -426,6 +426,15 @@ public partial class Kds : UserControl
         // Agora: quem PEDE TOQUE é negrito sobre faixa colorida; quem só ESPERA é
         // semibold sobre a faixa cinza-azulada própria (EsperaFundo). A diferença é
         // vista antes de qualquer palavra ser lida.
+        // O ÚLTIMO EVENTO DO ENTREGADOR (04/09, foto do dono: o Gestor dizia "Chega em
+        // 1min" e o card, nada). Vem da RPC pdv_kds_entrega na mesma puxada do feed e
+        // fica em memória (Nucleo.Kds.EntregaDe). Só em ENTREGA de delivery: retirada
+        // não tem entregador, balcão muito menos. Texto e destaque são regra pura
+        // (CardKds.TextoEntregador / EntregadorChegou). Sem previsão em minutos: ela
+        // não existe nos nossos dados, e o card não inventa.
+        var entrega = t.Origem == "ifood" && !t.Retirada ? Nucleo.Kds.EntregaDe(t.RefId)?.Code : null;
+        var entregadorChegou = CardKds.EntregadorChegou(entrega);
+
         var (acaoTexto, acaoCor, acaoFundo, acaoEspera) = t.Status switch
         {
             Nucleo.Kds.Preparando => ("TOQUE QUANDO FICAR PRONTO", "Ok", "ChipOkFundo", false),
@@ -436,10 +445,16 @@ public partial class Kds : UserControl
             // onde nao existe entregador nenhum.
             // Em ambos os casos o card sai sozinho: a saida e fato do MUNDO — quem
             // declara e o entregador (via API) ou o balcao entregando ao cliente.
-            Nucleo.Kds.Pronto when t.Origem == "ifood" && t.Retirada
-                                  => ("AGUARDANDO O CLIENTE RETIRAR", "TextoEspera", "EsperaFundo", true),
+            //
+            // Em PRONTO a faixa de espera É o lugar do entregador (CardKds.RodapeEspera):
+            // "AGUARDANDO O ENTREGADOR" enquanto não se sabe nada, "ENTREGADOR A CAMINHO"
+            // quando se sabe, e "ENTREGADOR CHEGOU" em amarelo sobre a faixa de alerta,
+            // que é o momento em que a sacola tem de estar fechada. Retirada continua
+            // "AGUARDANDO O CLIENTE RETIRAR", aconteça o que acontecer com eventos.
+            Nucleo.Kds.Pronto when t.Origem == "ifood" && entregadorChegou
+                                  => (CardKds.RodapeEspera(t.Retirada, entrega), "Amarelo", "ChipAlertaFundo", true),
             Nucleo.Kds.Pronto when t.Origem == "ifood"
-                                  => ("AGUARDANDO O ENTREGADOR", "TextoEspera", "EsperaFundo", true),
+                                  => (CardKds.RodapeEspera(t.Retirada, entrega), "TextoEspera", "EsperaFundo", true),
             // Balcão pronto TAMBÉM é toque, e por isso ganhou faixa de ação: com o
             // VeuElevado ele era gêmeo visual do "aguardando" logo ao lado, na mesma
             // coluna, e só o texto separava os dois.
@@ -478,14 +493,20 @@ public partial class Kds : UserControl
         raiz.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        // ── cabeçalho: [número + origem / cliente] + espera + botões ────────
-        // DUAS colunas: o botão do cabeçalho (elástico) e o relógio com os botões
-        // (Auto). Dentro do botão, o número vai em Auto e NUNCA corta — ele é a
-        // identidade do pedido, a única coisa que o operador grita para o cliente.
-        // Quem cede espaço em quadro estreito é o CHIP de origem, decoração (a
-        // 800x600 cada coluna do quadro fica com ~266 px). O nome do cliente desceu
-        // do corpo para cá: junto com o número ele é o alvo do toque que abre o
-        // detalhe, e um alvo de duas linhas é o que um dedo em pé acerta.
+        // ── cabeçalho: [número + origem / cliente + relógio] + botões ───────
+        // DUAS colunas: o botão do cabeçalho (elástico) e os botões (Auto). Dentro
+        // do botão, o número vai em Auto e NUNCA corta — ele é a identidade do
+        // pedido, a única coisa que o operador grita para o cliente. Quem cede
+        // espaço em quadro estreito é o CHIP de origem, decoração (a 800x600 cada
+        // coluna do quadro fica com ~266 px). O nome do cliente desceu do corpo para
+        // cá: junto com o número ele é o alvo do toque que abre o detalhe, e um alvo
+        // de duas linhas é o que um dedo em pé acerta.
+        //
+        // O RELÓGIO MORA NA SEGUNDA LINHA, à direita do cliente (04/09). Ele ficava na
+        // primeira, entre o chip e os botões, e cabia enquanto dizia "14 min"; ao
+        // passar a dizer qual relógio é ("faltam 11 min", "atrasado 3 min") a linha
+        // estourou e quem pagou foi o NÚMERO ("#507" na foto a 1024). Na segunda
+        // linha ele divide espaço com o cliente, que já corta com reticências.
         var cab = new Grid { Margin = new Thickness(11, 5, 11, 2) };
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 0 });
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -517,19 +538,26 @@ public partial class Kds : UserControl
         Grid.SetColumn(chips, 1);
         alvo.Children.Add(chips);
 
+        // segunda linha: [cliente (elástico, reticências)] [relógio (Auto)]
+        var linha2 = new Grid();
+        linha2.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 0 });
+        linha2.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         if (t.Cliente is { Length: > 0 })
         {
             var cli = new TextBlock
             {
                 Text = t.Cliente, FontSize = 12, FontWeight = FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 1),
+                VerticalAlignment = VerticalAlignment.Center,
             };
             cli.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-            Grid.SetRow(cli, 1);
             Grid.SetColumn(cli, 0);
-            Grid.SetColumnSpan(cli, 2);
-            alvo.Children.Add(cli);
+            linha2.Children.Add(cli);
         }
+        Grid.SetRow(linha2, 1);
+        Grid.SetColumn(linha2, 0);
+        Grid.SetColumnSpan(linha2, 2);
+        alvo.Children.Add(linha2);
 
         var btnCab = new Button
         {
@@ -545,9 +573,12 @@ public partial class Kds : UserControl
         Grid.SetColumn(btnCab, 0);
         cab.Children.Add(btnCab);
 
-        // O relógio é O MESMO do Gestor do iFood: o PRAZO (dueAt). "12 min"
-        // = falta isso pro prometido; "+3 min" = estourou. Pedido sem prazo
-        // (balcão) volta ao decorrido. Dois painéis, um relógio só.
+        // O relógio do card DIZ qual relógio é (04/09, foto do dono: Gestor "Preparar
+        // em 4min" x KDS "17 min"). Com prazo (preparo_ate): "faltam 4 min", "faltam 2
+        // min" em amarelo, "atrasado 3 min" em vermelho; em PRONTO congela em "no
+        // prazo" / "atrasou 3 min". Sem prazo (balcão): o decorrido de sempre. A regra
+        // e os degraus de cor moram em CardKds.TempoDoCard; o timer de 10 s repinta e
+        // o texto anda sozinho. O agendado tem o relógio dele, logo abaixo.
         string txtEspera; string corEspera;
         if (t.Agendado && t.AgendadoRestante is { } falta)
         {
@@ -565,37 +596,27 @@ public partial class Kds : UserControl
             else if (m >= 0) { txtEspera = $"em {m} min"; corEspera = "Amarelo"; }
             else { txtEspera = $"+{-m} min"; corEspera = "Erro"; }
         }
-        else if (t.PrazoRestante is { } prazo)
-        {
-            var m = (int)prazo.TotalMinutes;
-            if (m >= 0)
-            {
-                txtEspera = $"{m} min";
-                corEspera = m > 5 ? "Ok" : "Amarelo";
-            }
-            else
-            {
-                txtEspera = $"+{-m} min";
-                corEspera = "Erro";
-            }
-        }
         else
         {
-            var min = (int)t.Espera.TotalMinutes;
-            txtEspera = min < 1 ? "agora" : $"{min} min";
-            corEspera = min < 10 ? "Ok" : min < 20 ? "Amarelo" : "Erro";
+            var (texto, tom) = CardKds.TempoDoCard(t.CriadoEm, t.PreparoAte, DateTime.Now, t.ProntoEm);
+            txtEspera = texto;
+            corEspera = CardKds.PincelDoTom(tom);
         }
         var espera = new TextBlock
         {
             Text = txtEspera,
             FontSize = 14, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            // A folga separa o relógio do nome do cliente; e ele fica DENTRO do alvo
+            // do toque, então tocar no relógio também abre o detalhe.
+            Margin = new Thickness(10, 0, 2, 0),
         };
         espera.SetResourceReference(TextBlock.ForegroundProperty, corEspera);
-        Grid.SetColumn(espera, 0);
+        Grid.SetColumn(espera, 1);
+        linha2.Children.Add(espera);
 
         var dir = new StackPanel { Orientation = Orientation.Horizontal };
-        dir.Children.Add(espera);
         // ── VOLTAR UMA ETAPA (04/09, primeira reclamação do dono na 0.5.3) ──
         // "pedido 9507 e 5077 foi clicado marcar fazendo porem nao tem como desfazer
         // caso tenha clicado errado". O botão EXISTIA desde a 0.4.x, e some: a 1024x768
@@ -679,6 +700,37 @@ public partial class Kds : UserControl
 
         // ── corpo: agendado + itens (o cliente subiu para o cabeçalho) ──────
         var corpo = new StackPanel { Margin = new Thickness(11, 1, 11, 4) };
+        // ── O ENTREGADOR, nas colunas NA FILA e FAZENDO (04/09) ─────────────
+        // Uma linha curta no alto do corpo (em PRONTO a faixa de baixo já é o lugar
+        // dele). "entregador chegou" ganha faixa amarela: é o momento em que o pedido
+        // TEM de estar pronto, e é a única linha do corpo que pode gritar.
+        if (t.Status != Nucleo.Kds.Pronto && CardKds.TextoEntregador(entrega) is { } entregador)
+        {
+            var tb = new TextBlock
+            {
+                Text = entregador, FontSize = 13,
+                FontWeight = entregadorChegou ? FontWeights.Bold : FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
+            };
+            if (entregadorChegou)
+            {
+                tb.SetResourceReference(TextBlock.ForegroundProperty, "Amarelo");
+                var faixa = new Border
+                {
+                    CornerRadius = new CornerRadius(7), Padding = new Thickness(8, 3, 8, 4),
+                    Margin = new Thickness(0, 2, 0, 4), BorderThickness = new Thickness(1), Child = tb,
+                };
+                faixa.SetResourceReference(Border.BackgroundProperty, "ChipAlertaFundo");
+                faixa.SetResourceReference(Border.BorderBrushProperty, "ChipAlertaBorda");
+                corpo.Children.Add(faixa);
+            }
+            else
+            {
+                tb.Margin = new Thickness(0, 1, 0, 3);
+                tb.SetResourceReference(TextBlock.ForegroundProperty, "TextoEspera");
+                corpo.Children.Add(tb);
+            }
+        }
         if (t.Agendado && t.AgendadoPara is { } marcado)
         {
             // O AVISO que o dono pediu ("agendado pra 10h"), em texto corrido e
@@ -772,7 +824,8 @@ public partial class Kds : UserControl
             Text = acaoTexto, FontSize = 12,
             // Peso é o segundo sinal, além da cor e do fundo: negrito = o dedo
             // resolve; semibold = só o mundo resolve (o entregador, o cliente).
-            FontWeight = acaoEspera ? FontWeights.SemiBold : FontWeights.Bold,
+            // "ENTREGADOR CHEGOU" volta a negrito: o mundo acabou de bater na porta.
+            FontWeight = acaoEspera && !entregadorChegou ? FontWeights.SemiBold : FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             // Sem isto o texto vazava dos DOIS lados do card e o operador lia

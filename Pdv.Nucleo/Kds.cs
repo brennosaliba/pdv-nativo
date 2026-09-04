@@ -92,6 +92,14 @@ public sealed record DetalheNuvem(string OrderId, string? Localizador, string? C
                                   string? Entregador, IReadOnlyList<string> AgrupadoCom);
 
 /// <summary>
+/// O ÚLTIMO evento de entrega de um pedido, como a RPC <c>pdv_kds_entrega</c> devolve
+/// (04/09): o código do iFood (ASSIGNED, GOING_TO_ORIGIN, ARRIVED_AT_ORIGIN, COLLECTED,
+/// DISPATCHED...) e quando aconteceu (timestamptz ISO). Só o código vira texto no card
+/// (<see cref="CardKds.TextoEntregador"/>); não há previsão em minutos aqui nem em lugar nenhum.
+/// </summary>
+public sealed record EventoEntrega(string OrderId, string Code, string? Em);
+
+/// <summary>
 /// A fila de preparo do balcão.
 ///
 /// Por que ela mora no SQLite local e não na nuvem: o monitor fica ao lado do
@@ -778,7 +786,60 @@ public static class Kds
             foreach (var (id, status, prazoIso) in await nuvem.StatusPedidosAsync(orfaos).ConfigureAwait(false))
                 AplicarStatusDaNuvem(id, status, ChegadaLocal(prazoIso));
 
+        // Na MESMA puxada, sem timer novo: o entregador dos pedidos de entrega abertos.
+        await AtualizarEntregasAsync(nuvem).ConfigureAwait(false);
+
         return novos;
+    }
+
+    // ── O ENTREGADOR (04/09, foto do dono) ──────────────────────────────────
+    // A foto dos últimos eventos de entrega fica em MEMÓRIA, não no SQLite: é estado do
+    // mundo lá fora, muda a cada puxada e não vale nada depois que o card sai do quadro.
+    // Coluna no banco só carregaria um dado que vence em 10 s.
+    //
+    // A foto é trocada INTEIRA a cada resposta da nuvem. Resposta nenhuma (rede, RPC
+    // fora do ar, JSON ilegível) mantém a anterior: o entregador não volta de "chegou"
+    // para "a caminho", e uma linha que pisca a cada soluço de wi-fi ensina a cozinha a
+    // ignorá-la. Resposta VAZIA é resposta: ninguém tem evento, a foto esvazia.
+
+    private static volatile IReadOnlyDictionary<string, EventoEntrega> _entregas =
+        new Dictionary<string, EventoEntrega>(StringComparer.Ordinal);
+
+    /// <summary>O último evento de entrega conhecido do pedido, ou null quando não há o que dizer.</summary>
+    public static EventoEntrega? EntregaDe(string orderId)
+        => _entregas.TryGetValue(orderId, out var e) ? e : null;
+
+    /// <summary>
+    /// Substitui a foto pelos eventos que a nuvem mandou. Um por pedido: a RPC já manda
+    /// só o mais novo, e se mandar dois o primeiro vale (ela ordena do mais novo para o
+    /// mais velho). O modo --foto-kds semeia por aqui.
+    /// </summary>
+    public static void AplicarEntregas(IEnumerable<EventoEntrega> eventos)
+    {
+        var nova = new Dictionary<string, EventoEntrega>(StringComparer.Ordinal);
+        foreach (var e in eventos)
+            if (e.OrderId is { Length: > 0 } && !nova.ContainsKey(e.OrderId)) nova[e.OrderId] = e;
+        _entregas = nova;
+    }
+
+    /// <summary>
+    /// Pergunta à nuvem o último evento dos pedidos de ENTREGA abertos no quadro (retirada
+    /// não tem entregador; balcão não tem nuvem). Sem pedido aberto não consulta nada e
+    /// esvazia a foto. Falha mantém a foto anterior (ver o bloco acima).
+    /// </summary>
+    public static async Task AtualizarEntregasAsync(Nuvem nuvem)
+    {
+        List<string> ids;
+        using (var cx = Banco.Abrir())
+            ids = cx.Query<string>(
+                @"SELECT ref_id FROM kds_ticket
+                   WHERE origem = 'ifood' AND retirada = 0
+                     AND status IN ('recebido','preparando','pronto')")
+                .Take(100).ToList();
+        if (ids.Count == 0) { AplicarEntregas(Array.Empty<EventoEntrega>()); return; }
+
+        var eventos = await nuvem.EntregaPedidosAsync(ids).ConfigureAwait(false);
+        if (eventos is not null) AplicarEntregas(eventos);
     }
 
     private static Ticket Ler(dynamic r) => new(

@@ -79,6 +79,13 @@ public static class FotoKds
     /// itens ao lado do #9507 de um combo com quatro sabores — o par que mostrava os
     /// dois rodapés em alturas diferentes. Mais um card em cada uma das outras
     /// colunas, para os outros rodapés aparecerem na mesma foto.
+    ///
+    /// Desde a segunda foto do dono (Gestor "Preparar em 4min" x KDS "17 min"), cada
+    /// card também encena um estado do RELÓGIO e do ENTREGADOR: prazo no futuro (normal
+    /// e em atenção), prazo vencido, pronto no prazo, pronto atrasado, balcão sem prazo
+    /// (decorrido), e os eventos do entregador de "designado" a "chegou". Os prazos
+    /// levam folga de segundos porque a foto sai 2 a 3 s depois da semente, e o texto
+    /// do card não pode virar de minuto entre uma coisa e outra.
     /// </summary>
     private static void Semear()
     {
@@ -87,11 +94,18 @@ public static class FotoKds
         Vendas.GravarConfig(cx, Impressoes.Chave(Impressoes.Comanda),
                             Impressoes.Texto(PoliticaImpressao.Perguntar));
         cx.Execute("UPDATE terminal SET api_base = 'http://127.0.0.1:9'");
+        // A NUVEM DE VERDADE fica fora da foto. Servicos.Nuvem() lê a URL desta chave
+        // (não do api_base acima, que é o servidor fiscal), e a credencial do terminal
+        // pode existir na máquina de quem fotografa: sem isto a puxada do entregador
+        // chegaria no Supabase real, responderia "ninguém tem evento" para pedidos
+        // fabricados e apagaria a foto semeada abaixo. Endereço morto = falha rápida =
+        // a foto anterior fica, que é o contrato.
+        Vendas.GravarConfig(cx, "supabase_url", "http://127.0.0.1:9");
 
         var agora = DateTime.Now;
         void Card(string numero, string origem, string status, int minutosAtras,
                   string? cliente, object[] itens, bool retirada = false,
-                  DateTime? agendadoPara = null, DateTime? agendadoAte = null, string? preparoAte = null)
+                  DateTime? agendadoPara = null, DateTime? agendadoAte = null, DateTime? preparoAte = null)
         {
             var id = Guid.NewGuid().ToString();
             cx.Execute(
@@ -113,7 +127,7 @@ public static class FotoKds
                     ag = agendadoPara is null ? 0 : 1,
                     ap = agendadoPara?.ToString("o"),
                     aa = agendadoAte?.ToString("o"),
-                    pa = preparoAte,
+                    pa = preparoAte?.ToString("o"),
                 });
         }
 
@@ -133,14 +147,25 @@ public static class FotoKds
             Item("Café Coado 300ml", 1),
         }, retirada: true, agendadoPara: agora.AddMinutes(85), agendadoAte: agora.AddMinutes(115));
 
+        // NA FILA — prazo daqui a 2 min e pouco: "faltam 2 min" em atenção, com o
+        // entregador já a caminho (o pedido nem começou: é o card que mais precisa
+        // da linha).
         Card("5610", "ifood", Kds.Recebido, 3, "Marcela Prado", new[]
         {
             Item("Donut Ninho com Nutella", 2),
             Item("Cookie Duplo Chocolate", 1, "sem castanha"),
+        }, preparoAte: agora.AddSeconds(170));
+
+        // NA FILA — balcão, sem prazo nenhum: o decorrido de sempre ("5 min").
+        Card("42", "balcao", Kds.Recebido, 5, null, new[]
+        {
+            Item("Cookie Tradicional", 2),
+            Item("Café Coado 300ml", 1),
         });
 
-        // FAZENDO — o par da foto. O 5077 tem prazo: é o de dez itens, o que prova
-        // que a lista do detalhe ROLA a 1024x768 em vez de cortar.
+        // FAZENDO — o par da foto. O 5077 tem prazo folgado ("faltam 11 min") e o
+        // ENTREGADOR CHEGOU: é a faixa amarela no alto do corpo. É o de dez itens,
+        // o que prova que a lista do detalhe ROLA a 1024x768 em vez de cortar.
         Card("5077", "ifood", Kds.Preparando, 14, "Rafael Andrade", new[]
         {
             Item("Donut Ovomaltine", 1),
@@ -153,7 +178,9 @@ public static class FotoKds
             Item("Coxinha de Frango", 2),
             Item("Suco de Laranja 500ml", 1),
             Item("Café Coado 300ml", 1),
-        }, preparoAte: agora.AddMinutes(11).ToString("o"));
+        }, preparoAte: agora.AddSeconds(11 * 60 + 30));
+        // O 9507 estourou o prazo há quase 3 min: "atrasado 3 min" em vermelho, com
+        // entregador designado.
         Card("9507", "ifood", Kds.Preparando, 9, "Juliana Ferreira", new[]
         {
             Item("Combo 1 Cookies - 4 unidades", 1, null, new[]
@@ -163,13 +190,35 @@ public static class FotoKds
                 "Premium: 1x Cookie Pistache",
                 "Premium: 1x Cookie Ninho com Nutella",
             }),
-        });
+        }, preparoAte: agora.AddSeconds(-170));
 
-        // PRONTO
+        // PRONTO — o relógio congela no pronto: "no prazo" (ficou pronto com folga),
+        // e a faixa de baixo vira ENTREGADOR CHEGOU, em amarelo.
         Card("4218", "ifood", Kds.Pronto, 21, "Bruno Carvalho", new[]
         {
             Item("Donut Ovomaltine", 2),
             Item("Tortinha de Frango com Catupiry", 1),
+        }, preparoAte: agora.AddMinutes(5));
+        // PRONTO — ficou pronto 2 min e meio depois do prazo: "atrasou 3 min",
+        // entregador a caminho na faixa de baixo.
+        Card("4219", "ifood", Kds.Pronto, 25, "Carla Menezes", new[]
+        {
+            Item("Donut Homer", 2),
+            Item("Cookie Red Velvet", 1),
+        }, preparoAte: agora.AddMinutes(-3.5));
+
+        // Os eventos do entregador, semeados direto na foto em memória: a nuvem está
+        // num endereço morto, então a puxada do quadro devolve null e a foto FICA (é o
+        // contrato de Nucleo.Kds.AtualizarEntregasAsync). O 42 é balcão e o 3788 é
+        // retirada: nenhum dos dois é consultado nem ganha linha.
+        Kds.AplicarEntregas(new[]
+        {
+            new EventoEntrega("ref-5610", "GOING_TO_ORIGIN", null),
+            new EventoEntrega("ref-5077", "ARRIVED_AT_ORIGIN", null),
+            new EventoEntrega("ref-9507", "ASSIGNED", null),
+            new EventoEntrega("ref-4218", "ARRIVED_AT_ORIGIN", null),
+            new EventoEntrega("ref-4219", "GOING_TO_ORIGIN", null),
+            new EventoEntrega("ref-3788", "ARRIVED_AT_ORIGIN", null),   // retirada: tem de ser ignorado
         });
     }
 

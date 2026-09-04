@@ -774,6 +774,75 @@ public static class TestesKds
                 cxd.Execute("DELETE FROM kds_ticket");
                 cxd.Execute("DELETE FROM outbox WHERE tipo = 'kds_pronto'");
             }
+
+            // ── O ENTREGADOR NO CARD (04/09, foto do dono) ──────────────────
+            // A RPC pdv_kds_entrega devolve o ULTIMO evento de logistica de cada
+            // pedido. O que se prova aqui: o parser (contrato sem rede), a foto em
+            // memoria que a tela le, e a puxada: nuvem sem a RPC (404) MANTEM a foto
+            // anterior em vez de apagar (a linha nao pode piscar a cada soluco de
+            // wi-fi), e sem pedido de entrega aberto a foto esvazia sem consultar nada.
+            {
+                // 1. o parser
+                var ev = Nuvem.LerEntrega("""
+                    [{"order_id":"o-1","code":"ARRIVED_AT_ORIGIN","em":"2026-09-04T18:10:00+00:00"},
+                     {"order_id":"o-2","code":"GOING_TO_ORIGIN","em":null},
+                     {"order_id":null,"code":"ASSIGNED"},
+                     {"code":"ASSIGNED"},
+                     {"order_id":"o-3"},
+                     "lixo", 7]
+                    """);
+                checar(ev is { Count: 2 }, $"o parser le as duas linhas validas e pula as sem order_id/code (leu {ev?.Count})");
+                checar(ev is not null && ev[0].OrderId == "o-1" && ev[0].Code == "ARRIVED_AT_ORIGIN"
+                       && ev[0].Em == "2026-09-04T18:10:00+00:00",
+                    "order_id, code e em chegam inteiros");
+                checar(ev is not null && ev[1].Em is null, "em nulo vira null, sem quebrar a linha");
+                checar(Nuvem.LerEntrega("[]") is { Count: 0 }, "lista vazia e resposta VALIDA: ninguem tem evento");
+                checar(Nuvem.LerEntrega("{lixo") is null, "JSON ilegivel e FALHA (null), nao 'ninguem tem evento'");
+                checar(Nuvem.LerEntrega("{\"a\":1}") is null, "objeto no lugar da lista tambem e falha");
+
+                // 2. a foto em memoria
+                Kds.AplicarEntregas(new[]
+                {
+                    new EventoEntrega("o-1", "ARRIVED_AT_ORIGIN", null),
+                    new EventoEntrega("o-1", "ASSIGNED", null),
+                    new EventoEntrega("", "ASSIGNED", null),
+                });
+                checar(Kds.EntregaDe("o-1")?.Code == "ARRIVED_AT_ORIGIN",
+                    "dois eventos do mesmo pedido: o PRIMEIRO vale (a RPC manda o mais novo primeiro)");
+                checar(Kds.EntregaDe("o-x") is null, "pedido sem evento: null, nada a dizer");
+                checar(Kds.EntregaDe("") is null, "order_id vazio nao entra na foto");
+                Kds.AplicarEntregas(Array.Empty<EventoEntrega>());
+                checar(Kds.EntregaDe("o-1") is null, "resposta vazia esvazia a foto");
+
+                // 3. a puxada, contra uma nuvem SEM a RPC (o fake responde 404 a rota desconhecida)
+                using var fakeE = new FakePostgrest(4662);
+                var nuvemE = new Nuvem(fakeE.Url);
+                checar(nuvemE.EntrarAsync("kds@teste.com", "x").GetAwaiter().GetResult(),
+                    "nuvem fake autentica para a puxada do entregador");
+                using var cxe = Banco.Abrir();
+                cxe.Execute("DELETE FROM kds_ticket");
+                var donut = Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]");
+                Kds.DoDelivery("ent-2835", "2835", "Cliente", donut);
+                Kds.AplicarEntregas(new[] { new EventoEntrega("ent-2835", "ARRIVED_AT_ORIGIN", null) });
+                Nucleo.Kds.PuxarDaNuvemAsync(nuvemE, "Loja").GetAwaiter().GetResult();
+                checar(Kds.EntregaDe("ent-2835")?.Code == "ARRIVED_AT_ORIGIN",
+                    "RPC fora do ar (404) na puxada: a foto anterior FICA, a linha do card nao pisca");
+                checar(Kds.Abertos().Any(x => x.RefId == "ent-2835"),
+                    "e a puxada em si continua inofensiva com a nuvem muda (o card fica)");
+
+                cxe.Execute("DELETE FROM kds_ticket");
+                Nucleo.Kds.PuxarDaNuvemAsync(nuvemE, "Loja").GetAwaiter().GetResult();
+                checar(Kds.EntregaDe("ent-2835") is null,
+                    "sem pedido de entrega aberto a foto esvazia (nada a consultar, nada a mostrar)");
+
+                // retirada nao tem entregador: sem pedido de ENTREGA aberto, a foto tambem esvazia
+                Kds.DoDelivery("ret-1", "6976", "Cliente", donut, retirada: true);
+                Kds.AplicarEntregas(new[] { new EventoEntrega("ret-1", "ARRIVED_AT_ORIGIN", null) });
+                Nucleo.Kds.PuxarDaNuvemAsync(nuvemE, "Loja").GetAwaiter().GetResult();
+                checar(Kds.EntregaDe("ret-1") is null,
+                    "so RETIRADA aberta: ninguem e consultado e a foto esvazia (retirada nao tem entregador)");
+                cxe.Execute("DELETE FROM kds_ticket");
+            }
         }
         finally
         {

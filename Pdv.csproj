@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>Pdv</AssemblyName>
     <AssemblyTitle>PDV - Frente de Caixa</AssemblyTitle>
-    <Version>0.5.5</Version>
+    <Version>0.5.6</Version>
     <!-- Nome e empresa do Certificado de Conformidade PayGo (SETIS, 25/08/2026).
          Tem que bater com o 735-000 do protocolo e com o User-Agent do ControlPay. -->
     <Product>Pdv.AmericanDay</Product>

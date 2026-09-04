@@ -1399,6 +1399,15 @@ Console.WriteLine();
 Console.WriteLine("--- Instalador (origem completa, copia por cima, dados intactos) ---");
 TestesInstalador.Rodar((cond, nome) => Check("instalador: " + nome, cond));
 
+// -- POS AVULSO como forma de primeira classe (04/09, pedido do dono) ---------
+// "Quando o PayGo estava instavel utilizamos POS": cartao passado numa maquininha
+// SEM integracao, registrado com a forma real e sem disparar o TEF. O fallback ja
+// existia depois de o TEF falhar; aqui vira botao na grade — e o fechamento tem
+// que separar o POS do cartao integrado sem esconder TEF que sumiu.
+Console.WriteLine();
+Console.WriteLine("--- POS avulso (forma na grade, fechamento, nota, nuvem) ---");
+TestesPos.Rodar((cond, nome) => Check("pos: " + nome, cond));
+
 
 // ── 03/09/2026: caixa da Savassi ──────────────────────────────────────────
 // Banco PROPRIO: o `cx` da bateria chega aqui com a sessao da Maria aberta (a
@@ -1531,6 +1540,14 @@ try { File.Delete(arquivoT); } catch { }
 cx.Dispose();
 SqliteConnection.ClearAllPools();
 try { File.Delete(arquivo); } catch { }
+
+// ── 04/09/2026: menus da barra de cima da venda ────────────────────────────
+// "Juntar o menu impressora com cancelar venda, e o sair com o fechar caixa."
+// Quatro botões viraram dois menus; a lista e a ordem moram em Pdv.Nucleo/MenuBarra
+// e cada item reencaminha para o handler que já existia. Não usa banco nenhum.
+Console.WriteLine();
+Console.WriteLine("--- Menus da barra da venda (itens, ordem, handler, topo mais baixo) ---");
+TestesMenuBarra.Rodar((cond, nome) => Check("menu-barra: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

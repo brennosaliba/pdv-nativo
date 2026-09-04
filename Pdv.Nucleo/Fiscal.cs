@@ -130,6 +130,20 @@ public sealed record PagamentoFiscal(string TPag, decimal Valor, CartaoFiscal? C
     /// </summary>
     public static PagamentoFiscal De(string forma, Dinheiro valor, CartaoFiscal? card = null)
         => new(Fiscal.TPagDaForma(forma), valor.Reais, card);
+
+    /// <summary>
+    /// A partir de uma parte da venda: valor APLICADO (valor − troco) e o grupo &lt;card&gt;
+    /// só quando o pagamento foi INTEGRADO e o TEF devolveu cAut + CNPJ da credenciadora.
+    /// POS avulso (<see cref="PagamentoVenda.PosAvulso"/>) sai com o tPag da forma real e
+    /// SEM card: o motor emite tpIntegra=2, que é a verdade e passa na SEFAZ.
+    /// </summary>
+    public static PagamentoFiscal De(PagamentoVenda p)
+    {
+        var card = p.Integrado && p.Aut is { Length: > 0 } && p.CnpjCredenciadora is { Length: > 0 }
+            ? new CartaoFiscal(p.Aut, p.CnpjCredenciadora, p.Bandeira)
+            : null;
+        return De(p.Forma, new Dinheiro(p.Valor.Centavos - p.Troco.Centavos), card);
+    }
 }
 
 /// <summary>Emitente como saiu na nota — o cupom tem que imprimir exatamente isto.</summary>

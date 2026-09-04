@@ -521,6 +521,64 @@ public sealed class Nuvem
     }
 
     /// <summary>
+    /// O ÚLTIMO evento de entrega de cada pedido (RPC <c>pdv_kds_entrega</c>, 04/09): é o
+    /// que o card usa para dizer "entregador a caminho" / "entregador chegou". Pedido sem
+    /// evento simplesmente não vem na resposta. Mesma chamada da vizinha pdv_kds_status
+    /// (corpo <c>{"_order_ids": [...]}</c>, bearer da sessão).
+    ///
+    /// Devolve NULL em qualquer falha (sem sessão, rede, status fora de 2xx, JSON
+    /// ilegível) e LISTA em resposta válida, mesmo vazia. A diferença importa para quem
+    /// chama: "a nuvem não respondeu" mantém o que já se sabia; "respondeu que não há
+    /// nada" limpa.
+    /// </summary>
+    public async Task<List<EventoEntrega>?> EntregaPedidosAsync(IReadOnlyList<string> orderIds)
+    {
+        try
+        {
+            if (orderIds.Count == 0) return new();
+            if (!await SessaoOkAsync().ConfigureAwait(false)) return null;
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_entrega");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _order_ids = orderIds }),
+                Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return null;
+            return LerEntrega(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// A resposta da RPC de entrega, tolerante como o feed: linha sem order_id ou sem
+    /// code é pulada, <c>em</c> nulo vira null. JSON que não é lista (ou ilegível)
+    /// devolve null, porque isso é falha e não "ninguém tem evento". Separado do HTTP
+    /// para a suíte provar o contrato sem rede.
+    /// </summary>
+    public static List<EventoEntrega>? LerEntrega(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            var r = new List<EventoEntrega>();
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (e.ValueKind != JsonValueKind.Object) continue;
+                var id = Campo(e, "order_id");
+                var code = Campo(e, "code");
+                if (id is null || code is null) continue;
+                r.Add(new EventoEntrega(id, code, Campo(e, "em")));
+            }
+            return r;
+        }
+        catch { return null; }
+
+        static string? Campo(JsonElement e, string k) =>
+            e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String
+            && v.GetString() is { } s && s.Trim().Length > 0 ? s.Trim() : null;
+    }
+
+    /// <summary>
     /// O complemento de UM pedido de delivery para a tela de detalhe do KDS (RPC
     /// <c>pdv_kds_pedido_detalhe</c>, 04/09): localizador, código de coleta, observação
     /// do pedido e os outros pedidos agrupados na mesma entrega.

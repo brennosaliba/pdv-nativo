@@ -4,6 +4,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -111,6 +112,16 @@ public partial class Venda : UserControl
         // 30 s continua embaixo como rede de segurança
         Servicos.Sino(_loja ?? "").Ping += SinoTocou;
         Servicos.Sino(_loja ?? "").CatalogoMudou += CatalogoTocou;
+        // Esc fecha o menu da barra (mesmo gesto do detalhe do KDS). Só quando ele
+        // está aberto: fora disso a tecla segue para quem estiver com o foco.
+        PreviewKeyDown += (_, e) =>
+        {
+            if (VeuMenu.Visibility == Visibility.Visible && e.Key == Key.Escape)
+            {
+                FecharMenu();
+                e.Handled = true;
+            }
+        };
         Loaded += (_, _) =>
         {
             IniciarRelogio(); PintarPendencias(); ProcurarAtualizacao(); OferecerRascunho();
@@ -428,6 +439,8 @@ public partial class Venda : UserControl
     {
         var dono = Window.GetWindow(this)!;
         BtnSync.IsEnabled = false;
+        // (na barra compacta o glifo fica escondido e o botão só escurece enquanto
+        // trabalha: mostrar o ícone alargaria o botão e podia devolver a 2ª linha)
         var girando = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         var passo = 0;
         var quadros = new[] { "⟳", "⟲" };
@@ -722,13 +735,24 @@ public partial class Venda : UserControl
     private bool _estreita;
     private bool _larguraAplicada;
 
+    // 04/09 (Savassi, 1024x768): a barra de cima quebrava em DUAS linhas de botões
+    // (105 px de topo). Juntar quatro botões em dois menus não bastou na conta:
+    // com ícone e padding 10, oito botões ainda passam dos ~746 px que sobram ao
+    // lado da identidade. Abaixo desta largura a barra fica COMPACTA: os botões
+    // perdem o glifo de ícone (os selos com número ficam) e o padding cai para 8,
+    // e a barra volta a caber numa linha. A 1366 os ícones continuam.
+    private const double LarguraBarraCompacta = 1180;
+    private bool _barraCompacta;
+
     private void RaizRedimensionou(object sender, SizeChangedEventArgs e) => AplicarLargura(e.NewSize.Width);
 
     private void AplicarLargura(double largura)
     {
         var estreita = largura > 0 && largura < LarguraEstreita;
-        if (_larguraAplicada && estreita == _estreita) return;
+        var compacta = largura > 0 && largura < LarguraBarraCompacta;
+        if (_larguraAplicada && estreita == _estreita && compacta == _barraCompacta) return;
         _estreita = estreita;
+        _barraCompacta = compacta;
         _larguraAplicada = true;
 
         // 03/09 (tarde): o dono reprovou a faixa no topo. Categorias ficam SEMPRE na
@@ -762,12 +786,15 @@ public partial class Venda : UserControl
         if (estreita) ImgLogo.Visibility = Visibility.Collapsed; else CarregarIdentificacao();
         TxtSessao.Visibility = marca;
         TxtOperador.FontSize = estreita ? 15 : 16;
+        // 04/09: o topo mais baixo. Padding vertical 6 (era 10); 5 em tela estreita.
+        // Alvo de toque nunca abaixo de 40 (era 38 em tela estreita).
+        Cabecalho.Padding = estreita ? new Thickness(12, 5, 12, 5) : new Thickness(18, 6, 18, 6);
         foreach (var b in Botoes.Children.OfType<Button>())
         {
             if (estreita)
             {
-                b.FontSize = 12.5; b.Padding = new Thickness(10, 0, 10, 0);
-                b.MinHeight = 38; b.Margin = new Thickness(4, 2, 0, 2);
+                b.FontSize = 12.5; b.Padding = new Thickness(compacta ? 8 : 10, 0, compacta ? 8 : 10, 0);
+                b.MinHeight = 40; b.Margin = new Thickness(4, 1, 0, 1);
             }
             else
             {
@@ -775,7 +802,11 @@ public partial class Venda : UserControl
                 b.ClearValue(MinHeightProperty); b.ClearValue(MarginProperty);
             }
             if (b.Content is StackPanel sp && sp.Children.Count > 0 && sp.Children[0] is TextBlock icone)
+            {
                 icone.FontSize = estreita ? 14 : 17;
+                // barra compacta: sem o glifo; o texto é o que o operador lê
+                icone.Visibility = compacta ? Visibility.Collapsed : Visibility.Visible;
+            }
         }
         RepintarCategorias();
     }
@@ -1983,8 +2014,10 @@ public partial class Venda : UserControl
     /// Troca a impressora do cupom SEM voltar na configuração (que exige senha de
     /// admin): bobina acabou/entalou no meio do expediente, o operador aponta pra
     /// outra e segue vendendo. Escolha operacional, não fiscal — não precisa de senha.
+    /// 04/09: deixou de ser botão próprio; é o item "Configuração da impressora" do
+    /// menu Cancelar / Imprimir (MenuCancelamento). O corpo é o mesmo.
     /// </summary>
-    private async void TrocarImpressora(object sender, RoutedEventArgs e)
+    private async Task TrocarImpressoraAsync()
     {
         var dono = Window.GetWindow(this)!;
         List<string> nomes;
@@ -2084,17 +2117,17 @@ public partial class Venda : UserControl
     /// A porta continua sendo esta (mesmo botão da barra, mesmo menu de opções):
     /// inventar uma navegação nova para o caixa aprender seria trocar um problema
     /// por outro. O que mudou é que o TEF barra só o que é dele.
+    ///
+    /// 04/09 (pedido do dono): o botão virou "Cancelar / Imprimir" e o menu ganhou
+    /// a "Configuração da impressora" (o antigo botão Impressora). O menu é o véu
+    /// de <see cref="AbrirMenu"/>, pendurado sob o botão; a lista e a ordem vêm de
+    /// <see cref="MenuBarra.CancelarImprimir"/>. Cada item reencaminha para o que
+    /// já existia: CancelarVendaAsync, EstornarTefAsync, ReimprimirComprovanteAsync,
+    /// TrocarImpressoraAsync.
     /// </summary>
     private async void MenuCancelamento(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;
-        if (_comanda.Count > 0)
-        {
-            Dialogo.Avisar(dono, "Comanda aberta",
-                "Termine ou limpe a comanda antes de cancelar, estornar ou reimprimir.", "erro");
-            return;
-        }
-        if (TefEmAndamento(dono)) return;
 
         // O menu se monta pela CONFIG (`tef_habilitado`), não por o provedor estar de
         // pé neste segundo: num caixa com maquininha integrada e o PayGo fechado,
@@ -2105,21 +2138,21 @@ public partial class Venda : UserControl
         bool temTef;
         using (var cx = Banco.Abrir()) temTef = Vendas.Config(cx, "tef_habilitado") == "1";
 
-        // Menu administrativo do PayGo e roteiro de homologação saíram (28/08): o ADM
-        // é o painel web da PayGo, e a homologação terminou — opção que ninguém usa
-        // só aumenta a chance de tocar na errada com o cliente esperando.
-        var opcoes = new List<string> { "Cancelar uma venda (e a nota fiscal)" };
-        if (temTef)
+        var acao = await AbrirMenu(BtnCancelar, MenuBarra.CancelarImprimir(temTef));
+        if (acao is null) return;
+
+        // Trocar a impressora é ato OPERACIONAL (bobina acabou no meio da venda):
+        // não pede comanda vazia nem maquininha livre, então sai antes das travas.
+        if (acao == MenuBarra.Impressora) { await TrocarImpressoraAsync(); return; }
+
+        if (_comanda.Count > 0)
         {
-            opcoes.Add("Estornar o cartão/PIX de uma venda");
-            opcoes.Add("Reimprimir o último comprovante");
+            Dialogo.Avisar(dono, "Comanda aberta",
+                "Termine ou limpe a comanda antes de cancelar, estornar ou reimprimir.", "erro");
+            return;
         }
-        // Maquininha avulsa tem UMA opção: perguntar "o que você quer fazer?" com uma
-        // única resposta possível é um toque a mais com o cliente no balcão.
-        var escolha = opcoes.Count == 1
-            ? 0
-            : EscolherOpcao(dono, "Cancelar venda", "O que você quer fazer?", opcoes.ToArray());
-        if (escolha < 0) return;
+        if (TefEmAndamento(dono)) return;
+
         // Enquanto isto corre (o PayGo pode ficar com a tela/pinpad, e a autorização
         // acende o celular da gerência), a venda não pode seguir por baixo:
         // Finalizar/Fechar caixa/Sair conferem _tefOcupado.
@@ -2127,12 +2160,10 @@ public partial class Venda : UserControl
         _tefOcupado = true;
         try
         {
-            switch (escolha)
+            switch (acao)
             {
-                case 0:
-                    await CancelarVendaAsync(dono);
-                    break;
-                case 1:
+                case MenuBarra.Cancelar: await CancelarVendaAsync(dono); break;
+                case MenuBarra.Estornar:
                     // O ÚNICO ato que precisa de maquininha — e o aviso, quando ela não
                     // responde, aponta para o caminho que continua aberto.
                     var cli = Servicos.Operavel();
@@ -2141,12 +2172,10 @@ public partial class Venda : UserControl
                             "A maquininha integrada não respondeu: sem ela o PDV não devolve o cartão. " +
                             "Confira se ela está ligada e com o programa dela aberto.\n\n" +
                             "Para cancelar a VENDA e a NOTA você não precisa dela: volte e escolha " +
-                            "\"Cancelar uma venda\".", "erro");
+                            "\"Cancelar venda\".", "erro");
                     else await EstornarTefAsync(dono, cli);
                     break;
-                case 2:
-                    await ReimprimirComprovanteAsync(dono);
-                    break;
+                case MenuBarra.Reimprimir: await ReimprimirComprovanteAsync(dono); break;
             }
         }
         finally { _tefOcupado = false; BtnCancelar.IsEnabled = true; }
@@ -3174,4 +3203,91 @@ public partial class Venda : UserControl
         PintarComanda();
         Deslogou?.Invoke();
     }
+
+    // ── MENUS DA BARRA (04/09/2026) ──────────────────────────────────────────
+    // "Juntar o menu impressora com cancelar venda, e o sair com o fechar caixa."
+    // Os itens e a ordem moram em Pdv.Nucleo/MenuBarra (a suíte prova). Aqui só o
+    // desenho do véu e o reencaminhamento para os handlers que já existiam.
+
+    /// <summary>
+    /// Menu "Fechar / Sair": o pop-up de fechamento de caixa e o sair, que eram dois
+    /// botões, atrás de um só. As travas (comanda aberta, TEF em andamento) continuam
+    /// DENTRO de FecharCaixa e Sair, como sempre estiveram.
+    /// </summary>
+    private async void MenuFecharSair(object sender, RoutedEventArgs e)
+    {
+        var acao = await AbrirMenu(BtnFecharSair, MenuBarra.FecharSair());
+        switch (acao)
+        {
+            case MenuBarra.FecharCaixa: FecharCaixa(sender, e); break;
+            case MenuBarra.Sair: Sair(sender, e); break;
+        }
+    }
+
+    private TaskCompletionSource<string?>? _menuAberto;
+
+    /// <summary>
+    /// Abre o menu de um botão da barra e devolve a chave do item tocado, ou null se
+    /// o operador tocou fora ou apertou Esc. Véu sobre a tela inteira + cartão
+    /// pendurado sob o botão, no desenho da moldura do Dialogo (Painel, cantos de
+    /// 18, sombra do tema). Um item por linha, alvo de <see cref="MenuBarra.AlturaItem"/>:
+    /// é dedo, não mouse. Sem submenu: cada item já é a ação.
+    /// </summary>
+    private Task<string?> AbrirMenu(Button ancora, IReadOnlyList<MenuBarra.Item> itens)
+    {
+        FecharMenu();   // um menu por vez: o que estava aberto devolve null
+        var tcs = new TaskCompletionSource<string?>();
+        _menuAberto = tcs;
+
+        ItensMenu.Children.Clear();
+        Button? primeiro = null;
+        for (var i = 0; i < itens.Count; i++)
+        {
+            var it = itens[i];
+            var b = new Button
+            {
+                Style = (Style)Application.Current.Resources["BotaoBase"],
+                MinHeight = MenuBarra.AlturaItem, FontSize = 16,
+                Margin = new Thickness(0, 0, 0, i == itens.Count - 1 ? 0 : 6),
+                Padding = new Thickness(16, 0, 18, 0),
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Tag = it.Acao,
+            };
+            var linha = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            linha.Children.Add(new TextBlock { Text = it.Icone, FontSize = 16, Width = 30, VerticalAlignment = VerticalAlignment.Center });
+            linha.Children.Add(new TextBlock { Text = it.Rotulo, VerticalAlignment = VerticalAlignment.Center });
+            b.Content = linha;
+            AutomationProperties.SetName(b, it.Rotulo);
+            b.Click += (_, _) => FecharMenu(it.Acao);
+            ItensMenu.Children.Add(b);
+            primeiro ??= b;
+        }
+
+        // pendurado sob o botão: mesma borda direita, 6 px abaixo; nunca sai da tela
+        var p = ancora.TransformToAncestor(Raiz).Transform(new Point(0, 0));
+        var direita = Math.Max(8, Raiz.ActualWidth - (p.X + ancora.ActualWidth));
+        direita = Math.Min(direita, Math.Max(8, Raiz.ActualWidth - CartaoMenu.MinWidth - 8));
+        CartaoMenu.Margin = new Thickness(0, p.Y + ancora.ActualHeight + 6, direita, 0);
+        // a sombra é a do Dialogo.Moldura, com a opacidade do tema (resolvida agora:
+        // o menu é reconstruído a cada abertura, então troca de tema não deixa resto)
+        CartaoMenu.Effect = new DropShadowEffect
+        {
+            BlurRadius = 28, ShadowDepth = 6, Color = Colors.Black, Opacity = RD("SombraDialogoOpacidade"),
+        };
+        VeuMenu.Visibility = Visibility.Visible;
+        // foco no primeiro item: Esc e Enter chegam pelo teclado, quando há um
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () => primeiro?.Focus());
+        return tcs.Task;
+    }
+
+    /// <summary>Fecha o menu e entrega a chave tocada (null = tocou fora / Esc).</summary>
+    private void FecharMenu(string? acao = null)
+    {
+        var tcs = _menuAberto;
+        _menuAberto = null;
+        VeuMenu.Visibility = Visibility.Collapsed;
+        tcs?.TrySetResult(acao);
+    }
+
+    private void ToqueForaDoMenu(object sender, MouseButtonEventArgs e) => FecharMenu();
 }

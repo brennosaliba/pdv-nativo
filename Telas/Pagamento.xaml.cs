@@ -57,6 +57,9 @@ public partial class Pagamento : UserControl
     /// </summary>
     private readonly List<PagamentoVenda> _partes = new();
     private string _formaEmEdicao = "dinheiro";
+    // A parte em edição veio do tile POS: forma real em _formaEmEdicao, e o Confirmar
+    // registra à mão (RegistrarComoPos) em vez de armar a maquininha integrada.
+    private bool _posAvulso;
 
     private Dinheiro Falta => new(Math.Max(0,
         _total.Centavos - _partes.Sum(p => p.Valor.Centavos - p.Troco.Centavos)));
@@ -102,7 +105,16 @@ public partial class Pagamento : UserControl
         // liga em Configuracao > TEF ("forma_voucher"). Loja sem convenio nao
         // ganha um botao que so confunde.
         ("voucher",  "Refeição", "🍽️", "Roxo"),
+        // 04/09: maquininha AVULSA (POS), sem integração. Só aparece em caixa COM TEF:
+        // sem TEF todo cartão já é manual, e um segundo botão só confundiria. O toque
+        // abre a escolha da forma real (crédito/débito/PIX/refeição) e o pagamento
+        // entra pelo mesmo caminho do fallback de TEF falhado (RegistrarComoPos).
+        ("pos",      "POS",      "📟", "Amarelo"),
     };
+
+    /// <summary>Formas que o POS avulso aceita, na ordem do diálogo. Refeição só com o voucher ligado.</summary>
+    private static string[] FormasDoPos(bool voucher)
+        => voucher ? new[] { "credito", "debito", "pix", "voucher" } : new[] { "credito", "debito", "pix" };
 
     private static bool VoucherLigado()
     {
@@ -116,6 +128,7 @@ public partial class Pagamento : UserControl
         foreach (var (forma, rotulo, icone, cor) in Formas)
         {
             if (forma == "voucher" && !voucher) continue;
+            if (forma == "pos" && _tef is null) continue;
             var c = ((SolidColorBrush)Application.Current.Resources[cor]).Color;
             var b = new Button
             {
@@ -147,21 +160,63 @@ public partial class Pagamento : UserControl
         }
         // 03/09: com o voucher são 5 formas; em 2 colunas viravam 3 linhas espremidas
         // na mesma altura e os cartões saíam cortados. Acima de 4, 3 colunas (2 linhas).
+        // 04/09: com TEF + voucher são 6 (POS entra): 3 colunas, 2 linhas cheias.
         GradeFormas.Columns = GradeFormas.Children.Count > 4 ? 3 : 2;
     }
 
     private void Escolheu(string forma)
     {
         if (!DocumentoPermiteSeguir()) return;
+        if (forma == "pos") { EscolherFormaDoPos(); return; }
         // Toda forma passa pela tela de valor: é ela que permite dividir a conta.
         // O caso comum (uma forma só) continua a dois toques — o atalho "restante"
         // já vem como botão principal.
+        _posAvulso = false;
         _formaEmEdicao = forma;
         _digitado = "";
         MontarAtalhos();
         Ir(Fase.Dinheiro);
         PintarDinheiro();
     }
+
+    /// <summary>
+    /// Toque no POS: diálogo de UMA linha com as formas reais. O que sai daqui é a forma
+    /// que o cliente de fato usou (crédito, débito, PIX, refeição) — "POS" não é forma de
+    /// pagamento, é onde o cartão passou.
+    /// </summary>
+    private void EscolherFormaDoPos()
+    {
+        var formas = FormasDoPos(VoucherLigado());
+        var i = Dialogo.Escolher(Window.GetWindow(this)!, "Maquininha avulsa", "Como o cliente pagou no POS?",
+            formas.Select(Rotulo).ToArray());
+        if (i < 0) return;
+        IniciarPos(formas[i]);
+    }
+
+    /// <summary>
+    /// Entra na tela de valor com a forma REAL e a marca de POS avulso. Daqui em diante o
+    /// fluxo é o mesmo do cartão, exceto que o Confirmar NUNCA chama o TEF: vai direto para
+    /// RegistrarComoPos, como no caixa sem maquininha integrada.
+    /// </summary>
+    private void IniciarPos(string forma)
+    {
+        _posAvulso = true;
+        _formaEmEdicao = forma;
+        _digitado = "";
+        MontarAtalhos();
+        Ir(Fase.Dinheiro);
+        PintarDinheiro();
+    }
+
+    /// <summary>"Crédito", ou "Crédito POS" quando a parte em edição é avulsa.</summary>
+    private string RotuloEmEdicao => Rotulo(_formaEmEdicao) + (_posAvulso ? " POS" : "");
+
+    /// <summary>
+    /// Rótulo de uma parte já lançada, para chip e cupom. O sufixo "POS" só existe em
+    /// caixa COM TEF: é o que distingue o cartão que passou fora da maquininha integrada.
+    /// Em caixa sem TEF todo cartão é avulso e o sufixo não diria nada.
+    /// </summary>
+    private string RotuloParte(PagamentoVenda p) => Rotulo(p.Forma) + (p.PosAvulso && _tef is not null ? " POS" : "");
 
     /// <summary>Uma parte foi paga. Fecha a conta ou volta para as formas com o que falta.</summary>
     private void AdicionarParte(PagamentoVenda parte)
@@ -224,7 +279,7 @@ public partial class Pagamento : UserControl
             var linha = new StackPanel { Orientation = Orientation.Horizontal };
             var txt = new TextBlock
             {
-                Text = $"✓ {Rotulo(parte.Forma)} {valor.Formatado()}",
+                Text = $"✓ {RotuloParte(parte)} {valor.Formatado()}",
                 FontSize = 14, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center,
             };
             txt.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
@@ -235,7 +290,7 @@ public partial class Pagamento : UserControl
                 Margin = new Thickness(8, 0, 0, 0), Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Tirar este pagamento",
             };
-            System.Windows.Automation.AutomationProperties.SetName(tirar, $"Tirar {Rotulo(parte.Forma)} {valor.Formatado()}");
+            System.Windows.Automation.AutomationProperties.SetName(tirar, $"Tirar {RotuloParte(parte)} {valor.Formatado()}");
             tirar.Click += (_, _) => TirarParte(parte);
             linha.Children.Add(tirar);
             chip.Child = linha;
@@ -247,7 +302,7 @@ public partial class Pagamento : UserControl
     {
         var dono = Window.GetWindow(this)!;
         var valor = new Dinheiro(parte.Valor.Centavos - parte.Troco.Centavos);
-        if (parte.Forma != "dinheiro" && (parte.Nsu is not null || parte.Aut is not null))
+        if (parte.Integrado)
         {
             Dialogo.Avisar(dono, "Pagamento já aprovado",
                 $"Os {valor.Formatado()} em {Rotulo(parte.Forma)} já foram aprovados: o dinheiro saiu da conta do cliente. " +
@@ -256,7 +311,7 @@ public partial class Pagamento : UserControl
         }
         var aviso = parte.Forma == "dinheiro"
             ? $"Tirar os {valor.Formatado()} em dinheiro? Se o cliente já entregou, devolva."
-            : $"Tirar os {valor.Formatado()} em {Rotulo(parte.Forma)}? Se já passou na maquininha, cancele lá também, senão o cliente paga duas vezes.";
+            : $"Tirar os {valor.Formatado()} em {RotuloParte(parte)}? Se já passou na maquininha, cancele lá também, senão o cliente paga duas vezes.";
         if (!Dialogo.Confirmar(dono, "Tirar pagamento", aviso, "Tirar", "Voltar")) return;
         _partes.Remove(parte);
         try
@@ -276,11 +331,14 @@ public partial class Pagamento : UserControl
     /// enquadramento correto — e a confirmação é explícita porque, sem TEF, esta
     /// resposta é a ÚNICA testemunha de que o cartão passou.
     ///
-    /// Serve dois caminhos: caixa SEM TEF (direto) e caixa COM TEF que falhou na hora
+    /// Serve três caminhos: caixa SEM TEF (direto), o tile POS da grade (04/09: a loja
+    /// escolhe a avulsa antes de esperar o TEF falhar) e caixa COM TEF que falhou na hora
     /// (fallback). No fallback pós-timeout, a cobrança do TEF pode ter ficado ARMADA na
     /// maquininha — sem o aviso, o operador passa de novo e o cliente paga duas vezes.
+    /// `parcelas` só entra no texto: a maquininha avulsa é quem parcela, o PDV só anota
+    /// o que o operador deve digitar nela.
     /// </summary>
-    private void RegistrarComoPos(string forma, Dinheiro valor, bool posPodeEstarOcupado)
+    private void RegistrarComoPos(string forma, Dinheiro valor, bool posPodeEstarOcupado, int parcelas = 1)
     {
         var dono = Window.GetWindow(this)!;
         if (posPodeEstarOcupado &&
@@ -290,11 +348,14 @@ public partial class Pagamento : UserControl
                 "Já cancelei · continuar", "Voltar"))
             return;
 
+        var vezes = parcelas > 1 ? $" {parcelas}x" : "";
         if (!Dialogo.Confirmar(dono,
                 $"Cobrança de {valor.Formatado()}",
-                $"Passe {valor.Formatado()} em {Rotulo(forma)} na maquininha e confirme aqui.\n\nO pagamento foi aprovado?",
+                $"Passe {valor.Formatado()} em {Rotulo(forma)}{vezes} na maquininha e confirme aqui.\n\nO pagamento foi aprovado?",
                 "Aprovado · registrar", "Voltar"))
             return;
+        // Sem Aut/NSU de propósito: é isto que faz a parte ser PosAvulso (sem <card> na
+        // nota, fora da conferência TEF x PDV, "origem":"pos" na nuvem).
         AdicionarParte(new PagamentoVenda(forma, valor, Dinheiro.Zero));
     }
 
@@ -380,13 +441,13 @@ public partial class Pagamento : UserControl
         var rec = Recebido;
         var falta = Falta.Centavos;
         var ehDinheiro = _formaEmEdicao == "dinheiro";
-        TxtRotuloEntrada.Text = ehDinheiro ? "RECEBIDO" : $"COBRAR NO {Rotulo(_formaEmEdicao).ToUpperInvariant()}";
+        TxtRotuloEntrada.Text = ehDinheiro ? "RECEBIDO" : $"COBRAR NO {RotuloEmEdicao.ToUpperInvariant()}";
         TxtRecebido.Text = rec.Formatado();
 
         if (!ehDinheiro && rec.Centavos > falta)
         {
             // cartão não gera troco: cobrar a mais no cartão é erro, não troco
-            TxtRotuloTroco.Text = $"MÁXIMO NO {Rotulo(_formaEmEdicao).ToUpperInvariant()}";
+            TxtRotuloTroco.Text = $"MÁXIMO NO {RotuloEmEdicao.ToUpperInvariant()}";
             TxtTroco.Text = Falta.Formatado();
             Pintar(CaixaTroco, TxtRotuloTroco, TxtTroco, "Erro");
             BtnConfirmarDinheiro.IsEnabled = false;
@@ -444,6 +505,9 @@ public partial class Pagamento : UserControl
         if (_tef is null) { RegistrarComoPos(_formaEmEdicao, rec, posPodeEstarOcupado: false); return; }
         var parcelas = _formaEmEdicao == "credito" ? PerguntarParcelas() : 1;
         if (parcelas <= 0) return;   // desistiu na pergunta das parcelas
+        // POS avulso: o TEF está ligado, mas ESTA parte não passa por ele. Mesmo caminho
+        // do caixa sem TEF — e a maquininha integrada nunca é armada.
+        if (_posAvulso) { RegistrarComoPos(_formaEmEdicao, rec, posPodeEstarOcupado: false, parcelas); return; }
         _ = CobrarNoTefAsync(_formaEmEdicao, rec, parcelas);
     }
 
@@ -672,7 +736,7 @@ public partial class Pagamento : UserControl
         // Cartão/PIX JÁ APROVADO não se resolve cancelando a tela: o dinheiro só volta com
         // estorno na rede. Então a venda é concluída e o estorno sai pelo botão Cartão →
         // Estornar (com autorização do gerente), que cancela a venda no mesmo ato.
-        if (cartoes > 0 && _partes.Any(p => p.Forma != "dinheiro" && (p.Nsu is not null || p.Aut is not null)))
+        if (cartoes > 0 && _partes.Any(p => p.Integrado))
         {
             Dialogo.Avisar(Window.GetWindow(this)!, "Pagamento já aprovado",
                 $"O cliente já pagou {new Dinheiro(cartoes).Formatado()} no cartão/PIX: o dinheiro saiu da conta dele.\n\n" +
@@ -757,7 +821,7 @@ public partial class Pagamento : UserControl
                 Numero: 0, Serie: 0, Chave: null, Emissao: DateTime.Now, QrCode: null, TpAmb: null,
                 Itens: ItensDoCupom(descontoNoItem: true),
                 Total: _total, VNf: null,
-                Pagamentos: _partes.Select(p => new PagamentoCupom(Rotulo(p.Forma),
+                Pagamentos: _partes.Select(p => new PagamentoCupom(RotuloParte(p),
                     new Dinheiro(p.Valor.Centavos - p.Troco.Centavos))).ToList(),
                 Recebido: new Dinheiro(_partes.Sum(p => p.Valor.Centavos)),
                 Documento: _documento, Contingencia: false, Operador: _operador.Nome,
@@ -884,14 +948,9 @@ public partial class Pagamento : UserControl
 
         // Cada parte entra pelo valor APLICADO (valor − troco): a soma fecha com o vNF
         // por construção, sem depender da tag de troco que o motor não emite. O cartão
-        // integrado leva o grupo <card> da própria parte.
-        var pagFiscal = _partes.Select(p =>
-        {
-            var card = p.Aut is { Length: > 0 } && p.CnpjCredenciadora is { Length: > 0 }
-                ? new CartaoFiscal(p.Aut, p.CnpjCredenciadora, p.Bandeira)
-                : null;
-            return PagamentoFiscal.De(p.Forma, new Dinheiro(p.Valor.Centavos - p.Troco.Centavos), card);
-        }).ToList();
+        // integrado leva o grupo <card> da própria parte; o POS avulso vai sem card
+        // (tpIntegra=2) — a regra mora em PagamentoFiscal.De(PagamentoVenda).
+        var pagFiscal = _partes.Select(PagamentoFiscal.De).ToList();
 
         ResultadoEmissao r;
         try
@@ -1023,7 +1082,7 @@ public partial class Pagamento : UserControl
             VNf: r.VNF,
             // vPag da NOTA por parte (valor aplicado) — não o que o cliente entregou.
             // O entregue vai em Recebido, e o cupom deriva o troco dos dois.
-            Pagamentos: _partes.Select(p => new PagamentoCupom(Rotulo(p.Forma),
+            Pagamentos: _partes.Select(p => new PagamentoCupom(RotuloParte(p),
                 new Dinheiro(p.Valor.Centavos - p.Troco.Centavos))).ToList(),
             Recebido: new Dinheiro(_partes.Sum(p => p.Valor.Centavos)),
             Documento: _documento,
@@ -1080,7 +1139,7 @@ public partial class Pagamento : UserControl
             // "entregou" só vale para dinheiro na mão; no cartão o número é o que vai ser cobrado.
             Fase.Dinheiro => _formaEmEdicao == "dinheiro"
                 ? "Quanto o cliente entregou?"
-                : $"Quanto cobrar no {Rotulo(_formaEmEdicao)}?",
+                : $"Quanto cobrar no {RotuloEmEdicao}?",
             Fase.Cobrando => "Cobrando na maquininha",
             Fase.Emitindo => "Emitindo a nota",
             Fase.Sucesso => "Pronto",

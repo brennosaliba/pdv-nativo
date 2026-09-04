@@ -181,6 +181,155 @@ public static class TestesCardKds
 
         Densidade(checar);
         AlinhamentoDoCard(checar);
+        Tempo(checar);
+        Entregador(checar);
+    }
+
+    /// <summary>
+    /// O RELÓGIO DO CARD (04/09, foto do dono). Lado a lado: o Gestor do iFood dizia
+    /// "Preparar em 4min" para o #2835 e o nosso card dizia "17 min". "Por que essa
+    /// diferença?" Relógios diferentes: o Gestor conta o que FALTA do prazo; o card, sem
+    /// prazo, o que PASSOU; e com prazo ele contava o que falta com o MESMO texto do
+    /// decorrido, então ninguém sabia qual estava lendo. Agora o texto diz.
+    ///
+    /// Os quatro casos da foto, a virada do minuto (nunca "faltam 0 min", nunca "atrasado
+    /// 0 min"), o congelamento em PRONTO e a prova de que o mesmo prazo muda de texto um
+    /// minuto depois (quem repinta é o timer de 10 s do quadro).
+    /// </summary>
+    private static void Tempo(Action<bool, string> checar)
+    {
+        var agora = new DateTime(2026, 9, 4, 18, 12, 0);
+        var chegou = agora.AddMinutes(-17);
+        (string Texto, TomTempo Tom) T(DateTime? prazo, DateTime? pronto = null)
+            => CardKds.TempoDoCard(chegou, prazo, agora, pronto);
+
+        // ── os quatro casos da foto ─────────────────────────────────────────
+        checar(T(agora.AddMinutes(4)) == ("faltam 4 min", TomTempo.Normal),
+            "prazo daqui a 4 min: 'faltam 4 min', cor normal (o que o Gestor mostra)");
+        checar(T(agora.AddMinutes(2)) == ("faltam 2 min", TomTempo.Atencao),
+            "prazo daqui a 2 min: 'faltam 2 min' em atenção (3 ou menos)");
+        checar(T(agora.AddMinutes(-3)) == ("atrasado 3 min", TomTempo.Atraso),
+            "prazo há 3 min: 'atrasado 3 min' em vermelho");
+        checar(T(null) == ("17 min", TomTempo.Atencao),
+            "sem preparo_ate continua o decorrido de sempre: '17 min'");
+
+        // ── o limiar da atenção e o truncamento ─────────────────────────────
+        checar(T(agora.AddMinutes(3)) == ("faltam 3 min", TomTempo.Atencao),
+            "3 min já é atenção (limiar inclusivo)");
+        checar(T(agora.AddMinutes(4).AddSeconds(50)) == ("faltam 4 min", TomTempo.Normal),
+            "4 min e 50 s são 'faltam 4 min': trunca, como o Gestor, nunca arredonda a favor");
+        checar(T(agora.AddMinutes(3).AddSeconds(59)) == ("faltam 3 min", TomTempo.Atencao),
+            "3 min e 59 s ainda é atenção: a cor vira junto com o texto, não antes");
+        checar(CardKds.MinutosDeAtencao == 3, "o limiar de atenção continua em 3 min, como o dono pediu");
+
+        // ── a virada do minuto: 'faltam 0 min' e 'atrasado 0 min' não existem ─
+        checar(T(agora.AddSeconds(59)) == ("agora", TomTempo.Atencao),
+            "faltando 59 s o card diz 'agora', não 'faltam 0 min'");
+        checar(T(agora) == ("agora", TomTempo.Atencao), "prazo exatamente agora: 'agora'");
+        checar(T(agora.AddSeconds(-1)) == ("atrasado 1 min", TomTempo.Atraso),
+            "1 s depois do prazo: 'atrasado 1 min', nunca 'atrasado 0 min'");
+        checar(T(agora.AddSeconds(-60)) == ("atrasado 1 min", TomTempo.Atraso),
+            "60 s depois: ainda 'atrasado 1 min'");
+        checar(T(agora.AddSeconds(-61)) == ("atrasado 2 min", TomTempo.Atraso),
+            "61 s depois: 'atrasado 2 min' (o atraso arredonda para cima: errar para a pressa)");
+        checar(T(agora.AddMinutes(1)) == ("falta 1 min", TomTempo.Atencao),
+            "um minuto é singular: 'falta 1 min'");
+        checar(T(agora.AddSeconds(90)) == ("falta 1 min", TomTempo.Atencao),
+            "90 s: 'falta 1 min' (trunca)");
+
+        // ── o decorrido, intacto ────────────────────────────────────────────
+        checar(CardKds.TempoDoCard(agora.AddSeconds(-30), null, agora) == ("agora", TomTempo.Normal),
+            "chegou há 30 s: 'agora', em cor normal (era assim)");
+        checar(CardKds.TempoDoCard(agora.AddMinutes(-9), null, agora) == ("9 min", TomTempo.Normal),
+            "9 min de espera: normal");
+        checar(CardKds.TempoDoCard(agora.AddMinutes(-10), null, agora) == ("10 min", TomTempo.Atencao),
+            "10 min de espera: atenção (degrau de sempre)");
+        checar(CardKds.TempoDoCard(agora.AddMinutes(-20), null, agora) == ("20 min", TomTempo.Atraso),
+            "20 min de espera: vermelho (degrau de sempre)");
+        checar(CardKds.TempoDoCard(agora.AddMinutes(5), null, agora) == ("agora", TomTempo.Normal),
+            "relógio da máquina atrás da nuvem (chegada no futuro) não vira número negativo");
+
+        // ── PRONTO congela o relógio, em passado ────────────────────────────
+        checar(T(agora.AddMinutes(4), pronto: agora.AddMinutes(-1)) == ("no prazo", TomTempo.Normal),
+            "pronto antes do prazo: 'no prazo', e não 'faltam 5 min' num pedido que já acabou");
+        checar(T(agora.AddMinutes(-3), pronto: agora.AddMinutes(-1)) == ("atrasou 2 min", TomTempo.Atraso),
+            "ficou pronto 2 min depois do prazo: 'atrasou 2 min', congelado no momento do pronto");
+        checar(T(agora.AddMinutes(-3), pronto: agora.AddMinutes(-3)) == ("no prazo", TomTempo.Normal),
+            "pronto em cima do prazo é no prazo");
+        checar(T(agora.AddMinutes(-3), pronto: agora.AddMinutes(-3).AddSeconds(1)) == ("atrasou 1 min", TomTempo.Atraso),
+            "1 s depois do prazo já é 'atrasou 1 min' (para cima, como o atrasado)");
+        checar(T(null, pronto: agora.AddMinutes(-1)) == ("16 min", TomTempo.Atencao),
+            "sem prazo, o pronto congela o decorrido em 16 min (como Ticket.Espera sempre fez)");
+
+        // ── o texto anda sozinho ────────────────────────────────────────────
+        var prazo = agora.AddMinutes(4);
+        checar(CardKds.TempoDoCard(chegou, prazo, agora).Texto == "faltam 4 min"
+               && CardKds.TempoDoCard(chegou, prazo, agora.AddMinutes(1)).Texto == "faltam 3 min"
+               && CardKds.TempoDoCard(chegou, prazo, agora.AddMinutes(4)).Texto == "agora"
+               && CardKds.TempoDoCard(chegou, prazo, agora.AddMinutes(5)).Texto == "atrasado 1 min",
+            "o mesmo prazo, minuto a minuto: faltam 4, faltam 3, agora, atrasado 1 (o timer de 10 s repinta)");
+
+        // ── cor é pedida ao tema pela chave, nunca escolhida na tela ────────
+        checar(CardKds.PincelDoTom(TomTempo.Normal) == "Ok" && CardKds.PincelDoTom(TomTempo.Atencao) == "Amarelo"
+               && CardKds.PincelDoTom(TomTempo.Atraso) == "Erro",
+            "os três tons mapeiam para Ok / Amarelo / Erro, chaves que existem nos dois temas");
+
+        // ── curto e sem travessão: é lido a 2 m, de pé ──────────────────────
+        foreach (var (txt, _) in new[]
+        {
+            T(agora.AddMinutes(4)), T(agora.AddMinutes(-3)), T(agora), T(null),
+            T(agora.AddMinutes(4), agora.AddMinutes(-1)), T(agora.AddMinutes(-3), agora.AddMinutes(-1)),
+        })
+            checar(txt.Length <= 16 && !txt.Contains('—') && !txt.Contains('–'),
+                $"'{txt}' cabe no cabeçalho do card e não tem travessão");
+    }
+
+    /// <summary>
+    /// O ENTREGADOR NO CARD (04/09, a mesma foto): o Gestor dizia "Chega em 1min" e o
+    /// card, nada. O que existe nos nossos dados é o ÚLTIMO EVENTO de logística
+    /// (pdv_kds_entrega); o mapeamento código -> texto curto é puro e é isto que se
+    /// prova. Códigos reais vistos em produção em 04/09: PLACED, CONFIRMED, ASSIGNED,
+    /// GOING_TO_ORIGIN, ARRIVED_AT_ORIGIN, COLLECTED, DISPATCHED, CONCLUDED,
+    /// READY_TO_PICKUP. Previsão em minutos NÃO existe e o texto não pode ter número.
+    /// </summary>
+    private static void Entregador(Action<bool, string> checar)
+    {
+        checar(CardKds.TextoEntregador("ASSIGNED") == "entregador designado", "ASSIGNED: 'entregador designado'");
+        checar(CardKds.TextoEntregador("GOING_TO_ORIGIN") == "entregador a caminho", "GOING_TO_ORIGIN: 'entregador a caminho'");
+        checar(CardKds.TextoEntregador("ARRIVED_AT_ORIGIN") == "entregador chegou", "ARRIVED_AT_ORIGIN: 'entregador chegou'");
+        checar(CardKds.TextoEntregador("COLLECTED") == "saiu para entrega", "COLLECTED: 'saiu para entrega'");
+        checar(CardKds.TextoEntregador("DISPATCHED") == "saiu para entrega", "DISPATCHED: 'saiu para entrega'");
+
+        foreach (var mudo in new[] { "PLACED", "CONFIRMED", "READY_TO_PICKUP", "CONCLUDED", "XPTO_NOVO", "", "   ", null })
+            checar(CardKds.TextoEntregador(mudo) is null && !CardKds.EntregadorChegou(mudo),
+                $"'{mudo ?? "null"}' não vira texto nenhum no card");
+
+        checar(CardKds.TextoEntregador(" arrived_at_origin ") == "entregador chegou",
+            "o código é lido sem caixa e sem espaços: a ponte não escolhe cultura");
+        checar(CardKds.EntregadorChegou("ARRIVED_AT_ORIGIN") && !CardKds.EntregadorChegou("GOING_TO_ORIGIN")
+               && !CardKds.EntregadorChegou("COLLECTED"),
+            "só ARRIVED_AT_ORIGIN é destaque: é o momento em que o pedido tem de estar pronto");
+
+        // a faixa de baixo da coluna PRONTO
+        checar(CardKds.RodapeEspera(false, null) == "AGUARDANDO O ENTREGADOR",
+            "sem evento a faixa é a de sempre: AGUARDANDO O ENTREGADOR");
+        checar(CardKds.RodapeEspera(false, "PLACED") == "AGUARDANDO O ENTREGADOR",
+            "evento mudo (PLACED) também deixa a faixa de sempre");
+        checar(CardKds.RodapeEspera(false, "GOING_TO_ORIGIN") == "ENTREGADOR A CAMINHO",
+            "a caminho vira a faixa ENTREGADOR A CAMINHO");
+        checar(CardKds.RodapeEspera(false, "ARRIVED_AT_ORIGIN") == "ENTREGADOR CHEGOU",
+            "chegou vira a faixa ENTREGADOR CHEGOU");
+        checar(CardKds.RodapeEspera(true, "ARRIVED_AT_ORIGIN") == "AGUARDANDO O CLIENTE RETIRAR",
+            "RETIRADA ignora evento de entregador: é o cliente que vem, não motoboy");
+        checar(CardKds.RodapeEspera(true, null) == "AGUARDANDO O CLIENTE RETIRAR", "retirada sem evento: idem");
+
+        // nada de número: previsão em minutos não existe nos nossos dados
+        foreach (var c in new[] { "ASSIGNED", "GOING_TO_ORIGIN", "ARRIVED_AT_ORIGIN", "COLLECTED" })
+        {
+            var txt = CardKds.TextoEntregador(c)!;
+            checar(!Regex.IsMatch(txt, @"\d") && txt.Length <= 22 && !txt.Contains('—') && !txt.Contains('–'),
+                $"'{txt}' é curto, sem número inventado e sem travessão");
+        }
     }
 
     /// <summary>

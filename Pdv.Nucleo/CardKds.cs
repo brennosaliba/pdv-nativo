@@ -69,6 +69,14 @@ public enum ToqueKds
     Entregar,
 }
 
+/// <summary>A cor do relógio do card, como o tema a entende: normal, atenção (amarelo) ou atraso (vermelho).</summary>
+public enum TomTempo
+{
+    Normal,
+    Atencao,
+    Atraso,
+}
+
 public static class CardKds
 {
     /// <summary>O marcador de quantidade do quadro, um só: "2× Donut", nunca "2x Donut".</summary>
@@ -258,4 +266,114 @@ public static class CardKds
     private static bool LeNumero(string s, out decimal valor) =>
         decimal.TryParse(s.Replace(',', '.'), NumberStyles.Number,
                          CultureInfo.InvariantCulture, out valor);
+
+    // ── O RELÓGIO DO CARD (04/09, foto do dono: Gestor "Preparar em 4min" x KDS "17 min")
+    // O dono pôs o Gestor do iFood e o nosso quadro lado a lado, no mesmo pedido, e
+    // perguntou "por que essa diferença?". Resposta: relógios diferentes. O Gestor conta
+    // quanto FALTA do prazo de preparo. O card, sem prazo, conta quanto PASSOU desde a
+    // chegada. E com prazo ele até contava o que falta (desde 8f7d86a), mas com o MESMO
+    // texto do decorrido: "17 min" tanto podia ser "faltam 17" quanto "passaram 17", e
+    // ninguém na cozinha tinha como saber qual dos dois relógios estava lendo.
+    //
+    // Agora o texto DIZ qual é o relógio. Com preparo_ate (o mesmo prazo que o detalhe
+    // mostra em "Preparar até 18:29"): "faltam 4 min", "faltam 2 min" em amarelo quando
+    // sobram 3 ou menos, "atrasado 3 min" em vermelho quando passou. Sem prazo (balcão):
+    // o decorrido de sempre. "faltam 0 min" não existe: o minuto do prazo é "agora".
+    //
+    // O ARREDONDAMENTO ERRA PARA O LADO DA PRESSA nos dois sentidos: quanto falta é
+    // truncado (4 min e 50 s = "faltam 4 min", que é o que o Gestor mostra) e quanto
+    // atrasou é arredondado para cima (10 s depois do prazo = "atrasado 1 min"). O
+    // relógio da cozinha nunca mente para o lado do conforto.
+    //
+    // PRONTO CONGELA O RELÓGIO. O que o card conta é o preparo, e o preparo acabou:
+    // continuar contando pintaria de vermelho um pedido que só espera o entregador, e
+    // congelar em "faltam 2 min" seria mentira num pedido que já não falta nada. Vira
+    // passado: "no prazo" ou "atrasou 3 min". O decorrido já congelava (Ticket.Espera).
+    //
+    // A tela só pinta. O timer de 10 s do quadro repinta tudo, então o texto anda
+    // sozinho: nunca fica mais de 10 s atrás da virada do minuto.
+
+    /// <summary>A partir de quantos minutos restantes o relógio fica amarelo. 3, como o dono pediu.</summary>
+    public const int MinutosDeAtencao = 3;
+
+    /// <summary>
+    /// O texto e a cor do relógio do card. <paramref name="preparoAte"/> nulo = sem prazo,
+    /// conta o decorrido desde <paramref name="recebido"/>. <paramref name="prontoEm"/>
+    /// presente = o card está em PRONTO e o relógio congela ali, em passado.
+    /// </summary>
+    public static (string Texto, TomTempo Tom) TempoDoCard(DateTime recebido, DateTime? preparoAte,
+                                                           DateTime agora, DateTime? prontoEm = null)
+    {
+        var referencia = prontoEm ?? agora;
+
+        if (preparoAte is not { } prazo)
+        {
+            // O decorrido de sempre, com os mesmos degraus de cor que o card já tinha.
+            var min = Math.Max(0, (int)(referencia - recebido).TotalMinutes);
+            return (min < 1 ? "agora" : $"{min} min",
+                    min < 10 ? TomTempo.Normal : min < 20 ? TomTempo.Atencao : TomTempo.Atraso);
+        }
+
+        var restante = prazo - referencia;
+        if (prontoEm is not null)
+            return restante >= TimeSpan.Zero
+                ? ("no prazo", TomTempo.Normal)
+                : ($"atrasou {MinutosParaCima(-restante)} min", TomTempo.Atraso);
+
+        if (restante < TimeSpan.Zero)
+            return ($"atrasado {MinutosParaCima(-restante)} min", TomTempo.Atraso);
+
+        var faltam = (int)restante.TotalMinutes;   // trunca: 4 min e 50 s são 4, como no Gestor
+        if (faltam < 1) return ("agora", TomTempo.Atencao);
+        return (faltam == 1 ? "falta 1 min" : $"faltam {faltam} min",
+                faltam <= MinutosDeAtencao ? TomTempo.Atencao : TomTempo.Normal);
+    }
+
+    /// <summary>Atraso em minutos inteiros, para cima, e nunca zero: "atrasado 0 min" não existe.</summary>
+    private static int MinutosParaCima(TimeSpan t) => Math.Max(1, (int)Math.Ceiling(t.TotalMinutes));
+
+    /// <summary>A chave do pincel do tema para cada tom. A tela não escolhe cor: ela pede.</summary>
+    public static string PincelDoTom(TomTempo tom) => tom switch
+    {
+        TomTempo.Atencao => "Amarelo",
+        TomTempo.Atraso => "Erro",
+        _ => "Ok",
+    };
+
+    // ── O ENTREGADOR NO CARD (04/09, a mesma foto) ───────────────────────────
+    // O Gestor dizia "Chega em 1min" e o nosso card não dizia nada do entregador. O que
+    // existe na nuvem é o ÚLTIMO EVENTO de logística de cada pedido (RPC pdv_kds_entrega,
+    // lendo ifood_entrega_eventos, que a ponte grava), e é só isso que o card diz.
+    // PREVISÃO EM MINUTOS NÃO EXISTE nos nossos dados: o iFood só manda isso pelo
+    // rastreamento, que a ponte não consulta. O card não inventa número.
+
+    /// <summary>
+    /// O texto curto do card para o último evento de entrega, ou null quando não há o que
+    /// dizer: PLACED e CONFIRMED (o pedido ainda é só um pedido), READY_TO_PICKUP (é o
+    /// nosso próprio pronto, ecoado pelo iFood; o card já está na coluna PRONTO),
+    /// CONCLUDED (já foi embora) e qualquer código que a ponte ainda não conhece.
+    /// </summary>
+    public static string? TextoEntregador(string? codigo) => Codigo(codigo) switch
+    {
+        "ASSIGNED" => "entregador designado",
+        "GOING_TO_ORIGIN" => "entregador a caminho",
+        "ARRIVED_AT_ORIGIN" => "entregador chegou",
+        "COLLECTED" or "DISPATCHED" => "saiu para entrega",
+        _ => null,
+    };
+
+    /// <summary>O momento em que o pedido TEM de estar pronto: é o único evento que ganha destaque.</summary>
+    public static bool EntregadorChegou(string? codigo) => Codigo(codigo) == "ARRIVED_AT_ORIGIN";
+
+    /// <summary>
+    /// A faixa de espera da coluna PRONTO. Retirada é sempre o cliente, aconteça o que
+    /// acontecer com eventos; entrega diz o que o entregador está fazendo, e "AGUARDANDO
+    /// O ENTREGADOR" enquanto não se sabe nada.
+    /// </summary>
+    public static string RodapeEspera(bool retirada, string? codigoEntrega)
+        => retirada ? "AGUARDANDO O CLIENTE RETIRAR"
+         : TextoEntregador(codigoEntrega) is { } e ? e.ToUpperInvariant()
+         : "AGUARDANDO O ENTREGADOR";
+
+    private static string Codigo(string? c) => (c ?? "").Trim().ToUpperInvariant();
 }

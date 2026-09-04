@@ -29,7 +29,26 @@ public sealed record LinhaVenda(
 /// </summary>
 public sealed record PagamentoVenda(
     string Forma, Dinheiro Valor, Dinheiro Troco,
-    string? Aut = null, string? CnpjCredenciadora = null, string? Bandeira = null, string? Nsu = null);
+    string? Aut = null, string? CnpjCredenciadora = null, string? Bandeira = null, string? Nsu = null)
+{
+    /// <summary>
+    /// Aprovado pela maquininha INTEGRADA (TEF): tem carimbo, cAut ou NSU. É a MESMA regra
+    /// que o fechamento aplica em SQL (<see cref="Caixa.SqlIntegrado"/>): as duas têm que
+    /// andar juntas, senão a tela chama de POS o que o caixa fecha como TEF.
+    /// </summary>
+    public bool Integrado => Aut is not null || Nsu is not null;
+
+    /// <summary>
+    /// Cartão/PIX passado numa maquininha AVULSA (POS), sem integração: o operador cobrou
+    /// nela e confirmou na tela. Não há linha em `tef_transacao`, não há grupo &lt;card&gt;
+    /// na nota (tpIntegra=2). É o que RegistrarComoPos grava, tanto pelo botão POS quanto
+    /// pelo fallback de quando o TEF falha, e o que um caixa SEM TEF grava em todo cartão.
+    /// </summary>
+    public bool PosAvulso => Forma != "dinheiro" && !Integrado;
+
+    /// <summary>Para a nuvem: "tef" | "pos" | null (dinheiro). O servidor ignora; o painel pode ler.</summary>
+    public string? Origem => Forma == "dinheiro" ? null : Integrado ? "tef" : "pos";
+}
 
 public sealed record VendaGravada(string Id, string ClientKey, long Numero, Dinheiro Total, string BusinessDate);
 
@@ -191,7 +210,10 @@ public static class Vendas
                 promocao_id = i.PromoId,
                 promocao_nome = i.PromoNome,
             }).ToArray(),
-            p_pagamentos = pagamentos.Select(p => new { metodo = p.Forma, valor = (p.Valor.Centavos - p.Troco.Centavos) / 100m }).ToArray(),
+            // 04/09: `origem` diz se o cartão passou pela maquininha integrada ("tef") ou
+            // numa avulsa ("pos"). A forma continua sendo a REAL (credito/debito/pix/
+            // voucher): o servidor normaliza `metodo` e ignora o campo extra.
+            p_pagamentos = pagamentos.Select(p => new { metodo = p.Forma, valor = (p.Valor.Centavos - p.Troco.Centavos) / 100m, origem = p.Origem }).ToArray(),
             p_store = loja,
             p_store_id = lojaId,
             // A venda TEM que subir com QUEM a fez, senão o antifraude da nuvem fica

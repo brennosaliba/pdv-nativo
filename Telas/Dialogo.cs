@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 
@@ -101,6 +102,57 @@ public static class Dialogo
         };
         janela.ShowDialog();
         return resposta;
+    }
+
+    /// <summary>
+    /// Uma pergunta e as opções numa LINHA SÓ (lado a lado, alvo de dedo). Devolve o
+    /// índice da opção tocada, ou -1 em Voltar/Esc. É o diálogo do POS: "Crédito,
+    /// Débito, PIX, Refeição" sem lista rolável nem texto explicativo.
+    /// </summary>
+    public static int Escolher(Window dono, string titulo, string mensagem, params string[] opcoes)
+    {
+        var escolhido = -1;
+        // 118 px por opção: 4 opções cabem em 526, que ainda é menor que a tela de 1024.
+        var janela = Base(dono, Math.Max(460, (int)(opcoes.Length * 118 + MolduraLateral)));
+        var pilha = new StackPanel();
+
+        pilha.Children.Add(new TextBlock
+        {
+            Text = titulo, FontSize = 22, FontWeight = FontWeights.Bold,
+            Foreground = R("Texto"), TextWrapping = TextWrapping.Wrap,
+        });
+        pilha.Children.Add(new TextBlock
+        {
+            Text = mensagem, FontSize = 15, Foreground = R("TextoFraco"),
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 18),
+        });
+
+        var linha = new UniformGrid { Rows = 1, Columns = Math.Max(1, opcoes.Length) };
+        for (var i = 0; i < opcoes.Length; i++)
+        {
+            var idx = i;
+            var b = Botao(opcoes[i], false);
+            b.MinHeight = 68;
+            b.Margin = new Thickness(i == 0 ? 0 : 4, 0, i == opcoes.Length - 1 ? 0 : 4, 0);
+            b.Click += (_, _) => { escolhido = idx; janela.Close(); };
+            linha.Children.Add(b);
+        }
+        pilha.Children.Add(linha);
+
+        var voltar = Botao("Voltar", false);
+        voltar.MinHeight = 52;
+        voltar.FontSize = 15;
+        voltar.Margin = new Thickness(0, 12, 0, 0);
+        voltar.Click += (_, _) => janela.Close();
+        pilha.Children.Add(voltar);
+
+        janela.Content = Moldura(pilha);
+        janela.KeyDown += (_, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.Escape) janela.Close();
+        };
+        janela.ShowDialog();
+        return escolhido;
     }
 
     /// <summary>Aviso simples. `tom`: "ok" (verde), "erro" (vermelho) ou null (neutro).</summary>

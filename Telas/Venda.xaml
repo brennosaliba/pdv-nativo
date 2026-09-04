@@ -38,7 +38,9 @@
         </Grid.RowDefinitions>
 
         <!-- ══ TOPO: quem está no caixa. Responsabilidade sobre dinheiro precisa ter cara. ══ -->
-        <Border Grid.Row="0" x:Name="Cabecalho" Background="{DynamicResource BarraDegrade}" Padding="18,10"
+        <!-- 04/09: Padding vertical 10 -> 6 ("diminuir o espaço de linha no topo").
+             AplicarLargura ajusta de novo por largura (5 em tela estreita). -->
+        <Border Grid.Row="0" x:Name="Cabecalho" Background="{DynamicResource BarraDegrade}" Padding="18,6"
                 BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,0,1">
             <Grid>
                 <!-- DUAS COLUNAS, e a ordem de prioridade importa.
@@ -165,34 +167,36 @@
                             <TextBlock Text="Suprimento" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
-                    <Button Click="FecharCaixa" Style="{StaticResource BotaoBarra}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="🔒" FontSize="13" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Fechar caixa" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Button>
-                    <Button Click="TrocarImpressora" Style="{StaticResource BotaoBarra}"
-                            ToolTip="Mandar o cupom para outra impressora">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="🖨" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Impressora" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Button>
-                    <!-- Diz "Cancelar venda", não "Cartão": cancelar a venda e a NFC-e NÃO
+                    <!-- 04/09 (pedido do dono): "juntar o menu impressora com cancelar venda,
+                         e o sair com o fechar caixa". QUATRO botões viraram DOIS menus:
+                           · Cancelar / Imprimir → Cancelar venda, Estornar, Reimpressão,
+                                                   Configuração da impressora
+                           · Fechar / Sair       → Fechamento de caixa, Sair
+                         Os itens, a ordem e a chave de cada ação moram em
+                         Pdv.Nucleo/MenuBarra (a suíte prova); cada item reencaminha para o
+                         handler que JÁ existia. O menu abre como VÉU dentro desta tela
+                         (VeuMenu, no fim do arquivo), não como janela.
+                         Diz "Cancelar", não "Cartão": cancelar a venda e a NFC-e NÃO
                          precisam de maquininha (quem cancela a nota é o agente fiscal local),
-                         e um botão com nome de cartão escondia isso justamente de quem opera
-                         com maquininha AVULSA — que era quem mais precisava achar. O estorno
-                         do cartão e a reimpressão continuam aqui dentro, para quem tem TEF. -->
+                         e um botão com nome de cartão escondia isso de quem opera com
+                         maquininha AVULSA. O estorno e a reimpressão continuam aqui dentro,
+                         para quem tem TEF. -->
                     <Button x:Name="BtnCancelar" Click="MenuCancelamento" Style="{StaticResource BotaoBarra}"
-                            ToolTip="Cancelar uma venda e a nota fiscal · estornar cartão/PIX · reimprimir comprovante">
+                            ToolTip="Cancelar venda · Estornar · Reimpressão · Configuração da impressora">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="↩" FontSize="16" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Cancelar venda" VerticalAlignment="Center"/>
+                            <TextBlock Text="Cancelar / Imprimir" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
-                    <Button Content="Sair" Click="Sair" Style="{StaticResource BotaoBarra}"
+                    <Button x:Name="BtnFecharSair" Click="MenuFecharSair" Style="{StaticResource BotaoBarra}"
                             Background="{DynamicResource RosaDegrade}" Foreground="{DynamicResource SobreMarca}"
-                            BorderThickness="0" FontWeight="Bold" Margin="14,0,0,0"/>
+                            BorderThickness="0" FontWeight="Bold" Margin="14,0,0,0"
+                            ToolTip="Fechamento de caixa · Sair">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🔒" FontSize="13" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Fechar / Sair" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                 </WrapPanel>
             </Grid>
         </Border>
@@ -440,6 +444,23 @@
              com o cliente pagando, nada mais na tela pode ser tocado por acidente. -->
         <ContentControl x:Name="PainelPagamento" Grid.Row="0" Grid.RowSpan="3"
                         Visibility="Collapsed" Panel.ZIndex="10"/>
+
+        <!-- ══ MENU DA BARRA (04/09): véu sobre a tela inteira + cartão pendurado sob o
+             botão que abriu (Cancelar / Imprimir ou Fechar / Sair). Mesmo desenho do Veu
+             do KDS: toque FORA fecha, Esc fecha (PreviewKeyDown no construtor), sem
+             submenu. É parte da tela, e não uma janela, de propósito: o modo foto-venda
+             fotografa o menu aberto, e o operador não ganha uma janela a mais para o
+             Windows esconder atrás do PDV. O cartão segue a moldura do Dialogo (Painel,
+             cantos de 18, sombra do tema); os itens são montados em AbrirMenu a partir
+             de Pdv.Nucleo/MenuBarra, um por linha, alvo de MenuBarra.AlturaItem. ══ -->
+        <Grid x:Name="VeuMenu" Grid.Row="0" Grid.RowSpan="4" Visibility="Collapsed" Panel.ZIndex="60">
+            <Border Background="{DynamicResource Fundo}" Opacity="0.6" MouseLeftButtonDown="ToqueForaDoMenu"/>
+            <Border x:Name="CartaoMenu" HorizontalAlignment="Right" VerticalAlignment="Top" MinWidth="300"
+                    Background="{DynamicResource Painel}" BorderBrush="{DynamicResource Borda}" BorderThickness="1"
+                    CornerRadius="18" Padding="10" Margin="0,64,18,0">
+                <StackPanel x:Name="ItensMenu"/>
+            </Border>
+        </Grid>
 
         <!-- ══ RODAPÉ: estado do caixa. Offline muda o regime fiscal (contingência),
              então o operador precisa ver isso sem abrir menu nenhum. ══ -->
