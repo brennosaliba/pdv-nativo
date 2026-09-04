@@ -43,6 +43,11 @@ public partial class Pagamento : UserControl
     private DispatcherTimer? _avanco;
     private VendaGravada? _venda;
     private bool _emitindo;
+    // Charges de cartão APROVADOS nesta venda. Servem ao pop-up pós-aprovação das vias
+    // em "Perguntar na tela": cada charge tem seu comprovante guardado em tef_transacao.
+    private readonly List<string> _chargesTefPagos = new();
+    // O pop-up das vias aparece UMA vez por venda, não a cada reimpressão do cupom.
+    private bool _viasOferecidas;
 
     /// <summary>
     /// As partes já pagas da conta — 2-3 clientes dividindo, cada um passa um valor.
@@ -519,6 +524,8 @@ public partial class Pagamento : UserControl
 
         if (d.Situacao == SituacaoTef.Pago)
         {
+            // Guarda o charge para o pop-up das vias em "Perguntar" depois da conclusão.
+            if (d.ChargeId is { Length: > 0 } chg) _chargesTefPagos.Add(chg);
             // 03/09 (Savassi): PIX pelo TEF volta APROVADO com NSU mas sem "codigo de
             // autorizacao" (isso e coisa de cartao). O carimbo do fechamento e
             // `tef_aut IS NULL` = manual — entao TODO pix do TEF era pedido na
@@ -785,6 +792,8 @@ public partial class Pagamento : UserControl
             CaixaTrocoFinal.Visibility = Visibility.Visible;
         }
 
+        // Pop-up das vias em "Perguntar na tela" antes do auto-avanço (mesmo do gêmeo fiscal).
+        await OferecerViasNaTelaAsync();
         _avanco?.Stop();
         // ⚠️ Gate DIFERENTE do gêmeo fiscal (lá é só `erro is null`), e de propósito: no
         // recibo, quem toca em "Imprimir recibo" fica com a tela parada para conferir o
@@ -796,6 +805,56 @@ public partial class Pagamento : UserControl
             _avanco = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(troco.Positivo ? 4000 : 1600) };
             _avanco.Tick += (_, _) => { _avanco?.Stop(); Encerrou?.Invoke(DesfechoVenda.Concluida); };
             _avanco.Start();
+        }
+    }
+
+    /// <summary>
+    /// Pop-up pós-aprovação para as vias do cartão marcadas como "Perguntar na tela"
+    /// (Configuração → Impressora). "Imprimir sozinho" já saiu no ato da cobrança e "Não
+    /// imprimir" não pergunta: só a "Perguntar" chega aqui, e o operador decide via a via
+    /// com o cliente ainda no balcão. A fonte é a MESMA da reimpressão manual (Venda → TEF
+    /// → Reimprimir): o `resposta_txt` guardado em `tef_transacao` por charge_id. Roda uma
+    /// vez por venda (não a cada reimpressão do cupom) e ANTES de armar o auto-avanço, para
+    /// a tela não fechar embaixo do operador enquanto ele decide.
+    /// </summary>
+    private async Task OferecerViasNaTelaAsync()
+    {
+        if (_viasOferecidas || _chargesTefPagos.Count == 0) return;
+        _viasOferecidas = true;
+
+        PoliticaImpressao pCliente, pEstab;
+        string? impressora;
+        using (var cx = Banco.Abrir())
+        {
+            pCliente = Impressoes.Politica(cx, Impressoes.ViaCliente);
+            pEstab = Impressoes.Politica(cx, Impressoes.ViaEstabelecimento);
+            impressora = Vendas.Config(cx, "impressora");
+        }
+        // Nenhuma via em "Perguntar" = nada a oferecer. Automático já saiu; "não imprimir" cala.
+        if (pCliente != PoliticaImpressao.Perguntar && pEstab != PoliticaImpressao.Perguntar) return;
+
+        var dono = Window.GetWindow(this);
+        if (dono is null) return;
+        foreach (var charge in _chargesTefPagos)
+        {
+            string? txt;
+            using (var cx = Banco.Abrir())
+                txt = cx.ExecuteScalar<string?>(
+                    "SELECT resposta_txt FROM tef_transacao WHERE charge_id=@C AND resposta_txt IS NOT NULL LIMIT 1",
+                    new { C = charge });
+            if (txt is null) continue;
+            var vias = Servicos.ViasPerguntarRotuladas(RespostaPayGo.Analisar(txt), pCliente, pEstab);
+            foreach (var (qual, linhas) in vias)
+            {
+                if (linhas.Count == 0) continue;
+                var nome = qual == Servicos.ViaTef.Estabelecimento ? "via do estabelecimento" : "via do cliente";
+                if (!Dialogo.Confirmar(dono, "Comprovante do cartão",
+                        $"Imprimir a {nome}?", "Imprimir", "Agora não")) continue;
+                var erro = await Impressao.ImprimirTextoAsync("Comprovante TEF", new[] { linhas }, impressora);
+                if (erro is not null)
+                    Dialogo.Avisar(dono, "Comprovante",
+                        erro + "\n\nConfira a impressora e reimprima em TEF → Reimprimir o último comprovante.", "erro");
+            }
         }
     }
 
@@ -930,6 +989,9 @@ public partial class Pagamento : UserControl
         // parada no botão "Reimprimir" — senão o timer arranca o botão da frente do
         // operador (e podia fechar a venda no meio da reimpressão) e o cliente vai
         // embora sem cupom. Também paramos um timer anterior antes de reimprimir.
+        // Antes de armar o avanço, as vias em "Perguntar na tela" viram pop-up, com o
+        // cliente ainda no balcão. O modal segura a tela até o operador decidir.
+        await OferecerViasNaTelaAsync();
         _avanco?.Stop();
         if (erro is null)
         {

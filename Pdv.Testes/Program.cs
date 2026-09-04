@@ -100,6 +100,11 @@ if (args.Length >= 2 && args[0] == "--conferir-pacote")
 if (args.Length >= 4 && args[0] == "--foto-venda")
     return FotoVenda.Rodar(args);
 
+// Gera o icone do exe (mmtech, conceito B) num .ico multi-resolucao.
+//   Pdv.Testes.exe --gerar-icone saida.ico
+if (args.Length >= 2 && args[0] == "--gerar-icone")
+    return GerarIcone.Rodar(args[1]);
+
 if (args.Length >= 3 && args[0] == "--sonda-2a-instancia")
 {
     using var trava = InstanciaUnica.Tentar(args[2]);

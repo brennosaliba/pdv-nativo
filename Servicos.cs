@@ -578,6 +578,19 @@ public static class Servicos
             .ToList();
 
     /// <summary>
+    /// As vias que a loja marcou como "Perguntar na tela" (imp_via_cliente /
+    /// imp_via_estabelecimento). Elas NÃO saem sozinhas: a tela de pagamento oferece um
+    /// pop-up logo após a aprovação, com o cliente ainda no balcão. Volta ROTULADA para o
+    /// pop-up saber o nome de cada via. A via única obedece à política da via do CLIENTE,
+    /// a mesma regra de <see cref="ViasAutomaticas"/> — é o papel que o cliente leva.
+    /// </summary>
+    public static IReadOnlyList<(ViaTef Qual, IReadOnlyList<string> Linhas)> ViasPerguntarRotuladas(
+        RespostaPayGo r, PoliticaImpressao cliente, PoliticaImpressao estabelecimento)
+        => ViasRotuladas(r)
+            .Where(v => (v.Qual == ViaTef.Estabelecimento ? estabelecimento : cliente) == PoliticaImpressao.Perguntar)
+            .ToList();
+
+    /// <summary>
     /// Hook do two-phase do PayGo: imprime as vias do comprovante e diz se SAÍRAM. Falhou →
     /// pergunta ao operador se tenta de novo; "desistir" devolve false e o cliente manda NCN
     /// (o cliente não é cobrado; a tela mostra "Transação TEF cancelada: Rede/NSU/Valor").

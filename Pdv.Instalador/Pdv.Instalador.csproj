@@ -11,6 +11,8 @@
     <Product>PDV MMTech</Product>
     <Company>MMTech</Company>
     <Version>2.0.0</Version>
+    <!-- Mesmo icone do app: o instalador e a primeira coisa que a loja ve. -->
+    <ApplicationIcon>..\Recursos\mmtech.ico</ApplicationIcon>
     <!-- Program Files + registro + icacls exigem elevacao; o proprio Windows
          mostra o escudo UAC no exe. -->
     <ApplicationManifest>app.manifest</ApplicationManifest>

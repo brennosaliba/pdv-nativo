@@ -301,6 +301,26 @@ public static class TestesPoliticaImpressao
             "737=1: a rede mandou só a via do cliente");
         checar(Servicos.ViasRotuladas(Resposta(2))[0].Qual == Servicos.ViaTef.Estabelecimento,
             "737=2: a rede mandou só a via do estabelecimento");
+
+        // ⭐ PEDIDO DO DONO (03/09): a via em "perguntar" vira POP-UP na tela de pagamento.
+        // ViasPerguntarRotuladas é a fonte desse pop-up — rotulada, para nomear cada via.
+        // Espelha ViasAutomaticas, mas do outro lado: aqui saem as que o operador decide.
+        var popupAmbas = Servicos.ViasPerguntarRotuladas(r, PoliticaImpressao.Perguntar, PoliticaImpressao.Perguntar);
+        checar(popupAmbas.Count == 2
+               && popupAmbas[0].Qual == Servicos.ViaTef.Cliente
+               && popupAmbas[1].Qual == Servicos.ViaTef.Estabelecimento,
+            "⭐ as duas em 'perguntar': o pop-up oferece as duas vias, rotuladas");
+        var popupSoCliente = Servicos.ViasPerguntarRotuladas(r, PoliticaImpressao.Perguntar, PoliticaImpressao.Automatico);
+        checar(popupSoCliente.Count == 1 && popupSoCliente[0].Qual == Servicos.ViaTef.Cliente,
+            "só o cliente em 'perguntar': o pop-up oferece só a via do cliente (a da loja já saiu sozinha)");
+        checar(Servicos.ViasPerguntarRotuladas(r, PoliticaImpressao.Automatico, PoliticaImpressao.Nao).Count == 0,
+            "nenhuma via em 'perguntar' (automático + não imprimir): o pop-up não aparece");
+        checar(Servicos.ViasPerguntarRotuladas(r, PoliticaImpressao.Nao, PoliticaImpressao.Nao).Count == 0,
+            "as duas em 'não imprimir': o pop-up cala (é diferente de 'perguntar')");
+        // A via única obedece à política da via do CLIENTE também no pop-up.
+        var popupUnica = Servicos.ViasPerguntarRotuladas(unica, PoliticaImpressao.Perguntar, PoliticaImpressao.Nao);
+        checar(popupUnica.Count == 1 && popupUnica[0].Qual == Servicos.ViaTef.Unica,
+            "via única em 'perguntar' pela política do cliente: o pop-up a oferece");
     }
 
     // ── a revisão do assistente conta o que foi escolhido ───────────────────

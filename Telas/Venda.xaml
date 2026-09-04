@@ -237,17 +237,25 @@
             <!-- ══ ESQUERDA: categorias ══ -->
             <Border Grid.Column="0" x:Name="ColunaCategorias" SizeChanged="CategoriasRedimensionou"
                     Background="{DynamicResource FundoAfundado}" BorderBrush="{DynamicResource Borda}" BorderThickness="0,0,1,0">
-                <ScrollViewer VerticalScrollBarVisibility="Hidden">
-                    <ItemsControl x:Name="ListaCategorias" Margin="10,10,10,14" VerticalAlignment="Top">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <!-- 2 por linha ate 12 categorias; acima disso 3 por
-                                     linha com card mini (rede SaaS chega a 20+) -->
-                                <UniformGrid Columns="{Binding ColunasCategorias, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                    </ItemsControl>
-                </ScrollViewer>
+                <DockPanel>
+                    <!-- Densidade das categorias: automático (segue a resolução), 2 ou 3 por
+                         linha. Toque alterna e grava a escolha da loja. -->
+                    <Button x:Name="BtnDensidadeCategorias" DockPanel.Dock="Top" Click="AlternarDensidadeCategorias"
+                            Style="{StaticResource BotaoBase}" Margin="10,10,10,0" Padding="8,5" FontSize="12"
+                            HorizontalContentAlignment="Center"
+                            ToolTip="Categorias por linha: automático, 2 ou 3. Toque para alternar."/>
+                    <ScrollViewer VerticalScrollBarVisibility="Hidden">
+                        <ItemsControl x:Name="ListaCategorias" Margin="10,8,10,14" VerticalAlignment="Top">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <!-- colunas decididas por AjustarColunasCategorias: a escolha
+                                         da loja (2/3) ou a largura real quando automático -->
+                                    <UniformGrid Columns="{Binding ColunasCategorias, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
             </Border>
 
             <!-- ══ MEIO: busca + grade de produtos ══ -->

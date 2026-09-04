@@ -84,12 +84,19 @@ public partial class Venda : UserControl
     { get => (int)GetValue(ColunasCategoriasProperty); set => SetValue(ColunasCategoriasProperty, value); }
 
     private bool _categoriaMini;
+    // Densidade da coluna de categorias, escolha da loja (botão no topo da coluna):
+    // "auto" segue a largura real da tela (resolução), "2" e "3" fixam quantos cards
+    // por linha. Gravado em config; lido antes de montar a grade.
+    private string _categoriasPorLinha = "auto";
 
     public Venda(Operador operador, Sessao sessao)
     {
         InitializeComponent();
         _operador = operador;
         _sessao = sessao;
+        using (var cxCfg = Banco.Abrir())
+            _categoriasPorLinha = Vendas.Config(cxCfg, "categorias_por_linha") ?? "auto";
+        PintarBotaoDensidade();
         TxtOperador.Text = operador.Nome;
         TxtInicial.Text = operador.Nome.Trim().Length > 0 ? operador.Nome.Trim()[..1].ToUpperInvariant() : "?";
         TxtSessao.Text = $"Caixa aberto às {sessao.AberturaEm:HH:mm} · {DateTime.Parse(sessao.BusinessDate):dd/MM}";
@@ -598,13 +605,48 @@ public partial class Venda : UserControl
     /// </summary>
     private void AjustarColunasCategorias()
     {
-        var w = _larguraCategorias - 20; // margens do ItemsControl
         int cols;
-        if (w <= 0) cols = _categoriaMini ? 3 : 2;
-        else if (_categoriaMini) cols = w >= 250 ? 3 : (w >= 150 ? 2 : 1);
-        else cols = w >= 150 ? 2 : 1;
+        // A escolha da loja manda: "2"/"3" fixam. "auto" segue a largura real (resolução).
+        if (_categoriasPorLinha == "2") cols = 2;
+        else if (_categoriasPorLinha == "3") cols = 3;
+        else
+        {
+            var w = _larguraCategorias - 20; // margens do ItemsControl
+            if (w <= 0) cols = _estreita ? 3 : 2;
+            else if (_estreita) cols = w >= 250 ? 3 : (w >= 150 ? 2 : 1);
+            else cols = w >= 150 ? 2 : 1;
+        }
         if (ColunasCategorias != cols) ColunasCategorias = cols;
+
+        // Card mini quando há 3 por linha (forçado ou automático) ou tela estreita —
+        // senão o nome da categoria não cabe. Só re-desenha se o estado mudou.
+        var mini = _estreita || cols >= 3;
+        if (mini != _categoriaMini)
+        {
+            _categoriaMini = mini;
+            var cats = ListaCategorias.Items.Cast<Button>().Select(b => (string)b.Tag!).ToList();
+            if (cats.Count > 0) PreencherCategorias(cats);
+            RepintarCategorias();
+        }
     }
+
+    /// <summary>Alterna a densidade das categorias: automático → 2 → 3 → automático. Persiste.</summary>
+    private void AlternarDensidadeCategorias(object sender, RoutedEventArgs e)
+    {
+        _categoriasPorLinha = _categoriasPorLinha switch { "auto" => "2", "2" => "3", _ => "auto" };
+        using (var cx = Banco.Abrir()) Vendas.GravarConfig(cx, "categorias_por_linha", _categoriasPorLinha);
+        PintarBotaoDensidade();
+        AjustarColunasCategorias();
+    }
+
+    /// <summary>Rótulo do botão de densidade, conforme a escolha atual.</summary>
+    private void PintarBotaoDensidade()
+        => BtnDensidadeCategorias.Content = _categoriasPorLinha switch
+        {
+            "2" => "2 por linha",
+            "3" => "3 por linha",
+            _ => "Automático",
+        };
 
     // ── tela estreita (03/09/2026, Savassi 1024x768) ─────────────────────────
     // Duas tentativas de "encolher a coluna" pioraram a tela: cabeçalho em três
