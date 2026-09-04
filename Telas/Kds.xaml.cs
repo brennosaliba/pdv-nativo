@@ -214,13 +214,16 @@ public partial class Kds : UserControl
 
         var abertos = Nucleo.Kds.Abertos();
 
-        Encher(ColPreparar, abertos.Where(t => t.Status == Nucleo.Kds.Recebido));
+        // A PREPARAR: agendados no topo (por hora marcada), depois a fila de chegada.
+        var fila = Nucleo.Kds.OrdenarFila(abertos.Where(t => t.Status == Nucleo.Kds.Recebido));
+        Encher(ColPreparar, fila, faixaAgendados: true);
         Encher(ColPreparo,  abertos.Where(t => t.Status == Nucleo.Kds.Preparando));
         Encher(ColPronto,   abertos.Where(t => t.Status == Nucleo.Kds.Pronto));
 
-        TxtQtdPreparar.Text = ColPreparar.Children.Count.ToString();
-        TxtQtdPreparo.Text  = ColPreparo.Children.Count.ToString();
-        TxtQtdPronto.Text   = ColPronto.Children.Count.ToString();
+        // Conta TICKETS, não filhos do Grid: a faixa "AGENDADOS" é filho e não é pedido.
+        TxtQtdPreparar.Text = fila.Count.ToString();
+        TxtQtdPreparo.Text  = abertos.Count(t => t.Status == Nucleo.Kds.Preparando).ToString();
+        TxtQtdPronto.Text   = abertos.Count(t => t.Status == Nucleo.Kds.Pronto).ToString();
     }
 
     /// <summary>
@@ -235,8 +238,14 @@ public partial class Kds : UserControl
     /// e altura fixa CORTA pedido comprido (o de 6 itens aparecia com 2). Aqui
     /// cada LINHA cresce ate o maior card dela e os vizinhos esticam junto:
     /// alinhado em cima e embaixo, sem esconder item nenhum.
+    ///
+    /// Com <paramref name="faixaAgendados"/>, os AGENDADOS (que
+    /// <see cref="Nucleo.Kds.OrdenarFila"/> já pôs no topo) ganham uma faixa
+    /// "AGENDADOS" acima e os imediatos uma faixa "AGORA": sem isso os dois grupos
+    /// se misturavam à vista, e é exatamente a mistura que o dono não quer. Sem
+    /// agendado no quadro, nenhuma faixa aparece e a coluna é a de sempre.
     /// </summary>
-    private void Encher(Grid coluna, IEnumerable<Ticket> tickets)
+    private void Encher(Grid coluna, IEnumerable<Ticket> tickets, bool faixaAgendados = false)
     {
         coluna.Children.Clear();
         coluna.RowDefinitions.Clear();
@@ -244,12 +253,46 @@ public partial class Kds : UserControl
         for (var c = 0; c < CardsPorLinha; c++)
             coluna.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var i = 0;
-        foreach (var t in tickets)
+        var lista = tickets.ToList();
+        var comFaixas = faixaAgendados && lista.Any(t => t.Agendado);
+        var i = 0;   // próxima célula livre; linha = i / CardsPorLinha
+        void GaranteLinha(int linha)
         {
-            var linha = i / CardsPorLinha;
-            if (linha >= coluna.RowDefinitions.Count)
+            while (coluna.RowDefinitions.Count <= linha)
                 coluna.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        }
+        void Faixa(string texto, string cor)
+        {
+            if (i % CardsPorLinha != 0) i += CardsPorLinha - i % CardsPorLinha;   // começa em linha nova
+            var linha = i / CardsPorLinha;
+            GaranteLinha(linha);
+            var tb = new TextBlock
+            {
+                Text = texto, FontSize = 11, FontWeight = FontWeights.Bold,
+                Margin = new Thickness(6, 6, 6, 1),
+            };
+            tb.SetResourceReference(TextBlock.ForegroundProperty, cor);
+            Grid.SetRow(tb, linha);
+            Grid.SetColumn(tb, 0);
+            Grid.SetColumnSpan(tb, CardsPorLinha);
+            coluna.Children.Add(tb);
+            i += CardsPorLinha;                                                    // a faixa é a linha inteira
+        }
+
+        string? faixaAtual = null;
+        foreach (var t in lista)
+        {
+            if (comFaixas)
+            {
+                var faixa = t.Agendado ? "AGENDADOS" : "AGORA";
+                if (faixa != faixaAtual)
+                {
+                    Faixa(faixa, t.Agendado ? "Agendado" : "TextoFraco");
+                    faixaAtual = faixa;
+                }
+            }
+            var linha = i / CardsPorLinha;
+            GaranteLinha(linha);
             var card = Card(t);
             Grid.SetRow(card, linha);
             Grid.SetColumn(card, i % CardsPorLinha);
@@ -283,6 +326,10 @@ public partial class Kds : UserControl
             Nucleo.Kds.Pronto when t.Origem == "ifood"
                                   => ("AGUARDANDO O ENTREGADOR", "TextoFraco", "VeuElevado"),
             Nucleo.Kds.Pronto     => ("TOQUE QUANDO O CLIENTE LEVAR", "Texto", "VeuElevado"),
+            // AGENDADO a preparar: rodapé roxo, mesma instrução — a cozinha pode
+            // começar antes da hora se quiser (a comanda é que só sai perto dela).
+            Nucleo.Kds.Recebido when t.Agendado
+                                  => ("TOQUE PARA COMEÇAR", "Agendado", "ChipAgendadoFundo"),
             _                     => ("TOQUE PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
         };
 
@@ -295,6 +342,17 @@ public partial class Kds : UserControl
             VerticalContentAlignment = VerticalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
         };
+        if (t.Agendado)
+        {
+            // BOX próprio (pedido do dono, 04/09): fundo e borda roxos nos dois temas
+            // (Temas/*.xaml). Não é cor de estado (ok/alerta/erro contam tempo): é
+            // IDENTIDADE do pedido, e vai com ele por todas as colunas.
+            // SetResourceReference, não Resources[]: brush resolvido na criação
+            // congela e não segue a troca de tema.
+            b.SetResourceReference(Button.BackgroundProperty, "AgendadoFundo");
+            b.SetResourceReference(Button.BorderBrushProperty, "Agendado");
+            b.BorderThickness = new Thickness(2);
+        }
 
         var raiz = new Grid();
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -324,17 +382,37 @@ public partial class Kds : UserControl
         Grid.SetColumn(numero, 0);
         cab.Children.Add(numero);
 
-        var chip = Chip(t.Origem == "ifood" ? "iFOOD" : "BALCAO",
-                        t.Origem == "ifood" ? "Ciano" : "Rosa");
-        chip.ClipToBounds = true;
-        Grid.SetColumn(chip, 1);
-        cab.Children.Add(chip);
+        var chips = new StackPanel { Orientation = Orientation.Horizontal, ClipToBounds = true };
+        chips.Children.Add(Chip(t.Origem == "ifood" ? "iFOOD" : "BALCAO",
+                                t.Origem == "ifood" ? "Ciano" : "Rosa"));
+        // TAG do agendado ao lado da origem: é a segunda coisa que o olho lê no
+        // card, depois do número — e é o que diz "este não é para agora".
+        if (t.Agendado)
+            chips.Children.Add(Chip("AGENDADO", "Agendado", "ChipAgendadoFundo", "ChipAgendadoBorda"));
+        Grid.SetColumn(chips, 1);
+        cab.Children.Add(chips);
 
         // O relógio é O MESMO do Gestor do iFood: o PRAZO (dueAt). "12 min"
         // = falta isso pro prometido; "+3 min" = estourou. Pedido sem prazo
         // (balcão) volta ao decorrido. Dois painéis, um relógio só.
         string txtEspera; string corEspera;
-        if (t.PrazoRestante is { } prazo)
+        if (t.Agendado && t.AgendadoRestante is { } falta)
+        {
+            // O relógio do AGENDADO é a hora MARCADA — não o prazo do iFood nem a
+            // espera desde a chegada (que às 09:00 diria "540 min" para um pedido
+            // das 18:00 e pintaria o card de vermelho o dia inteiro). Longe (ou já
+            // pronto): a hora, em roxo. Na última hora: contagem, em amarelo.
+            // Passou da hora sem ficar pronto: vermelho.
+            var m = (int)falta.TotalMinutes;
+            if (m > 60 || t.Status == Nucleo.Kds.Pronto)
+            {
+                txtEspera = t.AgendadoPara!.Value.ToString("HH:mm");
+                corEspera = "Agendado";
+            }
+            else if (m >= 0) { txtEspera = $"em {m} min"; corEspera = "Amarelo"; }
+            else { txtEspera = $"+{-m} min"; corEspera = "Erro"; }
+        }
+        else if (t.PrazoRestante is { } prazo)
         {
             var m = (int)prazo.TotalMinutes;
             if (m >= 0)
@@ -430,6 +508,19 @@ public partial class Kds : UserControl
 
         // ── corpo: cliente + itens ──────────────────────────────────────────
         var corpo = new StackPanel { Margin = new Thickness(11, 0, 11, 4) };
+        if (t.Agendado && t.AgendadoPara is { } marcado)
+        {
+            // O AVISO que o dono pediu ("agendado pra 10h"), em texto corrido e
+            // roxo: a tag diz o quê, esta linha diz QUANDO. Mesmo texto da comanda.
+            var aviso = new TextBlock
+            {
+                Text = "Agendado para " + Nucleo.Kds.TextoHorario(marcado, t.AgendadoAte, DateTime.Now),
+                FontSize = 14, FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 3),
+            };
+            aviso.SetResourceReference(TextBlock.ForegroundProperty, "Agendado");
+            corpo.Children.Add(aviso);
+        }
         if (t.Cliente is { Length: > 0 })
         {
             var cli = new TextBlock
@@ -537,7 +628,9 @@ public partial class Kds : UserControl
         return b;
     }
 
-    private FrameworkElement Chip(string texto, string cor)
+    /// <param name="fundo">Chave do pincel de fundo; ausente = deduzido da cor (info/erro).</param>
+    /// <param name="borda">Chave do pincel da borda; idem.</param>
+    private FrameworkElement Chip(string texto, string cor, string? fundo = null, string? borda = null)
     {
         var tb = new TextBlock { Text = texto, FontSize = 10, FontWeight = FontWeights.Bold };
         tb.SetResourceReference(TextBlock.ForegroundProperty, cor);
@@ -547,8 +640,8 @@ public partial class Kds : UserControl
             Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
             Child = tb, BorderThickness = new Thickness(1),
         };
-        chip.SetResourceReference(Border.BackgroundProperty, cor == "Ciano" ? "ChipInfoFundo" : "ChipErroFundo");
-        chip.SetResourceReference(Border.BorderBrushProperty, cor == "Ciano" ? "ChipInfoBorda" : "ChipErroBorda");
+        chip.SetResourceReference(Border.BackgroundProperty, fundo ?? (cor == "Ciano" ? "ChipInfoFundo" : "ChipErroFundo"));
+        chip.SetResourceReference(Border.BorderBrushProperty, borda ?? (cor == "Ciano" ? "ChipInfoBorda" : "ChipErroBorda"));
         return chip;
     }
 }

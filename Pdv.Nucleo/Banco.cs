@@ -144,6 +144,15 @@ public static class Banco
             "ALTER TABLE venda ADD COLUMN promo_nome TEXT",
             "ALTER TABLE venda_item ADD COLUMN promo_id TEXT",
             "ALTER TABLE venda_item ADD COLUMN gratis_milesimo INTEGER NOT NULL DEFAULT 0",
+            // 04/09/2026: pedido AGENDADO do iFood (relato do 5592). A nuvem passou a
+            // dizer se o cliente marcou hora (RPC pdv_kds_pedidos: agendado,
+            // agendado_para, agendado_ate). O ticket guarda para o card ter box e
+            // tag proprios, a fila ordenar por horario, a expiracao de 4 h contar da
+            // hora MARCADA e a comanda so sair perto dela. 0 = imediato (RPC antiga
+            // nao manda o campo: ausencia = nao agendado).
+            "ALTER TABLE kds_ticket ADD COLUMN agendado INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE kds_ticket ADD COLUMN agendado_para TEXT",
+            "ALTER TABLE kds_ticket ADD COLUMN agendado_ate TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

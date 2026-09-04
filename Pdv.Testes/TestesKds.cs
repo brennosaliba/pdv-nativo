@@ -472,6 +472,152 @@ public static class TestesKds
                    "pedido de RETIRADA volta do banco marcado como retirada");
             checar(eEnt is { Retirada: false },
                    "pedido de ENTREGA volta como entrega — ausencia de dado nao vira retirada");
+
+            // ── PEDIDO AGENDADO (04/09 — relato do 5592) ───────────────────
+            // O cliente marcou hora no iFood. O card entra no quadro assim que a
+            // nuvem sabe dele, com box e tag proprios, ordenado pela hora marcada;
+            // a expiracao conta da hora MARCADA, e a comanda so sai perto dela.
+            {
+                // 1. o parser do feed le os campos novos e tolera a RPC antiga
+                var feedNovo = Nuvem.LerFeedKds("""
+                    [{"order_id":"ag-1","display_id":"5592","customer_name":"Cliente Ag",
+                      "itens":[{"qtd":1,"descricao":"Donut"}],"status":"faturado",
+                      "recebido_em":"2026-09-04T08:00:00+00:00","preparo_ate":null,"turbo":false,"retirada":false,
+                      "agendado":true,"agendado_para":"2026-09-04T13:00:00+00:00","agendado_ate":"2026-09-04T13:30:00+00:00"},
+                     {"order_id":"im-1","display_id":"5510","customer_name":null,
+                      "itens":[{"qtd":1,"descricao":"Donut"}],"status":"faturado",
+                      "recebido_em":"2026-09-04T12:50:00+00:00","preparo_ate":null,"turbo":false}]
+                    """);
+                checar(feedNovo.Count == 2, "feed com agendado e imediato vira dois pedidos");
+                checar(feedNovo[0].Agendado && feedNovo[0].AgendadoPara == "2026-09-04T13:00:00+00:00"
+                       && feedNovo[0].AgendadoAte == "2026-09-04T13:30:00+00:00",
+                    "agendado, agendado_para e agendado_ate descem do feed");
+                checar(!feedNovo[1].Agendado && feedNovo[1].AgendadoPara is null,
+                    "RPC antiga (sem os campos) = imediato, como sempre foi");
+                checar(Nuvem.LerFeedKds("{lixo").Count == 0, "feed ilegivel devolve vazio, nao excecao");
+
+                // 2. a sincronizacao grava os campos (hora LOCAL) e a expiracao de 4 h
+                //    conta da hora MARCADA, nao da chegada
+                using var cxa = Banco.Abrir();
+                cxa.Execute("DELETE FROM kds_ticket WHERE ref_id LIKE 'ag-%' OR ref_id LIKE 'im-%'");
+                var Iso = (DateTime d) => new DateTimeOffset(d).ToString("yyyy-MM-dd'T'HH:mm:sszzz");
+                var daqui2h = DateTime.Now.AddHours(2);
+                var chegou5h = DateTime.Now.AddHours(-5);
+                Kds.SincronizarDelivery(new[]
+                {
+                    new PedidoDelivery("ag-hoje", "5592", "Cliente Ag", "[{\"qtd\":2,\"descricao\":\"DONUT NINHO\"}]",
+                        "faturado", Iso(chegou5h), null, false, true, Iso(daqui2h), Iso(daqui2h.AddMinutes(30))),
+                    new PedidoDelivery("ag-passou", "5594", null, "[{\"qtd\":1,\"descricao\":\"DONUT\"}]",
+                        "faturado", Iso(DateTime.Now.AddHours(-9)), null, false, true, Iso(DateTime.Now.AddHours(-5)), null),
+                    new PedidoDelivery("im-velho", "5002", null, "[{\"qtd\":1,\"descricao\":\"DONUT\"}]",
+                        "faturado", Iso(chegou5h), null, false),
+                });
+                var lidoAg = Kds.Abertos().FirstOrDefault(x => x.RefId == "ag-hoje");
+                checar(lidoAg is { Agendado: true } && lidoAg.AgendadoPara is { } lp
+                       && Math.Abs((lp - daqui2h).TotalMinutes) < 1
+                       && lidoAg.AgendadoAte is { } la && Math.Abs((la - daqui2h.AddMinutes(30)).TotalMinutes) < 1,
+                    "agendado chegado ha 5 h entra no quadro com a hora marcada em hora local");
+                checar(lidoAg is not null && Math.Abs((lidoAg.CriadoEm - chegou5h).TotalMinutes) < 1,
+                    "o relogio de chegada continua sendo a chegada (o agendamento nao o reescreve)");
+
+                Kds.SincronizarDelivery(Array.Empty<PedidoDelivery>());   // so a expiracao
+                checar(Kds.Abertos().Any(x => x.RefId == "ag-hoje"),
+                    "expiracao de 4 h NAO derruba agendado de daqui a 2 h que chegou ha 5 h");
+                checar(Kds.Abertos().All(x => x.RefId != "ag-passou"),
+                    "agendado cuja hora marcada passou ha 5 h expira como qualquer outro");
+                checar(Kds.Abertos().All(x => x.RefId != "im-velho"),
+                    "imediato de 5 h continua expirando (regra intacta)");
+
+                // 3. a fila: agendados no topo, por hora; imediatos depois, por chegada
+                var t0 = DateTime.Now;
+                Ticket Ag(string id, DateTime para) => new(id, "ifood", id, id, null, "[]", Kds.Recebido,
+                    t0.AddHours(-3), null, null, Agendado: true, AgendadoPara: para);
+                Ticket Im(string id, DateTime chegou) => new(id, "ifood", id, id, null, "[]", Kds.Recebido,
+                    chegou, null, null);
+                var fila = Kds.OrdenarFila(new[]
+                {
+                    Im("im-b", t0.AddMinutes(-2)), Ag("ag-18h", t0.AddHours(6)),
+                    Im("im-a", t0.AddMinutes(-10)), Ag("ag-10h", t0.AddHours(1)),
+                });
+                var ordem = string.Join(",", fila.Select(x => x.Id));
+                checar(ordem == "ag-10h,ag-18h,im-a,im-b",
+                    $"fila: agendados primeiro (10h antes de 18h), depois por chegada (medi {ordem})");
+                checar(Kds.OrdenarFila(new[] { Im("im-b", t0.AddMinutes(-2)), Im("im-a", t0.AddMinutes(-10)) })
+                           .Select(x => x.Id).SequenceEqual(new[] { "im-a", "im-b" }),
+                    "sem agendado a fila e a de sempre: ordem de chegada");
+
+                // 4. a comanda do agendado NAO sai na chegada: sai a X min da hora (padrao 30) ou pelo botao
+                checar(Kds.MinutosAntesDaComandaAgendada(null) == 30 && Kds.MinutosAntesDaComandaAgendada("abc") == 30,
+                    "sem config (ou lixo) a comanda do agendado sai 30 min antes da hora");
+                checar(Kds.MinutosAntesDaComandaAgendada("45") == 45 && Kds.MinutosAntesDaComandaAgendada("99999") == 720,
+                    "config em minutos e respeitada, com teto de 12 h");
+                checar(!Kds.ComandaPodeSair(Ag("x", t0.AddHours(2)), t0, 30),
+                    "agendado para daqui a 2 h: a comanda NAO sai agora");
+                checar(Kds.ComandaPodeSair(Ag("x", t0.AddMinutes(25)), t0, 30),
+                    "faltando 25 min: a comanda sai sozinha");
+                checar(Kds.ComandaPodeSair(Ag("x", t0.AddMinutes(-5)), t0, 30),
+                    "hora marcada ja passou: a comanda sai");
+                checar(Kds.ComandaPodeSair(Im("x", t0), t0, 30),
+                    "imediato: a comanda sai na chegada, como sempre");
+                checar(Kds.ComandaPodeSair(new Ticket("x", "ifood", "x", "x", null, "[]", Kds.Recebido,
+                           t0, null, null, Agendado: true), t0, 30),
+                    "agendado sem hora marcada nao segura a comanda");
+
+                // e a fila de impressao obedece: 2 h a frente fica fora; a 10 min, entra
+                checar(Kds.ParaImprimir().All(x => x.RefId != "ag-hoje"),
+                    "ParaImprimir deixa o agendado de daqui a 2 h fora (nada de papel na chegada)");
+                cxa.Execute("UPDATE kds_ticket SET agendado_para=@p WHERE ref_id='ag-hoje'",
+                    new { p = DateTime.Now.AddMinutes(10).ToString("o") });
+                checar(Kds.ParaImprimir().Any(x => x.RefId == "ag-hoje"),
+                    "faltando 10 min o agendado entra na fila de impressao");
+
+                // 5. a comanda impressa avisa no cabecalho, logo abaixo do numero
+                var tAg = new Ticket("t-ag", "ifood", "r-ag", "5592", "Cliente Ag",
+                    "[{\"Descricao\":\"Donut Ninho\",\"Qtd\":2000,\"Observacao\":null}]",
+                    Kds.Recebido, new DateTime(2026, 9, 4, 8, 0, 0), null, null,
+                    Agendado: true, AgendadoPara: new DateTime(2026, 9, 4, 10, 0, 0),
+                    AgendadoAte: new DateTime(2026, 9, 4, 10, 30, 0));
+                var linhasAg = Kds.ComandaLinhas(tAg, hoje: new DateTime(2026, 9, 4, 8, 5, 0))
+                    .Select(LinhaEscala.Limpa).ToList();
+                var idxPedido = linhasAg.FindIndex(l => l.Contains("PEDIDO", StringComparison.Ordinal));
+                var idxAg = linhasAg.FindIndex(l => l.Contains("AGENDADO para 10:00 a 10:30", StringComparison.Ordinal));
+                checar(idxAg > 0 && idxAg == idxPedido + 1,
+                    "a comanda mostra 'AGENDADO para 10:00 a 10:30' logo abaixo do numero do pedido");
+                var escAg = Kds.ComandaLinhas(tAg, hoje: new DateTime(2026, 9, 4, 8, 5, 0))
+                    .Select(LinhaEscala.Le).First(x => x.Item1.Contains("AGENDADO", StringComparison.Ordinal)).Item2;
+                checar(escAg > 1.0, $"o aviso de agendado sai ampliado na comanda ({escAg})");
+                checar(!Kds.ComandaLinhas(Im("im-x", t0)).Any(l => l.Contains("AGENDADO", StringComparison.Ordinal)),
+                    "pedido imediato nao ganha aviso de agendado na comanda");
+
+                // 6. o texto do horario: hoje so a hora; outro dia com a data; faixa quando existe
+                var hoje = new DateTime(2026, 9, 4, 8, 0, 0);
+                checar(Kds.TextoHorario(new DateTime(2026, 9, 4, 10, 0, 0), null, hoje) == "10:00",
+                    "hoje: so a hora");
+                checar(Kds.TextoHorario(new DateTime(2026, 9, 4, 10, 0, 0), new DateTime(2026, 9, 4, 10, 30, 0), hoje) == "10:00 a 10:30",
+                    "faixa: de e ate");
+                checar(Kds.TextoHorario(new DateTime(2026, 9, 5, 10, 0, 0), null, hoje) == "05/09 10:00",
+                    "outro dia: leva a data");
+                checar(Kds.TextoHorario(new DateTime(2026, 9, 4, 10, 0, 0), new DateTime(2026, 9, 4, 10, 0, 0), hoje) == "10:00",
+                    "faixa de um instante so nao repete a hora");
+
+                // 7. re-sync atualiza a hora marcada; cancelado na nuvem derruba o agendado
+                Kds.SincronizarDelivery(new[] { new PedidoDelivery("ag-hoje", "5592", "Cliente Ag",
+                    "[{\"qtd\":2,\"descricao\":\"DONUT NINHO\"}]", "faturado", Iso(chegou5h), null, false,
+                    true, Iso(daqui2h.AddHours(1)), null) });
+                var reAg = Kds.Abertos().First(x => x.RefId == "ag-hoje");
+                checar(reAg.AgendadoPara is { } rp && Math.Abs((rp - daqui2h.AddHours(1)).TotalMinutes) < 1
+                       && reAg.AgendadoAte is null,
+                    "re-sync atualiza a hora marcada (o iFood remarcou)");
+                Kds.SincronizarDelivery(new[] { new PedidoDelivery("ag-hoje", "5592", "Cliente Ag",
+                    "[{\"qtd\":2,\"descricao\":\"DONUT NINHO\"}]", "faturado", Iso(chegou5h), null, false) });
+                checar(Kds.Abertos().First(x => x.RefId == "ag-hoje") is { Agendado: false, AgendadoPara: null },
+                    "nuvem deixou de dizer agendado -> o card volta a imediato");
+                Kds.SincronizarDelivery(new[] { new PedidoDelivery("ag-hoje", "5592", "Cliente Ag",
+                    "[{\"qtd\":2,\"descricao\":\"DONUT NINHO\"}]", "cancelado", Iso(chegou5h), null, false,
+                    true, Iso(daqui2h), null) });
+                checar(Kds.Abertos().All(x => x.RefId != "ag-hoje"),
+                    "agendado cancelado no iFood sai do quadro");
+            }
         }
         finally
         {

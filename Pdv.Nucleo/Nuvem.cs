@@ -394,11 +394,27 @@ public sealed class Nuvem
                 Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req);
             if (!resp.IsSuccessStatusCode) return new();
+            return LerFeedKds(await resp.Content.ReadAsStringAsync());
+        }
+        catch { return new(); }
+    }
 
-            var r = new List<PedidoDelivery>();
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+    /// <summary>
+    /// O JSON da RPC pdv_kds_pedidos, campo a campo e TOLERANTE: coluna que o
+    /// servidor ainda nao manda vira o padrao de sempre (entrega, imediato), e
+    /// JSON ilegivel devolve lista vazia — nunca derruba a puxada. Separado da
+    /// chamada HTTP para a suite provar o contrato sem rede.
+    /// </summary>
+    public static List<PedidoDelivery> LerFeedKds(string json)
+    {
+        var r = new List<PedidoDelivery>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return r;
             foreach (var e in doc.RootElement.EnumerateArray())
             {
+                if (e.ValueKind != JsonValueKind.Object) continue;
                 var id = e.TryGetProperty("order_id", out var oid) ? oid.GetString() : null;
                 if (id is null) continue;
                 r.Add(new PedidoDelivery(
@@ -419,11 +435,18 @@ public sealed class Nuvem
                     // parar de afirmar "esperando o entregador" em pedido de retirada.
                     // Servidor antigo nao manda o campo: ausencia = entrega, que e o
                     // padrao seguro (o balcao continua esperando o motoboy).
-                    e.TryGetProperty("retirada", out var rt) && rt.ValueKind == JsonValueKind.True));
+                    e.TryGetProperty("retirada", out var rt) && rt.ValueKind == JsonValueKind.True,
+                    // AGENDADO (04/09): o cliente marcou hora. RPC antiga nao manda os
+                    // campos: ausencia = imediato, que e o que sempre foi.
+                    e.TryGetProperty("agendado", out var ag) && ag.ValueKind == JsonValueKind.True,
+                    e.TryGetProperty("agendado_para", out var ap) && ap.ValueKind == JsonValueKind.String
+                        ? ap.GetString() : null,
+                    e.TryGetProperty("agendado_ate", out var aa) && aa.ValueKind == JsonValueKind.String
+                        ? aa.GetString() : null));
             }
-            return r;
         }
-        catch { return new(); }
+        catch { /* JSON quebrado: o que deu; a fila local continua valendo */ }
+        return r;
     }
 
     /// <summary>

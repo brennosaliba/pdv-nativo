@@ -30,6 +30,13 @@
     <Color x:Key="CorErro">#D2544C</Color>
     <Color x:Key="CorRoxo">#9B6DD4</Color>
 
+    <!-- AGENDADO (KDS, 04/09): roxo mais claro que o CorRoxo de propósito — o
+         #9B6DD4 sobre o painel dá 4,2:1 e reprova texto de 14 px. Medido pelo
+         teste nos dois temas. -->
+    <Color x:Key="CorAgendado">#B99BE8</Color>
+    <Color x:Key="CorAgendadoFundo">#241C36</Color>
+    <Color x:Key="CorChipAgendadoFundo">#3A2C55</Color>
+
     <SolidColorBrush x:Key="Fundo" Color="{StaticResource CorFundo}"/>
     <SolidColorBrush x:Key="Painel" Color="{StaticResource CorPainel}"/>
     <SolidColorBrush x:Key="PainelAlto" Color="{StaticResource CorPainelAlto}"/>
@@ -44,6 +51,10 @@
     <SolidColorBrush x:Key="Ok" Color="{StaticResource CorOk}"/>
     <SolidColorBrush x:Key="Erro" Color="{StaticResource CorErro}"/>
     <SolidColorBrush x:Key="Roxo" Color="{StaticResource CorRoxo}"/>
+    <SolidColorBrush x:Key="Agendado" Color="{StaticResource CorAgendado}"/>
+    <SolidColorBrush x:Key="AgendadoFundo" Color="{StaticResource CorAgendadoFundo}"/>
+    <SolidColorBrush x:Key="ChipAgendadoFundo" Color="{StaticResource CorChipAgendadoFundo}"/>
+    <SolidColorBrush x:Key="ChipAgendadoBorda" Color="#88B99BE8"/>
 
     <!-- Superfície "afundada" (mais escura que o fundo): as colunas laterais da
          Venda. Promovida do hex #0F171D que vivia cravado na tela. -->

@@ -28,6 +28,14 @@
     <Color x:Key="CorErro">#B3251C</Color>
     <Color x:Key="CorRoxo">#6B3FA8</Color>
 
+    <!-- AGENDADO (KDS, 04/09): pedido com hora marcada. Roxo de propósito: não é
+         cor de estado (ok/alerta/erro contam tempo) nem de origem (ciano iFood,
+         rosa balcão). Medido pelo teste: CorAgendado ≥ 4,5:1 sobre painel, fundo
+         e chip; CorTexto ≥ 7:1 sobre o fundo. -->
+    <Color x:Key="CorAgendado">#6B3FA8</Color>
+    <Color x:Key="CorAgendadoFundo">#EFE8FA</Color>
+    <Color x:Key="CorChipAgendadoFundo">#E4D9F6</Color>
+
     <SolidColorBrush x:Key="Fundo" Color="{StaticResource CorFundo}"/>
     <SolidColorBrush x:Key="Painel" Color="{StaticResource CorPainel}"/>
     <SolidColorBrush x:Key="PainelAlto" Color="{StaticResource CorPainelAlto}"/>
@@ -42,6 +50,10 @@
     <SolidColorBrush x:Key="Ok" Color="{StaticResource CorOk}"/>
     <SolidColorBrush x:Key="Erro" Color="{StaticResource CorErro}"/>
     <SolidColorBrush x:Key="Roxo" Color="{StaticResource CorRoxo}"/>
+    <SolidColorBrush x:Key="Agendado" Color="{StaticResource CorAgendado}"/>
+    <SolidColorBrush x:Key="AgendadoFundo" Color="{StaticResource CorAgendadoFundo}"/>
+    <SolidColorBrush x:Key="ChipAgendadoFundo" Color="{StaticResource CorChipAgendadoFundo}"/>
+    <SolidColorBrush x:Key="ChipAgendadoBorda" Color="#6B3FA8"/>
 
     <SolidColorBrush x:Key="FundoAfundado" Color="#E8E1D5"/>
 

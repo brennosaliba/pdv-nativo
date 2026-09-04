@@ -19,10 +19,20 @@ public sealed record Ticket(
     DateTime? ProntoEm,
     DateTime? PreparoAte = null,
     /// <summary>true = o CLIENTE vem buscar; false = sai com entregador.</summary>
-    bool Retirada = false)
+    bool Retirada = false,
+    /// <summary>O cliente marcou HORA no iFood (orderTiming = SCHEDULED). O card entra
+    /// no quadro assim que a nuvem sabe dele, mas a cozinha não monta agora.</summary>
+    bool Agendado = false,
+    /// <summary>Início da faixa marcada, em hora LOCAL da loja.</summary>
+    DateTime? AgendadoPara = null,
+    /// <summary>Fim da faixa marcada (null = um instante só).</summary>
+    DateTime? AgendadoAte = null)
 {
     /// <summary>Há quanto tempo esse pedido está esperando. É o que decide a cor do card.</summary>
     public TimeSpan Espera => (ProntoEm ?? DateTime.Now) - CriadoEm;
+
+    /// <summary>Quanto falta para a hora marcada (negativo = passou). Só para agendado.</summary>
+    public TimeSpan? AgendadoRestante => Agendado && AgendadoPara is { } a ? a - DateTime.Now : null;
 
     /// <summary>Quanto falta até o prazo que o iFood prometeu (negativo = estourou).
     /// É O MESMO relógio do Gestor — pedido do dono: os dois painéis não podem
@@ -46,9 +56,15 @@ public sealed record TicketItem(string Descricao, int Qtd, string? Observacao,
 /// <param name="RecebidoEm">Chegada REAL no iFood (timestamptz ISO). O relógio do
 /// card conta DAQUI, não da hora em que o PDV importou — senão pedido de 20 min
 /// nasce mostrando "agora" e a cozinha prioriza errado.</param>
+/// <param name="Agendado">O cliente marcou hora. RPC antiga não manda o campo:
+/// ausência = imediato, que é o que sempre foi.</param>
+/// <param name="AgendadoPara">Início da faixa marcada (timestamptz ISO).</param>
+/// <param name="AgendadoAte">Fim da faixa marcada (timestamptz ISO), se houver.</param>
 public sealed record PedidoDelivery(string OrderId, string Numero, string? Cliente,
                                     string ItensJson, string Status, string? RecebidoEm = null,
-                                    string? PreparoAte = null, bool Retirada = false);
+                                    string? PreparoAte = null, bool Retirada = false,
+                                    bool Agendado = false, string? AgendadoPara = null,
+                                    string? AgendadoAte = null);
 
 /// <summary>
 /// A fila de preparo do balcão.
@@ -107,13 +123,16 @@ public static class Kds
     public static string? DoDelivery(string orderId, string numeroVisivel,
                                      string? cliente, IEnumerable<TicketItem> itens,
                                      DateTime? chegadaReal = null, DateTime? preparoAte = null,
-                                     bool retirada = false)
-        => Criar("ifood", orderId, numeroVisivel, cliente, itens.ToList(), chegadaReal, preparoAte, retirada);
+                                     bool retirada = false, bool agendado = false,
+                                     DateTime? agendadoPara = null, DateTime? agendadoAte = null)
+        => Criar("ifood", orderId, numeroVisivel, cliente, itens.ToList(), chegadaReal, preparoAte, retirada,
+                 agendado, agendadoPara, agendadoAte);
 
     private static string? Criar(string origem, string refId, string numero,
                                  string? cliente, List<TicketItem> itens,
                                  DateTime? chegadaReal = null, DateTime? preparoAte = null,
-                                 bool retirada = false)
+                                 bool retirada = false, bool agendado = false,
+                                 DateTime? agendadoPara = null, DateTime? agendadoAte = null)
     {
         if (itens.Count == 0) return null;
 
@@ -125,8 +144,9 @@ public static class Kds
 
         var id = Guid.NewGuid().ToString();
         cx.Execute(
-            @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em, preparo_ate, retirada)
-              VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pa, @ret)
+            @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em, preparo_ate, retirada,
+                                      agendado, agendado_para, agendado_ate)
+              VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pa, @ret, @ag, @ap, @aa)
               ON CONFLICT(origem, ref_id) DO NOTHING",
             new
             {
@@ -136,6 +156,10 @@ public static class Kds
                 t = (chegadaReal ?? DateTime.Now).ToString("o"),
                 pa = preparoAte?.ToString("o"),
                 ret = retirada ? 1 : 0,
+                // agendado SEM hora não existe para o quadro: vira imediato
+                ag = agendado && agendadoPara is not null ? 1 : 0,
+                ap = agendado ? agendadoPara?.ToString("o") : null,
+                aa = agendado ? agendadoAte?.ToString("o") : null,
             });
 
         // O ON CONFLICT pode ter engolido o insert numa corrida com o polling do
@@ -158,6 +182,23 @@ public static class Kds
                ORDER BY criado_em")
             .Select(Ler).ToList();
     }
+
+    /// <summary>
+    /// A ordem da coluna A PREPARAR: AGENDADOS primeiro, do horário mais próximo ao
+    /// mais distante; depois os imediatos na ordem de chegada (a fila de sempre).
+    ///
+    /// No TOPO, e não no fim, porque é onde o olho da cozinha começa: o agendado que
+    /// está chegando na hora fica ao lado do primeiro da fila, e o de daqui a seis
+    /// horas é uma linha roxa que se pula em meio segundo. No fim da coluna ele só
+    /// seria visto com rolagem, e no dia cheio nunca. Agendado é raro (o 5592 foi o
+    /// primeiro que o dono viu), então o custo de empurrar a fila é pequeno.
+    /// </summary>
+    public static List<Ticket> OrdenarFila(IEnumerable<Ticket> tickets)
+        => tickets
+            .OrderBy(t => t.Agendado && t.AgendadoPara is not null ? 0 : 1)
+            .ThenBy(t => t.Agendado && t.AgendadoPara is { } p ? p : t.CriadoEm)
+            .ThenBy(t => t.CriadoEm)
+            .ToList();
 
     /// <summary>Quantos pedidos esperando — o número que vai no botão da barra.</summary>
     public static int Pendentes()
@@ -250,16 +291,62 @@ public static class Kds
     // cardápio próprio — a nuvem entrega os dois pelo mesmo feed; o número
     // "CD-xxxx" distingue na impressão). Venda de balcão já tem o cupom dela.
 
-    /// <summary>Tickets de delivery ainda sem comanda no papel.</summary>
-    public static List<Ticket> ParaImprimir()
+    /// <summary>
+    /// Tickets de delivery ainda sem comanda no papel E cuja comanda já pode sair
+    /// (<see cref="ComandaPodeSair"/>): o agendado fica de fora até faltar
+    /// <see cref="ChaveComandaAgendadaMin"/> minutos para a hora marcada.
+    /// </summary>
+    public static List<Ticket> ParaImprimir(DateTime? agora = null)
     {
         using var cx = Banco.Abrir();
+        var antes = MinutosAntesDaComandaAgendada(Vendas.Config(cx, ChaveComandaAgendadaMin));
+        var t0 = agora ?? DateTime.Now;
         return cx.Query(
             @"SELECT * FROM kds_ticket
                WHERE origem = 'ifood' AND impresso_em IS NULL
                  AND status IN ('recebido','preparando','pronto')
                ORDER BY criado_em")
-            .Select(Ler).ToList();
+            .Select(Ler)
+            .Where(t => ComandaPodeSair(t, t0, antes))
+            .ToList();
+    }
+
+    // ── comanda do pedido AGENDADO (04/09 — relato do 5592) ────────────────
+    // O cliente marcou hora. Imprimir na chegada seria papel na bancada às 08:00
+    // para um pedido das 18:00: ninguém monta agora e a comanda se perde antes da
+    // hora. A regra: sai sozinha quando faltar X minutos (padrão 30, config
+    // `kds_comanda_agendado_min`) ou quando alguém tocar no 🖨 do card. O timer
+    // de 10 s do quadro (e o de 60 s do caixa) reavaliam a cada puxada, então o
+    // papel sai no primeiro ciclo depois do limiar. O claim (impresso_em) só é
+    // feito quando a comanda de fato sai: até lá o ticket continua "sem papel".
+
+    /// <summary>Config: quantos minutos ANTES da hora marcada a comanda do agendado sai sozinha.</summary>
+    public const string ChaveComandaAgendadaMin = "kds_comanda_agendado_min";
+    public const int ComandaAgendadaMinPadrao = 30;
+
+    /// <summary>Lê a config; ausente ou lixo = 30. Teto de 12 h: acima disso é "na chegada".</summary>
+    public static int MinutosAntesDaComandaAgendada(string? valorConfig)
+        => int.TryParse((valorConfig ?? "").Trim(), out var m) ? Math.Clamp(m, 0, 720) : ComandaAgendadaMinPadrao;
+
+    /// <summary>
+    /// A comanda deste ticket já pode sair sozinha? Imediato: sempre. Agendado:
+    /// só quando faltar <paramref name="minutosAntes"/> ou menos para a hora
+    /// marcada (ou ela já passou). O 🖨 do card NÃO passa por aqui: dedo humano
+    /// imprime quando quiser.
+    /// </summary>
+    public static bool ComandaPodeSair(Ticket t, DateTime agora, int minutosAntes)
+        => !t.Agendado || t.AgendadoPara is not { } para
+           || para - agora <= TimeSpan.FromMinutes(minutosAntes);
+
+    /// <summary>
+    /// "10:00", "10:00 a 10:30" ou, quando não é hoje, "05/09 10:00". Um lugar só
+    /// para o card, a comanda e o aviso dizerem a mesma coisa.
+    /// </summary>
+    public static string TextoHorario(DateTime para, DateTime? ate, DateTime hoje)
+    {
+        var dia = para.Date == hoje.Date ? "" : para.ToString("dd/MM") + " ";
+        var faixa = ate is { } a && a > para ? $" a {a:HH:mm}" : "";
+        return $"{dia}{para:HH:mm}{faixa}";
     }
 
     /// <summary>
@@ -309,7 +396,11 @@ public static class Kds
     /// a comanda vai usar. O padrão mantém as 40 colunas de 80 mm, que é o que a loja
     /// imprime desde sempre: quem chama sem escolher não vê diferença nenhuma no papel.
     /// </param>
-    public static IReadOnlyList<string> ComandaLinhas(Ticket t, int colunas = ColunasPadrao)
+    /// <param name="hoje">
+    /// O "hoje" de quem imprime: decide se a hora marcada do agendado sai com a data.
+    /// Só os testes cravam; a operação usa o relógio.
+    /// </param>
+    public static IReadOnlyList<string> ComandaLinhas(Ticket t, int colunas = ColunasPadrao, DateTime? hoje = null)
     {
         var L = ColunasComanda(colunas);
         var eCardapio = t.Numero.StartsWith("CD-", StringComparison.OrdinalIgnoreCase);
@@ -320,8 +411,12 @@ public static class Kds
             Centro(eCardapio ? "CARDAPIO WEB" : "iFOOD", L),
             new string('=', L),
             Esc(Centro($"PEDIDO  #{t.Numero}", L), 2.0),
-            "",
         };
+        // AGENDADO logo abaixo do número, grande: quem pega o papel tem que saber
+        // ANTES de ler o item que este não é para agora.
+        if (t.Agendado && t.AgendadoPara is { } marcado)
+            linhas.Add(Esc(Centro("AGENDADO para " + TextoHorario(marcado, t.AgendadoAte, hoje ?? DateTime.Now), L), 1.5));
+        linhas.Add("");
         if (t.Cliente is { Length: > 0 })
             linhas.Add(Corta("Cliente: " + t.Cliente, L));
         // "Impresso" saiu (28/08): o que a cozinha usa é a hora que o pedido CHEGOU,
@@ -465,10 +560,13 @@ public static class Kds
         // ninguém mais confiar no que ele mostra.
         using (var cxLimpa = Banco.Abrir())
         {
+            // AGENDADO conta da hora MARCADA (fim da faixa), não da chegada: ele
+            // entra no quadro de manhã para as 18:00 e não pode "expirar" às 13:00.
             cxLimpa.Execute(
                 @"UPDATE kds_ticket SET status = @s
                    WHERE origem = 'ifood' AND status = 'recebido'
-                     AND criado_em < @limite",
+                     AND CASE WHEN agendado = 1 THEN coalesce(agendado_ate, agendado_para, criado_em)
+                              ELSE criado_em END < @limite",
                 new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o") });
             // SO 'recebido' nas 4h: expirar quem esta 'preparando' cancelaria um
             // pedido que o cozinheiro ACABOU de assumir (chegou as 3h58 do limite e
@@ -484,7 +582,8 @@ public static class Kds
             cxLimpa.Execute(
                 @"UPDATE kds_ticket SET status = @s
                    WHERE origem = 'ifood' AND status IN ('preparando','pronto')
-                     AND criado_em < @limite",
+                     AND CASE WHEN agendado = 1 THEN coalesce(agendado_ate, agendado_para, criado_em)
+                              ELSE criado_em END < @limite",
                 new { s = Cancelado, limite = DateTime.Now.AddHours(-12).ToString("o") });
         }
 
@@ -513,7 +612,8 @@ public static class Kds
                 var itensPr = ItensDeJson(p.ItensJson);
                 if (itensPr.Count > 0)
                     DoDelivery(p.OrderId, p.Numero, p.Cliente, itensPr,
-                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada);
+                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada,
+                               p.Agendado, ChegadaLocal(p.AgendadoPara), ChegadaLocal(p.AgendadoAte));
                 PromoverProntoDelivery(p.OrderId);
                 continue;
             }
@@ -527,7 +627,8 @@ public static class Kds
             if (!existia)
             {
                 if (DoDelivery(p.OrderId, p.Numero, p.Cliente, itens,
-                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada) is not null)
+                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada,
+                               p.Agendado, ChegadaLocal(p.AgendadoPara), ChegadaLocal(p.AgendadoAte)) is not null)
                     novos++;
             }
             else
@@ -536,17 +637,24 @@ public static class Kds
                 // corrigido (ou pedido editado no iFood) tem que consertar o card
                 // na tela — sem isso, "(item sem nome)" gravado fica errado pra
                 // sempre, porque a criação é idempotente de propósito.
+                // O agendamento segue a nuvem SEM coalesce: remarcar a hora (ou a
+                // RPC deixar de dizer agendado) tem que refletir no card.
+                var agPara = p.Agendado ? ChegadaLocal(p.AgendadoPara) : null;
                 cx.Execute(
                     @"UPDATE kds_ticket
                          SET itens_json = @j, cliente = @c, numero = @n,
                              criado_em = coalesce(@em, criado_em),
-                             preparo_ate = coalesce(@pa, preparo_ate)
+                             preparo_ate = coalesce(@pa, preparo_ate),
+                             agendado = @ag, agendado_para = @ap, agendado_ate = @aa
                        WHERE origem = 'ifood' AND ref_id = @r
                          AND status IN ('recebido','preparando')",
                     new { j = System.Text.Json.JsonSerializer.Serialize(itens),
                           c = p.Cliente, n = p.Numero, r = p.OrderId,
                           em = ChegadaLocal(p.RecebidoEm)?.ToString("o"),
-                          pa = ChegadaLocal(p.PreparoAte)?.ToString("o") });
+                          pa = ChegadaLocal(p.PreparoAte)?.ToString("o"),
+                          ag = agPara is not null ? 1 : 0,
+                          ap = agPara?.ToString("o"),
+                          aa = agPara is not null ? ChegadaLocal(p.AgendadoAte)?.ToString("o") : null });
             }
         }
         return novos;
@@ -656,5 +764,9 @@ public static class Kds
         r.pronto_em  is string q ? DateTime.Parse(q) : null,
         r.preparo_ate is string pa ? DateTime.Parse(pa) : (DateTime?)null,
         // coluna nova: banco antigo nao tem, e a leitura tolera (null = entrega)
-        r.retirada is long rt && rt == 1);
+        r.retirada is long rt && rt == 1,
+        // agendado (04/09): idem, ausencia = imediato
+        r.agendado is long ag && ag == 1,
+        r.agendado_para is string ap ? DateTime.Parse(ap) : (DateTime?)null,
+        r.agendado_ate  is string aa ? DateTime.Parse(aa) : (DateTime?)null);
 }

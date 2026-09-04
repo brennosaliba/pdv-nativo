@@ -118,6 +118,20 @@ public static class TestesTema
         Minimo("CorAmarelo", "CorPainel", 4.5);
         Minimo("CorRosa", "CorPainel", 4.5);
 
+        // AGENDADO (KDS, 04/09): roxo próprio do pedido com hora marcada, medido nos
+        // DOIS temas — o quadro fica na parede da cozinha no turno da noite também.
+        Minimo("CorAgendado", "CorPainel", 4.5);
+        Minimo("CorAgendado", "CorAgendadoFundo", 4.5);
+        Minimo("CorAgendado", "CorChipAgendadoFundo", 4.5);
+        Minimo("CorTexto", "CorAgendadoFundo", 7);
+        void MinimoEscuro(string frente, string fundo, double minimo) =>
+            checar(Tema.Contraste(escuro[frente], escuro[fundo]) >= minimo,
+                $"escuro: {frente} sobre {fundo} = {Tema.Contraste(escuro[frente], escuro[fundo]):0.00}:1 (mínimo {minimo}:1)");
+        MinimoEscuro("CorAgendado", "CorPainel", 4.5);
+        MinimoEscuro("CorAgendado", "CorAgendadoFundo", 4.5);
+        MinimoEscuro("CorAgendado", "CorChipAgendadoFundo", 4.5);
+        MinimoEscuro("CorTexto", "CorAgendadoFundo", 7);
+
         // o botão principal é branco sobre o rosa — nos DOIS temas
         checar(Tema.Contraste("#FFFFFF", claro["CorRosa"]) >= 4.5,
             $"claro: branco sobre o rosa do botão = {Tema.Contraste("#FFFFFF", claro["CorRosa"]):0.00}:1");
