@@ -2,11 +2,18 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Pdv"
+        xmlns:telas="clr-namespace:Pdv.Telas"
         Title="PDV" WindowState="Maximized" WindowStyle="None"
         Background="{DynamicResource Fundo}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
     <Grid>
         <ContentControl x:Name="Conteudo"/>
+
+        <!-- Chat do iFood como CAMADA viva: nasce uma vez e NUNCA é destacada da
+             árvore, para o WebView2 seguir vivo (observando não lidas) mesmo com o
+             operador na venda. Some por Visibility (Collapsed), porque o WebView2
+             é HWND e pintaria por cima de tudo se ficasse só atrás. -->
+        <telas:ChatIfood x:Name="CamadaChat" Visibility="Collapsed"/>
 
         <!-- Janela sem moldura (quiosque) precisa dos próprios botões de janela.
              Discretos de propósito: existem pro dono/suporte, não pro operador. -->

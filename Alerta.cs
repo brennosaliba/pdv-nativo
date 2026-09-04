@@ -11,6 +11,7 @@ namespace Pdv;
 public static class Alerta
 {
     private static DateTime _ultimo = DateTime.MinValue;
+    private static DateTime _ultimoChat = DateTime.MinValue;
 
     public static void PedidoNovo()
     {
@@ -27,6 +28,27 @@ public static class Alerta
                 Console.Beep(880, 350);
             }
             catch { /* sem som na máquina: o toast e o badge continuam avisando */ }
+        });
+    }
+
+    /// <summary>
+    /// Mensagem nova no chat: um aviso CURTO e DISCRETO (dois toques leves),
+    /// distinto do pedido novo — o operador reconhece sem olhar. Mesma proteção
+    /// contra metralhadora do pedido.
+    /// </summary>
+    public static void MensagemChat()
+    {
+        if ((DateTime.Now - _ultimoChat).TotalSeconds < 8) return;
+        _ultimoChat = DateTime.Now;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                Console.Beep(1046, 110);
+                Console.Beep(784, 150);
+            }
+            catch { /* sem som: o toast e o selo continuam avisando */ }
         });
     }
 }

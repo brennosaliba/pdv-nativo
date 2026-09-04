@@ -111,13 +111,24 @@ public partial class Venda : UserControl
         // 30 s continua embaixo como rede de segurança
         Servicos.Sino(_loja ?? "").Ping += SinoTocou;
         Servicos.Sino(_loja ?? "").CatalogoMudou += CatalogoTocou;
-        Loaded += (_, _) => { IniciarRelogio(); PintarPendencias(); ProcurarAtualizacao(); OferecerRascunho(); };
+        Loaded += (_, _) =>
+        {
+            IniciarRelogio(); PintarPendencias(); ProcurarAtualizacao(); OferecerRascunho();
+            // Selo do chat ao vivo: escuta o ServicoChat sempre que a venda está na
+            // tela (idempotente) e pinta o estado atual. Assim o selo continua certo
+            // ao voltar do KDS/chat, sem depender de a inscrição sobreviver.
+            ServicoChat.Mudou -= AtualizarSeloChat; ServicoChat.Mudou += AtualizarSeloChat;
+            ServicoChat.MensagemNova -= ChatMensagemNova; ServicoChat.MensagemNova += ChatMensagemNova;
+            AtualizarSeloChat(ServicoChat.NaoLidas);
+        };
         Unloaded += (_, _) =>
         {
             _relogio?.Stop(); _relogio = null;
             Aparencia.Mudou -= TemaMudou;
             Servicos.Sino(_loja ?? "").Ping -= SinoTocou;
             Servicos.Sino(_loja ?? "").CatalogoMudou -= CatalogoTocou;
+            ServicoChat.Mudou -= AtualizarSeloChat;
+            ServicoChat.MensagemNova -= ChatMensagemNova;
         };
     }
 
@@ -222,6 +233,35 @@ public partial class Venda : UserControl
     {
         ToastKds.Visibility = Visibility.Collapsed;
         PediuKds?.Invoke();
+    }
+
+    // ── selo e aviso do chat (espelham o delivery) ───────────────────────────
+    private DispatcherTimer? _toastChatSome;
+
+    /// <summary>Selo de nao lidas no botao Chat. Ao vivo pelo ServicoChat.</summary>
+    private void AtualizarSeloChat(int total) => Dispatcher.Invoke(() =>
+    {
+        TxtBadgeChat.Text = total > 99 ? "99+" : total.ToString();
+        BadgeChat.Visibility = total > 0 ? Visibility.Visible : Visibility.Collapsed;
+    });
+
+    /// <summary>Mensagem nova (so na subida): aviso na tela + som discreto.</summary>
+    private void ChatMensagemNova(int total) => Dispatcher.Invoke(() =>
+    {
+        TxtToastChat.Text = total == 1 ? "Mensagem nova no chat" : $"{total} mensagens no chat";
+        ToastChat.Visibility = Visibility.Visible;
+        Alerta.MensagemChat();
+
+        _toastChatSome?.Stop();
+        _toastChatSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _toastChatSome.Tick += (_, _) => { ToastChat.Visibility = Visibility.Collapsed; _toastChatSome?.Stop(); };
+        _toastChatSome.Start();
+    });
+
+    private void AbrirChatPeloToast(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        ToastChat.Visibility = Visibility.Collapsed;
+        PediuChat?.Invoke();
     }
 
     private void AlternarTema(object sender, RoutedEventArgs e)
@@ -630,12 +670,36 @@ public partial class Venda : UserControl
         }
     }
 
+    /// <summary>
+    /// Largura da coluna de categorias. Com 3 POR LINHA ela precisa de mais espaço,
+    /// senão o nome quebra no meio ("Bebidas Quen…", "Promoç ão") — foi o que o dono
+    /// viu em 04/09. Quem cede o espaço é a coluna do MEIO: os cards de produto ficam
+    /// um pouco menores e continuam 3 por linha, que era o pedido. Com 2 por linha ou
+    /// automático, nada muda em relação ao que já estava no ar.
+    /// </summary>
+    private void AplicarLarguraCategorias()
+    {
+        var tres = _categoriasPorLinha == "3";
+        if (_estreita)
+        {
+            ColCategorias.MinWidth = tres ? 272 : 200;
+            ColCategorias.MaxWidth = tres ? 300 : 224;
+        }
+        else
+        {
+            ColCategorias.MinWidth = tres ? 272 : 172;
+            ColCategorias.MaxWidth = tres ? 320 : 272;
+        }
+    }
+
     /// <summary>Alterna a densidade das categorias: automático → 2 → 3 → automático. Persiste.</summary>
     private void AlternarDensidadeCategorias(object sender, RoutedEventArgs e)
     {
         _categoriasPorLinha = _categoriasPorLinha switch { "auto" => "2", "2" => "3", _ => "auto" };
         using (var cx = Banco.Abrir()) Vendas.GravarConfig(cx, "categorias_por_linha", _categoriasPorLinha);
         PintarBotaoDensidade();
+        // a largura da coluna muda junto: AplicarLargura só roda quando a JANELA muda
+        AplicarLarguraCategorias();
         AjustarColunasCategorias();
     }
 
@@ -673,16 +737,9 @@ public partial class Venda : UserControl
         FaixaCategorias.Visibility = Visibility.Collapsed;
         ColunaCategorias.Visibility = Visibility.Visible;
         ColCategorias.Width = new GridLength(1, GridUnitType.Star);
-        if (estreita)
-        {
-            ColCategorias.MinWidth = 200; ColCategorias.MaxWidth = 224;
-            ColComanda.MinWidth = 236; ColComanda.MaxWidth = 250;
-        }
-        else
-        {
-            ColCategorias.MinWidth = 172; ColCategorias.MaxWidth = 272;
-            ColComanda.MinWidth = 300; ColComanda.MaxWidth = 340;
-        }
+        AplicarLarguraCategorias();
+        if (estreita) { ColComanda.MinWidth = 236; ColComanda.MaxWidth = 250; }
+        else          { ColComanda.MinWidth = 300; ColComanda.MaxWidth = 340; }
         _categoriaMini = estreita;
         var catsAtuais = ListaCategorias.Items.Cast<Button>().Select(b => (string)b.Tag!).ToList();
         if (catsAtuais.Count > 0) PreencherCategorias(catsAtuais);
@@ -960,7 +1017,11 @@ public partial class Venda : UserControl
             // 16 e nao caixa alta: maiuscula "parece" maior mas le pior e come
             // largura — corpo maior e o que aumenta a leitura de verdade
             Text = Capitalizar(categoria),
-            FontSize = _categoriaMini ? 11.5 : 16, FontWeight = FontWeights.Bold,
+            // Com 3 por linha o card é estreito e uma palavra sozinha ("Encomendas")
+            // não cabia numa linha: o WPF quebrava NO MEIO da palavra ("Encomenda/s").
+            // Meio ponto a menos resolve sem deixar o nome pequeno demais.
+            FontSize = ColunasCategorias >= 3 ? 11 : (_categoriaMini ? 11.5 : 16),
+            FontWeight = FontWeights.Bold,
             TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
             Margin = new Thickness(0, _categoriaMini ? 4 : 7, 0, 0),
             MaxHeight = _categoriaMini ? 44 : 44,

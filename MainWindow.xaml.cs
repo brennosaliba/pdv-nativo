@@ -111,22 +111,35 @@ public partial class MainWindow : Window
         t.PediuConfig += AbrirConfigProtegida;
         _telaVenda = t;
         Conteudo.Content = t;
+
+        // Pré-aquece o chat: com o caixa aberto, o WebView2 do chat já começa a
+        // observar as não lidas em segundo plano para o selo acender na venda
+        // antes de alguém abrir o chat (idempotente; a própria tela se protege
+        // de inicializar duas vezes).
+        _ = CamadaChat.PreAquecerAsync();
     }
 
-    private Telas.ChatIfood? _telaChat;
+    private bool _chatLigado;
 
     /// <summary>
-    /// Chat do iFood: a tela nasce UMA vez e fica viva — trocar de aba não
-    /// derruba o login do Gestor nem a conversa aberta.
+    /// Chat do iFood: a CAMADA (CamadaChat) vive na árvore desde o início e nunca
+    /// é destacada — trocar de aba não derruba o login do Gestor, a conversa
+    /// aberta nem o observador de não lidas. Mostrar/esconder é só Visibility.
+    ///
+    /// Na 1ª vez, liga o "Voltar" (esconde a camada) e pré-aquece o WebView2 para
+    /// o selo de não lidas já acender na venda. Se a plataforma não inicializar o
+    /// WebView2 enquanto a camada está oculta, o observador liga aqui, na 1ª
+    /// abertura — fallback seguro, o chat nunca fica inacessível.
     /// </summary>
     private void MostrarChat()
     {
-        if (_telaChat is null)
+        if (!_chatLigado)
         {
-            _telaChat = new Telas.ChatIfood();
-            _telaChat.Voltou += () => Conteudo.Content = _telaVenda;
+            _chatLigado = true;
+            CamadaChat.Voltou += () => CamadaChat.Visibility = Visibility.Collapsed;
         }
-        Conteudo.Content = _telaChat;
+        CamadaChat.Visibility = Visibility.Visible;
+        _ = CamadaChat.PreAquecerAsync();
     }
 
     /// <summary>

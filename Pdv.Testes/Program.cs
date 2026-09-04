@@ -1263,6 +1263,11 @@ Console.WriteLine();
 Console.WriteLine("--- Tema (diurno/noturno) ---");
 TestesTema.Rodar((cond, nome) => Check("tema: " + nome, cond));
 
+// -- CHAT do iFOOD: nao lidas, "so avisa na subida", normalizador e mascara ---
+Console.WriteLine();
+Console.WriteLine("--- Chat do iFood (nao lidas, aviso, captura) ---");
+TestesChat.Rodar((cond, nome) => Check("chat: " + nome, cond));
+
 // -- PROMOCOES: o motor que faltava (a promocao de quinta invisivel no caixa) --
 Console.WriteLine();
 Console.WriteLine("--- Promocoes (motor de preco) ---");
