@@ -100,6 +100,12 @@ if (args.Length >= 2 && args[0] == "--conferir-pacote")
 if (args.Length >= 4 && args[0] == "--foto-venda")
     return FotoVenda.Rodar(args);
 
+// Modo FOTO do quadro do KDS (ver Pdv.Testes/FotoKds.cs). Banco temporário próprio:
+// não encosta no caixa.
+//   Pdv.Testes.exe --foto-kds saida.png 1024 768 [claro|escuro]
+if (args.Length >= 4 && args[0] == "--foto-kds")
+    return FotoKds.Rodar(args);
+
 // Gera o icone do exe (mmtech, conceito B) num .ico multi-resolucao.
 //   Pdv.Testes.exe --gerar-icone saida.ico
 if (args.Length >= 2 && args[0] == "--gerar-icone")

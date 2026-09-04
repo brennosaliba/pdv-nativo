@@ -394,6 +394,62 @@ public static class TestesKds
             }
             Kds.Entregar(tIf!);
 
+            // ── PRONTO de ponta a ponta: fila → RPC → enviado_em (04/09, Savassi) ──
+            // A Savassi tocava PRONTO, o card ia para a coluna de coleta e o iFood
+            // nunca era avisado. Da nuvem tudo conferia (RPC, grant, escopo da loja);
+            // o que faltava era o caixa DIZER o que a RPC respondeu, e nao engolir
+            // `null` como sucesso. A nuvem falsa responde como a real: `true` marca;
+            // `null` e "fora do escopo da loja / inexistente" e NAO pode virar
+            // enviado_em, porque o entregador nao vai ser chamado.
+            {
+                using var fake = new FakePostgrest(4661);
+                var nuvem = new Nuvem(fake.Url);
+                checar(nuvem.EntrarAsync("kds@teste.com", "x").GetAwaiter().GetResult(),
+                    "nuvem fake autentica para o pronto");
+                using var dren = new Drenagem(nuvem, fake.Url);
+
+                var tOk = Kds.DoDelivery("order-ready-ok", "7778", null,
+                    Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+                var tNull = Kds.DoDelivery("order-ready-null", "7779", null,
+                    Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]"));
+                Kds.Assumir(tOk!);   Kds.Liberar(tOk!);
+                Kds.Assumir(tNull!); Kds.Liberar(tNull!);
+                fake.RespostaKdsPronto["order-ready-null"] = "null";
+                // Banco.Pasta e a pasta REAL (ProgramData) mesmo em teste: apaga o rastro
+                // de uma rodada anterior, senao a asserção abaixo nunca conseguiria falhar.
+                var diag = Path.Combine(Banco.Pasta, "kds-pronto.txt");
+                try { if (File.Exists(diag)) File.Delete(diag); } catch { }
+
+                for (var i = 0; i < Drenagem.MaxTentativas + 2; i++)
+                    dren.DrenarAsync().GetAwaiter().GetResult();
+
+                using var cxp = Banco.Abrir();
+                checar(fake.ProntosRecebidos.TryGetValue("order-ready-ok", out var n) && n >= 1,
+                    "o pronto do delivery CHEGA na nuvem pela fila (a RPC recebeu o order_id)");
+                checar(cxp.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM outbox WHERE tipo='kds_pronto' AND ref_id='order-ready-ok' AND enviado_em IS NOT NULL") == 1,
+                    "resposta true carimba enviado_em");
+                checar(cxp.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM outbox WHERE tipo='kds_pronto' AND ref_id='order-ready-null' AND enviado_em IS NOT NULL") == 0,
+                    "resposta null NUNCA vira enviado_em: o iFood nao foi avisado");
+                var erroNull = cxp.ExecuteScalar<string>(
+                    "SELECT ultimo_erro FROM outbox WHERE tipo='kds_pronto' AND ref_id='order-ready-null'") ?? "";
+                checar(erroNull.Contains("nao marcou") && erroNull.Contains("iFood"),
+                    "null fica VISIVEL na pendencia, com o motivo: " + erroNull);
+                checar(cxp.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM outbox WHERE tipo='kds_pronto' AND ref_id='order-ready-null' AND desistido_em IS NOT NULL") == 1,
+                    "null e recusa de negocio: esgota as tentativas e vira dead-letter, nao retry eterno");
+                var texto = File.Exists(diag) ? File.ReadAllText(diag) : "";
+                checar(texto.Contains("pedido=order-ready-ok") && texto.Contains("http=200") && texto.Contains("corpo=true"),
+                    "kds-pronto.txt registra a tentativa com HTTP e corpo (era o rastro que faltava)");
+                checar(texto.Contains("pedido=order-ready-null") && texto.Contains("corpo=null"),
+                    "kds-pronto.txt registra tambem a resposta null");
+                // O dreno acima tambem ENVIOU a linha 'order-ready-1' do bloco anterior. O
+                // teste do filtro da varredura, mais abaixo, precisa dela AINDA NA FILA:
+                // devolve o estado que ele espera (a suite e sequencial e compartilha o banco).
+                cxp.Execute("UPDATE outbox SET enviado_em = NULL WHERE tipo='kds_pronto' AND ref_id='order-ready-1'");
+            }
+
             // ── sino (Realtime): protocolo puro ─────────────────────────────
             var quadro = RealtimeKds.MontarQuadro("realtime:kds:Loja X", "phx_join", "{\"a\":1}", "1");
             checar(quadro.Contains("\"topic\":\"realtime:kds:Loja X\"")
@@ -617,6 +673,106 @@ public static class TestesKds
                     true, Iso(daqui2h), null) });
                 checar(Kds.Abertos().All(x => x.RefId != "ag-hoje"),
                     "agendado cancelado no iFood sai do quadro");
+            }
+
+            // ── VOLTAR UMA ETAPA (04/09 — relato do dono na 0.5.3) ─────────
+            // "pedido 9507 e 5077 foi clicado marcar fazendo porem nao tem como
+            // desfazer caso tenha clicado errado".
+            //
+            // As duas voltas NAO sao a mesma coisa, e e' isso que esta suite existe
+            // para travar: FAZENDO -> NA FILA nao sai desta maquina; PRONTO ->
+            // FAZENDO pode ja ter acionado o entregador no iFood. Um "desfazer" que
+            // mente para o operador (diz que desfez o readyToPickup que ja saiu) e'
+            // pior que nao ter desfazer nenhum: manda o cozinheiro confiar na tela.
+            {
+                using var cxd = Banco.Abrir();
+                cxd.Execute("DELETE FROM kds_ticket");
+                cxd.Execute("DELETE FROM outbox WHERE tipo = 'kds_pronto'");
+
+                int AvisosDe(string refId) => cxd.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM outbox WHERE tipo='kds_pronto' AND ref_id=@r", new { r = refId });
+
+                var umDonut = Nucleo.Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"DONUT\"}]");
+
+                // 1. FAZENDO -> NA FILA: local, sempre, e apaga o carimbo de inicio
+                var vA = Kds.DoBalcao(SemearVenda(arquivo, numero: 501));
+                Kds.Assumir(vA!);
+                checar(DesfazerKds.PodeVoltar(vA!), "card em FAZENDO oferece a volta");
+                checar(DesfazerKds.Voltar(vA!) == VoltaKds.Feito, "FAZENDO volta para NA FILA");
+                checar(Kds.Abertos().First(x => x.Id == vA).Status == Kds.Recebido,
+                    "depois da volta o card esta mesmo em NA FILA");
+                checar(Carimbo(vA!, "preparo_em") is null,
+                    "a volta APAGA a hora de inicio (senao o tempo de preparo mente)");
+                checar(DesfazerKds.Voltar(vA!) == VoltaKds.ForaDaEtapa,
+                    "voltar de NA FILA nao existe: nao ha etapa anterior");
+                checar(!DesfazerKds.PodeVoltar(vA!), "card em NA FILA nao oferece volta");
+
+                // 2. PRONTO de BALCAO -> FAZENDO: nao ha ninguem la fora para avisar
+                var vB = Kds.DoBalcao(SemearVenda(arquivo, numero: 502));
+                Kds.Assumir(vB!); Kds.Liberar(vB!);
+                checar(DesfazerKds.PodeVoltar(vB!), "pronto de balcao oferece a volta");
+                checar(DesfazerKds.Voltar(vB!) == VoltaKds.Feito, "pronto de BALCAO volta para FAZENDO");
+                checar(Kds.Abertos().First(x => x.Id == vB).Status == Kds.Preparando,
+                    "o card de balcao esta de volta em FAZENDO");
+                checar(Carimbo(vB!, "pronto_em") is null,
+                    "a volta APAGA a hora de saida (o relogio da espera volta a correr)");
+
+                // 3. PRONTO de iFOOD com o aviso AINDA NA FILA: volta, e o aviso morre
+                //    junto. Sem o DELETE, o dreno mandaria o readyToPickup 45 s depois
+                //    de o operador ter "desfeito" — o pior dos dois mundos.
+                var tOk = Kds.DoDelivery("volta-ok", "9507", null, umDonut);
+                Kds.Assumir(tOk!); Kds.Liberar(tOk!);
+                checar(AvisosDe("volta-ok") == 1, "liberar o iFood enfileirou o aviso de pronto");
+                checar(DesfazerKds.PodeVoltar(tOk!), "aviso ainda na fila: a volta e' possivel");
+                checar(DesfazerKds.Voltar(tOk!) == VoltaKds.Feito,
+                    "iFood com aviso ainda na fila volta para FAZENDO");
+                checar(AvisosDe("volta-ok") == 0,
+                    "a volta TIRA o aviso da fila (senao o iFood seria avisado depois do desfazer)");
+                checar(Kds.Abertos().First(x => x.Id == tOk).Status == Kds.Preparando,
+                    "o card do iFood esta de volta em FAZENDO");
+
+                // 4. e liberar de novo enfileira de novo: desfez, refez, o iFood soube
+                Kds.Liberar(tOk!);
+                checar(AvisosDe("volta-ok") == 1, "liberar depois da volta enfileira o aviso outra vez");
+
+                // 5. PRONTO de iFOOD com o aviso JA ENVIADO: recusa, e nao mexe em nada
+                cxd.Execute("UPDATE outbox SET enviado_em=@em WHERE tipo='kds_pronto' AND ref_id='volta-ok'",
+                    new { em = DateTime.Now.ToString("o") });
+                checar(!DesfazerKds.PodeVoltar(tOk!), "aviso ja enviado: a tela nem oferece a volta");
+                checar(DesfazerKds.Voltar(tOk!) == VoltaKds.IFoodJaAvisado,
+                    "readyToPickup ja disparado NAO volta — e diz por que");
+                checar(Kds.Abertos().First(x => x.Id == tOk).Status == Kds.Pronto,
+                    "a recusa deixa o card onde estava (nao existe meio-desfazer)");
+                checar(Carimbo(tOk!, "pronto_em") is not null, "a recusa preserva a hora de saida");
+                checar(AvisosDe("volta-ok") == 1, "a recusa NAO apaga o aviso que ja foi enviado");
+
+                // 6. PRONTO que veio DE FORA (o Gestor marcou pronto): sem aviso na
+                //    outbox porque nao foi declarado aqui. Voltar seria mentira dupla —
+                //    o iFood continua achando que esta pronto, e a proxima
+                //    reconciliacao empurraria o card de volta sozinho.
+                var tGestor = Kds.DoDelivery("volta-gestor", "5077", null, umDonut);
+                Kds.Assumir(tGestor!);
+                Nucleo.Kds.PromoverProntoDelivery("volta-gestor");
+                checar(Kds.Abertos().First(x => x.Id == tGestor).Status == Kds.Pronto,
+                    "o Gestor marcando pronto leva o card para a coluna de coleta");
+                checar(AvisosDe("volta-gestor") == 0, "pronto vindo de fora nao enfileira aviso nenhum");
+                checar(DesfazerKds.Voltar(tGestor!) == VoltaKds.IFoodJaAvisado,
+                    "pronto declarado NO IFOOD nao volta por aqui");
+                checar(Kds.Abertos().First(x => x.Id == tGestor).Status == Kds.Pronto,
+                    "e o card continua na coluna de coleta");
+
+                // 7. o que NAO existe nao volta
+                checar(DesfazerKds.Voltar("id-que-nao-existe") == VoltaKds.ForaDaEtapa,
+                    "voltar ticket inexistente nao finge sucesso");
+                checar(!DesfazerKds.PodeVoltar("id-que-nao-existe"), "ticket inexistente nao oferece volta");
+                Kds.Liberar(vB!);    // FAZENDO -> PRONTO (balcao: nao enfileira aviso)
+                Kds.Entregar(vB!);   // PRONTO -> ENTREGUE: sai do quadro
+                checar(Kds.Abertos().All(x => x.Id != vB), "entregue saiu mesmo do quadro");
+                checar(DesfazerKds.Voltar(vB!) == VoltaKds.ForaDaEtapa,
+                    "card que ja saiu do quadro (entregue) nao volta");
+
+                cxd.Execute("DELETE FROM kds_ticket");
+                cxd.Execute("DELETE FROM outbox WHERE tipo = 'kds_pronto'");
             }
         }
         finally

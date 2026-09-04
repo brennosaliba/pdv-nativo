@@ -49,6 +49,39 @@ public static class CardKds
     /// <summary>O marcador de quantidade do quadro, um só: "2× Donut", nunca "2x Donut".</summary>
     public const string Vezes = "×";
 
+    // ── QUANTOS CARDS CABEM LADO A LADO (04/09, segunda foto do dono) ────────
+    // "ainda nao esta bom o ux..talvez diminuir um poouco a fonte..aumentar o box".
+    // O quadro divide a tela em TRÊS colunas e cada coluna trazia DOIS cards fixos.
+    // Medido na foto do modo --foto-kds a 1024x768, que é a tela da Savassi: sobram
+    // ~150 px por card, e a 16 px de fonte quase todo item quebra em duas linhas
+    // ("1× Tortinha de / Frango com / Catupiry"). Dois fixos não era uma escolha de
+    // densidade: era o número que estava escrito no código desde o primeiro dia.
+    //
+    // A saída NÃO é encolher a fonte. A cozinha lê o card a 1 ou 2 metros, e o que
+    // sobra de legibilidade ali é justamente o que não pode ser gasto. O que estava
+    // sobrando era COLUNA: em tela estreita cabe um card por linha, e ele fica com o
+    // dobro da largura.
+
+    /// <summary>
+    /// Largura mínima que um card precisa para o nome de item comum caber numa linha
+    /// só a 16 px. Medida no pior nome real do cardápio ("Tortinha de Frango com
+    /// Catupiry", ~245 px com a quantidade e as folgas), arredondada para cima.
+    /// </summary>
+    public const double LarguraMinimaCard = 270;
+
+    /// <summary>
+    /// Quantos cards cabem lado a lado numa coluna do quadro de
+    /// <paramref name="larguraDaColuna"/> pixels úteis.
+    ///
+    /// Chão de 1 e teto de 3: um card sozinho numa coluna larga é feio, mas card
+    /// ilegível é caro. Largura desconhecida (a primeira pintura acontece antes de o
+    /// WPF medir a tela) responde 1, que é o valor que nunca quebra nome.
+    /// </summary>
+    public static int CardsPorLinha(double larguraDaColuna, int teto = 3)
+        => larguraDaColuna <= 0
+            ? 1
+            : Math.Clamp((int)(larguraDaColuna / LarguraMinimaCard), 1, Math.Max(1, teto));
+
     /// <summary>
     /// A quantidade do item como ela aparece: milésimos viram "1", "2", "1,5".
     /// Mesma conta que a tela fazia inline (e que a comanda continua fazendo), agora

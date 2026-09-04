@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Text.RegularExpressions;
 using Pdv.Nucleo;
 
@@ -177,5 +178,95 @@ public static class TestesCardKds
             "toda linha do card começa com a quantidade seguida de ×");
         checar(!linhas.Any(l => Regex.IsMatch(l, @"^\d+(?:[.,]\d+)?\s*x\s")),
             "nenhuma linha do card ainda marca quantidade com x minúsculo");
+
+        Densidade(checar);
+        AlinhamentoDoCard(checar);
+    }
+
+    /// <summary>
+    /// QUANTOS CARDS CABEM LADO A LADO (04/09, segunda reclamação do dono).
+    ///
+    /// "ainda nao esta bom o ux..talvez diminuir um poouco a fonte..aumentar o box".
+    /// O quadro trazia DOIS cards por coluna, fixos no código. A 1024x768, que é a
+    /// tela da Savassi, cada coluna do quadro tem ~307 px úteis: dois cards ali dão
+    /// ~150 px cada, e a 16 px quase todo item quebra em duas linhas. Agora quem
+    /// decide é a largura medida.
+    ///
+    /// As medidas abaixo saíram do modo --foto-kds nas resoluções reais, não de conta
+    /// de cabeça: coluna do quadro = (largura - 24 de margem) / 3, menos 8 de margem,
+    /// 2 de borda e 16 de recuo do ScrollViewer.
+    /// </summary>
+    private static void Densidade(Action<bool, string> checar)
+    {
+        checar(CardKds.CardsPorLinha(0) == 1,
+            "largura ainda não medida responde 1 (a primeira pintura sai antes do layout)");
+        checar(CardKds.CardsPorLinha(-500) == 1, "largura negativa não vira zero card por linha");
+        checar(CardKds.CardsPorLinha(307) == 1,
+            "a 1024x768 (a tela da Savassi) cabe UM card por coluna, não dois");
+        checar(CardKds.CardsPorLinha(421) == 1, "a 1366x768 ainda é um card por coluna");
+        checar(CardKds.CardsPorLinha(606) == 2, "a 1920x1080 cabem dois cards por coluna");
+        checar(CardKds.CardsPorLinha(819) == 3, "num monitor de 2560 cabem três");
+        checar(CardKds.CardsPorLinha(100000) == 3, "o teto de três vale mesmo em tela absurda");
+        checar(CardKds.CardsPorLinha(CardKds.LarguraMinimaCard) == 1,
+            "exatamente a largura mínima é UM card, não zero");
+        checar(CardKds.CardsPorLinha(CardKds.LarguraMinimaCard - 1) == 1,
+            "abaixo da largura mínima ainda é um card (nunca zero: o quadro ficaria vazio)");
+        checar(CardKds.CardsPorLinha(CardKds.LarguraMinimaCard * 2) == 2,
+            "o dobro da largura mínima é que volta a ser dois");
+        checar(CardKds.CardsPorLinha(1000, teto: 1) == 1, "o teto pedido é respeitado");
+        checar(CardKds.CardsPorLinha(1000, teto: 0) == 1, "teto zero não zera a coluna");
+        // A régua: um card menor que isto quebra "Tortinha de Frango com Catupiry" em
+        // duas linhas a 16 px. Encolher a FONTE seria a outra saída, e é a errada: a
+        // cozinha lê o card a 1 ou 2 metros.
+        checar(CardKds.LarguraMinimaCard is >= 250 and <= 320,
+            "a largura mínima do card continua na faixa medida na foto (250 a 320 px)");
+    }
+
+    /// <summary>
+    /// O CONTEÚDO DO CARD COLADO NO TOPO (04/09, terceira reclamação do dono).
+    ///
+    /// "alem de q o toque quando pronto ficar pronto nao esta alinhado..mesmo q na
+    /// mesma linha". A causa não estava no card: estava no BotaoBase, cujo
+    /// ContentPresenter tinha "Center/Center" CRAVADO no template. O card do KDS pede
+    /// Stretch nos dois eixos e era ignorado — o conteúdo boiava no meio do botão e
+    /// dois cards da mesma linha terminavam com o rodapé em alturas diferentes.
+    ///
+    /// Isto aqui é layout, e layout não roda na suíte. O que dá para travar é o
+    /// TEXTO do estilo: se alguém cravar o alinhamento de novo, cai aqui e não na
+    /// cozinha. O padrão do Button já é Center nos dois eixos, então o TemplateBinding
+    /// não muda nada para o resto da tela (medido: a foto da venda a 1024x768 saiu
+    /// pixel por pixel idêntica antes e depois).
+    /// </summary>
+    private static void AlinhamentoDoCard(Action<bool, string> checar)
+    {
+        var arquivo = AchaEstilos();
+        if (arquivo is null)
+        {
+            checar(false, "não achei o Estilos.xaml para conferir o alinhamento do BotaoBase");
+            return;
+        }
+        var xaml = File.ReadAllText(arquivo);
+        // só o trecho do BotaoBase: os outros templates têm ContentPresenter próprio
+        var corpo = Regex.Match(xaml, "x:Key=\"BotaoBase\".*?</Style>", RegexOptions.Singleline).Value;
+        checar(corpo.Length > 0, "achei o estilo BotaoBase no Estilos.xaml");
+        var apresentador = Regex.Match(corpo, "<ContentPresenter[^>]*>", RegexOptions.Singleline).Value;
+        checar(apresentador.Contains("{TemplateBinding VerticalContentAlignment}", StringComparison.Ordinal),
+            "o BotaoBase obedece ao VerticalContentAlignment do botão (era 'Center' cravado)");
+        checar(apresentador.Contains("{TemplateBinding HorizontalContentAlignment}", StringComparison.Ordinal),
+            "o BotaoBase obedece ao HorizontalContentAlignment do botão");
+        checar(!Regex.IsMatch(apresentador, "VerticalAlignment=\"(Center|Top|Bottom|Stretch)\""),
+            "o alinhamento vertical do BotaoBase não voltou a ser cravado no template");
+    }
+
+    /// <summary>Estilos.xaml a partir da pasta do teste, subindo até achar o fonte.</summary>
+    private static string? AchaEstilos()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+        {
+            var candidato = Path.Combine(dir.FullName, "Estilos.xaml");
+            if (File.Exists(candidato)) return candidato;
+        }
+        return null;
     }
 }

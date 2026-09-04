@@ -819,19 +819,31 @@ public sealed class Drenagem : IDisposable
         catch (Exception ex) { return (null, Corta(ex.Message)); }
     }
 
+    /// <summary>Motivo gravado quando a nuvem responde ao pronto sem marcar nada.</summary>
+    internal const string MsgNuvemNaoMarcouPronto =
+        "nuvem nao marcou o pronto (pedido fora da loja deste usuario, ou inexistente); iFood NAO avisado";
+
     private async Task<(bool? Ok, string? Erro)> EnviarKdsProntoAsync(string orderId, string token, CancellationToken ct)
     {
         try
         {
             var corpo = JsonSerializer.Serialize(new { _order_id = orderId });
             var (status, resp) = await RpcAsync("pdv_kds_pronto", corpo, token, ct).ConfigureAwait(false);
+            // Rastro de CADA tentativa, com o que a nuvem respondeu. Em 04/09 a
+            // Savassi tocava PRONTO, o card mudava de coluna e o iFood nunca era
+            // avisado; da nuvem tudo parecia certo (RPC, grant, escopo) e o caixa
+            // nao dizia nada. Este arquivo e o que faltou para saber o motivo.
+            AnotarKdsPronto(orderId, status, resp);
             if (status is >= 200 and < 300)
             {
-                // "null" = o pedido nao existe na nuvem. Nao insiste: o ticket
-                // NASCEU da nuvem, entao isso so acontece se alguem apagou a
-                // linha - e re-tentar pra sempre nao a traz de volta.
+                // "null" NAO e sucesso. A RPC devolve null quando o pedido nao esta
+                // no escopo da loja do usuario da sessao, ou nao existe: nos dois
+                // casos o iFood NAO foi avisado e o entregador NAO vai ser chamado.
+                // A versao anterior carimbava enviado_em aqui ("nada a marcar"), e
+                // o pronto sumia da fila sem rastro. Recusa de negocio: conta
+                // tentativa, vira dead-letter com o motivo legivel na pendencia.
                 return (resp?.Trim() == "null" || string.IsNullOrWhiteSpace(resp?.Trim()))
-                    ? (true, "pedido nao existe na nuvem; nada a marcar")
+                    ? (false, MsgNuvemNaoMarcouPronto)
                     : (true, null);
             }
             // DesfechoDeStatus, como TODO handler daqui: rede caida/5xx/429 e
@@ -842,6 +854,23 @@ public sealed class Drenagem : IDisposable
             return DesfechoDeStatus(status, resp);
         }
         catch (Exception ex) { return (null, "kds_pronto: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// Uma linha por tentativa de avisar o pronto, em ProgramData\PdvNativo\kds-pronto.txt:
+    /// hora, pedido, HTTP e o inicio do corpo. Diagnostico, nao historico: recomeca em 1 MB.
+    /// Nunca derruba a fila.
+    /// </summary>
+    private static void AnotarKdsPronto(string orderId, int status, string? corpo)
+    {
+        try
+        {
+            var caminho = System.IO.Path.Combine(Banco.Pasta, "kds-pronto.txt");
+            if (System.IO.File.Exists(caminho) && new System.IO.FileInfo(caminho).Length > 1_000_000) System.IO.File.Delete(caminho);
+            System.IO.File.AppendAllText(caminho,
+                $"{DateTime.Now:dd/MM HH:mm:ss}  pedido={orderId}  http={status}  corpo={Corta(corpo)}{Environment.NewLine}");
+        }
+        catch { /* diagnostico nunca atrapalha o envio */ }
     }
 
     private async Task<(int Status, string? Corpo)> RpcAsync(string nome, string corpoJson, string token, CancellationToken ct)

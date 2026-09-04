@@ -46,6 +46,10 @@ public partial class Kds : UserControl
         };
         _timer.Start();
         Unloaded += (_, _) => { _timer?.Stop(); _timer = null; };
+        // A largura do card só existe depois que o WPF mede a tela, e a loja tem
+        // monitores de tamanhos diferentes. Aqui é onde a decisão de quantos cards
+        // cabem lado a lado ganha o número de verdade.
+        SizeChanged += (_, _) => Repartir();
         Aparencia.Mudou += Pintar;
         Unloaded += (_, _) => Aparencia.Mudou -= Pintar;
         Servicos.Sino(loja).Ping += SinoTocou;
@@ -212,6 +216,7 @@ public partial class Kds : UserControl
     private void Pintar()
     {
         using (var cxp = Banco.Abrir()) _politicaComanda = Impressoes.Politica(cxp, Impressoes.Comanda);
+        _porLinha = CabemPorLinha();
 
         var abertos = Nucleo.Kds.Abertos();
 
@@ -228,12 +233,38 @@ public partial class Kds : UserControl
     }
 
     /// <summary>
-    /// Quantas colunas de card cabem DENTRO de cada coluna de status.
+    /// Quantas colunas de card cabem DENTRO de cada coluna de status AGORA.
+    ///
+    /// Era 2 fixo, e era ele o "box pequeno" que o dono reclamou na 0.5.3: a 1024x768
+    /// (a tela da Savassi) dois cards por coluna dão ~150 px cada, e quase todo item
+    /// quebra em duas linhas. Agora quem decide é a largura de verdade, pela regra de
+    /// <see cref="CardKds.CardsPorLinha"/> — que é onde a suíte alcança.
+    ///
+    /// 1 enquanto o WPF não mediu a tela (a primeira pintura sai do construtor, antes
+    /// do layout): é o valor que nunca quebra nome. O <see cref="Repartir"/> repinta
+    /// assim que a medida chega.
     /// </summary>
-    private const int CardsPorLinha = 2;
+    private int _porLinha = 1;
 
     /// <summary>
-    /// Distribui os cards num Grid de <see cref="CardsPorLinha"/> colunas.
+    /// A conta, a partir da largura MEDIDA. As três colunas do quadro têm largura
+    /// igual (Width="*"), então uma medida serve para as três.
+    /// </summary>
+    private int CabemPorLinha() => CardKds.CardsPorLinha(ColPreparar.ActualWidth);
+
+    /// <summary>
+    /// Repinta SÓ quando o número de cards por linha mudou. Sem o "só quando mudou",
+    /// arrastar a janela repintaria o quadro inteiro (com ida ao banco) a cada pixel.
+    /// O valor em si é reassumido a cada <see cref="Pintar"/>, então uma medida que
+    /// chegue atrasada se conserta sozinha no próximo ciclo de 10 s.
+    /// </summary>
+    private void Repartir()
+    {
+        if (CabemPorLinha() != _porLinha) Pintar();
+    }
+
+    /// <summary>
+    /// Distribui os cards num Grid de <see cref="_porLinha"/> colunas.
     ///
     /// Grid e nao WrapPanel: no WrapPanel, alinhar os cards exigia altura FIXA —
     /// e altura fixa CORTA pedido comprido (o de 6 itens aparecia com 2). Aqui
@@ -251,12 +282,13 @@ public partial class Kds : UserControl
         coluna.Children.Clear();
         coluna.RowDefinitions.Clear();
         coluna.ColumnDefinitions.Clear();
-        for (var c = 0; c < CardsPorLinha; c++)
+        var porLinha = Math.Max(1, _porLinha);
+        for (var c = 0; c < porLinha; c++)
             coluna.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
         var lista = tickets.ToList();
         var comFaixas = faixaAgendados && lista.Any(t => t.Agendado);
-        var i = 0;   // próxima célula livre; linha = i / CardsPorLinha
+        var i = 0;   // próxima célula livre; linha = i / porLinha
         void GaranteLinha(int linha)
         {
             while (coluna.RowDefinitions.Count <= linha)
@@ -264,8 +296,8 @@ public partial class Kds : UserControl
         }
         void Faixa(string texto, string cor)
         {
-            if (i % CardsPorLinha != 0) i += CardsPorLinha - i % CardsPorLinha;   // começa em linha nova
-            var linha = i / CardsPorLinha;
+            if (i % porLinha != 0) i += porLinha - i % porLinha;   // começa em linha nova
+            var linha = i / porLinha;
             GaranteLinha(linha);
             var tb = new TextBlock
             {
@@ -275,9 +307,9 @@ public partial class Kds : UserControl
             tb.SetResourceReference(TextBlock.ForegroundProperty, cor);
             Grid.SetRow(tb, linha);
             Grid.SetColumn(tb, 0);
-            Grid.SetColumnSpan(tb, CardsPorLinha);
+            Grid.SetColumnSpan(tb, porLinha);
             coluna.Children.Add(tb);
-            i += CardsPorLinha;                                                    // a faixa é a linha inteira
+            i += porLinha;                                                         // a faixa é a linha inteira
         }
 
         string? faixaAtual = null;
@@ -292,11 +324,11 @@ public partial class Kds : UserControl
                     faixaAtual = faixa;
                 }
             }
-            var linha = i / CardsPorLinha;
+            var linha = i / porLinha;
             GaranteLinha(linha);
             var card = Card(t);
             Grid.SetRow(card, linha);
-            Grid.SetColumn(card, i % CardsPorLinha);
+            Grid.SetColumn(card, i % porLinha);
             coluna.Children.Add(card);
             i++;
         }
@@ -455,26 +487,44 @@ public partial class Kds : UserControl
 
         var dir = new StackPanel { Orientation = Orientation.Horizontal };
         dir.Children.Add(espera);
-        if (t.Status == Nucleo.Kds.Preparando)
+        // ── VOLTAR UMA ETAPA (04/09, primeira reclamação do dono na 0.5.3) ──
+        // "pedido 9507 e 5077 foi clicado marcar fazendo porem nao tem como desfazer
+        // caso tenha clicado errado". O botão EXISTIA desde a 0.4.x, e some: a 1024x768
+        // o cabeçalho do card não cabia na largura de ~150 px e ↩ e 🖨 eram desenhados
+        // PARA FORA do card. Provado no --foto-kds (a 1920 os dois aparecem; a 1024,
+        // nenhum). O conserto de verdade é a largura (CardKds.CardsPorLinha); aqui só
+        // o botão passa a valer também em PRONTO.
+        //
+        // Sem confirmação, de propósito: pedir "tem certeza?" para DESFAZER é pedir
+        // confirmação da correção de um erro. O que é grave é avançar, e avançar já
+        // pergunta. E as duas voltas não são iguais: FAZENDO → NA FILA é local, PRONTO
+        // → FAZENDO pode já ter acionado o entregador. Quem sabe isso é o núcleo
+        // (DesfazerKds), e ele recusa com motivo em vez de mentir que desfez.
+        if (t.Status is Nucleo.Kds.Preparando or Nucleo.Kds.Pronto)
         {
-            // Desfazer: pegou o card errado com a cozinha cheia — volta pra fila
-            // sem drama. Botão próprio (o Click interno não vaza pro card).
-            // 44px perdia pro dedo: o toque pegava o CARD e abria o pop-up
-            // de PRONTO. Alvo de verdade (76×56) + texto — o padrão da casa é 64px.
             var desfaz = new Button
             {
                 Content = "↩", FontSize = 15, MinHeight = 46, MinWidth = 46,
-                Margin = new Thickness(10, 0, 0, 0), Padding = new Thickness(8, 0, 8, 0),
+                // 8 e não 10: o cabeçalho do card é a linha mais disputada da tela.
+                Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(8, 0, 8, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
-                ToolTip = "Devolver para a fila",
+                ToolTip = t.Status == Nucleo.Kds.Preparando
+                    ? "Devolver para a fila" : "Voltar para FAZENDO",
             };
             desfaz.Click += (_, e) =>
             {
-                Nucleo.Kds.Desassumir(t.Id);
-                Pintar();
                 // Click e roteado e BORBULHA: sem isto o clique segue pro card e
                 // abre a confirmacao de PRONTO - exatamente o bug que o dono viu.
                 e.Handled = true;
+                // Textos de uma linha: quem lê está de pé, com pedido na mão.
+                TxtStatus.Text = DesfazerKds.Voltar(t.Id) switch
+                {
+                    VoltaKds.IFoodJaAvisado => $"O #{t.Numero} não volta: o iFood já foi avisado.",
+                    VoltaKds.ForaDaEtapa => $"O #{t.Numero} já tinha mudado de coluna.",
+                    _ when t.Status == Nucleo.Kds.Pronto => $"Pedido #{t.Numero} voltou para FAZENDO.",
+                    _ => TxtStatus.Text,
+                };
+                Pintar();
             };
             dir.Children.Add(desfaz);
         }
@@ -489,7 +539,7 @@ public partial class Kds : UserControl
             var imprime = new Button
             {
                 Content = "🖨", FontSize = 16, MinHeight = 46, MinWidth = 46,
-                Margin = new Thickness(10, 0, 0, 0),
+                Margin = new Thickness(8, 0, 0, 0),
                 Style = (Style)Application.Current.Resources["BotaoBase"],
                 ToolTip = "Tirar a comanda deste pedido no papel de novo",
             };
@@ -688,8 +738,11 @@ public partial class Kds : UserControl
         tb.SetResourceReference(TextBlock.ForegroundProperty, cor);
         var chip = new Border
         {
-            CornerRadius = new CornerRadius(7), Padding = new Thickness(7, 1, 7, 2),
-            Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            CornerRadius = new CornerRadius(7), Padding = new Thickness(6, 1, 6, 2),
+            // A folga da DIREITA (6) separa o chip do relógio. Ela mora na margem de
+            // propósito: a coluna do chip é a elástica e é recortada (ClipToBounds), então
+            // em card apertado o corte come esta folga ANTES de comer letra do chip.
+            Margin = new Thickness(8, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center,
             Child = tb, BorderThickness = new Thickness(1),
         };
         chip.SetResourceReference(Border.BackgroundProperty, fundo ?? (cor == "Ciano" ? "ChipInfoFundo" : "ChipErroFundo"));

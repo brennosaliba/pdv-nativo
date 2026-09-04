@@ -32,6 +32,14 @@ public sealed class FakePostgrest : IDisposable
     public ConcurrentDictionary<string, byte> Sessoes { get; } = new();
     /// <summary>Códigos de cortesia queimados via courtesy_redeem.</summary>
     public ConcurrentDictionary<string, byte> Resgatadas { get; } = new();
+
+    /// <summary>
+    /// O que pdv_kds_pronto responde por pedido: "true" (marcou) ou "null" (fora do
+    /// escopo da loja / inexistente, que e o que a RPC real devolve). Sem entrada = "true".
+    /// </summary>
+    public ConcurrentDictionary<string, string> RespostaKdsPronto { get; } = new();
+    /// <summary>Pedidos cujo pronto chegou aqui (a ponte leria kds_pronto_em).</summary>
+    public ConcurrentDictionary<string, int> ProntosRecebidos { get; } = new();
     public int Vinculos;
 
     /// <summary>
@@ -150,6 +158,23 @@ public sealed class FakePostgrest : IDisposable
                     if (!Resgatadas.TryAdd(code!, 1))
                     { Responder(ctx, 200, """{"ok":false,"error":"ja_resgatado"}"""); return; }
                     Responder(ctx, 200, """{"ok":true}""");
+                    return;
+                }
+                case "/rest/v1/rpc/pdv_kds_pronto":
+                {
+                    // A RPC real devolve `true` quando carimba kds_pronto_em e `null`
+                    // quando o pedido nao esta no escopo da loja do usuario (ou nao
+                    // existe). O corpo e um JSON escalar, nao um objeto {ok:...}.
+                    string? oid = null;
+                    try {
+                        using var d = JsonDocument.Parse(corpo);
+                        if (d.RootElement.TryGetProperty("_order_id", out var ov) && ov.ValueKind == JsonValueKind.String)
+                            oid = ov.GetString();
+                    } catch { }
+                    if (string.IsNullOrWhiteSpace(oid)) { Responder(ctx, 400, """{"message":"_order_id obrigatorio"}"""); return; }
+                    var resposta = RespostaKdsPronto.TryGetValue(oid!, out var r) ? r : "true";
+                    if (resposta == "true") ProntosRecebidos.AddOrUpdate(oid!, 1, (_, n) => n + 1);
+                    Responder(ctx, 200, resposta);
                     return;
                 }
                 case "/rest/v1/pdv_caixa_fechamentos":

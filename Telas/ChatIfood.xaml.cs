@@ -436,6 +436,30 @@ public partial class ChatIfood : UserControl
         }
         return null;
       }
+      // O X DA GAVETA (04/09, pedido do dono). O holofote esconde os IRMÃOS da
+      // gaveta, mas o X fica DENTRO dela, na linha do título, e continuava
+      // clicável. Fechar por ele deixava o PDV sem chat e sem saída: o resto da
+      // página seguia escondido e só o Recarregar trazia algo de volta, e trazia
+      // o painel inicial do Gestor. Aqui o X some. O único jeito de sair do chat
+      // passa a ser o "Voltar ao caixa", que é o que o dono queria.
+      function esconderFecharDaGaveta(alvo, titulo){
+        try {
+          var rt = titulo.getBoundingClientRect();
+          var bs = alvo.querySelectorAll('button,[role="button"]');
+          for (var i = 0; i < bs.length; i++){
+            var b = bs[i];
+            if (b.contains(titulo)) continue;
+            var r = b.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            var rotulo = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '')).toLowerCase();
+            var naLinhaDoTitulo = r.top < rt.bottom && r.bottom > rt.top;
+            var aDireita = r.left >= rt.right;
+            var pequeno = r.width <= 80 && r.height <= 80;
+            if ((naLinhaDoTitulo && aDireita && pequeno) || /fechar|close/.test(rotulo))
+              b.setAttribute('data-pdv-hide','');
+          }
+        } catch (e) {}
+      }
       window.pdvIsolar = function () {
         try {
           var alvo = candidato();
@@ -448,6 +472,8 @@ public partial class ChatIfood : UserControl
             for (var i=0;i<p.children.length;i++){ if (p.children[i] !== el) p.children[i].setAttribute('data-pdv-hide',''); }
             el = p;
           }
+          var titulo = tituloDoPainel();
+          if (titulo) esconderFecharDaGaveta(alvo, titulo);
           document.body.classList.add('pdv-so-chat');
           envia({tipo:'modo', modo:'chat'});
           return true;
@@ -477,6 +503,18 @@ public partial class ChatIfood : UserControl
         var tid = setInterval(function(){ if (pronto) { clearInterval(tid); return; } tentar(); }, 20000);
         setTimeout(function(){ clearInterval(tid); }, 300000);
         setInterval(window.pdvContar, 5000);
+        // VIGIA DA GAVETA (04/09). `pronto` travava em true para sempre: se a
+        // gaveta fechasse depois (Esc, clique fora, o X antes de ser escondido),
+        // ninguém a reabria e o dono tinha que recarregar a página, que caía no
+        // painel inicial do Gestor. Agora, isolada e sumida = volta a insistir.
+        // Só age quando a gaveta NÃO está na tela, para nunca clicar no botão
+        // com ela aberta (poderia fechá-la).
+        setInterval(function(){
+          if (!pronto) return;
+          if (candidato()) return;
+          pronto = false;
+          tentar();
+        }, 1500);
       }
       if (document.body) liga(); else document.addEventListener('DOMContentLoaded', liga);
     })();

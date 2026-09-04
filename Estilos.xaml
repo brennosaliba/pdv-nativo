@@ -26,7 +26,16 @@
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="b" CornerRadius="14" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                        <!-- ALINHAMENTO VEM DO BOTAO, nao esta cravado aqui (04/09).
+                             Era "Center/Center" fixo, e o padrao do Button ja e' Center nos
+                             dois eixos — entao para 99% da tela nada muda. O 1% era o card do
+                             KDS, que pede Stretch e era IGNORADO: o conteudo do card ficava
+                             centralizado na vertical, boiando longe do topo, e dois cards da
+                             mesma linha terminavam com o rodape "TOQUE QUANDO FICAR PRONTO"
+                             em alturas diferentes. Foi a terceira reclamacao do dono na 0.5.3
+                             ("o toque quando pronto ficar pronto nao esta alinhado"). -->
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                           Margin="{TemplateBinding Padding}"/>
                     </Border>
                     <ControlTemplate.Triggers>
