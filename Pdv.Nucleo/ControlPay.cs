@@ -276,10 +276,17 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             // um motivo posto agora grudaria na linha depois de a venda ser aprovada.
             Guardar(new TransacaoPayGo(chargeId, "", tipo, valor.Centavos, parc, "aguardando", null));
 
+            // Cronômetro do "por que o PayGo demora a aparecer". Em modo ativo a API só responde
+            // quando o PayGo Windows pega a transação, então a duração DESTE post é, na prática, o
+            // tempo que a janela do PayGo leva para abrir no balcão. É o número que faltava para
+            // saber se o gargalo é a máquina da loja, o PayGo ou a nossa chamada.
+            var relogio = Stopwatch.StartNew();
+
             JsonDocument resp;
             try { resp = await ChamarAsync(HttpMethod.Post, "Venda/Vender/", body, CancellationToken.None, TempoCriacaoMs).ConfigureAwait(false); }
             catch (TimeoutException ex)
             {
+                Auditar?.Invoke($"controlpay: tempo criar={relogio.ElapsedMilliseconds}ms tipo={tipo} valor={valor.Formatado()} resultado=sem-resposta");
                 // Sem resposta NÃO é sinônimo de "não cobrou": a requisição pode ter chegado e o
                 // pinpad pode ter aprovado. Órfã e aviso; nunca "erro" limpo, que convida o
                 // operador a cobrar de novo o cliente que já pagou.
@@ -291,6 +298,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             catch (Exception ex)
             {
                 // O servidor respondeu (HTTP 4xx/5xx) ou a conexão nem abriu: não há cobrança.
+                Auditar?.Invoke($"controlpay: tempo criar={relogio.ElapsedMilliseconds}ms tipo={tipo} valor={valor.Formatado()} resultado=falha");
                 Guardar(new TransacaoPayGo(chargeId, "", tipo, valor.Centavos, parc, "erro", null, Sanitizar(ex.Message)));
                 Auditar?.Invoke("controlpay: Venda/Vender falhou (" + Sanitizar(ex.Message) + ")");
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "ControlPay indisponível: " + Sanitizar(ex.Message));
@@ -307,6 +315,8 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             if (intencaoId <= 0)
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "ControlPay não devolveu o id da intenção de venda");
             var ident = intencaoId.ToString(CultureInfo.InvariantCulture);
+            var criarMs = relogio.ElapsedMilliseconds;
+            Auditar?.Invoke($"controlpay: tempo criar={criarMs}ms tipo={tipo} valor={valor.Formatado()} resultado=ok intencao={ident}");
             Auditar?.Invoke($"controlpay: intenção {ident} criada ({valor.Formatado()} {tipo} {parc}x) status {status} {statusNome}");
 
             if (status == StatusIntencao.Expirado)
@@ -325,6 +335,9 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             // 2. acompanhar até o final
             var teto = tipo == TipoTef.Pix ? TempoMaxPixMs : TempoMaxEmPagamentoMs;
             var fim = await AcompanharAsync(ident, chargeId, andamento, ct, teto, instrucao).ConfigureAwait(false);
+            // Separa as duas esperas: `criar` é o PayGo abrir a janela, `pinpad` é o cliente
+            // passando o cartão. Sem separar, tudo vira "o TEF está lento" e não dá para agir.
+            Auditar?.Invoke($"controlpay: tempo criar={criarMs}ms pinpad={relogio.ElapsedMilliseconds - criarMs}ms total={relogio.ElapsedMilliseconds}ms intencao={ident}");
             if (fim.Desistencia == "tempo")
             {
                 // Passou do teto sem desfecho. A cobrança pode estar viva no pinpad: órfã +

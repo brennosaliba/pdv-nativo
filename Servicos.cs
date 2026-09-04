@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 using Pdv.Telas;
@@ -257,6 +257,10 @@ public static class Servicos
                             Caixa.Auditar(c4, null, "tef_controlpay", null, null, detalhe);
                         }
                         catch { /* auditoria não derruba cobrança */ }
+                        // Cópia legível dos tempos num arquivo só, para o dono conseguir mandar sem
+                        // depender de abrir banco. A auditoria continua sendo a fonte de verdade.
+                        if (detalhe.StartsWith("controlpay: tempo", StringComparison.Ordinal))
+                            AnotarTempoTef(detalhe);
                     },
                 };
                 return _tef;
@@ -683,6 +687,25 @@ public static class Servicos
     /// CNF. False = o cliente desfaz a transação (NCN). Upsert por `id = charge_id`, a mesma
     /// chave que a tela de pagamento usa — as duas escritas convergem na mesma linha.
     /// </summary>
+    /// <summary>
+    /// Uma linha por cobrança em ProgramData\PdvNativo\tef-tempos.txt, para responder "por que o
+    /// PayGo demora a aparecer" com número em vez de impressão. `criar` é a espera até a janela do
+    /// PayGo abrir; `pinpad` é o cliente no cartão. Nunca derruba a cobrança e não guarda segredo:
+    /// só tipo, valor, tempos e o id da intenção.
+    /// </summary>
+    private static void AnotarTempoTef(string detalhe)
+    {
+        try
+        {
+            var caminho = System.IO.Path.Combine(Banco.Pasta, "tef-tempos.txt");
+            // O arquivo é para diagnóstico, não para histórico: passando de 1 MB, recomeça.
+            if (System.IO.File.Exists(caminho) && new System.IO.FileInfo(caminho).Length > 1_000_000) System.IO.File.Delete(caminho);
+            System.IO.File.AppendAllText(caminho, DateTime.Now.ToString("dd/MM HH:mm:ss") + "  " +
+                                        detalhe.Replace("controlpay: tempo ", "") + Environment.NewLine);
+        }
+        catch { /* diagnóstico nunca atrapalha a venda */ }
+    }
+
     private static bool GuardarPayGo(TransacaoPayGo t) => GuardarTef(t, "paygo");
 
     /// <summary>Mesma linha para PayGo e ControlPay — só o `provedor` muda (e o charge_id já diz quem é: paygo-/cpay-).</summary>
