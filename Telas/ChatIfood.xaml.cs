@@ -281,7 +281,10 @@ public partial class ChatIfood : UserControl
                 var dir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PdvNativo");
                 Directory.CreateDirectory(dir);
-                File.WriteAllText(Path.Combine(dir, "chat-diagnostico.txt"), texto);
+                // cinto E suspensório: quem GRAVA passa a varredura de novo (é
+                // idempotente). Assim, nem um texto montado por outro caminho no
+                // futuro chega ao disco com segredo em claro.
+                File.WriteAllText(Path.Combine(dir, "chat-diagnostico.txt"), ChatCaptura.MascararTexto(texto));
             }
             catch { /* diagnóstico é conveniência, nunca derruba o caixa */ }
         });

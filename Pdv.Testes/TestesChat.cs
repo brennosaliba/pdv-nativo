@@ -158,7 +158,129 @@ public static class TestesChat
             checar(diag.Contains("wss://chat.ifood.com.br/socket"), "acc: a URL do WS (mascarada) está no diagnóstico");
             checar(acc.Mensagens().Count == 1, "acc: 1 quadro vira mensagem normalizada (o ack não)");
         }
+
+        // ── INCIDENTE REAL: JWT em claro na query do WebSocket do firefly ────
+        // O mascaramento era LISTA NEGRA (nome conhecido de parâmetro): pegou
+        // "token=" do userpilot e deixou passar x-firefly-access-key e
+        // x-amz-customauthorizer-signature. Agora a regra é LISTA BRANCA: some
+        // por nome suspeito E por formato de segredo, venha com que nome vier.
+        {
+            var mf = ChatCaptura.MascararUrl(UrlFirefly);
+            checar(!mf.Contains(CabecaJwt), "firefly: o JWT da query NÃO sobra na URL mascarada");
+            checar(mf.Contains("x-firefly-access-key=XXXX"),
+                "firefly: x-firefly-access-key mantém o NOME e perde o valor");
+            checar(!mf.Contains("FT7aThrZ"), "firefly: a assinatura AWS da query some");
+            checar(mf.Contains("x-amz-customauthorizer-signature=XXXX"),
+                "firefly: x-amz-customauthorizer-signature mantém o NOME e perde o valor");
+            checar(mf.Contains("wss://firefly-api.ifood.com.br/"),
+                "firefly: host e caminho continuam legíveis (é o que vale no diagnóstico)");
+
+            // valor com cara de segredo some mesmo sob nome nunca previsto
+            checar(ChatCaptura.MascararUrl("wss://x.ifood.com.br/ws?carimbo=" + AssinaturaAws)
+                    .Contains("carimbo=XXXX"),
+                "valor: assinatura longa some sob nome desconhecido (carimbo)");
+
+            // a URL inteira dentro de um campo de quadro (foi por aqui que passou)
+            var frameComUrl = $$"""{"tipo":"handshake","endpoint":"{{UrlFirefly}}"}""";
+            var mj = ChatCaptura.MascararJson(frameComUrl);
+            checar(!mj.Contains(CabecaJwt), "frame: URL com JWT dentro de um campo é mascarada");
+            checar(!mj.Contains("FT7aThrZ"), "frame: assinatura dentro da URL de um campo some");
+
+            // JWT solto (com prefixo Bearer) num campo que ninguém previu
+            var frameSolto = $$"""{"tipo":"novo","campoQueNinguemPreviu":"Bearer {{JwtFirefly}}"}""";
+            checar(!ChatCaptura.MascararJson(frameSolto).Contains(CabecaJwt),
+                "frame: JWT solto no meio do corpo é mascarado");
+
+            // legibilidade: o que NÃO é segredo tem que continuar visível
+            var comCaminho = ChatCaptura.MascararUrl(
+                "wss://firefly-api.ifood.com.br/chat/v1.0/socket?ai=2D7B4CDB&x-firefly-access-key=" + JwtFirefly);
+            checar(comCaminho.Contains("wss://firefly-api.ifood.com.br/chat/v1.0/socket"),
+                "URL: o caminho continua legível");
+            checar(comCaminho.Contains("ai=2D7B4CDB"), "URL: parâmetro público continua legível");
+
+            var ms = ChatCaptura.MascararUrl(UrlSendbird);
+            checar(ms.Contains("ai=2D7B4CDB-9012-4A3B-8C5D-6E7F8A9B0C1D"),
+                "sendbird: o app_id (ai) continua legível");
+            checar(ms.Contains("pv=3.1.6") && ms.Contains("sv=4.9.11"),
+                "sendbird: a versão do SDK continua legível");
+            checar(ms.Contains("user_id=ifood-9911"), "sendbird: o user_id continua legível");
+            checar(ms.Contains("access_token=XXXX") && !ms.Contains("eyJhbGciOiJIUzI1NiJ9"),
+                "sendbird: o access_token vira XXXX");
+        }
+
+        // ── rede de segurança: o texto INTEIRO do diagnóstico é varrido ──────
+        {
+            var acc = new ChatCaptura.Acumulador();
+            acc.RegistrarWebSocket(UrlFirefly);
+            acc.RegistrarFrame(
+                $$"""{"tipo":"novo","campoQueNinguemPreviu":"{{JwtFirefly}}","carimbo":"{{AssinaturaAws}}"}""",
+                enviado: false);
+            var diag = acc.MontarDiagnostico();
+            checar(!diag.Contains(CabecaJwt), "rede: token em campo NOVO não aparece no diagnóstico");
+            checar(!diag.Contains("FT7aThrZ"), "rede: assinatura em campo NOVO não aparece no diagnóstico");
+            checar(diag.Contains("firefly-api.ifood.com.br"), "rede: o host continua no diagnóstico");
+            checar(diag.Contains("x-firefly-access-key"), "rede: o NOME do parâmetro continua no diagnóstico");
+            checar(diag.Contains("campoQueNinguemPreviu"), "rede: o NOME do campo novo continua legível");
+
+            // seção que ninguém escreveu ainda: a varredura do texto final é a
+            // última linha de defesa, e ela não depende de conhecer o campo
+            var inventado = "-- secao que nao existe hoje --\n"
+                + "  campo_novo: " + JwtFirefly + "\n"
+                + "  carimbo: " + AssinaturaAws + "\n"
+                + "  endpoint: " + UrlFirefly;
+            var limpo = ChatCaptura.MascararTexto(inventado);
+            checar(!limpo.Contains(CabecaJwt), "rede: JWT em texto solto é varrido");
+            checar(!limpo.Contains("FT7aThrZ"), "rede: assinatura longa em texto solto é varrida");
+            checar(limpo.Contains("campo_novo:") && limpo.Contains("carimbo:"),
+                "rede: os NOMES dos campos sobrevivem à varredura");
+            checar(limpo.Contains("wss://firefly-api.ifood.com.br/")
+                && limpo.Contains("x-firefly-access-key=XXXX"),
+                "rede: a URL sai por parâmetro (host e nome ficam, valor some)");
+            checar(ChatCaptura.MascararTexto(limpo) == limpo, "rede: varrer duas vezes dá o mesmo texto");
+
+            // o que é público continua legível depois da varredura do texto inteiro
+            checar(ChatCaptura.MascararTexto("  " + UrlSendbird)
+                    .Contains("ai=2D7B4CDB-9012-4A3B-8C5D-6E7F8A9B0C1D"),
+                "rede: a varredura não come o app_id do Sendbird");
+            checar(ChatCaptura.MascararTexto("  " + UrlSendbird).Contains("sv=4.9.11"),
+                "rede: a varredura não come a versão do SDK");
+
+            // a regra em si, exercitada de frente
+            checar(ChatCaptura.NomeSensivel("x-firefly-access-key")
+                && ChatCaptura.NomeSensivel("x-amz-customauthorizer-signature")
+                && ChatCaptura.NomeSensivel("X-Session-Id"),
+                "regra: nome suspeito é por PEDAÇO do nome, sem caixa");
+            checar(!ChatCaptura.NomeSensivel("ai") && !ChatCaptura.NomeSensivel("user_id")
+                && !ChatCaptura.NomeSensivel("sv"),
+                "regra: app_id, user_id e versão do SDK não são nomes suspeitos");
+            checar(ChatCaptura.ValorSensivel(AssinaturaAws) && ChatCaptura.ValorSensivel(JwtFirefly),
+                "regra: valor com cara de segredo cai mesmo sem nome");
+            checar(!ChatCaptura.ValorSensivel("2D7B4CDB-9012-4A3B-8C5D-6E7F8A9B0C1D")
+                && !ChatCaptura.ValorSensivel("3.1.6") && !ChatCaptura.ValorSensivel("ifood-9911"),
+                "regra: id público curto, versão e user_id não são tratados como segredo");
+        }
     }
+
+    // ── material do incidente (encurtado, mesmo formato do arquivo real) ─────
+    private const string JwtFirefly =
+        "eyJhbGciOiJSUzI1NiIsImtpZCI6IjRkOTBhYiJ9"
+        + ".eyJzdWIiOiJtZXJjaGFudC05OTExIiwiZXhwIjoxNzg4ODg4ODg4fQ"
+        + ".RlQ3YVRoclo5a1FtWG8yYlYxc1BxUjh1WXRHaEprTG1OcFFyU3RVdld4WXo";
+
+    /// <summary>Cabeça do JWT: se ISTO aparecer no diagnóstico, vazou.</summary>
+    private const string CabecaJwt = "eyJhbGciOiJSUzI1NiIsImtpZCI6";
+
+    private const string AssinaturaAws =
+        "FT7aThrZ9kQmXo2bV1sPqR8uYtGhJkLmNpQrStUvWxYz0123456789%2FabcdEFGH%2BijkLMNO%3D";
+
+    private const string UrlFirefly =
+        "wss://firefly-api.ifood.com.br/?x-firefly-access-key=" + JwtFirefly
+        + "&x-amz-customauthorizer-signature=" + AssinaturaAws;
+
+    private const string UrlSendbird =
+        "wss://ws-2D7B4CDB.sendbird.com/?p=JS&pv=3.1.6&sv=4.9.11"
+        + "&ai=2D7B4CDB-9012-4A3B-8C5D-6E7F8A9B0C1D&user_id=ifood-9911"
+        + "&access_token=eyJhbGciOiJIUzI1NiJ9.eyJ1IjoidTEiLCJ2IjoxfQ.YXNzaW5hdHVyYS1kZS1tZW50aXJh&active=1";
 
     /// <summary>Monta um JWT de teste (base64url) a partir de header e payload JSON.</summary>
     private static string MontarJwt(string headerJson, string payloadJson)

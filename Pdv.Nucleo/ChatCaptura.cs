@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Pdv.Nucleo;
 
@@ -20,8 +21,10 @@ public sealed record FormatoToken(bool EhJwt, int Segmentos, string? UserIdMasca
 /// lista nativa.
 ///
 /// ⚠️ SEGREDO: o token capturado é a sessão do dono. Tudo aqui MASCARA antes de
-/// escrever qualquer coisa em disco — nunca o token em claro, nunca enviado para
-/// lugar nenhum. Fica na máquina.
+/// escrever qualquer coisa em disco: nunca o token em claro, nunca enviado para
+/// lugar nenhum. Fica na máquina. O mascaramento é LISTA BRANCA (some por nome
+/// suspeito E por formato de segredo) e o texto final ainda passa por uma
+/// varredura de rede de segurança, para que caminho novo não fure a promessa.
 ///
 /// Como o formato real do iFood só se vê com a página logada, o normalizador é
 /// LENIENTE de propósito: tenta vários nomes de campo conhecidos e devolve null
@@ -36,9 +39,40 @@ public static class ChatCaptura
     private static readonly string[] CamposQuando = { "timestamp", "ts", "createdAt", "created_at", "date", "sentAt", "time" };
     private static readonly string[] CamposConversa = { "conversationId", "chatId", "threadId", "conversation", "chat", "roomId", "groupId" };
 
-    // chaves cujo VALOR é segredo e precisa sumir do diagnóstico
-    private static readonly string[] ChavesSensiveis =
-        { "token", "access_token", "accesstoken", "authorization", "auth", "jwt", "secret", "refresh_token", "id_token", "apikey", "api_key" };
+    // ── a regra do mascaramento (LISTA BRANCA, não lista negra) ─────────────
+    //
+    // ⚠️ INCIDENTE REAL: a regra antiga era por NOME EXATO conhecido de parâmetro.
+    // Pegou "token=" (userpilot) e deixou passar, em claro, dentro da query do
+    // WebSocket do firefly, um JWT inteiro em x-firefly-access-key e a assinatura
+    // AWS em x-amz-customauthorizer-signature. Nome desconhecido = segredo vazado.
+    //
+    // Agora sai TUDO que (a) tem NOME suspeito (por PEDAÇO do nome, não exato) ou
+    // (b) tem CARA de segredo (JWT ou string opaca longa), venha com o nome que
+    // vier. Fica só o que tem valor de diagnóstico e não é segredo: host, caminho,
+    // NOMES de parâmetro/campo e identificadores curtos e públicos.
+
+    // pedaços de NOME (de parâmetro de query ou de campo JSON) que denunciam segredo
+    private static readonly string[] PedacosSensiveis =
+    {
+        "token", "key", "secret", "signature", "sig", "auth", "credential",
+        "password", "senha", "session", "access",
+    };
+
+    // JWT: três segmentos base64url, o primeiro começando em eyJ (o "{" do header)
+    private const string PadraoJwt = @"eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*";
+
+    // uma URL inteira dentro de um texto qualquer (mascarada por parâmetro, para
+    // preservar host, caminho e nomes)
+    private const string PadraoUrl = @"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s""'<>\\)\]}]+";
+
+    // string opaca longa: 40+ caracteres de base64/hex/percent-encoded sem espaço.
+    // Sem "=" e sem "." de propósito: assim a varredura não engole o NOME antes do
+    // "=" nem o host/caminho de uma URL.
+    private const string PadraoOpaco = @"[A-Za-z0-9%+/_-]{40,}";
+
+    private static readonly Regex RxJwt = new(PadraoJwt, RegexOptions.Compiled);
+    private static readonly Regex RxUrlOuOpaco = new(
+        "(?<url>" + PadraoUrl + ")|(?<opaco>" + PadraoOpaco + ")", RegexOptions.Compiled);
 
     // ── normalização (o coração testável) ───────────────────────────────────
 
@@ -195,8 +229,57 @@ public static class ChatCaptura
     }
 
     /// <summary>
-    /// Reescreve um JSON MASCARANDO qualquer valor sensível: chaves de token e
-    /// qualquer string com cara de JWT viram "XXXX". Preserva as CHAVES e a
+    /// O NOME (de parâmetro de query ou de campo) denuncia segredo? A conta é por
+    /// PEDAÇO do nome: "x-firefly-access-key" contém "access" e "key", e
+    /// "x-amz-customauthorizer-signature" contém "auth" e "signature".
+    /// </summary>
+    public static bool NomeSensivel(string? nome)
+    {
+        if (string.IsNullOrEmpty(nome)) return false;
+        var n = nome.ToLowerInvariant();
+        foreach (var p in PedacosSensiveis)
+            if (n.Contains(p, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Uma string opaca longa (40+ de base64/hex/percent-encoded, sem espaço).
+    /// Serve para valores INTEIROS (parâmetro de query, segmento de caminho), onde
+    /// o começo e o fim são conhecidos.
+    /// </summary>
+    public static bool ParaceSegredoOpaco(string? s)
+    {
+        if (s is null || s.Length < 40) return false;
+        foreach (var c in s)
+            if (!(char.IsAsciiLetterOrDigit(c) || c is '%' or '+' or '/' or '=' or '_' or '-' or '.' or '~'))
+                return false;
+        return true;
+    }
+
+    /// <summary>Um VALOR tem cara de segredo, independentemente do nome que carrega?</summary>
+    public static bool ValorSensivel(string? valor)
+        => !string.IsNullOrWhiteSpace(valor)
+            && (ParaceJwt(valor) || RxJwt.IsMatch(valor) || ParaceSegredoOpaco(valor));
+
+    /// <summary>
+    /// REDE DE SEGURANÇA. Varre um TEXTO inteiro e apaga segredo venha de onde
+    /// vier (URL, corpo de quadro, cabeçalho, campo nunca visto): primeiro todo
+    /// JWT, depois toda URL (mascarada parâmetro a parâmetro, preservando host,
+    /// caminho e nomes) e toda string opaca longa. Idempotente: passar duas vezes
+    /// dá o mesmo texto.
+    /// </summary>
+    public static string MascararTexto(string? texto)
+    {
+        if (string.IsNullOrEmpty(texto)) return texto ?? "";
+        var semJwt = RxJwt.Replace(texto, "XXXX");
+        return RxUrlOuOpaco.Replace(semJwt, m => m.Groups["url"].Success ? MascararUrl(m.Value) : "XXXX");
+    }
+
+    /// <summary>
+    /// Reescreve um JSON MASCARANDO qualquer valor sensível: campo de nome
+    /// suspeito, string com cara de JWT ou segredo opaco, e ainda o segredo
+    /// escondido dentro de um valor composto (uma URL, um "Bearer &lt;jwt&gt;"),
+    /// tudo vira "XXXX". Preserva as CHAVES e a
     /// estrutura — que é o que o dono precisa me mandar. JSON inválido devolve
     /// um aviso, nunca o texto cru (poderia carregar segredo).
     /// </summary>
@@ -235,9 +318,13 @@ public static class ChatCaptura
                 break;
             case JsonValueKind.String:
                 var s = e.GetString();
-                var sensivel = chavePai is not null
-                    && ChavesSensiveis.Contains(chavePai.ToLowerInvariant());
-                w.WriteStringValue(sensivel || ParaceJwt(s) ? "XXXX" : s);
+                // nome suspeito ou valor que É um segredo: some inteiro.
+                // Valor COMPOSTO (uma URL, um "Bearer <jwt>"): passa pela varredura,
+                // que apaga só o segredo e preserva o resto (host, caminho, nomes).
+                w.WriteStringValue(
+                    NomeSensivel(chavePai) || ParaceJwt(s) || ParaceSegredoOpaco(s)
+                        ? "XXXX"
+                        : MascararTexto(s));
                 break;
             case JsonValueKind.Number:
                 w.WriteRawValue(e.GetRawText());
@@ -249,26 +336,39 @@ public static class ChatCaptura
     }
 
     /// <summary>
-    /// Mascara a URL: mantém host, caminho e os NOMES dos parâmetros; troca o
-    /// valor de parâmetros sensíveis (token, apikey…) por XXXX. Serve para a URL
-    /// do WebSocket, que às vezes leva o token na query string.
+    /// Mascara a URL: mantém host, caminho e os NOMES dos parâmetros (é isso que
+    /// tem valor de diagnóstico) e troca por XXXX o VALOR de todo parâmetro de
+    /// nome suspeito E de todo valor com cara de segredo, mesmo sob nome nunca
+    /// visto. Serve para a URL do WebSocket, que leva o token na query string.
     /// </summary>
     public static string MascararUrl(string? url)
     {
         if (string.IsNullOrWhiteSpace(url)) return "(vazio)";
         var i = url.IndexOf('?');
-        if (i < 0) return url;
-        var baseUrl = url[..i];
-        var query = url[(i + 1)..];
-        var partes = query.Split('&').Select(par =>
+        var saida = new StringBuilder(MascararCaminho(i < 0 ? url : url[..i]));
+        if (i < 0) return saida.ToString();
+
+        var partes = url[(i + 1)..].Split('&').Select(par =>
         {
             var eq = par.IndexOf('=');
-            if (eq < 0) return par;
+            if (eq < 0) return ValorSensivel(par) ? "XXXX" : par;
             var nome = par[..eq];
-            var sensivel = ChavesSensiveis.Contains(nome.ToLowerInvariant()) || ParaceJwt(par[(eq + 1)..]);
-            return sensivel ? nome + "=XXXX" : par;
+            return NomeSensivel(nome) || ValorSensivel(par[(eq + 1)..]) ? nome + "=XXXX" : par;
         });
-        return baseUrl + "?" + string.Join("&", partes);
+        return saida.Append('?').Append(string.Join("&", partes)).ToString();
+    }
+
+    /// <summary>
+    /// Segredo às vezes viaja no CAMINHO, não na query. Preserva esquema, host e a
+    /// estrutura do caminho; troca por XXXX só o SEGMENTO que é segredo.
+    /// </summary>
+    private static string MascararCaminho(string semQuery)
+    {
+        var esquema = semQuery.IndexOf("://", StringComparison.Ordinal);
+        var barra = semQuery.IndexOf('/', esquema < 0 ? 0 : esquema + 3);
+        if (barra < 0) return semQuery;
+        var segmentos = semQuery[barra..].Split('/').Select(s => ValorSensivel(s) ? "XXXX" : s);
+        return semQuery[..barra] + string.Join("/", segmentos);
     }
 
     /// <summary>Descreve o SHAPE de um quadro: nomes de campo de topo e seus tipos.</summary>
@@ -362,7 +462,11 @@ public static class ChatCaptura
             var sb = new StringBuilder();
             sb.AppendLine("== DIAGNOSTICO DO CHAT DO iFOOD (PDV nativo) ==");
             sb.AppendLine("Gerado em: " + DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"));
-            sb.AppendLine("TODOS os tokens e segredos estao MASCARADOS (XXXX). Pode me mandar este arquivo.");
+            sb.AppendLine("Tokens, chaves e assinaturas sao MASCARADOS (XXXX) por NOME de parametro/campo");
+            sb.AppendLine("(token, key, secret, signature, auth, session, access...) E por FORMATO (JWT e");
+            sb.AppendLine("string longa opaca), mesmo em campo nunca visto. O texto inteiro passa por essa");
+            sb.AppendLine("varredura antes de ser gravado. Host, caminho, nomes de parametro e ids curtos");
+            sb.AppendLine("e publicos (app_id, versao do SDK) ficam legiveis de proposito.");
             sb.AppendLine();
 
             sb.AppendLine("-- WebSocket --");
@@ -409,7 +513,10 @@ public static class ChatCaptura
             var conversas = AgruparConversas(msgs);
             sb.AppendLine($"-- Resumo normalizado: {msgs.Count} mensagem(ns) em {conversas.Count} conversa(s) --");
 
-            return sb.ToString();
+            // REDE DE SEGURANÇA: o texto inteiro passa pela varredura antes de sair
+            // daqui. Caminho novo (seção nova, campo novo, cabeçalho novo) não fura
+            // a promessa do cabeçalho, porque nenhum deles escapa desta linha.
+            return MascararTexto(sb.ToString());
         }
     }
 }
