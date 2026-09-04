@@ -153,6 +153,12 @@ public static class Banco
             "ALTER TABLE kds_ticket ADD COLUMN agendado INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE kds_ticket ADD COLUMN agendado_para TEXT",
             "ALTER TABLE kds_ticket ADD COLUMN agendado_ate TEXT",
+            // 04/09/2026: a hora em que ESTE ticket foi inserido nesta maquina.
+            // criado_em NAO serve para isso: ele e a chegada do pedido no iFood,
+            // e numa reingestao pode ser de ontem. A reconciliacao usa visto_em
+            // para o periodo de graca de 120 s — o feed capturado as 10:00:00 nao
+            // pode derrubar o card que nasceu as 10:00:01 pelo sino do Realtime.
+            "ALTER TABLE kds_ticket ADD COLUMN visto_em TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

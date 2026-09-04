@@ -15,7 +15,7 @@ namespace Pdv.Nucleo;
 /// A credencial é do TERMINAL, não da pessoa — o operador não deve ter conta no
 /// sistema de gestão. Ela fica cifrada na máquina e o app renova a sessão sozinho.
 /// </summary>
-public sealed class Nuvem
+public sealed class Nuvem : IFeedKds
 {
     public const string ProjectRef = "ctwjedradxhlmqmdmbif";
     public const string UrlPadrao = "https://" + ProjectRef + ".supabase.co";
@@ -381,22 +381,44 @@ public sealed class Nuvem
     /// o KDS continua com o que ja tem no SQLite, que e o contrato do PDV inteiro.
     /// </summary>
     public async Task<List<PedidoDelivery>> BaixarPedidosDeliveryAsync(string loja, int janelaMin = 45)
+        => (await FeedKdsAsync(loja, janelaMin).ConfigureAwait(false)).Pedidos;
+
+    /// <summary>
+    /// O feed do quadro COM confiabilidade explicita.
+    ///
+    /// Por que a confiabilidade passou a viajar junto (04/09/2026): a RPC virou
+    /// ESPELHO do conjunto ABERTO, e o exe passou a poder concluir coisas da
+    /// AUSENCIA de um pedido no feed. Enquanto ninguem inferia fechamento da
+    /// ausencia, devolver lista vazia para sem-sessao, HTTP nao 2xx, excecao e
+    /// JSON ilegivel era inofensivo. Agora e a falha mais cara possivel: uma
+    /// queda de wi-fi de 30 segundos limparia o quadro com a cozinha cheia.
+    ///
+    /// Confiavel = true SOMENTE com sessao valida, HTTP 2xx e corpo que fez
+    /// parse como array JSON. Qualquer outra coisa e "nao sei", e "nao sei"
+    /// preserva o quadro exatamente como esta.
+    ///
+    /// Lista vazia por SUCESSO (loja sem pedido aberto) e coisa diferente de
+    /// lista vazia por FALHA, e agora o tipo carrega essa diferenca.
+    /// </summary>
+    public async Task<(bool Confiavel, List<PedidoDelivery> Pedidos)> FeedKdsAsync(
+        string loja, int janelaMin = 45)
     {
         try
         {
             // RPC com escopo, nao a tabela: ifood_orders tem RLS de gestor, e o
-            // terminal pareado nao e gestor. A funcao devolve so a janela recente
+            // terminal pareado nao e gestor. A funcao devolve so o conjunto aberto
             // da PROPRIA loja - e exige sessao valida (o anon le zero, de proposito).
-            if (!await SessaoOkAsync()) return new();
+            if (!await SessaoOkAsync().ConfigureAwait(false)) return (false, new());
             using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_pedidos");
             req.Content = new StringContent(
                 JsonSerializer.Serialize(new { _loja = loja, _janela_min = janelaMin }),
                 Encoding.UTF8, "application/json");
-            using var resp = await _http.SendAsync(req);
-            if (!resp.IsSuccessStatusCode) return new();
-            return LerFeedKds(await resp.Content.ReadAsStringAsync());
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return (false, new());
+            var corpo = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            return TentarLerFeedKds(corpo, out var pedidos) ? (true, pedidos) : (false, new());
         }
-        catch { return new(); }
+        catch { return (false, new()); }
     }
 
     /// <summary>
@@ -407,11 +429,23 @@ public sealed class Nuvem
     /// </summary>
     public static List<PedidoDelivery> LerFeedKds(string json)
     {
+        TentarLerFeedKds(json, out var r);
+        return r;
+    }
+
+    /// <summary>
+    /// Igual a <see cref="LerFeedKds"/>, mas DIZ se o corpo era mesmo um array
+    /// JSON. false = "nao sei o que a nuvem respondeu", e quem chama nao pode
+    /// concluir NADA da lista vazia que vem junto.
+    /// </summary>
+    public static bool TentarLerFeedKds(string json, out List<PedidoDelivery> pedidos)
+    {
         var r = new List<PedidoDelivery>();
+        pedidos = r;
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return r;
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return false;
             foreach (var e in doc.RootElement.EnumerateArray())
             {
                 if (e.ValueKind != JsonValueKind.Object) continue;
@@ -445,8 +479,8 @@ public sealed class Nuvem
                         ? aa.GetString() : null));
             }
         }
-        catch { /* JSON quebrado: o que deu; a fila local continua valendo */ }
-        return r;
+        catch { /* JSON quebrado: o que deu; a fila local continua valendo */ return false; }
+        return true;
     }
 
     /// <summary>
@@ -492,20 +526,35 @@ public sealed class Nuvem
     /// vazia: os tickets ficam como estao ate o proximo ciclo.</summary>
     public async Task<List<(string OrderId, string Status, string? PreparoAte)>> StatusPedidosAsync(
         IReadOnlyList<string> orderIds)
+        => (await StatusKdsAsync(orderIds).ConfigureAwait(false)).Itens;
+
+    /// <summary>
+    /// Igual a <see cref="StatusPedidosAsync"/>, mas dizendo se a resposta e
+    /// CONFIAVEL. Sem isto, "a nuvem nao devolveu linha para este pedido"
+    /// (que a reconciliacao le como "a nuvem nao conhece este pedido") seria
+    /// indistinguivel de "a chamada falhou" — e o exe fecharia cards por
+    /// causa de um timeout.
+    ///
+    /// Lote VAZIO conta como confiavel: nao havia o que perguntar, e nao ha
+    /// duvida nenhuma a resolver.
+    /// </summary>
+    public async Task<(bool Confiavel, List<(string OrderId, string Status, string? PreparoAte)> Itens)>
+        StatusKdsAsync(IReadOnlyList<string> orderIds)
     {
         try
         {
-            if (orderIds.Count == 0 || !await SessaoOkAsync().ConfigureAwait(false)) return new();
+            if (orderIds.Count == 0) return (true, new());
+            if (!await SessaoOkAsync().ConfigureAwait(false)) return (false, new());
             using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_status");
             req.Content = new StringContent(
                 JsonSerializer.Serialize(new { _order_ids = orderIds }),
                 Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return new();
+            if (!resp.IsSuccessStatusCode) return (false, new());
 
             var r = new List<(string, string, string?)>();
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return new();
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return (false, new());
             foreach (var e in doc.RootElement.EnumerateArray())
             {
                 var id = e.TryGetProperty("order_id", out var i) ? i.GetString() : null;
@@ -515,9 +564,9 @@ public sealed class Nuvem
                     e.TryGetProperty("preparo_ate", out var pa) && pa.ValueKind == JsonValueKind.String
                         ? pa.GetString() : null));
             }
-            return r;
+            return (true, r);
         }
-        catch { return new(); }
+        catch { return (false, new()); }
     }
 
     private static Dapper.DynamicParameters BuildParams(List<string> ids, string agora)

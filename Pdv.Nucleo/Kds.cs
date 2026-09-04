@@ -26,7 +26,12 @@ public sealed record Ticket(
     /// <summary>Início da faixa marcada, em hora LOCAL da loja.</summary>
     DateTime? AgendadoPara = null,
     /// <summary>Fim da faixa marcada (null = um instante só).</summary>
-    DateTime? AgendadoAte = null)
+    DateTime? AgendadoAte = null,
+    /// <summary>Quando ESTE ticket foi inserido NESTA máquina (hora local).
+    /// Não confundir com <see cref="CriadoEm"/>, que é a chegada do pedido no
+    /// iFood e numa reingestão pode ser de ontem. É o relógio do período de
+    /// graça da reconciliação. Ticket gravado antes de 04/09 tem null.</summary>
+    DateTime? VistoEm = null)
 {
     /// <summary>Há quanto tempo esse pedido está esperando. É o que decide a cor do card.</summary>
     public TimeSpan Espera => (ProntoEm ?? DateTime.Now) - CriadoEm;
@@ -65,6 +70,59 @@ public sealed record PedidoDelivery(string OrderId, string Numero, string? Clien
                                     string? PreparoAte = null, bool Retirada = false,
                                     bool Agendado = false, string? AgendadoPara = null,
                                     string? AgendadoAte = null);
+
+/// <summary>O que a nuvem manda fazer com um card do quadro.</summary>
+public enum DestinoDoCard
+{
+    /// <summary>O quadro fica como está. É o único desfecho seguro quando não se sabe.</summary>
+    Manter,
+    /// <summary>A produção terminou (aqui ou no Gestor): vai pra coluna de coleta.</summary>
+    ParaColeta,
+    /// <summary>Estava pronto e foi embora: sai do quadro com o tempo de preparo preservado.</summary>
+    Entregue,
+    /// <summary>Nunca foi produzido aqui e não vai mais ser: sai do quadro.</summary>
+    Cancelar,
+}
+
+/// <summary>
+/// O que a nuvem disse NESTE ciclo, com a confiabilidade junto.
+///
+/// Por que a confiabilidade é um campo e não um detalhe: com o feed virando
+/// ESPELHO do conjunto aberto, o exe passa a poder concluir coisas da AUSÊNCIA
+/// de um pedido. Lista vazia por sucesso (loja sem pedido aberto) e lista vazia
+/// por falha (wi-fi caiu) levariam a decisões opostas, e antes disto as duas
+/// chegavam aqui exatamente iguais.
+/// </summary>
+/// <param name="FeedConfiavel">Sessão válida, HTTP 2xx e corpo que fez parse como array JSON.</param>
+/// <param name="Abertos">O conjunto aberto que o servidor afirma. Só significa alguma coisa com FeedConfiavel.</param>
+/// <param name="StatusConfiavel">A pergunta por pedido (pdv_kds_status) foi respondida de verdade.</param>
+/// <param name="StatusPorPedido">order_id -> estado (aberto | pronto | cancelado | despachado | concluido | ...).</param>
+/// <param name="LotePerguntadoCompleto">
+/// false quando havia mais de 100 órfãos e o excedente NÃO foi perguntado. Um
+/// pedido ausente da resposta, nesse caso, pode simplesmente não ter sido
+/// perguntado — e ausência sem pergunta não fecha nada.
+/// </param>
+public sealed record FotoDaNuvem(
+    bool FeedConfiavel,
+    IReadOnlyList<PedidoDelivery> Abertos,
+    bool StatusConfiavel,
+    IReadOnlyDictionary<string, string> StatusPorPedido,
+    bool LotePerguntadoCompleto);
+
+/// <summary>
+/// A costura entre o quadro e a nuvem. Existe para a suíte alcançar a seleção
+/// de órfãos, o teto de 100, o feed vazio por falha e a ordem
+/// expira/sincroniza/reconcilia — que é justamente onde o defeito morava e
+/// onde nenhum teste chegava, porque <see cref="Nuvem"/> é uma classe selada
+/// sem interface e sem membro virtual.
+/// </summary>
+public interface IFeedKds
+{
+    Task<(bool Confiavel, List<PedidoDelivery> Pedidos)> FeedKdsAsync(string loja, int janelaMin = 45);
+
+    Task<(bool Confiavel, List<(string OrderId, string Status, string? PreparoAte)> Itens)>
+        StatusKdsAsync(IReadOnlyList<string> orderIds);
+}
 
 /// <summary>
 /// A fila de preparo do balcão.
@@ -145,8 +203,8 @@ public static class Kds
         var id = Guid.NewGuid().ToString();
         cx.Execute(
             @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em, preparo_ate, retirada,
-                                      agendado, agendado_para, agendado_ate)
-              VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pa, @ret, @ag, @ap, @aa)
+                                      agendado, agendado_para, agendado_ate, visto_em)
+              VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pa, @ret, @ag, @ap, @aa, @vi)
               ON CONFLICT(origem, ref_id) DO NOTHING",
             new
             {
@@ -154,6 +212,10 @@ public static class Kds
                 j = JsonSerializer.Serialize(itens), s = Recebido,
                 // o relógio do card conta da CHEGADA no iFood quando conhecida
                 t = (chegadaReal ?? DateTime.Now).ToString("o"),
+                // ...mas o relógio da RECONCILIAÇÃO conta da INSERÇÃO aqui: numa
+                // reingestão a chegada pode ser de ontem, e o período de graça
+                // existe para proteger o ticket que ACABOU de nascer nesta máquina.
+                vi = DateTime.Now.ToString("o"),
                 pa = preparoAte?.ToString("o"),
                 ret = retirada ? 1 : 0,
                 // agendado SEM hora não existe para o quadro: vira imediato
@@ -546,6 +608,120 @@ public static class Kds
             } : null;
     }
 
+    // ── A DECISÃO, pura e testável (04/09/2026) ─────────────────────────────
+    // Sem banco, sem rede, com o "agora" injetado. Uma cópia da regra: o feed e
+    // a reconciliação por pedido passam as duas por aqui.
+
+    /// <summary>
+    /// Quanto tempo um ticket recém-inserido NESTA máquina é intocável pela
+    /// reconciliação. Cobre a corrida entre o feed capturado às 10:00:00 e o
+    /// ticket nascido às 10:00:01, e a corrida entre o timer de 10 segundos e o
+    /// sino do Realtime.
+    /// </summary>
+    public static readonly TimeSpan GracaDoTicketNovo = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// O que fazer com um card, dado o que a nuvem diz sobre AQUELE pedido e o
+    /// status que ele tem aqui.
+    ///
+    /// A regra em uma frase: só palavra CONHECIDA de encerramento fecha card.
+    /// 'aberto', 'faturado', 'recebido', 'pago', string vazia e QUALQUER palavra
+    /// que ninguém previu resultam em Manter — e é este último ramo, sozinho,
+    /// que fecha o furo dos 71 cards: o ramo default do sincronizador era CRIAR
+    /// CARD, e 'faturado' é o estado que 100% das linhas têm no ingresso.
+    /// </summary>
+    /// <param name="estadoDaNuvem">O que pdv_kds_pedidos/pdv_kds_status disseram.</param>
+    /// <param name="statusLocal">O status do ticket aqui, ou vazio se ele não existe.</param>
+    public static DestinoDoCard Classificar(string? estadoDaNuvem, string? statusLocal)
+    {
+        var e = (estadoDaNuvem ?? "").Trim();
+        // Já saiu do forno: o produto EXISTE. Cancelamento vindo depois disso é
+        // divergência de gente, não de tela, e não pode apagar a produção.
+        var jaPronto = string.Equals(statusLocal, Pronto, StringComparison.OrdinalIgnoreCase);
+
+        if (e.Equals("cancelado", StringComparison.OrdinalIgnoreCase))
+            return jaPronto ? DestinoDoCard.Manter : DestinoDoCard.Cancelar;
+
+        if (e.Equals("despachado", StringComparison.OrdinalIgnoreCase)
+            || e.Equals("concluido", StringComparison.OrdinalIgnoreCase))
+            // pronto aqui = foi produzido e coletado (o tempo de preparo continua
+            // valendo); a preparar/em preparo = nunca foi produzido AQUI.
+            return jaPronto ? DestinoDoCard.Entregue : DestinoDoCard.Cancelar;
+
+        if (e.Equals("pronto", StringComparison.OrdinalIgnoreCase))
+            return DestinoDoCard.ParaColeta;
+
+        return DestinoDoCard.Manter;
+    }
+
+    /// <summary>
+    /// Dado o quadro local e a foto da nuvem, QUAIS cards mudam e para onde.
+    /// Devolve só as MUDANÇAS: o que não está na lista fica exatamente como está.
+    ///
+    /// As guardas, na ordem em que aparecem no código:
+    ///  G1. feed não confiável = nenhuma mudança. Ponto final.
+    ///  G5. só se mexe em origem 'ifood'. Balcão e encomenda não têm
+    ///      representação na nuvem e não podem cair por ausência num feed que
+    ///      não fala sobre eles. SUTILEZA: o pedido do CARDÁPIO DIGITAL chega
+    ///      pelo mesmo feed e é gravado com origem 'ifood' e ref_id = numero
+    ///      (CD-xxxx), então ele ENTRA na reconciliação — e isso está certo,
+    ///      porque pdv_kds_status também cobre cardapio_digital_pedidos. Se um
+    ///      dia o cardápio ganhar origem própria, pdv_kds_status tem que ganhar
+    ///      junto.
+    ///  G4. ticket inserido aqui há menos de <see cref="GracaDoTicketNovo"/> é
+    ///      sempre mantido, mesmo ausente e mesmo sem resposta.
+    ///  G2. ausência não fecha sozinha: ela PERGUNTA. Terminal explícito fecha;
+    ///      'aberto'/'pronto' mantêm; ausência da resposta só fecha se a
+    ///      pergunta foi feita e respondida com sucesso.
+    ///  G3. 'preparando' é comida no forno: só sai com terminal EXPLÍCITO sobre
+    ///      aquele pedido. Silêncio da RPC e id desconhecido mantêm o card.
+    /// </summary>
+    public static IReadOnlyList<(string RefId, DestinoDoCard Destino)> Reconciliar(
+        IReadOnlyList<Ticket> abertosLocais, FotoDaNuvem foto, DateTime agora)
+    {
+        var mudancas = new List<(string, DestinoDoCard)>();
+
+        // G1. Erro, timeout, 401, HTTP não 2xx, JSON ilegível e lista vazia por
+        // falha são todos "não sei", e "não sei" preserva o quadro.
+        if (!foto.FeedConfiavel) return mudancas;
+
+        var noFeed = new HashSet<string>(foto.Abertos.Select(p => p.OrderId),
+                                         StringComparer.OrdinalIgnoreCase);
+
+        foreach (var t in abertosLocais)
+        {
+            // G5
+            if (!string.Equals(t.Origem, "ifood", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // O feed FALA deste pedido: quem cuida dele é a sincronização.
+            if (noFeed.Contains(t.RefId)) continue;
+
+            // G4
+            if (t.VistoEm is { } visto && agora - visto < GracaDoTicketNovo) continue;
+
+            // G2, primeira metade: a nuvem respondeu sobre ESTE pedido.
+            if (foto.StatusPorPedido.TryGetValue(t.RefId, out var estado))
+            {
+                var destino = Classificar(estado, t.Status);
+                if (destino != DestinoDoCard.Manter) mudancas.Add((t.RefId, destino));
+                continue;
+            }
+
+            // G2, segunda metade: ele NÃO veio na resposta. Isso só quer dizer
+            // "a nuvem não conhece este pedido" quando a pergunta foi mesmo
+            // feita e mesmo respondida.
+            if (!foto.StatusConfiavel) continue;
+            if (!foto.LotePerguntadoCompleto) continue;
+
+            // G3
+            if (string.Equals(t.Status, Preparando, StringComparison.OrdinalIgnoreCase)) continue;
+
+            mudancas.Add((t.RefId, DestinoDoCard.Cancelar));
+        }
+
+        return mudancas;
+    }
+
     /// <summary>
     /// Aplica a foto da nuvem na fila local. Idempotente: pedido repetido não
     /// duplica; cancelado na nuvem cancela aqui (menos se já saiu do forno — aí
@@ -553,11 +729,42 @@ public static class Kds
     /// Devolve quantos tickets NOVOS nasceram.
     /// </summary>
     public static int SincronizarDelivery(IEnumerable<PedidoDelivery> pedidos)
+        => SincronizarDelivery(pedidos, null);
+
+    /// <param name="protegidos">
+    /// Pedidos que a nuvem afirmou estarem ABERTOS neste ciclo (os do feed, mais
+    /// os que <c>pdv_kds_status</c> respondeu como abertos). A rede de segurança
+    /// de 4 h/12 h NÃO os toca.
+    ///
+    /// Por que isto existe: a expiração cega gravava 'cancelado' de forma
+    /// IRREVERSÍVEL. No ciclo seguinte o feed trazia o pedido vivo, mas Criar é
+    /// idempotente e não ressuscita, e o UPDATE do re-sync exige
+    /// status IN ('recebido','preparando') — então o pedido sumia do quadro para
+    /// SEMPRE. Com o feed cobrindo o dia operacional, um pedido aberto de 5 horas
+    /// passa a CHEGAR no feed e seria morto pela expiração no mesmo ciclo em que
+    /// nasceu. Nulo ou vazio = comportamento de sempre (é o que os testes de
+    /// expiração exercitam, chamando com o feed vazio).
+    /// </param>
+    public static int SincronizarDelivery(IEnumerable<PedidoDelivery> pedidos,
+                                          IReadOnlySet<string>? protegidos)
     {
+        var lote = pedidos as IList<PedidoDelivery> ?? pedidos.ToList();
+        var vivos = new HashSet<string>(protegidos ?? (IReadOnlySet<string>)new HashSet<string>(),
+                                        StringComparer.OrdinalIgnoreCase);
+        foreach (var p in lote) vivos.Add(p.OrderId);
+
         // Quadro é PRESENTE, não histórico: ticket de delivery parado há mais de
         // 4h (o teto da janela do servidor) não vai mais ser preparado por
         // ninguém — expira sozinho, senão o quadro acumula card morto até
         // ninguém mais confiar no que ele mostra.
+        //
+        // 04/09: virou REDE DE SEGURANÇA, e não mais a regra. Quem manda no
+        // quadro é a nuvem (feed + pdv_kds_status); a expiração só alcança
+        // pedido sobre o qual a nuvem NÃO disse nada neste ciclo. E ela só roda
+        // depois de um feed CONFIÁVEL, porque PuxarDaNuvemAsync nem chega aqui
+        // quando a chamada falhou — internet fora por quatro horas não pode
+        // matar todos os 'recebido' sem que nada tenha chegado da nuvem.
+        var filtroVivos = vivos.Count > 0 ? " AND ref_id NOT IN @vivos" : "";
         using (var cxLimpa = Banco.Abrir())
         {
             // AGENDADO conta da hora MARCADA (fim da faixa), não da chegada: ele
@@ -566,8 +773,9 @@ public static class Kds
                 @"UPDATE kds_ticket SET status = @s
                    WHERE origem = 'ifood' AND status = 'recebido'
                      AND CASE WHEN agendado = 1 THEN coalesce(agendado_ate, agendado_para, criado_em)
-                              ELSE criado_em END < @limite",
-                new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o") });
+                              ELSE criado_em END < @limite" + filtroVivos,
+                new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o"),
+                      vivos = vivos.ToList() });
             // SO 'recebido' nas 4h: expirar quem esta 'preparando' cancelaria um
             // pedido que o cozinheiro ACABOU de assumir (chegou as 3h58 do limite e
             // foi pego) - o card sumiria da tela no meio da producao.
@@ -583,47 +791,53 @@ public static class Kds
                 @"UPDATE kds_ticket SET status = @s
                    WHERE origem = 'ifood' AND status IN ('preparando','pronto')
                      AND CASE WHEN agendado = 1 THEN coalesce(agendado_ate, agendado_para, criado_em)
-                              ELSE criado_em END < @limite",
-                new { s = Cancelado, limite = DateTime.Now.AddHours(-12).ToString("o") });
+                              ELSE criado_em END < @limite" + filtroVivos,
+                new { s = Cancelado, limite = DateTime.Now.AddHours(-12).ToString("o"),
+                      vivos = vivos.ToList() });
         }
 
         var novos = 0;
-        foreach (var p in pedidos)
+        foreach (var p in lote)
         {
-            if (p.Status.Equals("cancelado", StringComparison.OrdinalIgnoreCase))
+            // UMA cópia da regra: o mesmo Classificar que a reconciliação usa.
+            // Antes havia duas tabelas de decisão (esta e a de AplicarStatusDaNuvem)
+            // e elas já discordavam sobre 'faturado'.
+            var statusLocal = StatusLocalDe(p.OrderId) ?? "";
+            switch (Classificar(p.Status, statusLocal))
             {
-                CancelarDelivery(p.OrderId);
-                continue;
+                // A loja opera com o Gestor do iFood LADO A LADO: pedido cancelado,
+                // despachado ou concluído por lá tem que SAIR do quadro daqui — card
+                // pendurado de pedido que já foi embora destrói a confiança na tela.
+                // Com o feed virando espelho isso praticamente não acontece mais
+                // (terminal não vem no feed), mas continua valendo contra a RPC
+                // ANTIGA: exe novo + servidor velho se comporta como sempre.
+                case DestinoDoCard.Cancelar:
+                    CancelarDelivery(p.OrderId);
+                    continue;
+                case DestinoDoCard.Entregue:
+                    DespacharDelivery(p.OrderId);
+                    continue;
+                // PRONTO no Gestor: a cozinha já terminou POR LÁ. Aqui o card pula
+                // direto pra coluna de coleta — mostrar como "a preparar" era a
+                // confusão gigante que o dono viu no quadro.
+                case DestinoDoCard.ParaColeta:
+                {
+                    var itensPr = ItensDeJson(p.ItensJson);
+                    if (itensPr.Count > 0)
+                        DoDelivery(p.OrderId, p.Numero, p.Cliente, itensPr,
+                                   ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada,
+                                   p.Agendado, ChegadaLocal(p.AgendadoPara), ChegadaLocal(p.AgendadoAte));
+                    PromoverProntoDelivery(p.OrderId);
+                    continue;
+                }
             }
-            // A loja opera com o Gestor do iFood LADO A LADO: pedido despachado
-            // ou concluído por lá tem que SAIR do quadro daqui — card pendurado
-            // de pedido que já foi embora destrói a confiança na tela.
-            if (p.Status.Equals("despachado", StringComparison.OrdinalIgnoreCase)
-                || p.Status.Equals("concluido", StringComparison.OrdinalIgnoreCase))
-            {
-                DespacharDelivery(p.OrderId);
-                continue;
-            }
-            // PRONTO no Gestor: a cozinha já terminou POR LÁ. Aqui o card pula
-            // direto pra coluna de coleta — mostrar como "a preparar" era a
-            // confusão gigante que o dono viu no quadro.
-            if (p.Status.Equals("pronto", StringComparison.OrdinalIgnoreCase))
-            {
-                var itensPr = ItensDeJson(p.ItensJson);
-                if (itensPr.Count > 0)
-                    DoDelivery(p.OrderId, p.Numero, p.Cliente, itensPr,
-                               ChegadaLocal(p.RecebidoEm), ChegadaLocal(p.PreparoAte), p.Retirada,
-                               p.Agendado, ChegadaLocal(p.AgendadoPara), ChegadaLocal(p.AgendadoAte));
-                PromoverProntoDelivery(p.OrderId);
-                continue;
-            }
+
+            // Manter: o pedido está ABERTO na nuvem. Nasce ou acompanha.
             var itens = ItensDeJson(p.ItensJson);
             if (itens.Count == 0) continue;
 
             using var cx = Banco.Abrir();
-            var existia = cx.QueryFirstOrDefault<string>(
-                "SELECT id FROM kds_ticket WHERE origem = 'ifood' AND ref_id = @r",
-                new { r = p.OrderId }) is not null;
+            var existia = statusLocal.Length > 0;
             if (!existia)
             {
                 if (DoDelivery(p.OrderId, p.Numero, p.Cliente, itens,
@@ -714,44 +928,105 @@ public static class Kds
     /// </summary>
     public static void AplicarStatusDaNuvem(string orderId, string status, DateTime? preparoAte)
     {
-        switch (status.ToLowerInvariant())
+        AplicarDestino(orderId, Classificar(status, StatusLocalDe(orderId) ?? ""));
+        PreencherPrazo(orderId, preparoAte);
+    }
+
+    /// <summary>O status do ticket local deste pedido de delivery, ou null se ele
+    /// não existe aqui. String vazia nunca: "não existe" e "existe cancelado" são
+    /// coisas diferentes para a decisão.</summary>
+    internal static string? StatusLocalDe(string orderId)
+    {
+        using var cx = Banco.Abrir();
+        return cx.QueryFirstOrDefault<string>(
+            "SELECT status FROM kds_ticket WHERE origem = 'ifood' AND ref_id = @r",
+            new { r = orderId });
+    }
+
+    /// <summary>O prazo do iFood que faltava. Só preenche o que está vazio: o
+    /// prazo que a ponte já pôs é o que o Gestor mostra.</summary>
+    private static void PreencherPrazo(string orderId, DateTime? preparoAte)
+    {
+        if (preparoAte is not { } pa) return;
+        using var cx = Banco.Abrir();
+        cx.Execute(
+            @"UPDATE kds_ticket SET preparo_ate = @p
+               WHERE origem = 'ifood' AND ref_id = @r AND preparo_ate IS NULL",
+            new { p = pa.ToString("o"), r = orderId });
+    }
+
+    /// <summary>Executa a decisão de <see cref="Classificar"/> num ticket local.</summary>
+    public static void AplicarDestino(string orderId, DestinoDoCard destino)
+    {
+        switch (destino)
         {
-            case "cancelado": CancelarDelivery(orderId); break;
-            case "despachado" or "concluido": DespacharDelivery(orderId); break;
-            case "pronto": PromoverProntoDelivery(orderId); break;
-        }
-        if (preparoAte is { } pa)
-        {
-            using var cx = Banco.Abrir();
-            cx.Execute(
-                @"UPDATE kds_ticket SET preparo_ate = @p
-                   WHERE origem = 'ifood' AND ref_id = @r AND preparo_ate IS NULL",
-                new { p = pa.ToString("o"), r = orderId });
+            case DestinoDoCard.Cancelar:   CancelarDelivery(orderId); break;
+            case DestinoDoCard.Entregue:   DespacharDelivery(orderId); break;
+            case DestinoDoCard.ParaColeta: PromoverProntoDelivery(orderId); break;
+            // Manter: o quadro fica exatamente como está. É o caso mais comum e
+            // o único seguro quando não se sabe.
         }
     }
 
     /// <summary>
-    /// Puxa os pedidos do dia e alimenta a fila; depois RECONCILIA os tickets
-    /// abertos que ficaram FORA da janela do feed (o furo dos "12 cards de
-    /// pedido já entregue": a nuvem sabia, o quadro era surdo pra pedido
-    /// velho). Falha de rede é silenciosa — a fila local continua valendo.
+    /// Puxa a foto da nuvem e RECONCILIA o quadro com ela.
+    ///
+    /// A ordem importa e é esta, nesta sequência (nada de expirar antes de saber):
+    ///  1. obter o feed. Se ele NÃO for confiável, sair sem tocar em nada;
+    ///  2. levantar os órfãos (ticket local aberto que o feed não menciona) e
+    ///     PERGUNTAR por eles, um a um, à pdv_kds_status;
+    ///  3. sincronizar o feed, protegendo da rede de segurança tudo que a nuvem
+    ///     afirmou estar aberto neste ciclo;
+    ///  4. aplicar a reconciliação dos órfãos.
+    ///
+    /// Falha de rede é silenciosa E INÓCUA: a fila local continua valendo, e é
+    /// isso que impede uma queda de wi-fi de 30 segundos de limpar o quadro com
+    /// a cozinha cheia.
     /// </summary>
-    public static async Task<int> PuxarDaNuvemAsync(Nuvem nuvem, string loja)
+    public static async Task<int> PuxarDaNuvemAsync(IFeedKds nuvem, string loja)
     {
-        var feed = await nuvem.BaixarPedidosDeliveryAsync(loja).ConfigureAwait(false);
-        var novos = SincronizarDelivery(feed);
+        var (feedOk, feed) = await nuvem.FeedKdsAsync(loja, 45).ConfigureAwait(false);
+        // G1 e G7: sem feed confiável não se sincroniza, não se reconcilia e,
+        // sobretudo, não se expira nada.
+        if (!feedOk) return 0;
 
-        var noFeed = feed.Select(p => p.OrderId).ToHashSet();
-        List<string> orfaos;
-        using (var cx = Banco.Abrir())
-            orfaos = cx.Query<string>(
-                @"SELECT ref_id FROM kds_ticket
-                   WHERE origem = 'ifood' AND status IN ('recebido','preparando','pronto')")
-                .Where(r => !noFeed.Contains(r)).Take(100).ToList();
+        var noFeed = new HashSet<string>(feed.Select(p => p.OrderId), StringComparer.OrdinalIgnoreCase);
 
-        if (orfaos.Count > 0)
-            foreach (var (id, status, prazoIso) in await nuvem.StatusPedidosAsync(orfaos).ConfigureAwait(false))
-                AplicarStatusDaNuvem(id, status, ChegadaLocal(prazoIso));
+        // Órfãos ANTES de sincronizar: a resposta deles é que protege o pedido
+        // vivo da rede de segurança no passo seguinte.
+        var orfaos = Abertos()
+            .Where(t => t.Origem.Equals("ifood", StringComparison.OrdinalIgnoreCase)
+                        && !noFeed.Contains(t.RefId))
+            .Select(t => t.RefId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // O teto de 100 casa com o [1:100] da RPC. O excedente fica para o ciclo
+        // seguinte, MANTIDO — nunca fechado às cegas.
+        var perguntados = orfaos.Take(100).ToList();
+        var (statusOk, respostas) = await nuvem.StatusKdsAsync(perguntados).ConfigureAwait(false);
+
+        var statusPorPedido = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, status, _) in respostas) statusPorPedido[id] = status;
+
+        var foto = new FotoDaNuvem(true, feed, statusOk, statusPorPedido,
+                                   LotePerguntadoCompleto: orfaos.Count <= 100);
+
+        // Protegidos: o feed inteiro mais todo órfão que a nuvem NÃO deu por
+        // encerrado. Sem isto, o pedido aberto de 5 horas que passou a chegar no
+        // feed morreria pela expiração no mesmo ciclo em que nasceu.
+        var protegidos = new HashSet<string>(noFeed, StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, estado) in statusPorPedido)
+            if (Classificar(estado, "") is DestinoDoCard.Manter or DestinoDoCard.ParaColeta)
+                protegidos.Add(id);
+
+        var novos = SincronizarDelivery(feed, protegidos);
+
+        // O prazo do iFood que faltava continua descendo pela reconciliação.
+        foreach (var (id, _, prazoIso) in respostas) PreencherPrazo(id, ChegadaLocal(prazoIso));
+
+        foreach (var (refId, destino) in Reconciliar(Abertos(), foto, DateTime.Now))
+            AplicarDestino(refId, destino);
 
         return novos;
     }
@@ -768,5 +1043,9 @@ public static class Kds
         // agendado (04/09): idem, ausencia = imediato
         r.agendado is long ag && ag == 1,
         r.agendado_para is string ap ? DateTime.Parse(ap) : (DateTime?)null,
-        r.agendado_ate  is string aa ? DateTime.Parse(aa) : (DateTime?)null);
+        r.agendado_ate  is string aa ? DateTime.Parse(aa) : (DateTime?)null,
+        // visto_em (04/09): banco antigo nao tem, e ticket gravado antes da
+        // coluna existir tambem nao — ausencia = sem periodo de graca, que e o
+        // que faz a primeira sincronizacao depois do deploy limpar o quadro.
+        r.visto_em is string vi ? DateTime.Parse(vi) : (DateTime?)null);
 }
