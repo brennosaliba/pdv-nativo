@@ -227,11 +227,11 @@ public static class TestesControlPay
         TransacaoPayGo? ultimaPaga = null;
         {
             using var f = new FakeControlPay();
-            var guardadas = new List<(string situacao, int impressoes)>();
+            var guardadas = new List<(string situacao, int impressoes, string ident)>();
             var impressoes = 0;
             var auditoria = new List<string>();
             using var c = Cliente(f,
-                guardar: t => { guardadas.Add((t.Situacao, impressoes)); if (t.Situacao == "pago") ultimaPaga = t; return true; },
+                guardar: t => { guardadas.Add((t.Situacao, impressoes, t.Identificacao)); if (t.Situacao == "pago") ultimaPaga = t; return true; },
                 imprimir: t => { impressoes++; checar(t.Resposta!.ViaCliente.Count == 4 && t.Resposta.ViaEstabelecimento.Count == 5, "hook recebe as vias 713/715 do dump"); return Task.FromResult(true); },
                 auditoria: auditoria);
             var fases = new List<string>();
@@ -257,8 +257,13 @@ public static class TestesControlPay
             checar(f.Rota("IntencaoVenda/GetById").Count >= 2, "acompanhou por GetById até o final");
             checar(f.Rota("IntencaoVenda/GetByFiltros").Count >= 1 && f.Rota("PagamentoExterno/GetById").Count >= 1, "detalhes: GetByFiltros + PagamentoExterno/GetById (bandeira)");
 
-            checar(guardadas.Select(g => g.situacao).SequenceEqual(new[] { "aguardando", "aprovada", "pago" }),
-                   "guardou aguardando → aprovada → pago: " + string.Join(",", guardadas.Select(g => g.situacao)));
+            // Duas linhas 'aguardando' de propósito: a PRIMEIRA nasce antes do POST sair (ainda sem
+            // id da intenção) para que um timeout na criação não deixe cliente cobrado sem registro;
+            // a segunda é a mesma linha já com o id. Mesmo charge_id, então no banco é uma só.
+            checar(guardadas.Select(g => g.situacao).SequenceEqual(new[] { "aguardando", "aguardando", "aprovada", "pago" }),
+                   "guardou aguardando (antes de enviar) → aguardando (com id) → aprovada → pago: " + string.Join(",", guardadas.Select(g => g.situacao)));
+            checar(guardadas[0].ident == "" && guardadas[1].ident.Length > 0,
+                   "a primeira linha é anterior à resposta (sem id da intenção) e a segunda já tem o id: " + guardadas[1].ident);
             // No ControlPay não há CNF/NCN: a transação já está efetivada quando o status vira 10.
             // Por isso 'pago' é gravado ANTES de imprimir — impressora travada não pode segurar o
             // caixa com a venda já cobrada (aconteceu na homologação: fila da térmica em erro).
@@ -515,6 +520,79 @@ public static class TestesControlPay
             checar(r.ViaCliente.Count == 2 && r.ViaCliente[0] == "LINHA 1" && r.ViaEstabelecimento.Count == 0 && r.Vias == 1 && !r.RequerConfirmacao,
                    "sintética: via cliente de 2 linhas, 737=1, 729=1 (nada a confirmar)");
             checar(ClientePayGo.TBand("MASTERCARD") == "02" && ClientePayGo.CnpjConhecido("REDE") == "01425787000104", "tBand/CNPJ pela rede e bandeira");
+        }
+
+        // ── CRIAÇÃO SEM RESPOSTA: cliente cobrado e caixa sem registro ────
+        // Savassi, 04/09. Em modo ativo a API segura o POST que cria a cobrança até o
+        // PayGo Windows pegar a transação, e isso passou dos 40 s do teto antigo. O PDV
+        // estourava, dizia "ControlPay indisponível" e NÃO gravava nada — só que o pinpad
+        // já podia ter aprovado. Cartão processado, venda não concluída, nota não emitida,
+        // e nenhuma linha para o fechamento ou o menu TEF acusarem.
+        {
+            var f = new FakeControlPay { AtrasoVenderMs = 3_000 };
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.Aprovar);
+            var guardadas = new List<TransacaoPayGo>();
+            var auditoria = new List<string>();
+            using var c = new ClienteControlPay(
+                new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159",
+                                     f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 15,
+                TempoHttpMs = 5_000,
+                TempoCriacaoMs = 300,
+                Guardar = t => { guardadas.Add(t); return true; },
+                Auditar = auditoria.Add,
+            };
+            var d = Cobrar(c, TipoTef.Credito, 25m);
+
+            checar(guardadas.Count > 0, "criação sem resposta AINDA ASSIM deixa linha no caixa (o buraco era não deixar nenhuma)");
+            checar(guardadas[0].Situacao == "aguardando", "a linha nasce ANTES do envio, não depois da resposta: " + guardadas[0].Situacao);
+            checar(guardadas[^1].Situacao == "orfa", "sem resposta, a linha termina órfã: " + guardadas[^1].Situacao);
+            checar(!guardadas.Any(g => g.Situacao == "pago"), "NUNCA 'pago': ninguém sabe se o pinpad aprovou");
+            checar(d.Situacao == SituacaoTef.Timeout && d.PosPodeTerFicadoOcupado,
+                   "o desfecho avisa que PODE ter cobrado, em vez de 'erro' limpo que convida a cobrar de novo");
+            checar((d.Motivo ?? "").Contains("pode ter passado") && (d.Motivo ?? "").Contains("confira"),
+                   "aviso manda conferir no PayGo antes de cobrar de novo: " + d.Motivo);
+            checar(!(d.Motivo ?? "").Contains("indisponível"), "não diz 'indisponível': a requisição pode ter chegado");
+            checar(auditoria.Any(a => a.Contains("órfã")), "auditoria registra a criação sem resposta");
+        }
+
+        // ── O TETO DA CRIAÇÃO É SÓ DELE ──────────────────────────────────
+        // Criar espera o PayGo pegar a transação e é lento por natureza; consultar não é.
+        // Amarrar os dois no mesmo teto foi o que derrubou vendas boas aos 40 s.
+        {
+            var f = new FakeControlPay { AtrasoVenderMs = 400 };
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.Aprovar);
+            using var c = new ClienteControlPay(
+                new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159",
+                                     f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 15,
+                TempoHttpMs = 150,      // teto curto das consultas
+                TempoCriacaoMs = 5_000, // teto próprio da criação
+            };
+            var d = Cobrar(c, TipoTef.Credito, 25m);
+            checar(d.Pago, "criação mais lenta que o teto das consultas ainda aprova a venda: " + d.Motivo);
+        }
+
+        // ── NÃO SEGURAR A RESPOSTA (saída para a espera do balcão) ────────
+        // Com a flag desligada a API responde na hora, com o id da intenção, e quem acompanha
+        // é o poll. O cliente espera o mesmo no pinpad, mas a tela não fica travada e a
+        // cobrança nasce COM id, então a reconciliação resolve qualquer sobra.
+        {
+            using var f = new FakeControlPay();
+            f.Roteiro.Enqueue(FakeControlPay.Desfecho.Aprovar);
+            using var c = new ClienteControlPay(
+                new OpcoesControlPay(OpcoesControlPay.SandboxUrl, FakeControlPay.ChaveCerta, "314159",
+                                     f.TerminalId, f.PessoaId, "PdvNativo/teste"), f)
+            {
+                IntervaloPollMs = 15, TempoHttpMs = 5_000, EsperarTefPegar = false,
+            };
+            var d = Cobrar(c, TipoTef.Credito, 40m);
+            var b = Body(f.Rota("Venda/Vender").Single());
+            checar(!b.GetProperty("aguardarTefIniciarTransacao").GetBoolean(), "flag desligada chega desligada na API");
+            checar(b.GetProperty("iniciarTransacaoAutomaticamente").GetBoolean(), "modo ativo continua: a transação ainda é empurrada para o pinpad");
+            checar(d.Pago, "sem segurar a resposta, a venda ainda fecha pelo acompanhamento: " + d.Motivo);
         }
     }
 }

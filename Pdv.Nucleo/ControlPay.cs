@@ -104,8 +104,27 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// </summary>
     public int IntervaloPollAtivoMs { get; init; } = 500;
 
-    /// <summary>Teto do POST Venda/Vender: em modo ativo a API pode segurar até ~20 s esperando o PayGo pegar a transação.</summary>
+    /// <summary>Teto das chamadas de consulta (status, cancelamento, reconciliação).</summary>
     public int TempoHttpMs { get; init; } = 40_000;
+
+    /// <summary>
+    /// Teto do POST Venda/Vender, SEPARADO das consultas. Em modo ativo a API segura a resposta
+    /// até o PayGo Windows da loja pegar a transação (`aguardarTefIniciarTransacao`), e na Savassi
+    /// isso passou de 40 s: o caixa estourava, dava erro, e o cliente saía cobrado sem venda. O
+    /// teto aqui é maior de propósito, porque desistir cedo NÃO cancela nada do outro lado; só
+    /// nos cega. Quem devolve a tela ao operador é <see cref="TempoMaxEmPagamentoMs"/>.
+    /// </summary>
+    public int TempoCriacaoMs { get; init; } = 90_000;
+
+    /// <summary>
+    /// Pedir à API que SEGURE a resposta do Venda/Vender até o PayGo Windows pegar a transação.
+    /// Ligado (padrão) é o comportamento homologado: a resposta já confirma que o TEF começou.
+    /// O preço é que a espera do PayGo vira espera do caixa, com a tela travada. Desligado, a API
+    /// responde na hora com o id da intenção e quem acompanha é o poll: o cliente espera o mesmo
+    /// no pinpad, mas a tela reage e a cobrança nasce com id (a reconciliação resolve tudo).
+    /// Fica em config para dar de testar numa loja sem exe novo.
+    /// </summary>
+    public bool EsperarTefPegar { get; init; } = true;
 
     /// <summary>
     /// Sem timeout para a transação em si (quem está com o cliente é o pinpad/janela do PayGo).
@@ -232,7 +251,7 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 ["terminalId"] = _op.TerminalId,
                 ["referencia"] = referencia,
                 ["iniciarTransacaoAutomaticamente"] = true,
-                ["aguardarTefIniciarTransacao"] = true,       // a doc usa os dois nomes; mandar ambos é inócuo
+                ["aguardarTefIniciarTransacao"] = EsperarTefPegar,  // a doc usa os dois nomes; mandar ambos é inócuo
                 ["quantidadeParcelas"] = parc,
                 ["valorTotalVendido"] = ValorComVirgula(valor.Centavos),
                 ["observacao"] = "PDV " + referencia + (string.IsNullOrEmpty(documento) ? "" : " doc " + documento),
@@ -247,10 +266,32 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
             var adq = tipo == TipoTef.Pix ? (_op.AdquirentePix ?? _op.Adquirente) : _op.Adquirente;
             if (!string.IsNullOrWhiteSpace(adq)) body["adquirente"] = adq;
 
+            // Memória não volátil ANTES de enviar. A cobrança pode existir no ControlPay a partir
+            // do instante em que a requisição SAI, não de quando a resposta chega: se o timeout
+            // estourar no meio, o pinpad já pode ter aprovado. Gravando só depois da resposta (como
+            // era até 04/09), esse caso deixava o cliente cobrado e o caixa sem UMA LINHA sequer,
+            // então nem o fechamento nem o menu TEF tinham como acusar. A linha nasce sem
+            // identificação porque a intenção ainda não tem id; a reconciliação pula linha sem id.
+            // Sem `motivo` aqui de propósito: GuardarTef faz COALESCE(excluded.motivo, motivo), então
+            // um motivo posto agora grudaria na linha depois de a venda ser aprovada.
+            Guardar(new TransacaoPayGo(chargeId, "", tipo, valor.Centavos, parc, "aguardando", null));
+
             JsonDocument resp;
-            try { resp = await ChamarAsync(HttpMethod.Post, "Venda/Vender/", body, CancellationToken.None).ConfigureAwait(false); }
+            try { resp = await ChamarAsync(HttpMethod.Post, "Venda/Vender/", body, CancellationToken.None, TempoCriacaoMs).ConfigureAwait(false); }
+            catch (TimeoutException ex)
+            {
+                // Sem resposta NÃO é sinônimo de "não cobrou": a requisição pode ter chegado e o
+                // pinpad pode ter aprovado. Órfã e aviso; nunca "erro" limpo, que convida o
+                // operador a cobrar de novo o cliente que já pagou.
+                const string aviso = "O ControlPay não respondeu a tempo. A cobrança pode ter passado: confira no PayGo antes de cobrar de novo.";
+                Guardar(new TransacaoPayGo(chargeId, "", tipo, valor.Centavos, parc, "orfa", null, aviso));
+                Auditar?.Invoke("controlpay: Venda/Vender sem resposta (" + Sanitizar(ex.Message) + "); gravada como órfã");
+                return new DesfechoTef(SituacaoTef.Timeout, null, chargeId, null, aviso, true) { Codigo = CodigoTef.Timeout };
+            }
             catch (Exception ex)
             {
+                // O servidor respondeu (HTTP 4xx/5xx) ou a conexão nem abriu: não há cobrança.
+                Guardar(new TransacaoPayGo(chargeId, "", tipo, valor.Centavos, parc, "erro", null, Sanitizar(ex.Message)));
                 Auditar?.Invoke("controlpay: Venda/Vender falhou (" + Sanitizar(ex.Message) + ")");
                 return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "ControlPay indisponível: " + Sanitizar(ex.Message));
             }
@@ -763,18 +804,19 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
     /// Chama a API. A chave vai na query (`key=`) — por contrato da PayGo — e NUNCA aparece em
     /// mensagens: toda exceção passa por <see cref="Sanitizar"/>. Devolve o JSON; lança em HTTP ≠ 2xx.
     /// </summary>
-    private async Task<JsonDocument> ChamarAsync(HttpMethod metodo, string caminhoEQuery, object? body, CancellationToken ct)
+    private async Task<JsonDocument> ChamarAsync(HttpMethod metodo, string caminhoEQuery, object? body, CancellationToken ct, int tetoMs = 0)
     {
+        var teto = tetoMs > 0 ? tetoMs : TempoHttpMs;
         var sep = caminhoEQuery.Contains('?') ? "&" : "?";
         var url = _op.BaseUrl.TrimEnd('/') + "/" + caminhoEQuery.TrimStart('/') + sep + "key=" + Uri.EscapeDataString(_op.Chave);
         using var req = new HttpRequestMessage(metodo, url);
         if (body is not null)
             req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TempoHttpMs);
+        cts.CancelAfter(teto);
         HttpResponseMessage resp;
         try { resp = await _http.SendAsync(req, cts.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new TimeoutException($"ControlPay não respondeu em {TempoHttpMs / 1000} s ({Rota(caminhoEQuery)})"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new TimeoutException($"ControlPay não respondeu em {teto / 1000} s ({Rota(caminhoEQuery)})"); }
         catch (HttpRequestException ex) { throw new HttpRequestException(Sanitizar(ex.Message), null, ex.StatusCode); }
         using (resp)
         {

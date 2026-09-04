@@ -234,6 +234,12 @@ public static class Servicos
                         Adquirente: Vendas.Config(cx, "tef_cpay_adquirente"),
                         AdquirentePix: Vendas.Config(cx, "tef_cpay_adquirente_pix")))
                 {
+                    // Teto do POST que cria a cobrança, separado do teto da cobrança em si. Ajustável
+                    // pela config para não precisar de exe novo se a loja/PayGo ficar mais lenta.
+                    TempoCriacaoMs = int.TryParse(Vendas.Config(cx, "tef_cpay_timeout_criacao_s"), out var tc) ? tc * 1000 : 90_000,
+                    // "0" faz a API responder na hora em vez de segurar até o PayGo pegar a
+                    // transação. Padrão continua o homologado (segurar).
+                    EsperarTefPegar = Vendas.Config(cx, "tef_cpay_esperar_tef") != "0",
                     TempoMaxEmPagamentoMs = int.TryParse(Vendas.Config(cx, "tef_cpay_timeout_s"), out var ts) ? ts * 1000 : 60_000,
                     TempoMaxPixMs = int.TryParse(Vendas.Config(cx, "tef_cpay_timeout_pix_s"), out var tp) ? tp * 1000 : 180_000,
                     Guardar = t => GuardarTef(t, "controlpay"),

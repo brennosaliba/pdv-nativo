@@ -46,6 +46,13 @@ public sealed class FakeControlPay : HttpMessageHandler
     /// <summary>Omite o dump respostaAdquirente (só comprovantes em texto + campos estruturados).</summary>
     public bool SemDump { get; set; }
 
+    /// <summary>
+    /// Segura a resposta do Venda/Vender por este tempo. É o que acontece de verdade em modo ativo:
+    /// a API só responde quando o PayGo Windows da loja pega a transação, e na Savassi isso passou
+    /// dos 40 s do teto antigo.
+    /// </summary>
+    public int AtrasoVenderMs { get; set; }
+
     public ConcurrentQueue<Desfecho> Roteiro { get; } = new();
     public ConcurrentQueue<DesfechoCancelamento> RoteiroCancelamento { get; } = new();
 
@@ -66,6 +73,12 @@ public sealed class FakeControlPay : HttpMessageHandler
     private readonly ConcurrentDictionary<long, (bool Pronto, int Polls)> _adms = new();
 
     public long UltimaIntencao { get; private set; }
+
+    private async Task<HttpResponseMessage> VenderDevagar(string body, Uri uri, CancellationToken ct)
+    {
+        await Task.Delay(AtrasoVenderMs, ct).ConfigureAwait(false);
+        return Vender(body, uri);
+    }
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
     {
@@ -96,6 +109,7 @@ public sealed class FakeControlPay : HttpMessageHandler
                     },
                 })));
             case "venda/vender":
+                if (AtrasoVenderMs > 0) return VenderDevagar(body ?? "{}", uri, ct);
                 return Task.FromResult(Vender(body ?? "{}", uri));
             case "intencaovenda/getbyid":
                 return Task.FromResult(GetById(long.Parse(q["intencaoVendaId"] ?? "0")));
