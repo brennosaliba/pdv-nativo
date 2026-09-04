@@ -348,11 +348,40 @@ public partial class ChatIfood : UserControl
         } catch (e) { envia({ tipo: 'naolidas', texto: '' }); }
       };
 
-      // (2) abrir o painel de conversas (Conversas com clientes / Atendimento).
+      // (1.5) FECHAR O AVISO QUE BLOCA TUDO. O Gestor abre "Ativar som das
+      // notificações" por cima da página; enquanto ele está aberto NADA mais é
+      // alcançável, e era por isso que o painel nunca era achado (04/09).
+      window.pdvFecharAvisos = function () {
+        try {
+          var bs = document.querySelectorAll('button');
+          for (var i = 0; i < bs.length; i++) {
+            var t = (bs[i].textContent || '').trim().toLowerCase();
+            if (t === 'ok' || t === 'entendi' || t === 'permitir') {
+              var r = bs[i].getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) { bs[i].click(); return true; }
+            }
+          }
+        } catch (e) {}
+        return false;
+      };
+
+      // (2) abrir o painel de conversas.
+      // ⚠️ O botão do chat NÃO tem aria-label nem title no HTML do Gestor: ele é
+      // um ícone na ponta direita da barra de cima (o leitor de tela mostra um
+      // nome porque deduz do tooltip, mas o DOM não tem). Por isso a busca é por
+      // POSIÇÃO, com o seletor por rótulo antes, de graça, caso um dia exista.
       window.pdvAbrirConversas = function () {
         try {
-          var b = document.querySelector('[aria-label*="Conversas com clientes"],[aria-label*="Conversas"],[aria-label*="Atendimento"]');
+          var b = document.querySelector('[aria-label*="Conversas com clientes"],[aria-label*="Conversas"]');
           if (b) { b.click(); return true; }
+          var alvo = null, melhorX = -1;
+          var cands = document.querySelectorAll('button,[role="button"],div');
+          for (var i = 0; i < cands.length; i++) {
+            var r = cands[i].getBoundingClientRect();
+            if (r.top < 60 && r.width >= 40 && r.height >= 40 &&
+                r.left > window.innerWidth - 120 && r.left > melhorX) { melhorX = r.left; alvo = cands[i]; }
+          }
+          if (alvo) { (alvo.closest('button') || alvo).click(); return true; }
         } catch (e) {}
         return false;
       };
@@ -379,13 +408,30 @@ public partial class ChatIfood : UserControl
         s.textContent = 'body.pdv-so-chat [data-pdv-hide]{display:none!important}';
         (document.head || document.documentElement).appendChild(s);
       }
+      // ÂNCORA DO PAINEL: o título "Conversas" (um h1 dentro da gaveta), NÃO o
+      // botão da barra. Subir a partir do BOTÃO leva à barra de cima, nunca ao
+      // painel, que é uma gaveta em outro ramo do DOM: foi o defeito de 04/09,
+      // que fazia o PDV cair no Gestor inteiro.
+      function tituloDoPainel(){
+        var h = document.querySelectorAll('h1,h2,h3,[role="heading"]');
+        for (var i = 0; i < h.length; i++){
+          var t = (h[i].textContent || '').trim();
+          if (/^convers/i.test(t) && t.length < 30){
+            var r = h[i].getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return h[i];
+          }
+        }
+        return null;
+      }
       function candidato(){
-        var el = document.querySelector('[aria-label*="Conversas com clientes"],[aria-label*="Atendimento"]');
-        // sobe até um contêiner com área relevante (o painel do chat)
+        var el = tituloDoPainel();
+        if (!el) return null;
+        // sobe do título até o contêiner da gaveta (largo o bastante para ser o
+        // painel, alto o bastante para não ser só o cabeçalho dele)
         var no = el;
         while (no && no !== document.body){
           var r = no.getBoundingClientRect();
-          if (r.width > 240 && r.height > 240) return no;
+          if (r.width >= 250 && r.width <= 900 && r.height > 400) return no;
           no = no.parentElement;
         }
         return null;
@@ -413,8 +459,23 @@ public partial class ChatIfood : UserControl
       function agenda(){ if (pend) return; pend = setTimeout(function(){ pend=null; window.pdvContar(); }, 400); }
       function liga(){
         try { new MutationObserver(agenda).observe(document.body, {childList:true, subtree:true, characterData:true}); } catch(e){}
-        // tentativas escalonadas de abrir e isolar enquanto a SPA monta
-        [800,2000,4000,8000].forEach(function(ms){ setTimeout(function(){ window.pdvAbrirConversas(); window.pdvIsolar(); window.pdvContar(); }, ms); });
+        // ⚠️ O chat é um mini-aplicativo que carrega TARDE: em teste real ele não
+        // existia no DOM depois de 33 s. A tentativa antiga parava em 8 s e por
+        // isso desistia antes de o painel existir. Agora insiste por ~5 min e
+        // para assim que consegue isolar.
+        var pronto = false;
+        function tentar(){
+          if (pronto) return;
+          try {
+            window.pdvFecharAvisos();      // o aviso de som bloqueia tudo
+            window.pdvAbrirConversas();
+            if (window.pdvIsolar()) pronto = true;
+            window.pdvContar();
+          } catch (e) {}
+        }
+        [1000,2000,4000,7000,11000,16000,25000,40000,60000,90000].forEach(function(ms){ setTimeout(tentar, ms); });
+        var tid = setInterval(function(){ if (pronto) { clearInterval(tid); return; } tentar(); }, 20000);
+        setTimeout(function(){ clearInterval(tid); }, 300000);
         setInterval(window.pdvContar, 5000);
       }
       if (document.body) liga(); else document.addEventListener('DOMContentLoaded', liga);
