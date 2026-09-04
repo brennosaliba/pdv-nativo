@@ -84,6 +84,55 @@
         <Setter Property="Margin" Value="6,0,0,0"/>
     </Style>
 
+    <!-- CARD DO KDS EM DUAS ZONAS DE TOQUE (04/09, detalhe do pedido). O card era UM
+         botão e qualquer toque avançava a etapa; o dono já sofreu com toque acidental.
+         Agora o CABEÇALHO (número, cliente) abre o detalhe e o RODAPÉ (a faixa com a
+         ordem) é a única coisa que avança. O corpo, onde o dedo encosta por acidente,
+         não é botão de nada. A regra mora em CardKds.AcaoDoToque; aqui só a cara. -->
+
+    <!-- O cabeçalho é botão INVISÍVEL: sem fundo nem borda, só o feedback de pressão
+         do BotaoBase. Alvo de 40 px no mínimo para o dedo. -->
+    <Style x:Key="BotaoCabecalhoKds" TargetType="Button" BasedOn="{StaticResource BotaoBase}">
+        <Setter Property="MinHeight" Value="40"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+    <!-- O rodapé casa com o canto de baixo do card (13 dentro dos 14 da moldura).
+         Template próprio só por isso: o BotaoBase arredonda os quatro cantos. -->
+    <Style x:Key="BotaoRodapeKds" TargetType="Button" BasedOn="{StaticResource BotaoBase}">
+        <Setter Property="MinHeight" Value="46"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="b" CornerRadius="0,0,13,13" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                          Margin="{TemplateBinding Padding}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="b" Property="Opacity" Value="0.65"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="b" Property="Opacity" Value="0.88"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="Titulo" TargetType="TextBlock">
         <Setter Property="Foreground" Value="{DynamicResource Texto}"/>
         <Setter Property="FontSize" Value="30"/>

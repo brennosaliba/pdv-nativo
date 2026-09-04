@@ -372,6 +372,11 @@ public partial class ChatIfood : UserControl
       // POSIÇÃO, com o seletor por rótulo antes, de graça, caso um dia exista.
       window.pdvAbrirConversas = function () {
         try {
+          // 1) pelo ICONE do chat (classe estavel do design system do iFood, achada pelo
+          //    dono no inspetor: "ifdl-icon-chat"). Independe de posicao e de resolucao.
+          var ic = document.querySelector('.ifdl-icon-chat,[class*="ifdl-icon-chat"],[class*="icon-chat"]');
+          if (ic) { (ic.closest('a,button,[role="button"]') || ic).click(); return true; }
+          // 2) pelo rotulo, se um dia existir
           var b = document.querySelector('[aria-label*="Conversas com clientes"],[aria-label*="Conversas"]');
           if (b) { b.click(); return true; }
           var alvo = null, melhorX = -1;
@@ -405,7 +410,9 @@ public partial class ChatIfood : UserControl
       function estilo(){
         if (document.getElementById('pdv-css')) return;
         var s = document.createElement('style'); s.id = 'pdv-css';
-        s.textContent = 'body.pdv-so-chat [data-pdv-hide]{display:none!important}';
+        s.textContent = 'body.pdv-so-chat [data-pdv-hide]{display:none!important;pointer-events:none!important}' +
+          '#pdv-cortina{position:fixed;inset:0;z-index:2147483647;background:#f7f4ee;display:flex;align-items:center;' +
+          'justify-content:center;font:16px system-ui,Segoe UI,sans-serif;color:#555}';
         (document.head || document.documentElement).appendChild(s);
       }
       // ÂNCORA DO PAINEL: o título "Conversas" (um h1 dentro da gaveta), NÃO o
@@ -442,24 +449,58 @@ public partial class ChatIfood : UserControl
       // página seguia escondido e só o Recarregar trazia algo de volta, e trazia
       // o painel inicial do Gestor. Aqui o X some. O único jeito de sair do chat
       // passa a ser o "Voltar ao caixa", que é o que o dono queria.
+      // E um X que fecha? Tres redes, qualquer uma basta (a 0.5.4 tinha so a
+      // geometria "a direita do titulo", e o titulo desta gaveta ocupa a linha
+      // inteira, entao o X ficava "dentro" da largura dele e escapava):
+      //   a) classe do icone do design system do iFood (ifdl-icon-close e parentes)
+      //      ou rotulo "fechar"/"close";
+      //   b) o glifo em si: texto que e so um "x" (×, ✕, ✖, X);
+      //   c) qualquer clicavel na LINHA do cabecalho que nao contenha o titulo.
+      function ehFechar(el, titulo, rt){
+        try {
+          if (el.contains(titulo)) return false;
+          var cls = (typeof el.className === 'string' ? el.className : (el.getAttribute('class') || '')).toLowerCase();
+          var rot = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase();
+          if (/icon-close|icon-x\b|close-icon|\bclose\b|fechar/.test(cls) || /fechar|close/.test(rot)) return true;
+          var txt = (el.textContent || '').trim();
+          if (/^[×✕✖xX]$/.test(txt)) return true;
+          if (el.querySelector && el.querySelector('[class*="icon-close"],[class*="close-icon"],[class*="ifdl-icon-close"]')) return true;
+          var r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) return false;
+          var naLinhaDoTitulo = r.top < rt.bottom && r.bottom > rt.top;
+          var pequeno = r.width <= 80 && r.height <= 80;
+          return naLinhaDoTitulo && pequeno && !/input|textarea|select/i.test(el.tagName);
+        } catch (e) { return false; }
+      }
       function esconderFecharDaGaveta(alvo, titulo){
         try {
           var rt = titulo.getBoundingClientRect();
-          var bs = alvo.querySelectorAll('button,[role="button"]');
-          for (var i = 0; i < bs.length; i++){
-            var b = bs[i];
-            if (b.contains(titulo)) continue;
-            var r = b.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            var rotulo = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('title') || '')).toLowerCase();
-            var naLinhaDoTitulo = r.top < rt.bottom && r.bottom > rt.top;
-            var aDireita = r.left >= rt.right;
-            var pequeno = r.width <= 80 && r.height <= 80;
-            if ((naLinhaDoTitulo && aDireita && pequeno) || /fechar|close/.test(rotulo))
-              b.setAttribute('data-pdv-hide','');
+          var cands = alvo.querySelectorAll('button,[role="button"],a,svg,[class*="icon-close"],[class*="close"]');
+          for (var i = 0; i < cands.length; i++){
+            var el = cands[i];
+            if (!ehFechar(el, titulo, rt)) continue;
+            var alvoClique = el.closest('button,[role="button"],a') || el;
+            if (alvoClique.contains(titulo)) continue;
+            alvoClique.setAttribute('data-pdv-hide','');
+            alvoClique.setAttribute('data-pdv-fechar','');
           }
         } catch (e) {}
       }
+      // Cinto: mesmo que o X reapareca (React re-renderiza), clique nele morre na
+      // fase de captura, antes de o Gestor ouvir. So enquanto o chat esta isolado.
+      document.addEventListener('click', function (ev) {
+        try {
+          if (!document.body.classList.contains('pdv-so-chat')) return;
+          var t = ev.target && ev.target.closest ? ev.target.closest('[data-pdv-fechar]') : null;
+          if (!t) {
+            var titulo = tituloDoPainel();
+            if (!titulo || !ev.target.closest) return;
+            var el = ev.target.closest('button,[role="button"],a,svg');
+            if (!el || !ehFechar(el, titulo, titulo.getBoundingClientRect())) return;
+          }
+          ev.stopImmediatePropagation(); ev.preventDefault();
+        } catch (e) {}
+      }, true);
       window.pdvIsolar = function () {
         try {
           var alvo = candidato();
@@ -483,7 +524,23 @@ public partial class ChatIfood : UserControl
       // observador: qualquer mexida no DOM reconta (com folga) e tenta abrir/isolar.
       var pend = null;
       function agenda(){ if (pend) return; pend = setTimeout(function(){ pend=null; window.pdvContar(); }, 400); }
+      // CORTINA: o dono nao quer ver o painel do Gestor nem por 3 segundos depois
+      // de recarregar. Cobre a pagina desde a carga e so sai quando o chat esta
+      // isolado. Nunca fica para sempre: cai sozinha em 25 s (tela morta e pior
+      // que Gestor a mostra) e nunca cobre a tela de LOGIN (tem campo de senha).
+      function cortina(on){
+        try {
+          var c = document.getElementById('pdv-cortina');
+          if (!on) { if (c) c.remove(); return; }
+          if (c || document.querySelector('input[type="password"]')) return;
+          estilo();
+          c = document.createElement('div'); c.id = 'pdv-cortina'; c.textContent = 'Abrindo o chat...';
+          document.body.appendChild(c);
+        } catch (e) {}
+      }
       function liga(){
+        cortina(true);
+        setTimeout(function(){ cortina(false); }, 25000);
         try { new MutationObserver(agenda).observe(document.body, {childList:true, subtree:true, characterData:true}); } catch(e){}
         // ⚠️ O chat é um mini-aplicativo que carrega TARDE: em teste real ele não
         // existia no DOM depois de 33 s. A tentativa antiga parava em 8 s e por
@@ -495,7 +552,7 @@ public partial class ChatIfood : UserControl
           try {
             window.pdvFecharAvisos();      // o aviso de som bloqueia tudo
             window.pdvAbrirConversas();
-            if (window.pdvIsolar()) pronto = true;
+            if (window.pdvIsolar()) { pronto = true; cortina(false); }
             window.pdvContar();
           } catch (e) {}
         }

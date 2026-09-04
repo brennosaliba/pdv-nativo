@@ -67,6 +67,31 @@ public sealed record PedidoDelivery(string OrderId, string Numero, string? Clien
                                     string? AgendadoAte = null);
 
 /// <summary>
+/// O COMPLEMENTO de um pedido de delivery, como a nuvem devolve na RPC
+/// <c>pdv_kds_pedido_detalhe</c> (04/09). É o que o Gestor do iFood mostra na tela de
+/// detalhe e o feed do quadro NÃO carrega: localizador, código de coleta, observação
+/// do pedido inteiro e os outros pedidos agrupados na mesma entrega.
+///
+/// Todo campo pode vir nulo, e a tela esconde a seção quando vem. Pedido de balcão
+/// e do cardápio próprio não têm linha nenhuma (a RPC devolve vazio).
+/// </summary>
+/// <param name="Localizador">O telefone-localizador do cliente, o mesmo que o Gestor
+/// mostra ao lado de "Feito às".</param>
+/// <param name="CodigoColeta">O que o entregador informa no balcão ("0807"): é o que
+/// a loja confere antes de entregar a sacola ao motoboy.</param>
+/// <param name="Observacoes">Observação do PEDIDO inteiro (a por item já vem no
+/// <see cref="TicketItem.Observacao"/>).</param>
+/// <param name="PreparoInicio">timestamptz ISO de quando a nuvem viu o preparo começar.</param>
+/// <param name="OrderTiming">IMMEDIATE ou SCHEDULED, cru como veio.</param>
+/// <param name="Entregador">Id OPACO do entregador (worker_id). Não é nome: NÃO vai
+/// para a tela — serve só para casar pedidos do mesmo entregador no servidor.</param>
+/// <param name="AgrupadoCom">Números (display_id) dos OUTROS pedidos no mesmo grupo de
+/// entrega do iFood (delivery_group_id). Vazio quando o pedido vai sozinho.</param>
+public sealed record DetalheNuvem(string OrderId, string? Localizador, string? CodigoColeta,
+                                  string? Observacoes, string? PreparoInicio, string? OrderTiming,
+                                  string? Entregador, IReadOnlyList<string> AgrupadoCom);
+
+/// <summary>
 /// A fila de preparo do balcão.
 ///
 /// Por que ela mora no SQLite local e não na nuvem: o monitor fica ao lado do

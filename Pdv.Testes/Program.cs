@@ -101,8 +101,8 @@ if (args.Length >= 4 && args[0] == "--foto-venda")
     return FotoVenda.Rodar(args);
 
 // Modo FOTO do quadro do KDS (ver Pdv.Testes/FotoKds.cs). Banco temporário próprio:
-// não encosta no caixa.
-//   Pdv.Testes.exe --foto-kds saida.png 1024 768 [claro|escuro]
+// não encosta no caixa. --detalhe abre o painel do pedido por cima do quadro.
+//   Pdv.Testes.exe --foto-kds saida.png 1024 768 [claro|escuro] [--detalhe 5077] [--nuvem]
 if (args.Length >= 4 && args[0] == "--foto-kds")
     return FotoKds.Rodar(args);
 
@@ -1269,6 +1269,14 @@ TestesKds.Rodar((cond, nome) => Check("kds: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- KDS (texto do card) ---");
 TestesCardKds.Rodar((cond, nome) => Check("kds-card: " + nome, cond));
+
+// -- KDS: o DETALHE do pedido (04/09, pedido do dono olhando o KDS na loja) ---
+// O modelo puro da tela (itens, rotulos, secoes da nuvem que somem quando nulas),
+// a regra de qual zona do card faz o que (cabecalho NUNCA avanca etapa) e o parser
+// da RPC pdv_kds_pedido_detalhe.
+Console.WriteLine();
+Console.WriteLine("--- KDS (detalhe do pedido) ---");
+TestesDetalhePedido.Rodar((cond, nome) => Check("kds-detalhe: " + nome, cond));
 
 // -- TEMA: decisao diurno/noturno + contraste da paleta clara ----------------
 // O teste de contraste le Temas/Claro.xaml de verdade: paleta ilegivel derruba

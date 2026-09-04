@@ -44,10 +44,66 @@ public readonly record struct LinhaCard(string Qtd, string Nome)
 /// número já está na tela logo abaixo, e na dúvida devolve o nome intacto: nome
 /// mutilado na cozinha custa mais caro que nome comprido.
 /// </summary>
+/// <summary>Onde o dedo encostou no card. É isto, e não o status, que decide o que acontece.</summary>
+public enum ZonaCard
+{
+    /// <summary>Número do pedido e nome do cliente.</summary>
+    Cabecalho,
+    /// <summary>A lista de itens.</summary>
+    Corpo,
+    /// <summary>A faixa colorida de baixo, a que diz "TOQUE PARA COMEÇAR".</summary>
+    Rodape,
+}
+
+/// <summary>O que um toque no card faz.</summary>
+public enum ToqueKds
+{
+    Nada,
+    /// <summary>Abre a tela de detalhe do pedido. Nunca muda de coluna.</summary>
+    AbrirDetalhe,
+    /// <summary>NA FILA → FAZENDO.</summary>
+    Assumir,
+    /// <summary>FAZENDO → PRONTO, passando pela confirmação (chama o entregador).</summary>
+    ConfirmarPronto,
+    /// <summary>PRONTO → sai do quadro (só balcão: no delivery quem declara é a API).</summary>
+    Entregar,
+}
+
 public static class CardKds
 {
     /// <summary>O marcador de quantidade do quadro, um só: "2× Donut", nunca "2x Donut".</summary>
     public const string Vezes = "×";
+
+    // ── O QUE O TOQUE FAZ, POR ZONA (04/09, detalhe do pedido) ───────────────
+    // O card inteiro era UM botão e qualquer toque avançava a etapa. O dono já sofreu
+    // com toque acidental (o 9507 e o 5077 "marcados fazendo" sem querer), e o detalhe
+    // não podia virar mais um jeito de avançar. Então a regra saiu da tela e veio para
+    // cá, onde a suíte alcança:
+    //
+    //   CABEÇALHO (número, cliente)  → abre o detalhe. Em QUALQUER coluna e origem.
+    //   CORPO (itens)                → nada. É onde o dedo encosta por acidente.
+    //   RODAPÉ (a faixa com a ordem) → a ÚNICA coisa que avança etapa.
+    //
+    // A tela chama isto com a zona de onde o clique nasceu; se um dia alguém religar
+    // o avanço no cabeçalho, cai no teste antes de cair na cozinha.
+
+    /// <summary>
+    /// O que acontece ao tocar em <paramref name="zona"/> de um card em
+    /// <paramref name="status"/>. PRONTO de delivery não sai no toque: a coleta é fato
+    /// do mundo, quem declara é o entregador (via API), não o dedo.
+    /// </summary>
+    public static ToqueKds AcaoDoToque(string status, string origem, ZonaCard zona) => zona switch
+    {
+        ZonaCard.Cabecalho => ToqueKds.AbrirDetalhe,
+        ZonaCard.Corpo => ToqueKds.Nada,
+        _ => status switch
+        {
+            Kds.Recebido => ToqueKds.Assumir,
+            Kds.Preparando => ToqueKds.ConfirmarPronto,
+            Kds.Pronto when origem != "ifood" => ToqueKds.Entregar,
+            _ => ToqueKds.Nada,
+        },
+    };
 
     // ── QUANTOS CARDS CABEM LADO A LADO (04/09, segunda foto do dono) ────────
     // "ainda nao esta bom o ux..talvez diminuir um poouco a fonte..aumentar o box".

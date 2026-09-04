@@ -8,7 +8,8 @@
 
          O pedido ENTRA na esquerda e SAI pela direita — quem olha de longe sabe
          o estado da cozinha pela coluna mais cheia, sem ler card nenhum.
-         Toque no card avança a etapa; entregar/coletar tira do quadro.
+         Toque no RODAPÉ do card avança a etapa (o cabeçalho abre o detalhe do
+         pedido); entregar/coletar tira do quadro.
 
          Os rótulos são UMA palavra e começam com letras diferentes de propósito:
          "A PREPARAR" e "EM PREPARO" viravam a mesma mancha de tinta a três
@@ -159,6 +160,24 @@
                     </ScrollViewer>
                 </Grid>
             </Border>
+        </Grid>
+
+        <!-- DETALHE DO PEDIDO (04/09, pedido do dono olhando o KDS na loja): "um pop-up
+             que quando clica ele visualiza o pedido, com uma tela melhor, assim como é o
+             iFood". Abre pelo toque no CABEÇALHO do card, em qualquer coluna.
+
+             É uma camada POR CIMA do quadro, não uma tela nova nem uma janela: o dono já
+             reprovou "adicionar mais coisas no menu", e janela à parte não sairia na foto
+             do modo foto-kds. O véu escurece o quadro (e fecha no toque); o painel é montado
+             em código por Telas/DetalhePedidoKds. Fecha pelo botão grande, pelo Esc ou
+             pelo toque fora — nada de X pequeno no canto de uma tela de toque. -->
+        <Grid x:Name="Veu" Grid.Row="0" Grid.RowSpan="2" Visibility="Collapsed">
+            <Border Background="{DynamicResource Fundo}" Opacity="0.82" MouseLeftButtonDown="ToqueNoVeu"/>
+            <!-- Stretch + MaxWidth: o painel ocupa até 760 px e o WPF o centraliza quando
+                 sobra tela. Center na vertical: ele encolhe até o conteúdo e, quando o
+                 pedido é comprido, para na margem e a lista de itens ROLA por dentro. -->
+            <ContentControl x:Name="PainelDetalhe" Margin="24" MaxWidth="760" Focusable="False"
+                            HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
         </Grid>
     </Grid>
 </UserControl>

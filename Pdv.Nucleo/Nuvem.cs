@@ -520,6 +520,84 @@ public sealed class Nuvem
         catch { return new(); }
     }
 
+    /// <summary>
+    /// O complemento de UM pedido de delivery para a tela de detalhe do KDS (RPC
+    /// <c>pdv_kds_pedido_detalhe</c>, 04/09): localizador, código de coleta, observação
+    /// do pedido e os outros pedidos agrupados na mesma entrega.
+    ///
+    /// Devolve null em QUALQUER falha (sem sessão, rede, tempo esgotado, linha nenhuma):
+    /// a tela já abriu com o que o SQLite tinha e só deixa as seções da nuvem de fora.
+    /// Tempo curto de propósito (5 s, contando a sessão): o operador está com o pedido
+    /// na mão, e uma seção que chega depois de meio minuto chega para ninguém.
+    /// </summary>
+    public async Task<DetalheNuvem?> BaixarDetalhePedidoAsync(string orderId)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(orderId)) return null;
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            if (!await SessaoOkAsync(cts.Token).ConfigureAwait(false)) return null;
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_pedido_detalhe");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _order_id = orderId }),
+                Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, cts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return null;
+            return LerDetalhePedido(await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// A resposta da RPC de detalhe, TOLERANTE como o feed: a RPC devolve uma tabela
+    /// (lista de zero ou uma linha), mas um objeto solto também é lido. Campo ausente
+    /// ou nulo vira null; <c>agrupado_com</c> aceita números ou textos, com ou sem "#".
+    /// Lista vazia, JSON quebrado ou linha sem order_id devolvem null: para a tela,
+    /// "não tem complemento" e "não deu para ler" são a mesma coisa (esconde a seção).
+    /// Separado do HTTP para a suíte provar o contrato sem rede.
+    /// </summary>
+    public static DetalheNuvem? LerDetalhePedido(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var raiz = doc.RootElement;
+            JsonElement linha;
+            if (raiz.ValueKind == JsonValueKind.Array)
+            {
+                if (raiz.GetArrayLength() == 0) return null;
+                linha = raiz[0];
+            }
+            else linha = raiz;
+            if (linha.ValueKind != JsonValueKind.Object) return null;
+
+            var id = Texto(linha, "order_id");
+            if (id is null) return null;
+
+            var agrupado = new List<string>();
+            if (linha.TryGetProperty("agrupado_com", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                foreach (var e in arr.EnumerateArray())
+                {
+                    var n = e.ValueKind switch
+                    {
+                        JsonValueKind.String => e.GetString(),
+                        JsonValueKind.Number => e.GetRawText(),
+                        _ => null,
+                    };
+                    if (n is { Length: > 0 }) agrupado.Add(n);
+                }
+
+            return new DetalheNuvem(id, Texto(linha, "localizador"), Texto(linha, "codigo_coleta"),
+                                    Texto(linha, "observacoes"), Texto(linha, "preparo_inicio"),
+                                    Texto(linha, "order_timing"), Texto(linha, "entregador"), agrupado);
+        }
+        catch { return null; }
+
+        static string? Texto(JsonElement e, string k) =>
+            e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String
+            && v.GetString() is { } s && s.Trim().Length > 0 ? s.Trim() : null;
+    }
+
     private static Dapper.DynamicParameters BuildParams(List<string> ids, string agora)
     {
         var p = new Dapper.DynamicParameters();

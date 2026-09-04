@@ -16,8 +16,10 @@ namespace Pdv.Telas;
 /// coluna da esquerda com os pedidos do delivery. Sem internet, quem produz
 /// continua movendo cards — igual ao resto do PDV.
 ///
-/// Toque avança a etapa. As transições exigem o estado anterior lá no Núcleo:
-/// dois dedos rápidos não pulam coluna nem reescrevem carimbo de tempo.
+/// O RODAPÉ do card avança a etapa; o CABEÇALHO abre o detalhe do pedido; o
+/// corpo não faz nada (CardKds.AcaoDoToque). As transições exigem o estado
+/// anterior lá no Núcleo: dois dedos rápidos não pulam coluna nem reescrevem
+/// carimbo de tempo.
 /// </summary>
 public partial class Kds : UserControl
 {
@@ -54,9 +56,75 @@ public partial class Kds : UserControl
         Unloaded += (_, _) => Aparencia.Mudou -= Pintar;
         Servicos.Sino(loja).Ping += SinoTocou;
         Unloaded += (_, _) => Servicos.Sino(loja).Ping -= SinoTocou;
+        // Esc fecha o detalhe. Preview, e não KeyDown: chega antes de qualquer filho
+        // e vale com o foco em qualquer lugar do quadro.
+        PreviewKeyDown += (_, e) =>
+        {
+            if (Veu.Visibility == Visibility.Visible && e.Key == System.Windows.Input.Key.Escape)
+            {
+                FecharDetalhe();
+                e.Handled = true;
+            }
+        };
     }
 
     private void SinoTocou() => Dispatcher.Invoke(() => _ = PuxarAsync());
+
+    // ── DETALHE DO PEDIDO (04/09, pedido do dono olhando o KDS na loja) ────
+    // "criar no KDS do PDV um pop-up que quando clica ele visualiza o pedido, com
+    // uma tela melhor, assim como é o iFood". Abre pelo toque no CABEÇALHO do card
+    // (CardKds.AcaoDoToque decide), em qualquer coluna; o conteúdo é montado por
+    // DetalhePedido (núcleo) e pintado por DetalhePedidoKds. Nunca avança etapa.
+
+    /// <summary>Id do ticket cujo detalhe está aberto; null = véu fechado.</summary>
+    private string? _detalheDe;
+
+    /// <summary>
+    /// Abre o detalhe IMEDIATAMENTE com o que o SQLite tem e, em pedido de delivery,
+    /// pede o complemento à nuvem (localizador, código de coleta, agrupado). Sem
+    /// resposta, as seções simplesmente não aparecem: nada de erro para a cozinha.
+    /// <paramref name="complemento"/> já em mãos (o modo --foto-kds fabrica um) pula
+    /// a nuvem.
+    /// </summary>
+    public void AbrirDetalhe(Ticket t, DetalheNuvem? complemento = null)
+    {
+        var painel = new DetalhePedidoKds(DetalhePedido.De(t, DateTime.Now, complemento), FecharDetalhe);
+        PainelDetalhe.Content = painel;
+        Veu.Visibility = Visibility.Visible;
+        _detalheDe = t.Id;
+        painel.FocarFechar();
+        if (complemento is null && t.Origem == "ifood") _ = CompletarDetalheAsync(t, painel);
+    }
+
+    /// <summary>Pelo número visível do pedido (é como o modo --foto-kds pede). Falso se não está no quadro.</summary>
+    public bool AbrirDetalhe(string numero, DetalheNuvem? complemento = null)
+    {
+        var t = Nucleo.Kds.Abertos().FirstOrDefault(x => x.Numero == numero);
+        if (t is null) return false;
+        AbrirDetalhe(t, complemento);
+        return true;
+    }
+
+    private async Task CompletarDetalheAsync(Ticket t, DetalhePedidoKds painel)
+    {
+        DetalheNuvem? nuvem;
+        try { nuvem = await Servicos.Nuvem().BaixarDetalhePedidoAsync(t.RefId); }
+        catch { nuvem = null; }
+        // Fechou, ou abriu OUTRO pedido, enquanto a nuvem pensava: a resposta não
+        // é de ninguém. Conferir o painel (e não só o id) cobre abrir-fechar-abrir
+        // o mesmo card.
+        if (nuvem is null || _detalheDe != t.Id || !ReferenceEquals(PainelDetalhe.Content, painel)) return;
+        painel.Completar(painel.Detalhe.ComNuvem(nuvem));
+    }
+
+    private void FecharDetalhe()
+    {
+        _detalheDe = null;
+        Veu.Visibility = Visibility.Collapsed;
+        PainelDetalhe.Content = null;
+    }
+
+    private void ToqueNoVeu(object sender, System.Windows.Input.MouseButtonEventArgs e) => FecharDetalhe();
 
     // ── ONDE A COMANDA SAI (29/08 — relato do dono) ─────────────────────────
     // "apos instalado, nao mostra a impressora no PDV na aba de delivery, somente
@@ -335,10 +403,16 @@ public partial class Kds : UserControl
     }
 
     /// <summary>
-    /// O card é UM botão: com farinha na mão, o alvo é "o pedido", não um
-    /// botãozinho dentro dele. O rodapé diz o que o toque faz NESTA coluna.
+    /// O card tem DUAS zonas de toque (04/09), e a regra de qual faz o quê mora em
+    /// <see cref="CardKds.AcaoDoToque"/>: o CABEÇALHO (número, cliente) abre o
+    /// detalhe e o RODAPÉ (a faixa que diz o que fazer) é a única coisa que avança a
+    /// etapa. O corpo, onde o dedo com farinha encosta por acidente, não é botão.
+    ///
+    /// Era UM botão inteiro ("o alvo é o pedido"), e foi assim que o dono marcou o
+    /// 9507 e o 5077 como FAZENDO sem querer. O alvo do avanço continua largo (a
+    /// faixa tem a largura do card e 46 px de altura) e agora está escrito nele.
     /// </summary>
-    private Button Card(Ticket t)
+    private FrameworkElement Card(Ticket t)
     {
         // PRONTO de iFood NAO sai no toque: a coleta e fato do MUNDO — quem
         // declara e o entregador, e a noticia chega pela API (DISPATCHED ->
@@ -377,15 +451,16 @@ public partial class Kds : UserControl
             _                     => ("TOQUE PARA COMEÇAR", "Amarelo", "ChipAlertaFundo", false),
         };
 
-        var b = new Button
+        // A moldura é um Border, não mais um Button: a mesma cara de sempre (painel,
+        // borda fina, canto 14), sem o feedback de pressão no corpo, que agora não
+        // faz nada.
+        var b = new Border
         {
-            Style = (Style)Application.Current.Resources["BotaoBase"],
-            MinHeight = 116, Margin = new Thickness(3, 3, 3, 4),
-            Padding = new Thickness(0), Tag = t.Id,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalContentAlignment = VerticalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            CornerRadius = new CornerRadius(14), BorderThickness = new Thickness(1),
+            MinHeight = 116, Margin = new Thickness(3, 3, 3, 4), Tag = t.Id,
         };
+        b.SetResourceReference(Border.BackgroundProperty, "Painel");
+        b.SetResourceReference(Border.BorderBrushProperty, "Borda");
         if (t.Agendado)
         {
             // BOX próprio (pedido do dono, 04/09): fundo e borda roxos nos dois temas
@@ -393,8 +468,8 @@ public partial class Kds : UserControl
             // IDENTIDADE do pedido, e vai com ele por todas as colunas.
             // SetResourceReference, não Resources[]: brush resolvido na criação
             // congela e não segue a troca de tema.
-            b.SetResourceReference(Button.BackgroundProperty, "AgendadoFundo");
-            b.SetResourceReference(Button.BorderBrushProperty, "Agendado");
+            b.SetResourceReference(Border.BackgroundProperty, "AgendadoFundo");
+            b.SetResourceReference(Border.BorderBrushProperty, "Agendado");
             b.BorderThickness = new Thickness(2);
         }
 
@@ -403,28 +478,33 @@ public partial class Kds : UserControl
         raiz.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        // ── cabeçalho: número + origem + espera ─────────────────────────────
-        // TRES colunas, e a do meio e a unica que encolhe.
-        // Antes eram duas — numero+chip numa coluna elastica e relogio+botoes em
-        // Auto. Em quadro estreito (o KDS divide a tela em 3, entao a 800x600 cada
-        // coluna fica com ~266 px) a elastica era espremida e o NUMERO DO PEDIDO
-        // sumia: sobrava so o "#" colado no relogio. O numero e a identidade do
-        // pedido — e a unica coisa que o operador grita para o cliente. Ele vai
-        // para Auto e nunca corta. Quem cede espaco e o CHIP de origem, decoracao.
-        var cab = new Grid { Margin = new Thickness(11, 8, 11, 3) };
-        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // ── cabeçalho: [número + origem / cliente] + espera + botões ────────
+        // DUAS colunas: o botão do cabeçalho (elástico) e o relógio com os botões
+        // (Auto). Dentro do botão, o número vai em Auto e NUNCA corta — ele é a
+        // identidade do pedido, a única coisa que o operador grita para o cliente.
+        // Quem cede espaço em quadro estreito é o CHIP de origem, decoração (a
+        // 800x600 cada coluna do quadro fica com ~266 px). O nome do cliente desceu
+        // do corpo para cá: junto com o número ele é o alvo do toque que abre o
+        // detalhe, e um alvo de duas linhas é o que um dedo em pé acerta.
+        var cab = new Grid { Margin = new Thickness(11, 5, 11, 2) };
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 0 });
         cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var esq = new StackPanel { Orientation = Orientation.Horizontal };
+        var alvo = new Grid { ClipToBounds = true };
+        alvo.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        alvo.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        alvo.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        alvo.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 0 });
+
         var numero = new TextBlock
         {
             Text = "#" + t.Numero, FontSize = 23, FontWeight = FontWeights.Bold,
             VerticalAlignment = VerticalAlignment.Center,
         };
         numero.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
+        Grid.SetRow(numero, 0);
         Grid.SetColumn(numero, 0);
-        cab.Children.Add(numero);
+        alvo.Children.Add(numero);
 
         var chips = new StackPanel { Orientation = Orientation.Horizontal, ClipToBounds = true };
         chips.Children.Add(Chip(t.Origem == "ifood" ? "iFOOD" : "BALCAO",
@@ -433,8 +513,37 @@ public partial class Kds : UserControl
         // card, depois do número — e é o que diz "este não é para agora".
         if (t.Agendado)
             chips.Children.Add(Chip("AGENDADO", "Agendado", "ChipAgendadoFundo", "ChipAgendadoBorda"));
+        Grid.SetRow(chips, 0);
         Grid.SetColumn(chips, 1);
-        cab.Children.Add(chips);
+        alvo.Children.Add(chips);
+
+        if (t.Cliente is { Length: > 0 })
+        {
+            var cli = new TextBlock
+            {
+                Text = t.Cliente, FontSize = 12, FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 1),
+            };
+            cli.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+            Grid.SetRow(cli, 1);
+            Grid.SetColumn(cli, 0);
+            Grid.SetColumnSpan(cli, 2);
+            alvo.Children.Add(cli);
+        }
+
+        var btnCab = new Button
+        {
+            Style = (Style)Application.Current.Resources["BotaoCabecalhoKds"],
+            Content = alvo, ToolTip = "Ver o pedido",
+        };
+        btnCab.Click += (_, e) =>
+        {
+            e.Handled = true;   // o clique morre aqui: nada acima dele avança etapa
+            if (CardKds.AcaoDoToque(t.Status, t.Origem, ZonaCard.Cabecalho) == ToqueKds.AbrirDetalhe)
+                AbrirDetalhe(t);
+        };
+        Grid.SetColumn(btnCab, 0);
+        cab.Children.Add(btnCab);
 
         // O relógio é O MESMO do Gestor do iFood: o PRAZO (dueAt). "12 min"
         // = falta isso pro prometido; "+3 min" = estourou. Pedido sem prazo
@@ -513,8 +622,8 @@ public partial class Kds : UserControl
             };
             desfaz.Click += (_, e) =>
             {
-                // Click e roteado e BORBULHA: sem isto o clique segue pro card e
-                // abre a confirmacao de PRONTO - exatamente o bug que o dono viu.
+                // Cinto: o card já não é botão, mas Click borbulha e ninguém acima
+                // pode reagir a ele (foi assim que o desfazer abria o pop-up de PRONTO).
                 e.Handled = true;
                 // Textos de uma linha: quem lê está de pé, com pedido na mão.
                 TxtStatus.Text = DesfazerKds.Voltar(t.Id) switch
@@ -545,7 +654,7 @@ public partial class Kds : UserControl
             };
             imprime.Click += async (_, e) =>
             {
-                e.Handled = true; // não deixa o clique borbulhar e avançar etapa
+                e.Handled = true; // cinto: o clique morre aqui, como no desfazer
                 // MESMO destino da comanda automática (Servicos.DestinoDaComanda): a
                 // reimpressão tem que sair na bobina em que a original sairia, senão o
                 // 🖨 vira "saiu, mas noutra impressora" — que é pior que não sair.
@@ -564,12 +673,12 @@ public partial class Kds : UserControl
             };
             dir.Children.Add(imprime);
         }
-        Grid.SetColumn(dir, 2);
+        Grid.SetColumn(dir, 1);
         cab.Children.Add(dir);
         raiz.Children.Add(cab);
 
-        // ── corpo: cliente + itens ──────────────────────────────────────────
-        var corpo = new StackPanel { Margin = new Thickness(11, 0, 11, 4) };
+        // ── corpo: agendado + itens (o cliente subiu para o cabeçalho) ──────
+        var corpo = new StackPanel { Margin = new Thickness(11, 1, 11, 4) };
         if (t.Agendado && t.AgendadoPara is { } marcado)
         {
             // O AVISO que o dono pediu ("agendado pra 10h"), em texto corrido e
@@ -582,16 +691,6 @@ public partial class Kds : UserControl
             };
             aviso.SetResourceReference(TextBlock.ForegroundProperty, "Agendado");
             corpo.Children.Add(aviso);
-        }
-        if (t.Cliente is { Length: > 0 })
-        {
-            var cli = new TextBlock
-            {
-                Text = t.Cliente, FontSize = 12, FontWeight = FontWeights.SemiBold,
-                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 3),
-            };
-            cli.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-            corpo.Children.Add(cli);
         }
         // ── os três níveis do corpo (04/09, foto do dono) ───────────────────
         // 1. ITEM: quantidade em NEGRITO + nome em peso normal, cor Texto, 16 px.
@@ -667,9 +766,7 @@ public partial class Kds : UserControl
         Grid.SetRow(corpo, 1);
         raiz.Children.Add(corpo);
 
-        // ── rodapé: o que o toque faz aqui ──────────────────────────────────
-        var rodape = new Border { Padding = new Thickness(8, 8, 8, 9), CornerRadius = new CornerRadius(0, 0, 13, 13) };
-        rodape.SetResourceReference(Border.BackgroundProperty, acaoFundo);
+        // ── rodapé: o ÚNICO toque que avança etapa ──────────────────────────
         var acao = new TextBlock
         {
             Text = acaoTexto, FontSize = 12,
@@ -677,31 +774,33 @@ public partial class Kds : UserControl
             // resolve; semibold = só o mundo resolve (o entregador, o cliente).
             FontWeight = acaoEspera ? FontWeights.SemiBold : FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
             // Sem isto o texto vazava dos DOIS lados do card e o operador lia
             // "NDO O ENTREGADOR · sai". Num quadro de 3 colunas a 800x600 o card
             // tem ~250 px: instrucao de operacao tem que caber, nem que quebre.
             TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
         };
         acao.SetResourceReference(TextBlock.ForegroundProperty, acaoCor);
-        rodape.Child = acao;
-        Grid.SetRow(rodape, 2);
-        raiz.Children.Add(rodape);
-
-        b.Content = raiz;
-        b.Click += (_, e) =>
+        var rodape = new Button
         {
-            // CINTO além do e.Handled do botão interno: Click borbulha, e o
-            // Source denuncia de onde o clique nasceu — clique que não nasceu
-            // NO card não avança etapa. (O dono viu o desfazer abrir o pop-up
-            // de PRONTO em tela touch; nunca mais.)
-            if (!ReferenceEquals(e.Source, b)) return;
-            switch (t.Status)
+            Style = (Style)Application.Current.Resources["BotaoRodapeKds"],
+            Content = acao,
+            // A faixa que só ESPERA (o entregador, o cliente) não é botão: sem
+            // hit-test ela não dá feedback de pressão nem cursor de mão, e o dedo
+            // aprende que ali não há o que tocar.
+            IsHitTestVisible = !acaoEspera,
+        };
+        rodape.SetResourceReference(Button.BackgroundProperty, acaoFundo);
+        rodape.Click += (_, e) =>
+        {
+            e.Handled = true;
+            switch (CardKds.AcaoDoToque(t.Status, t.Origem, ZonaCard.Rodape))
             {
-                case Nucleo.Kds.Recebido:
+                case ToqueKds.Assumir:
                     Nucleo.Kds.Assumir(t.Id);
                     break;
 
-                case Nucleo.Kds.Preparando:
+                case ToqueKds.ConfirmarPronto:
                     // PRONTO é declaração para fora: quando a ponte ligar o
                     // readyToPickup, isso aciona o entregador no iFood. Toque
                     // acidental aqui vira motoboy na porta sem donut na caixa —
@@ -717,16 +816,28 @@ public partial class Kds : UserControl
                     if (Dialogo.Confirmar(dono, "Pedido pronto", aviso,
                                           delivery ? "Chamar entregador" : "Marcar pronto",
                                           "Ainda não"))
+                    {
                         Nucleo.Kds.Liberar(t.Id);
+                        // O aviso de PRONTO foi para a outbox: sem cutucar, o iFood só
+                        // saberia no timer de 45 s ou na próxima venda.
+                        Servicos.Dreno()?.Cutucar();
+                    }
                     break;
 
-                case Nucleo.Kds.Pronto:
+                case ToqueKds.Entregar:
                     // balcao: cliente retirou no caixa. iFood: nada — a API manda.
-                    if (t.Origem != "ifood") Nucleo.Kds.Entregar(t.Id);
+                    Nucleo.Kds.Entregar(t.Id);
                     break;
+
+                default:
+                    return;
             }
             Pintar();
         };
+        Grid.SetRow(rodape, 2);
+        raiz.Children.Add(rodape);
+
+        b.Child = raiz;
         return b;
     }
 
