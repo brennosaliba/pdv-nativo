@@ -132,6 +132,45 @@ public static class TestesTema
         MinimoEscuro("CorAgendado", "CorChipAgendadoFundo", 4.5);
         MinimoEscuro("CorTexto", "CorAgendadoFundo", 7);
 
+        // ── HIERARQUIA DO CARD DO KDS (04/09) ───────────────────────────────
+        // A reclamação do dono na foto foi de COR, não de layout: subitem do combo,
+        // rodapé "AGUARDANDO O ENTREGADOR" e nome do cliente eram todos TextoFraco.
+        // Três papéis, um cinza. Aqui medem-se as duas coisas que a correção precisa
+        // ter: cada cor LEGÍVEL onde ela é usada, e cada par SEPARADO o bastante para
+        // o olho pegar a diferença antes de ler.
+        Minimo("CorTextoSubItem", "CorPainel", 7);
+        Minimo("CorTextoSubItem", "CorFundo", 7);
+        Minimo("CorTextoSubItem", "CorPainelAlto", 7);
+        // O card agendado tem fundo próprio: o subitem tem que continuar legível lá.
+        Minimo("CorTextoSubItem", "CorAgendadoFundo", 7);
+        Minimo("CorTextoEspera", "CorEsperaFundo", 4.5);
+        Minimo("CorTextoEspera", "CorPainel", 4.5);
+        MinimoEscuro("CorTextoSubItem", "CorPainel", 7);
+        MinimoEscuro("CorTextoSubItem", "CorFundo", 7);
+        MinimoEscuro("CorTextoSubItem", "CorPainelAlto", 7);
+        MinimoEscuro("CorTextoSubItem", "CorAgendadoFundo", 7);
+        MinimoEscuro("CorTextoEspera", "CorEsperaFundo", 4.5);
+        MinimoEscuro("CorTextoEspera", "CorPainel", 4.5);
+
+        // A SEPARAÇÃO entre os três níveis. Sem isto seria possível "corrigir" o
+        // problema criando chaves novas com o mesmo hex de sempre: passaria em tudo
+        // acima e o card na parede continuaria igual.
+        void Separado(Dictionary<string, string> tema, string nome, string a, string b, double minimo) =>
+            checar(Tema.Contraste(tema[a], tema[b]) >= minimo,
+                $"{nome}: {a} x {b} = {Tema.Contraste(tema[a], tema[b]):0.00}:1 de distância (mínimo {minimo}:1)");
+
+        foreach (var (nome, tema) in new[] { ("claro", claro), ("escuro", escuro) })
+        {
+            // subitem não é o item principal, e não é a legenda cinza
+            Separado(tema, nome, "CorTextoSubItem", "CorTexto", 1.35);
+            Separado(tema, nome, "CorTextoSubItem", "CorTextoFraco", 1.4);
+            // o rodapé de espera não é o subitem
+            Separado(tema, nome, "CorTextoEspera", "CorTextoSubItem", 1.3);
+            Separado(tema, nome, "CorTextoEspera", "CorTexto", 1.7);
+            // e a faixa de espera precisa APARECER como faixa sobre o card
+            Separado(tema, nome, "CorEsperaFundo", "CorPainel", 1.12);
+        }
+
         // o botão principal é branco sobre o rosa — nos DOIS temas
         checar(Tema.Contraste("#FFFFFF", claro["CorRosa"]) >= 4.5,
             $"claro: branco sobre o rosa do botão = {Tema.Contraste("#FFFFFF", claro["CorRosa"]):0.00}:1");

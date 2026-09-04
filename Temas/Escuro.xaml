@@ -37,12 +37,24 @@
     <Color x:Key="CorAgendadoFundo">#241C36</Color>
     <Color x:Key="CorChipAgendadoFundo">#3A2C55</Color>
 
+    <!-- HIERARQUIA DO CARD DO KDS (04/09) — os três níveis que no escuro caíam
+         todos no mesmo #8296A2. Ver o bloco gêmeo em Claro.xaml para o porquê;
+         aqui o sentido inverte (subitem CLAREIA na direção do CorTexto em vez de
+         escurecer), e a faixa de espera é uma superfície um degrau ACIMA do
+         painel, não abaixo. Os dois temas são medidos pelo mesmo teste. -->
+    <Color x:Key="CorTextoSubItem">#BAC7CF</Color>
+    <Color x:Key="CorTextoEspera">#82ACC2</Color>
+    <Color x:Key="CorEsperaFundo">#212E38</Color>
+
     <SolidColorBrush x:Key="Fundo" Color="{StaticResource CorFundo}"/>
     <SolidColorBrush x:Key="Painel" Color="{StaticResource CorPainel}"/>
     <SolidColorBrush x:Key="PainelAlto" Color="{StaticResource CorPainelAlto}"/>
     <SolidColorBrush x:Key="Borda" Color="{StaticResource CorBorda}"/>
     <SolidColorBrush x:Key="Texto" Color="{StaticResource CorTexto}"/>
     <SolidColorBrush x:Key="TextoFraco" Color="{StaticResource CorTextoFraco}"/>
+    <SolidColorBrush x:Key="TextoSubItem" Color="{StaticResource CorTextoSubItem}"/>
+    <SolidColorBrush x:Key="TextoEspera" Color="{StaticResource CorTextoEspera}"/>
+    <SolidColorBrush x:Key="EsperaFundo" Color="{StaticResource CorEsperaFundo}"/>
     <SolidColorBrush x:Key="Rosa" Color="{StaticResource CorRosa}"/>
     <SolidColorBrush x:Key="RosaEscuro" Color="{StaticResource CorRosaEscuro}"/>
     <SolidColorBrush x:Key="Ciano" Color="{StaticResource CorCiano}"/>

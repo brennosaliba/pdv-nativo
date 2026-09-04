@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Pdv.Nucleo;
@@ -311,9 +312,17 @@ public partial class Kds : UserControl
         // declara e o entregador, e a noticia chega pela API (DISPATCHED ->
         // espelho -> reconciliacao). Dedo no card nao inventa coleta. O toque
         // de entrega fica so pro BALCAO, onde nao existe evento externo.
-        var (acaoTexto, acaoCor, acaoFundo) = t.Status switch
+        //
+        // O QUARTO CAMPO É "ESPERA" (04/09, foto do dono). Rodapé que pede TOQUE e
+        // rodapé que só INFORMA não podem ter a mesma cara. Antes os dois estados de
+        // "aguardando" eram TextoFraco sobre VeuElevado — o mesmo cinza dos subitens
+        // do combo e quase o mesmo fundo do card, então a faixa não existia à vista.
+        // Agora: quem PEDE TOQUE é negrito sobre faixa colorida; quem só ESPERA é
+        // semibold sobre a faixa cinza-azulada própria (EsperaFundo). A diferença é
+        // vista antes de qualquer palavra ser lida.
+        var (acaoTexto, acaoCor, acaoFundo, acaoEspera) = t.Status switch
         {
-            Nucleo.Kds.Preparando => ("TOQUE QUANDO FICAR PRONTO", "Ok", "ChipOkFundo"),
+            Nucleo.Kds.Preparando => ("TOQUE QUANDO FICAR PRONTO", "Ok", "ChipOkFundo", false),
             // Agora o card SABE: a RPC pdv_kds_pedidos devolve `retirada`
             // (cardapio_digital_pedidos.modalidade e ifood_orders.payload->orderType),
             // o SQLite guarda, e o texto para de adivinhar. Antes ele escolhia so
@@ -322,15 +331,18 @@ public partial class Kds : UserControl
             // Em ambos os casos o card sai sozinho: a saida e fato do MUNDO — quem
             // declara e o entregador (via API) ou o balcao entregando ao cliente.
             Nucleo.Kds.Pronto when t.Origem == "ifood" && t.Retirada
-                                  => ("AGUARDANDO O CLIENTE RETIRAR", "TextoFraco", "VeuElevado"),
+                                  => ("AGUARDANDO O CLIENTE RETIRAR", "TextoEspera", "EsperaFundo", true),
             Nucleo.Kds.Pronto when t.Origem == "ifood"
-                                  => ("AGUARDANDO O ENTREGADOR", "TextoFraco", "VeuElevado"),
-            Nucleo.Kds.Pronto     => ("TOQUE QUANDO O CLIENTE LEVAR", "Texto", "VeuElevado"),
+                                  => ("AGUARDANDO O ENTREGADOR", "TextoEspera", "EsperaFundo", true),
+            // Balcão pronto TAMBÉM é toque, e por isso ganhou faixa de ação: com o
+            // VeuElevado ele era gêmeo visual do "aguardando" logo ao lado, na mesma
+            // coluna, e só o texto separava os dois.
+            Nucleo.Kds.Pronto     => ("TOQUE QUANDO O CLIENTE LEVAR", "Texto", "ChipOkFundo", false),
             // AGENDADO a preparar: rodapé roxo, mesma instrução — a cozinha pode
             // começar antes da hora se quiser (a comanda é que só sai perto dela).
             Nucleo.Kds.Recebido when t.Agendado
-                                  => ("TOQUE PARA COMEÇAR", "Agendado", "ChipAgendadoFundo"),
-            _                     => ("TOQUE PARA COMEÇAR", "Amarelo", "ChipAlertaFundo"),
+                                  => ("TOQUE PARA COMEÇAR", "Agendado", "ChipAgendadoFundo", false),
+            _                     => ("TOQUE PARA COMEÇAR", "Amarelo", "ChipAlertaFundo", false),
         };
 
         var b = new Button
@@ -531,29 +543,66 @@ public partial class Kds : UserControl
             cli.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
             corpo.Children.Add(cli);
         }
+        // ── os três níveis do corpo (04/09, foto do dono) ───────────────────
+        // 1. ITEM: quantidade em NEGRITO + nome em peso normal, cor Texto, 16 px.
+        //    O negrito só na quantidade porque é ela que o cozinheiro varre antes
+        //    de ler nome nenhum; o nome inteiro em negrito não destacava nada.
+        // 2. SUBITEM: 14 px em TextoSubItem (cor PRÓPRIA, não mais o cinza do
+        //    rodapé), recuado por MARGIN e marcado por uma régua vertical.
+        // 3. OBSERVAÇÃO: amarelo itálico, como já era.
+        //
+        // O prefixo "    - " morreu aqui. Ele gastava ~6 caracteres de largura em
+        // card de ~250 px, e era metade da causa das quebras que a foto mostrava
+        // ("1× Combo 1 Cookies - 4 / unidades"). Recuo é geometria, não texto.
         foreach (var i in t.Itens)
         {
-            var qtd = i.Qtd % 1000 == 0 ? (i.Qtd / 1000).ToString() : (i.Qtd / 1000m).ToString("0.###");
+            var principal = CardKds.ItemPrincipal(i);
             var linha = new TextBlock
             {
-                Text = $"{qtd}× {i.Descricao}", FontSize = 16,
-                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1),
+                FontSize = 16, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 1),
             };
+            linha.Inlines.Add(new Run(principal.Qtd + " ") { FontWeight = FontWeights.Bold });
+            linha.Inlines.Add(new Run(principal.Nome));
             linha.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
             corpo.Children.Add(linha);
             // As escolhas do combo aparecem aqui pelo mesmo motivo da comanda: sem
-            // elas o card diz "1x Combo Box 4un" e o cozinheiro não sabe o que fazer.
+            // elas o card diz "1× Combo Box" e o cozinheiro não sabe o que fazer.
+            // Elas vão TODAS dentro de uma régua só: a linha vertical amarra o grupo
+            // ao item de cima e diz "isto é o de dentro daquele" sem gastar largura.
             if (i.Escolhas is { Count: > 0 })
+            {
+                var dentro = new StackPanel();
                 foreach (var esc in i.Escolhas)
                 {
+                    var s = CardKds.SubItem(esc);
                     var sub = new TextBlock
                     {
-                        Text = "    - " + esc, FontSize = 14,
-                        TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 1),
+                        FontSize = 14, TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 0, 0, 1),
                     };
-                    sub.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-                    corpo.Children.Add(sub);
+                    // Quantidade em semibold aqui também: o mesmo olhar que varre as
+                    // quantidades do item varre as do combo. Semibold e não bold para
+                    // o subitem não competir com o item que ele pertence.
+                    if (s.Qtd.Length > 0)
+                        sub.Inlines.Add(new Run(s.Qtd + " ") { FontWeight = FontWeights.SemiBold });
+                    sub.Inlines.Add(new Run(s.Nome));
+                    sub.SetResourceReference(TextBlock.ForegroundProperty, "TextoSubItem");
+                    dentro.Children.Add(sub);
                 }
+                var regua = new Border
+                {
+                    BorderThickness = new Thickness(2, 0, 0, 0),
+                    Margin = new Thickness(3, 1, 0, 3),
+                    Padding = new Thickness(7, 0, 0, 0),
+                    Child = dentro,
+                };
+                // A régua fica em TextoFraco de propósito: o cinza de legenda serve
+                // bem para um traço de 2 px, e nesse papel ele não volta a se
+                // confundir com texto nenhum.
+                regua.SetResourceReference(Border.BorderBrushProperty, "TextoFraco");
+                corpo.Children.Add(regua);
+            }
             if (i.Observacao is { Length: > 0 })
             {
                 var obs = new TextBlock
@@ -573,7 +622,10 @@ public partial class Kds : UserControl
         rodape.SetResourceReference(Border.BackgroundProperty, acaoFundo);
         var acao = new TextBlock
         {
-            Text = acaoTexto, FontSize = 12, FontWeight = FontWeights.Bold,
+            Text = acaoTexto, FontSize = 12,
+            // Peso é o segundo sinal, além da cor e do fundo: negrito = o dedo
+            // resolve; semibold = só o mundo resolve (o entregador, o cliente).
+            FontWeight = acaoEspera ? FontWeights.SemiBold : FontWeights.Bold,
             HorizontalAlignment = HorizontalAlignment.Center,
             // Sem isto o texto vazava dos DOIS lados do card e o operador lia
             // "NDO O ENTREGADOR · sai". Num quadro de 3 colunas a 800x600 o card

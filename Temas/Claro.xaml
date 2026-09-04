@@ -36,12 +36,36 @@
     <Color x:Key="CorAgendadoFundo">#EFE8FA</Color>
     <Color x:Key="CorChipAgendadoFundo">#E4D9F6</Color>
 
+    <!-- HIERARQUIA DO CARD DO KDS (04/09) — "DIFERENCIAÇÃO DA COR DO AGUARDANDO
+         ENTREGADOR, DO ITEM PRINCIPAL, DOS SUBITENS, pra não ficar tão confuso"
+         (foto do dono). Antes eram TRÊS papéis na MESMA cor: subitem do combo,
+         rodapé "aguardando" e nome do cliente compartilhavam CorTextoFraco.
+
+         Agora cada nível tem a sua:
+           CorTexto         = o item principal (o mais forte)
+           CorTextoSubItem  = o que o combo tem dentro. É CONTEÚDO, não legenda:
+                              fica perto do item principal, não do cinza de UI —
+                              era justamente virar cinza de UI que fazia o sabor
+                              do donut parecer metadado.
+           CorTextoFraco    = legenda de verdade (nome do cliente, régua do recuo)
+           CorTextoEspera   = o rodapé que NÃO pede toque. Ardósia azulada sobre
+                              faixa própria: informação, não botão.
+
+         Medidos pelo teste (TestesTema): legibilidade de cada um sobre as
+         superfícies E a DISTÂNCIA entre eles, que é o que o dono reclamou. -->
+    <Color x:Key="CorTextoSubItem">#2A3B47</Color>
+    <Color x:Key="CorTextoEspera">#2F5C6B</Color>
+    <Color x:Key="CorEsperaFundo">#D8DFE3</Color>
+
     <SolidColorBrush x:Key="Fundo" Color="{StaticResource CorFundo}"/>
     <SolidColorBrush x:Key="Painel" Color="{StaticResource CorPainel}"/>
     <SolidColorBrush x:Key="PainelAlto" Color="{StaticResource CorPainelAlto}"/>
     <SolidColorBrush x:Key="Borda" Color="{StaticResource CorBorda}"/>
     <SolidColorBrush x:Key="Texto" Color="{StaticResource CorTexto}"/>
     <SolidColorBrush x:Key="TextoFraco" Color="{StaticResource CorTextoFraco}"/>
+    <SolidColorBrush x:Key="TextoSubItem" Color="{StaticResource CorTextoSubItem}"/>
+    <SolidColorBrush x:Key="TextoEspera" Color="{StaticResource CorTextoEspera}"/>
+    <SolidColorBrush x:Key="EsperaFundo" Color="{StaticResource CorEsperaFundo}"/>
     <SolidColorBrush x:Key="Rosa" Color="{StaticResource CorRosa}"/>
     <SolidColorBrush x:Key="RosaEscuro" Color="{StaticResource CorRosaEscuro}"/>
     <SolidColorBrush x:Key="Ciano" Color="{StaticResource CorCiano}"/>

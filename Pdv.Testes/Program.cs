@@ -1256,6 +1256,14 @@ Console.WriteLine();
 Console.WriteLine("--- KDS (fila de preparo) ---");
 TestesKds.Rodar((cond, nome) => Check("kds: " + nome, cond));
 
+// -- KDS: o TEXTO do card (04/09, foto do dono) ------------------------------
+// Marcador de quantidade unico ("2x" e "2×" no mesmo card) e a cauda redundante
+// do nome do combo ("Combo 1 Cookies - 4 unidades" com as 4 listadas embaixo).
+// Metade dos casos prova o CORTE; a outra metade prova o NAO CORTE.
+Console.WriteLine();
+Console.WriteLine("--- KDS (texto do card) ---");
+TestesCardKds.Rodar((cond, nome) => Check("kds-card: " + nome, cond));
+
 // -- TEMA: decisao diurno/noturno + contraste da paleta clara ----------------
 // O teste de contraste le Temas/Claro.xaml de verdade: paleta ilegivel derruba
 // a bateria aqui, nao espera reclamacao no balcao.
