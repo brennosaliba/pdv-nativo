@@ -911,9 +911,24 @@ public static class TestesAtualizacao
     /// </summary>
     private static void OQueOCaixaContaDeVolta(Action<bool, string> checar)
     {
-        var estado = new Atualizacao.EstadoDoCaixa(CaixaAberto: true, VendasPorSubir: 4);
+        var estado = new Atualizacao.EstadoDoCaixa(CaixaAberto: true, VendasPorSubir: 4,
+            Fila: "fila: venda 4 · mais antigo 12 min · último erro: HTTP 503: caos");
         var corpo = Atualizacao.CorpoDaPergunta("term-uuid-1", "loja-savassi", "0.3.0", estado,
             TimeSpan.FromSeconds(90));
+
+        // 04/09: a fila parou às 16:15 e o painel só dizia "turno aberto · nenhum". O
+        // resumo da fila vai no mesmo relato, e o servidor o pendura no último detalhe.
+        // JSON escapa "·" e "ú" como ·/ú, então se lê o campo, não o texto cru.
+        static string? Fila(string json)
+        {
+            using var d = System.Text.Json.JsonDocument.Parse(json);
+            return d.RootElement.GetProperty("_estado").TryGetProperty("fila", out var f)
+                   && f.ValueKind == System.Text.Json.JsonValueKind.String ? f.GetString() : null;
+        }
+        checar(Fila(corpo) == estado.Fila,
+            $"relato: o resumo da fila vai em _estado.fila, inteiro (viu: '{Fila(corpo)}')");
+        checar(Fila(Atualizacao.CorpoDaPergunta("t", "l", "0.3.0", estado with { Fila = null }, null)) is null,
+            "relato: sem conseguir ler a fila, o campo vai nulo (o servidor omite; o heartbeat não quebra)");
 
         checar(corpo.Contains("\"_versao\":\"0.3.0\""),
             "relato: a versão que ESTE caixa está rodando vai na pergunta — é ela que fecha o ciclo do painel");

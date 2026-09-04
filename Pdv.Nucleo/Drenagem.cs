@@ -152,123 +152,238 @@ public sealed class Drenagem : IDisposable
             // no servidor, então a ordem por id da fila já resolve (a venda entra antes)
             var vendaNaNuvem = new Dictionary<string, string>();   // ref_id local -> sale_id da nuvem
 
-            foreach (var item in fila)
+            foreach (object linha in fila)
             {
                 if (ct.IsCancellationRequested) break;
-                var tipo = (string)item.tipo;
-                var refId = (string)item.ref_id;
-                var (ok, erro) = tipo switch
-                {
-                    "venda" => await EnviarVendaAsync((string)item.payload, refId, vendaNaNuvem, token, ct).ConfigureAwait(false),
-                    "nfce_vinculo" => await VincularNotaAsync((string)item.payload, refId, vendaNaNuvem, token, ct).ConfigureAwait(false),
-                    "fechamento" => await EnviarFechamentoAsync((string)item.payload, refId, token, ct).ConfigureAwait(false),
-                    // Sangria/suprimento: alimenta o painel antifraude (sinal de sangria).
-                    // Sem isto a tabela pdv_caixa_movimentos fica vazia e o controle da
-                    // operação de maior risco nunca dispara.
-                    "movimento" => await EnviarMovimentoAsync(refId, (string)item.client_key, token, ct).ConfigureAwait(false),
-                    // Abertura do turno. Sem este ramo o item ficava preso na fila para
-                    // sempre (a fila só crescia) e a nuvem nunca sabia a que horas o
-                    // caixa abriu — o que deixava o "abriu atrasado" do relatório sem
-                    // a metade da informação.
-                    "caixa_sessao" => await EnviarAberturaAsync(refId, (string)item.client_key, token, ct).ConfigureAwait(false),
-                    // cancelamento de venda NÃO-fiscal: marca a venda como cancelada na
-                    // nuvem. (Venda com nota autorizada nem chega aqui — Vendas.Cancelar
-                    // recusa antes; a nota se cancela na SEFAZ.)
-                    "venda_cancelada" => await CancelarVendaAsync((string)item.client_key, (string)item.payload, token, ct).ConfigureAwait(false),
-                    // Resgate de cortesia que falhou na hora (rede caiu). Sem esta fila,
-                    // o cupom parcial continuava ATIVO no servidor apos a venda: cliente
-                    // levava os itens de graca E o cupom ficava resgatavel de novo, sem
-                    // rastro. Agora o resgate e' duravel como o resto.
-                    "cortesia_resgate" => await ResgatarCortesiaAsync((string)item.payload, token, ct).ConfigureAwait(false),
-                    // PRONTO do KDS: carimba kds_pronto_em na nuvem; a ponte no
-                    // servidor ve o carimbo e dispara o readyToPickup no iFood.
-                    "kds_pronto" => await EnviarKdsProntoAsync(refId, token, ct).ConfigureAwait(false),
-                    // Estorno de cartao/PIX que saiu SEM aprovacao remota (caiu para o
-                    // PIN do supervisor). E' o unico caminho pelo qual esse fato sai do
-                    // disco daquele caixa: a tabela `auditoria` nao sobe e nenhuma tela
-                    // do PDV a le. Sem esta linha, "o dono lista depois" so acontece indo
-                    // ate a loja com o SQLite na mao.
-                    Autorizacao.TipoNaFila => await EnviarEstornoSemAprovacaoAsync(
-                        (string)item.payload, (string)item.client_key, token, ct).ConfigureAwait(false),
-                    // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
-                    // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
-                    // para o dead-letter abaixo depois de poucas tentativas.
-                    _ => (false, $"tipo sem handler: {tipo}"),
-                };
 
-                var tentativas = item.tentativas is null ? 0L : (long)item.tentativas;
-                DateTime? primeiroErro = item.primeiro_erro_em is string pes
-                    && DateTime.TryParse(pes, out var pe) ? pe : null;
-                var agora = DateTime.Now;
+                // ISOLAMENTO POR ITEM (incidente 04/09/2026, Savassi). Os handlers
+                // engolem exceção, mas o código EM VOLTA deles (os casts do item
+                // dynamic, o Banco.Abrir, o UPDATE da linha) vivia dentro de UM try
+                // para a varredura inteira. Uma exceção ali abortava a varredura sem
+                // escrever NADA na linha, e a varredura seguinte (ORDER BY id) batia
+                // na MESMA linha primeiro: um item podre na frente = fila morta para
+                // sempre, em silêncio, com o caixa vivo e vendendo. Agora a exceção
+                // fica NA LINHA (conta tentativa, vira dead-letter no teto) e o laço
+                // segue para o próximo item.
+                long id;
+                try { id = (long)((dynamic)linha).id; }
+                catch (Exception ex) { AnotarFila($"linha sem id legível: {Corta(ex.Message)}"); continue; }
 
-                // ÚNICO ponto que escreve no outbox, sempre por id (PK). Ver o topo
-                // da classe: client_key não é única, e escrever por ela já errou o alvo.
-                using var cx = Banco.Abrir();
-                switch (DecidirFila(ok, tentativas, primeiroErro, agora))
+                try
                 {
-                    case AcaoFila.Enviado:
-                        // erro aqui é uma NOTA de desfecho (ex.: "venda nunca subiu;
-                        // nada a cancelar na nuvem") — vale guardar; senão preserva.
-                        //
-                        // MAS o rastro de DESISTÊNCIA morre aqui, sempre. O contador de
-                        // pendências lê `ultimo_erro LIKE 'desistido%'` para enxergar as
-                        // linhas antigas; preservá-lo depois de o servidor CONFIRMAR fazia
-                        // a venda reenviada com sucesso continuar somando no aviso — o
-                        // "apertei Sincronizar e continua 16" seguiria igual, agora com a
-                        // fila certa e o número mentindo. Desfecho novo apaga rastro velho.
-                        cx.Execute("""
-                            UPDATE outbox
-                               SET enviado_em   = @Em,
-                                   desistido_em = NULL,
-                                   ultimo_erro  = CASE
-                                       WHEN @E IS NOT NULL THEN @E
-                                       WHEN COALESCE(ultimo_erro,'') LIKE 'desistido%'
-                                         OR COALESCE(ultimo_erro,'') LIKE 'reaberto%' THEN NULL
-                                       ELSE ultimo_erro END
-                             WHERE id = @Id
-                            """, new { Em = agora.ToString("o"), E = erro, Id = (long)item.id });
+                    if (await ProcessarAsync(linha, id, vendaNaNuvem, token, ct).ConfigureAwait(false))
                         enviados++;
-                        break;
-                    // DEAD-LETTER: recusa que se repete não pode ficar eterna nem entupir
-                    // a janela de 50 (starvation: a fila só devolve linhas mortas e nada
-                    // novo sobe). Depois de MaxTentativas, sai da JANELA DE DRENAGEM com
-                    // o motivo gravado — mas em desistido_em, NUNCA em enviado_em: a
-                    // nuvem não recebeu nada. Marcar as duas coisas na mesma coluna foi o
-                    // que fez R$ 102.626,50 sumirem do contador de pendentes.
-                    case AcaoFila.DeadLetter:
-                        cx.Execute("UPDATE outbox SET desistido_em = @Em, tentativas = tentativas + 1, ultimo_erro = @E WHERE id = @Id",
-                            new { Em = agora.ToString("o"),
-                                  E = $"desistido após {tentativas + 1} tentativas — {erro ?? "recusado pelo servidor"}",
-                                  Id = (long)item.id });
-                        break;
-                    case AcaoFila.ContaTentativa:
-                        cx.Execute("UPDATE outbox SET tentativas = tentativas + 1, ultimo_erro = @E WHERE id = @Id",
-                            new { E = erro ?? "recusado pelo servidor", Id = (long)item.id });
-                        break;
-                    // Transitório que já falha há DiasParaDesistir (contados da primeira
-                    // falha real): desiste para não starvar a janela para sempre.
-                    case AcaoFila.ExpiraVelho:
-                        cx.Execute("UPDATE outbox SET desistido_em = @Em, ultimo_erro = @E WHERE id = @Id",
-                            new { Em = agora.ToString("o"),
-                                  E = $"desistido: dias falhando sem conseguir enviar — {erro ?? "sem resposta"}",
-                                  Id = (long)item.id });
-                        break;
-                    // Transitório recente: NÃO conta tentativa (rede volta), mas deixa o
-                    // rastro (um 5xx repetido era mudo — "presa sem ninguém saber por quê")
-                    // e carimba a primeira falha real, que é o relógio da expiração.
-                    case AcaoFila.Aguarda:
-                        cx.Execute("""
-                            UPDATE outbox SET ultimo_erro = COALESCE(@E, ultimo_erro),
-                                              primeiro_erro_em = COALESCE(primeiro_erro_em, @Agora)
-                             WHERE id = @Id
-                            """, new { E = erro, Agora = agora.ToString("o"), Id = (long)item.id });
-                        break;
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex) { RegistrarExcecao(id, ex); }
             }
             return enviados;
         }
-        catch { return 0; }
+        catch (Exception ex)
+        {
+            // Aborto GERAL (sessão, o SELECT da fila, banco fora). Devolver 0 sem dizer
+            // nada foi o silêncio de 04/09: o rastro vai para fila.txt e para a auditoria.
+            var msg = $"varredura abortada: {ex.GetType().Name}: {Corta(ex.Message)}";
+            AnotarFila(msg);
+            AuditarFila("fila_varredura_abortada", msg);
+            return 0;
+        }
         finally { _porta.Release(); }
+    }
+
+    /// <summary>
+    /// UM item da fila: handler, decisão e a escrita na linha. Devolve true quando o
+    /// servidor confirmou. Pode lançar (cast de coluna estranha, SQLite bloqueado):
+    /// quem chama isola a exceção na linha e segue para o próximo item.
+    /// </summary>
+    private async Task<bool> ProcessarAsync(object linha, long id, Dictionary<string, string> vendaNaNuvem,
+        string token, CancellationToken ct)
+    {
+        dynamic item = linha;
+        var tipo = (string)item.tipo;
+        var refId = (string)item.ref_id;
+        var (ok, erro) = tipo switch
+        {
+            "venda" => await EnviarVendaAsync((string)item.payload, refId, vendaNaNuvem, token, ct).ConfigureAwait(false),
+            "nfce_vinculo" => await VincularNotaAsync((string)item.payload, refId, vendaNaNuvem, token, ct).ConfigureAwait(false),
+            "fechamento" => await EnviarFechamentoAsync((string)item.payload, refId, token, ct).ConfigureAwait(false),
+            // Sangria/suprimento: alimenta o painel antifraude (sinal de sangria).
+            // Sem isto a tabela pdv_caixa_movimentos fica vazia e o controle da
+            // operação de maior risco nunca dispara.
+            "movimento" => await EnviarMovimentoAsync(refId, (string)item.client_key, token, ct).ConfigureAwait(false),
+            // Abertura do turno. Sem este ramo o item ficava preso na fila para
+            // sempre (a fila só crescia) e a nuvem nunca sabia a que horas o
+            // caixa abriu — o que deixava o "abriu atrasado" do relatório sem
+            // a metade da informação.
+            "caixa_sessao" => await EnviarAberturaAsync(refId, (string)item.client_key, token, ct).ConfigureAwait(false),
+            // cancelamento de venda NÃO-fiscal: marca a venda como cancelada na
+            // nuvem. (Venda com nota autorizada nem chega aqui — Vendas.Cancelar
+            // recusa antes; a nota se cancela na SEFAZ.)
+            "venda_cancelada" => await CancelarVendaAsync((string)item.client_key, (string)item.payload, token, ct).ConfigureAwait(false),
+            // Resgate de cortesia que falhou na hora (rede caiu). Sem esta fila,
+            // o cupom parcial continuava ATIVO no servidor apos a venda: cliente
+            // levava os itens de graca E o cupom ficava resgatavel de novo, sem
+            // rastro. Agora o resgate e' duravel como o resto.
+            "cortesia_resgate" => await ResgatarCortesiaAsync((string)item.payload, token, ct).ConfigureAwait(false),
+            // PRONTO do KDS: carimba kds_pronto_em na nuvem; a ponte no
+            // servidor ve o carimbo e dispara o readyToPickup no iFood.
+            "kds_pronto" => await EnviarKdsProntoAsync(refId, token, ct).ConfigureAwait(false),
+            // Estorno de cartao/PIX que saiu SEM aprovacao remota (caiu para o
+            // PIN do supervisor). E' o unico caminho pelo qual esse fato sai do
+            // disco daquele caixa: a tabela `auditoria` nao sobe e nenhuma tela
+            // do PDV a le. Sem esta linha, "o dono lista depois" so acontece indo
+            // ate a loja com o SQLite na mao.
+            Autorizacao.TipoNaFila => await EnviarEstornoSemAprovacaoAsync(
+                (string)item.payload, (string)item.client_key, token, ct).ConfigureAwait(false),
+            // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
+            // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
+            // para o dead-letter abaixo depois de poucas tentativas.
+            _ => (false, $"tipo sem handler: {tipo}"),
+        };
+
+        var tentativas = item.tentativas is null ? 0L : (long)item.tentativas;
+        DateTime? primeiroErro = item.primeiro_erro_em is string pes
+            && DateTime.TryParse(pes, out var pe) ? pe : null;
+        var agora = DateTime.Now;
+
+        // ÚNICO ponto que escreve no outbox por desfecho de envio, sempre por id (PK).
+        // Ver o topo da classe: client_key não é única, e escrever por ela já errou o
+        // alvo. (RegistrarExcecao escreve também, pelo mesmo id, quando ISTO lança.)
+        using var cx = Banco.Abrir();
+        switch (DecidirFila(ok, tentativas, primeiroErro, agora))
+        {
+            case AcaoFila.Enviado:
+                // erro aqui é uma NOTA de desfecho (ex.: "venda nunca subiu;
+                // nada a cancelar na nuvem") — vale guardar; senão preserva.
+                //
+                // MAS o rastro de DESISTÊNCIA morre aqui, sempre. O contador de
+                // pendências lê `ultimo_erro LIKE 'desistido%'` para enxergar as
+                // linhas antigas; preservá-lo depois de o servidor CONFIRMAR fazia
+                // a venda reenviada com sucesso continuar somando no aviso — o
+                // "apertei Sincronizar e continua 16" seguiria igual, agora com a
+                // fila certa e o número mentindo. Desfecho novo apaga rastro velho.
+                cx.Execute("""
+                    UPDATE outbox
+                       SET enviado_em   = @Em,
+                           desistido_em = NULL,
+                           ultimo_erro  = CASE
+                               WHEN @E IS NOT NULL THEN @E
+                               WHEN COALESCE(ultimo_erro,'') LIKE 'desistido%'
+                                 OR COALESCE(ultimo_erro,'') LIKE 'reaberto%' THEN NULL
+                               ELSE ultimo_erro END
+                     WHERE id = @Id
+                    """, new { Em = agora.ToString("o"), E = erro, Id = id });
+                return true;
+            // DEAD-LETTER: recusa que se repete não pode ficar eterna nem entupir
+            // a janela de 50 (starvation: a fila só devolve linhas mortas e nada
+            // novo sobe). Depois de MaxTentativas, sai da JANELA DE DRENAGEM com
+            // o motivo gravado — mas em desistido_em, NUNCA em enviado_em: a
+            // nuvem não recebeu nada. Marcar as duas coisas na mesma coluna foi o
+            // que fez R$ 102.626,50 sumirem do contador de pendentes.
+            case AcaoFila.DeadLetter:
+                cx.Execute("UPDATE outbox SET desistido_em = @Em, tentativas = tentativas + 1, ultimo_erro = @E WHERE id = @Id",
+                    new { Em = agora.ToString("o"),
+                          E = $"desistido após {tentativas + 1} tentativas — {erro ?? "recusado pelo servidor"}",
+                          Id = id });
+                return false;
+            case AcaoFila.ContaTentativa:
+                cx.Execute("UPDATE outbox SET tentativas = tentativas + 1, ultimo_erro = @E WHERE id = @Id",
+                    new { E = erro ?? "recusado pelo servidor", Id = id });
+                return false;
+            // Transitório que já falha há DiasParaDesistir (contados da primeira
+            // falha real): desiste para não starvar a janela para sempre.
+            case AcaoFila.ExpiraVelho:
+                cx.Execute("UPDATE outbox SET desistido_em = @Em, ultimo_erro = @E WHERE id = @Id",
+                    new { Em = agora.ToString("o"),
+                          E = $"desistido: dias falhando sem conseguir enviar — {erro ?? "sem resposta"}",
+                          Id = id });
+                return false;
+            // Transitório recente: NÃO conta tentativa (rede volta), mas deixa o
+            // rastro (um 5xx repetido era mudo — "presa sem ninguém saber por quê")
+            // e carimba a primeira falha real, que é o relógio da expiração.
+            default:
+                cx.Execute("""
+                    UPDATE outbox SET ultimo_erro = COALESCE(@E, ultimo_erro),
+                                      primeiro_erro_em = COALESCE(primeiro_erro_em, @Agora)
+                     WHERE id = @Id
+                    """, new { E = erro, Agora = agora.ToString("o"), Id = id });
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Exceção no processamento de UM item: fica NA LINHA, pelo id. Conta como recusa
+    /// permanente para o teto (a mesma matemática de <see cref="DecidirFila"/> com
+    /// ok=false): até MaxTentativas conta +1 e reinsiste; no teto vai para o dead-letter
+    /// com o motivo legível. Assim uma linha que lança em TODA varredura (payload que
+    /// não é texto, coluna com tipo estranho) sai da frente da fila em vez de voltar
+    /// para lá para sempre.
+    ///
+    /// `tentativas` é lido com CAST de propósito: se a coluna for a própria linha
+    /// envenenada (texto onde devia ser número), `tentativas + 1` no SQL viraria 1 e o
+    /// veneno sumiria sem rastro; aqui vira 0 e conta certo.
+    ///
+    /// Se nem gravar na linha der (SQLite bloqueado), o rastro vai para fila.txt e para
+    /// a auditoria, e o laço segue mesmo assim: parar a fila inteira por causa de uma
+    /// linha foi exatamente o defeito.
+    /// </summary>
+    private static void RegistrarExcecao(long id, Exception ex)
+    {
+        var mensagem = Corta(ex.Message.Replace('\r', ' ').Replace('\n', ' ').Trim());
+        AnotarFila($"linha {id}: {ex.GetType().Name}: {mensagem}");
+        var motivo = $"exceção: {mensagem}";
+        try
+        {
+            using var cx = Banco.Abrir();
+            var agora = DateTime.Now;
+            var tentativas = cx.ExecuteScalar<long?>(
+                "SELECT COALESCE(CAST(tentativas AS INTEGER), 0) FROM outbox WHERE id = @Id", new { Id = id }) ?? 0;
+            var deadLetter = DecidirFila(false, tentativas, null, agora) == AcaoFila.DeadLetter;
+            cx.Execute("""
+                UPDATE outbox
+                   SET tentativas       = @T,
+                       ultimo_erro      = @E,
+                       primeiro_erro_em = COALESCE(primeiro_erro_em, @Em),
+                       desistido_em     = CASE WHEN @Dead = 1 THEN @Em ELSE desistido_em END
+                 WHERE id = @Id
+                """, new
+                {
+                    T = tentativas + 1,
+                    E = deadLetter ? $"desistido após {tentativas + 1} tentativas: {motivo}" : motivo,
+                    Em = agora.ToString("o"),
+                    Dead = deadLetter ? 1 : 0,
+                    Id = id,
+                });
+        }
+        catch (Exception ex2)
+        {
+            var msg = $"linha {id}: não deu para gravar o erro na linha ({Corta(ex2.Message)}); erro original: {mensagem}";
+            AnotarFila(msg);
+            AuditarFila("fila_linha_sem_rastro", msg);
+        }
+    }
+
+    /// <summary>Uma linha em ProgramData\PdvNativo\fila.txt. Nunca derruba a fila.</summary>
+    private static void AnotarFila(string texto) => AnotarDiagnostico("fila.txt", texto);
+
+    private static string? _ultimaAuditoriaFila;
+
+    /// <summary>
+    /// Auditoria do que a fila não consegue dizer pela própria linha. Só quando o
+    /// texto MUDA: a cada 45 s a mesma varredura abortada viraria 1.900 registros por
+    /// dia, e trilha que ninguém lê é trilha que não existe. Nunca lança.
+    /// </summary>
+    private static void AuditarFila(string evento, string detalhe)
+    {
+        var chave = evento + "|" + detalhe;
+        if (chave == _ultimaAuditoriaFila) return;
+        try
+        {
+            using var cx = Banco.Abrir();
+            Caixa.Auditar(cx, null, evento, null, null, detalhe);
+            _ultimaAuditoriaFila = chave;
+        }
+        catch { /* banco fora: o arquivo já tem o rastro */ }
     }
 
     /// <summary>(true,_) confirmada · (false,motivo) recusa permanente · (null,motivo) transitório.</summary>
@@ -862,13 +977,20 @@ public sealed class Drenagem : IDisposable
     /// Nunca derruba a fila.
     /// </summary>
     private static void AnotarKdsPronto(string orderId, int status, string? corpo)
+        => AnotarDiagnostico("kds-pronto.txt", $"pedido={orderId}  http={status}  corpo={Corta(corpo)}");
+
+    /// <summary>
+    /// Uma linha datada num arquivo de diagnóstico em ProgramData\PdvNativo. Diagnóstico,
+    /// não histórico: recomeça em 1 MB. Nunca lança.
+    /// </summary>
+    private static void AnotarDiagnostico(string arquivo, string texto)
     {
         try
         {
-            var caminho = System.IO.Path.Combine(Banco.Pasta, "kds-pronto.txt");
+            System.IO.Directory.CreateDirectory(Banco.Pasta);
+            var caminho = System.IO.Path.Combine(Banco.Pasta, arquivo);
             if (System.IO.File.Exists(caminho) && new System.IO.FileInfo(caminho).Length > 1_000_000) System.IO.File.Delete(caminho);
-            System.IO.File.AppendAllText(caminho,
-                $"{DateTime.Now:dd/MM HH:mm:ss}  pedido={orderId}  http={status}  corpo={Corta(corpo)}{Environment.NewLine}");
+            System.IO.File.AppendAllText(caminho, $"{DateTime.Now:dd/MM HH:mm:ss}  {texto}{Environment.NewLine}");
         }
         catch { /* diagnostico nunca atrapalha o envio */ }
     }

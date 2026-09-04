@@ -1314,6 +1314,13 @@ Console.WriteLine();
 Console.WriteLine("--- Fila de sincronizacao (dead-letter) ---");
 await TestesFila.RodarAsync((cond, nome) => Check("fila: " + nome, cond));
 
+// -- FILA: uma linha envenenada nao pode parar a fila inteira (04/09, Savassi) --
+// A varredura abortava na primeira excecao fora dos handlers e batia na mesma linha
+// na passada seguinte: fila morta em silencio, com o caixa vivo e vendendo.
+Console.WriteLine();
+Console.WriteLine("--- Fila de sincronizacao (isolamento por item, poison row, rastro) ---");
+await TestesFila.RodarIsolamentoAsync((cond, nome) => Check("fila: " + nome, cond));
+
 // -- PENDENCIA: o aviso que nao se apaga -------------------------------------
 // 16 vendas / R$ 102.626,50 em dead-letter sem NENHUMA saida: o dono arrumava o
 // painel, apertava Sincronizar e o numero continuava 16. Aviso sem saida vira ruido.

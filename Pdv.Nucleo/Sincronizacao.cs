@@ -427,6 +427,17 @@ public static class Sincronizacao
             return "o painel não tinha caixa aberto para receber esta venda";
         if (Tem("tipo sem handler"))
             return "esta versão do PDV não sabe enviar este tipo de registro";
+        // Exceção no PRÓPRIO caixa ao processar a linha (não foi a nuvem que recusou).
+        // O trecho cru vai junto: é a única pista que o suporte tem.
+        var exc = erro!.IndexOf("exceção:", StringComparison.OrdinalIgnoreCase);
+        if (exc >= 0)
+        {
+            var trecho = erro[(exc + "exceção:".Length)..].Trim();
+            if (trecho.Length > 60) trecho = trecho[..60];
+            return trecho.Length > 0
+                ? $"o caixa falhou ao processar este registro ({trecho})"
+                : "o caixa falhou ao processar este registro";
+        }
 
         var http = System.Text.RegularExpressions.Regex.Match(erro!, @"HTTP (\d{3})");
         if (http.Success) return $"o painel recusou o envio (HTTP {http.Groups[1].Value})";
@@ -451,4 +462,65 @@ public static class Sincronizacao
     /// Não voltam sozinhas: precisam de reconciliação manual.
     /// </summary>
     public static int Desistidos() => VendasNaoEntregues().Desistidas;
+
+    /// <summary>
+    /// A fila, em uma linha, para o heartbeat do terminal (vira o "último detalhe" do
+    /// caixa no painel). Só o que ainda está PENDENTE (nem enviado, nem desistido): é
+    /// isso que decide se a nuvem está atrasada em relação ao balcão.
+    ///
+    /// POR QUE EXISTE: em 04/09/2026 a fila da Savassi parou às 16:15 e o painel só
+    /// dizia "turno aberto · nenhum · relógio -15s" por três horas, com o caixa vivo e
+    /// vendendo. O contador de vendas por subir já ia no mesmo relato e não bastou:
+    /// faltava o tipo do que estava preso, há quanto tempo e o erro que a fila via.
+    ///
+    /// Devolve null quando não dá para ler (banco bloqueado, esquema velho): o
+    /// heartbeat manda o relato de sempre, sem este campo. Nunca lança.
+    /// </summary>
+    public static string? ResumoDaFila()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            const string pendente = "enviado_em IS NULL AND desistido_em IS NULL";
+            var porTipo = cx.Query($"SELECT tipo, COUNT(*) AS n FROM outbox WHERE {pendente} GROUP BY tipo ORDER BY n DESC, tipo")
+                .Select(r => ((string)r.tipo, (int)(long)r.n))
+                .ToList();
+            var maisAntigoTxt = cx.ExecuteScalar<string?>($"SELECT MIN(criado_em) FROM outbox WHERE {pendente}");
+            DateTime? maisAntigo = maisAntigoTxt is not null
+                && DateTime.TryParse(maisAntigoTxt, System.Globalization.CultureInfo.InvariantCulture,
+                                     System.Globalization.DateTimeStyles.RoundtripKind, out var d)
+                ? (d.Kind == DateTimeKind.Utc ? d.ToLocalTime() : d) : null;
+            // A linha pendente mais nova que já tem rastro: é o erro mais recente que a
+            // fila escreveu (as linhas são visitadas em ordem de id a cada varredura).
+            var ultimoErro = cx.ExecuteScalar<string?>(
+                $"SELECT ultimo_erro FROM outbox WHERE {pendente} AND ultimo_erro IS NOT NULL ORDER BY id DESC LIMIT 1");
+            return MontarResumoDaFila(porTipo, maisAntigo, ultimoErro, DateTime.Now);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// O texto do resumo. PURA, para a suíte provar o formato sem banco:
+    /// "fila: venda 17, kds_pronto 3 · mais antigo 146 min · último erro: exceção: database is locked".
+    /// "fila vazia" quando não há pendência: some do painel é o que a fila fazia antes.
+    /// O erro é cortado em 60 caracteres (o painel guarda 400 no total) e nunca leva
+    /// travessão: isto é texto de tela.
+    /// </summary>
+    public static string MontarResumoDaFila(IReadOnlyList<(string Tipo, int Quantos)> porTipo,
+        DateTime? maisAntigo, string? ultimoErro, DateTime agora)
+    {
+        if (porTipo.Count == 0) return "fila vazia";
+        var partes = new List<string>
+        {
+            "fila: " + string.Join(", ", porTipo.Select(p => $"{p.Tipo} {p.Quantos}")),
+        };
+        if (maisAntigo is { } m)
+            partes.Add($"mais antigo {Math.Max(0, (int)(agora - m).TotalMinutes)} min");
+        if (!string.IsNullOrWhiteSpace(ultimoErro))
+        {
+            var e = ultimoErro.Replace('\r', ' ').Replace('\n', ' ').Replace('—', '-').Replace('–', '-').Trim();
+            partes.Add("último erro: " + (e.Length <= 60 ? e : e[..60]));
+        }
+        return string.Join(" · ", partes);
+    }
 }

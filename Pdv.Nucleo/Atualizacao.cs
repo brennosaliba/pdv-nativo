@@ -320,7 +320,8 @@ public static class Atualizacao
         int PapeisNaFila = 0,
         bool CaixaAberto = false,
         int VendasPorSubir = 0,
-        bool EstadoIncerto = false);
+        bool EstadoIncerto = false,
+        string? Fila = null);
 
     /// <param name="EstadoDesconhecido">Só existe no caminho AUTOMÁTICO: alguma coisa
     /// que o portão precisa saber não pôde ser lida. Ver <see cref="ImpedeSozinho"/>.</param>
@@ -947,6 +948,9 @@ public static class Atualizacao
                 // Segundos, e não texto: o painel precisa ORDENAR por isto para achar
                 // as máquinas de relógio torto antes de a SEFAZ recusar a nota delas.
                 desvio_relogio_seg = desvioDoRelogio is { } d ? (int)Math.Round(d.TotalSeconds) : (int?)null,
+                // A fila em uma linha (Sincronizacao.ResumoDaFila): tipo, idade e último
+                // erro do que está preso. Nulo quando não deu para ler; o servidor omite.
+                fila = estado?.Fila,
             },
         });
     }

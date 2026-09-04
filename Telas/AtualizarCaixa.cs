@@ -93,6 +93,11 @@ public static class AtualizarCaixa
 
         try { vendas = Sincronizacao.VendasNaoEntregues().Total; } catch { vendas = 0; }
 
+        // A fila em uma linha para o painel (04/09: ela parou por 3 h e o heartbeat
+        // não dizia nada). Falhou a leitura? Vai nulo e o relato segue como sempre.
+        string? fila = null;
+        try { fila = Sincronizacao.ResumoDaFila(); } catch { fila = null; }
+
         return new Atualizacao.EstadoDoCaixa(
             ItensNaComanda: itensNaComanda,
             MaquininhaOcupada: maquininhaOcupada,
@@ -100,7 +105,8 @@ public static class AtualizarCaixa
             PapeisNaFila: PapeisNaFila(),
             CaixaAberto: caixaAberto,
             VendasPorSubir: vendas,
-            EstadoIncerto: incerto);
+            EstadoIncerto: incerto,
+            Fila: fila);
     }
 
     // ── O ESTADO QUANDO NÃO TEM TELA PARA PERGUNTAR ───────────────────────────
