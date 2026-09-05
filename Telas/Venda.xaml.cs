@@ -2297,12 +2297,12 @@ public partial class Venda : UserControl
     /// em docs/TEF_PAYGO_homologacao.md): a linha do TEF vira 'estornada' e sai da soma do
     /// fechamento — se a venda continuasse 'finalizada', o caixa acusaria um cartão que não
     /// existe mais. Ordem: pré-checar (nota fiscal, turno) → motivo e confirmação →
-    /// AUTORIZAÇÃO (código de 6 dígitos no WhatsApp da gerência; PIN do supervisor como
-    /// saída quando a nuvem não responde) → CNC → só com o CNC aprovado cancela a venda.
+    /// AUTORIZAÇÃO (código do autenticador do dono, conferido pela nuvem; sem código não
+    /// há estorno) → CNC → só com o CNC aprovado cancela a venda.
     /// Venda com mais de um cartão só é cancelada no último.
     ///
-    /// A autorização inteira mora em <see cref="Autorizacao.ResolverAsync"/> — inclusive a
-    /// regra do modo de homologação. Aqui em cima só entra o que a decisão devolveu.
+    /// A autorização inteira mora em <see cref="Autorizacao.ResolverAsync"/>. Aqui em cima
+    /// só entra o que a decisão devolveu.
     /// </summary>
     private async Task EstornarTefAsync(Window dono, IProvedorTefOperavel cli)
     {
@@ -2396,21 +2396,17 @@ public partial class Venda : UserControl
                 "Estornar agora", "Voltar", perigo: true)) return;
 
         // ── AUTORIZAÇÃO ──────────────────────────────────────────────────────
-        // Vem DEPOIS do motivo e da confirmação de propósito: quem aprova recebe um
-        // WhatsApp de verdade, e a edge só deixa 5 pedidos por caixa a cada 10 min.
-        // Pedir antes acenderia o celular da gerente para todo estorno que o operador
-        // abre e desiste — e o aviso que acende à toa é o aviso que ninguém lê.
+        // Só o código do autenticador do dono (Google Authenticator) libera, e quem
+        // confere é a nuvem (RPC pdv_autorizacao_totp): o segredo não está neste
+        // caixa. Vem DEPOIS do motivo e da confirmação: pedir o código a cada estorno
+        // aberto e abandonado só ensina o operador a ligar para o dono à toa.
         //
-        // O modo de HOMOLOGAÇÃO continua liberando sem PIN e sem token (é decidido
-        // dentro de Autorizacao.ResolverAsync): os passos 20/21/22/54 do roteiro
-        // PayGo são estornos, rodados com a loja fechada e sem gerente para aprovar.
+        // NÃO EXISTE SAÍDA. Sem internet, sem sessão ou sem autenticador configurado,
+        // o estorno não sai. Decisão do dono (04/09/2026); o teste TL-3 vigia que
+        // nenhuma porta lateral (senha local, aprovação fabricada aqui) volte.
         DesfechoAutorizacao aut;
-        // Fica FORA do using: o pedido é a identidade deste estorno (referência,
-        // valor, NSU, venda, loja) e é ele que viaja para a nuvem lá embaixo, se o
-        // estorno acabar saindo sem aprovação remota.
         PedidoAutorizacao pedidoAut;
         using (var cxa = Banco.Abrir())
-        {
             pedidoAut = new PedidoAutorizacao(
                 Autorizacao.NomeDoTerminal(cxa),
                 Autorizacao.Referencia((string)l.tef_id, nsu, valor.Centavos, numero),
@@ -2420,53 +2416,32 @@ public partial class Venda : UserControl
                 Venda: numero.ToString(),
                 Forma: Forma((string)l.forma),
                 Nsu: nsu);
-            var telaAut = new TelaAutorizacao(dono);
+        try
+        {
+            aut = await Autorizacao.ResolverAsync(Servicos.Autorizador(), pedidoAut, new TelaAutorizacao(dono));
+        }
+        catch (Exception ex)
+        {
+            // ÚLTIMA REDE ANTES DE O PROCESSO MORRER. Este método é chamado de um
+            // `async void` sem catch, e o App não registra DispatcherUnhandledException:
+            // exceção que escape daqui encerra o Pdv.exe no meio do atendimento. Falha
+            // na autorização RECUSA o estorno: não libera por outro caminho e não
+            // derruba o caixa. O motivo técnico vai para a auditoria, não para a tela.
+            aut = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null,
+                "A autorização falhou neste caixa. Estorno não autorizado.");
             try
             {
-                aut = await Autorizacao.ResolverAsync(cxa, Servicos.Autorizador(), pedidoAut,
-                    _operador, telaAut);
+                using var cxe = Banco.Abrir();
+                Caixa.Auditar(cxe, null, "autorizacao_falhou", _operador.Id, null,
+                    $"venda={numero} nsu={nsu} · {ex.GetType().Name}: {ex.Message}");
             }
-            catch (Exception ex)
-            {
-                // ÚLTIMA REDE ANTES DE O PROCESSO MORRER. Este método é chamado de
-                // MenuTef, que é `async void` e tem finally mas NÃO tem catch, e o
-                // App não registra DispatcherUnhandledException: qualquer exceção
-                // que escape daqui encerra o Pdv.exe no meio do atendimento — e o
-                // operador nem chega a ver a saída do PIN. Já aconteceu por um
-                // ConfigureAwait(false) no núcleo (corrigido; teste UI-1/UI-2/UI-3),
-                // e nenhuma falha da autorização vale o caixa fechando sozinho.
-                //
-                // A degradação é a que o dono já decidiu para quando a nuvem não
-                // colabora: PIN do supervisor, com o estorno marcado como SEM
-                // APROVAÇÃO REMOTA na auditoria. Se nem o PIN sair, o estorno é
-                // recusado — mas o caixa continua de pé.
-                aut = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, null,
-                    "o pedido de aprovação não saiu deste caixa (" + ex.Message + ")");
-                try
-                {
-                    var supEmergencia = await telaAut.PedirPinAsync(
-                        "o pedido de aprovação por WhatsApp não saiu deste caixa");
-                    aut = supEmergencia is null
-                        ? aut with { Avisado = true }
-                        : new DesfechoAutorizacao(ViaAutorizacao.Pin, supEmergencia, null, null,
-                            "o pedido de aprovação por WhatsApp não saiu deste caixa");
-                }
-                catch { /* nem o PIN deu: recusa o estorno, mas não derruba o PDV */ }
-            }
+            catch { /* auditoria não pode derrubar o caixa */ }
         }
         if (!aut.Autorizado)
         {
-            if (!aut.Avisado)
-                Dialogo.Avisar(dono, "Estorno não autorizado",
-                    aut.Motivo + ".\n\nNada foi estornado. Chame o gerente.", "erro");
+            if (!aut.Avisado) Dialogo.Avisar(dono, "Autorização", aut.Motivo, "erro");
             return;
         }
-        var sup = aut.Supervisor;
-        // Diferente da sangria, o próprio supervisor PODE autorizar pelo PIN (loja de uma
-        // pessoa só não teria como estornar) — o PayGo ainda exige a senha do lojista no
-        // CNC, e a auditoria marca a auto-autorização em destaque. Aprovado por WhatsApp
-        // não existe auto-autorização: quem aprovou está fora da loja.
-        var autoAutorizado = sup is not null && sup.Id == _operador.Id ? " [AUTO-AUTORIZADO]" : "";
         var trilha = Autorizacao.Trilha(aut);
 
         // ── NOTA FISCAL PRIMEIRO ─────────────────────────────────────────────
@@ -2526,11 +2501,11 @@ public partial class Venda : UserControl
         }
         if (!d.Pago)
         {
-            // Estorno NEGADO pela rede: nenhum dinheiro voltou, então isto não entra na
-            // lista dos estornos que escaparam do token — mas a trilha fica registrada.
+            // Estorno NEGADO pela rede: nenhum dinheiro voltou, mas a trilha (quem
+            // autorizou) fica registrada.
             using var cxn = Banco.Abrir();
             Caixa.Auditar(cxn, null, "tef_estorno_negado", _operador.Id, aut.Autorizador,
-                $"venda={numero} nsu={nsu} {d.Motivo}{autoAutorizado}{trilha}");
+                $"venda={numero} nsu={nsu} {d.Motivo}{trilha}");
             Dialogo.Avisar(dono, "Estorno negado",
                 $"A maquininha não aprovou o estorno: {d.MensagemParaTela}.\n\n" +
                 "O dinheiro não voltou para o cliente." +
@@ -2557,16 +2532,7 @@ public partial class Venda : UserControl
             var dinheiro = cx.ExecuteScalar<long>(
                 "SELECT COALESCE(SUM(valor_cent - troco_cent), 0) FROM venda_pagamento WHERE venda_id = @V AND forma = 'dinheiro'",
                 new { V = vendaId });
-            var detalhe = $"venda={numero} nsu={nsu} valor={valor.Formatado()} · {motivo}{autoAutorizado}{trilha}";
-
-            // O DINHEIRO JÁ VOLTOU (o CNC foi aprovado): é aqui, e só aqui, que o estorno
-            // vira fato consumado. Se este estorno escapou do token, a linha própria sai
-            // AGORA — antes disso a lista do dono encheria de estorno que nem aconteceu.
-            // Sai em DOIS lugares na mesma transação: a auditoria local e a FILA da nuvem
-            // (a tabela `auditoria` nunca sobe, então sem a fila a lista do dono ficaria
-            // presa no disco deste caixa — exatamente no cenário de internet caída).
-            Autorizacao.AuditarSemAprovacaoRemota(cx, aut, _operador.Id,
-                $"venda={numero} nsu={nsu} valor={valor.Formatado()}", pedidoAut, vendaId);
+            var detalhe = $"venda={numero} nsu={nsu} valor={valor.Formatado()} · {motivo}{trilha}";
 
             if (restantes > 0)
             {
@@ -2816,84 +2782,58 @@ public partial class Venda : UserControl
                 plano.Arriscado ? "Tentar mesmo assim" : "Cancelar a venda", "Voltar", perigo: true)) return;
 
         // ── AUTORIZAÇÃO ──────────────────────────────────────────────────────
-        // Cancelar nota é ato fiscal: passa pelo MESMO caminho do estorno (token de
-        // 6 dígitos no WhatsApp da gerência, PIN do supervisor como saída quando a
-        // nuvem não responde). Vem depois do motivo e da confirmação pelo motivo de
-        // sempre: o aviso que acende à toa é o aviso que ninguém lê.
+        // Cancelar nota é ato fiscal: passa pelo MESMO caminho do estorno (código do
+        // autenticador do dono, conferido pela nuvem; sem código não cancela). Vem
+        // depois do motivo e da confirmação pelo motivo de sempre: pedir o código a
+        // cada cancelamento aberto e abandonado só ensina a ligar para o dono à toa.
         DesfechoAutorizacao aut;
         PedidoAutorizacao pedidoAut;
         using (var cxa = Banco.Abrir())
-        {
             pedidoAut = new PedidoAutorizacao(
                 Autorizacao.NomeDoTerminal(cxa),
-                // Referência PRÓPRIA (prefixo "cancelamento:"): um token aprovado para
-                // esta venda não pode servir para cancelar outra — nem para um estorno.
+                // Referência PRÓPRIA (prefixo "cancelamento:"): o log da nuvem separa
+                // cancelar esta venda de devolver dinheiro no cartão.
                 Autorizacao.ReferenciaCancelamento(vendaId, numero, total.Centavos),
                 total.Centavos,
                 Loja: cxa.ExecuteScalar<string?>("SELECT loja_nome FROM terminal LIMIT 1"),
                 Operador: _operador.Nome,
                 Venda: numero.ToString(),
-                // Quem aprova pelo WhatsApp precisa saber COMO a venda foi paga: é o que
-                // deixa claro que não existe estorno automático nenhum nesta aprovação.
+                // COMO a venda foi paga vai para o log: deixa claro que não existe
+                // estorno automático nenhum nesta aprovação.
                 Forma: CancelamentoVenda.ResumoDasFormas(pagsAlvo),
-                Nsu: null);
-            var telaAut = new TelaAutorizacao(dono);
+                Nsu: null) { Tipo = "cancelamento" };
+        try
+        {
+            aut = await Autorizacao.ResolverAsync(Servicos.Autorizador(), pedidoAut, new TelaAutorizacao(dono));
+        }
+        catch (Exception ex)
+        {
+            // MESMA REDE DO ESTORNO, e pelo mesmo motivo: este método é chamado de um
+            // `async void` sem catch, e o App não registra DispatcherUnhandledException.
+            // Falha na autorização RECUSA o cancelamento; não libera por outro caminho.
+            aut = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null,
+                "A autorização falhou neste caixa. Cancelamento não autorizado.");
             try
             {
-                aut = await Autorizacao.ResolverAsync(cxa, Servicos.Autorizador(), pedidoAut,
-                    _operador, telaAut);
+                using var cxe = Banco.Abrir();
+                Caixa.Auditar(cxe, null, "autorizacao_falhou", _operador.Id, null,
+                    $"cancelamento de venda={numero} · {ex.GetType().Name}: {ex.Message}");
             }
-            catch (Exception ex)
-            {
-                // MESMA REDE DO ESTORNO, e pelo mesmo motivo: este método é chamado de
-                // um `async void` sem catch, e o App não registra
-                // DispatcherUnhandledException — exceção que escape daqui ENCERRA o
-                // Pdv.exe no meio do atendimento. Nenhuma falha de autorização vale o
-                // caixa fechando sozinho.
-                aut = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, null,
-                    "o pedido de aprovação não saiu deste caixa (" + ex.Message + ")");
-                try
-                {
-                    var supEmergencia = await telaAut.PedirPinAsync(
-                        "o pedido de aprovação por WhatsApp não saiu deste caixa");
-                    aut = supEmergencia is null
-                        ? aut with { Avisado = true }
-                        : new DesfechoAutorizacao(ViaAutorizacao.Pin, supEmergencia, null, null,
-                            "o pedido de aprovação por WhatsApp não saiu deste caixa");
-                }
-                catch { /* nem o PIN deu: recusa o cancelamento, mas não derruba o PDV */ }
-            }
+            catch { /* auditoria não pode derrubar o caixa */ }
         }
         if (!aut.Autorizado)
         {
-            if (!aut.Avisado)
-                Dialogo.Avisar(dono, "Cancelamento não autorizado",
-                    aut.Motivo + ".\n\nNada foi cancelado. Chame o gerente.", "erro");
+            if (!aut.Avisado) Dialogo.Avisar(dono, "Autorização", aut.Motivo, "erro");
             return;
         }
 
         var trilha = Autorizacao.Trilha(aut);
-        var autoAutorizado = aut.Supervisor is { } quem && quem.Id == _operador.Id ? " [AUTO-AUTORIZADO]" : "";
         // A auditoria diz COMO a venda foi paga e que a devolução é MANUAL: quem for
         // conferir isto depois (o dono, o contador) precisa saber que o PDV não
-        // devolveu nada — senão o cancelamento parece um estorno que nunca houve.
+        // devolveu nada, senão o cancelamento parece um estorno que nunca houve.
         var detalhe = $"venda={numero} total={total.Formatado()} pago em " +
                       $"{CancelamentoVenda.ResumoDasFormas(pagsAlvo)} (devolução do dinheiro é MANUAL, " +
-                      $"fora do PDV) · {motivo}{autoAutorizado}{trilha}";
-
-        // A linha "escapou do token" sai UMA vez, no PRIMEIRO ato irreversível — que
-        // aqui é a nota (evento 110111 registrado não volta atrás), e só na falta
-        // dela é a venda. Sem o guarda ela sairia duas vezes e o painel do dono
-        // contaria dois cancelamentos onde houve um.
-        var registrou = false;
-        void RegistrarEscape()
-        {
-            if (registrou) return;
-            registrou = true;
-            using var c = Banco.Abrir();
-            Autorizacao.AuditarSemAprovacaoRemota(c, aut, _operador.Id,
-                $"cancelamento de venda={numero} total={total.Formatado()}", pedidoAut, vendaId);
-        }
+                      $"fora do PDV) · {motivo}{trilha}";
 
         // ── A NOTA PRIMEIRO ──────────────────────────────────────────────────
         if (plano.CancelaNota)
@@ -2936,7 +2876,6 @@ public partial class Venda : UserControl
                     Caixa.Auditar(cxn, null, "nfce_cancelada_sefaz", _operador.Id, aut.Autorizador,
                         $"venda={numero} chave={chaveNfce} · {rc.Mensagem}{trilha}");
                 }
-                RegistrarEscape();
             }
         }
 
@@ -2956,10 +2895,9 @@ public partial class Venda : UserControl
                     "Chame o gerente.\n\nDetalhe: " + ex.Message, "erro");
                 return;
             }
-            RegistrarEscape();
             // Linha separada da que `Vendas.Cancelar` grava: é esta que carrega a
-            // TRILHA (quem aprovou, ou o aviso em maiúsculas de que ninguém de fora
-            // aprovou). O motivo que sobe para a nuvem fica limpo do lado de lá.
+            // TRILHA (quem aprovou pelo autenticador). O motivo que sobe para a nuvem
+            // fica limpo do lado de lá.
             Caixa.Auditar(cx, null, "cancelamento_autorizado", _operador.Id, aut.Autorizador, detalhe);
         }
 

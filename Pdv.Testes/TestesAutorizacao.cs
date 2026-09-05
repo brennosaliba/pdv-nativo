@@ -1,46 +1,47 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Dapper;
 using Pdv.Nucleo;
 
 namespace Pdv.Testes;
 
 /// <summary>
-/// AUTORIZAÇÃO DE ESTORNO POR TOKEN DE WHATSAPP.
+/// AUTORIZAÇÃO DE ESTORNO PELO AUTENTICADOR DO DONO (TOTP).
 ///
 /// O estorno é o único ponto do PDV onde dinheiro VOLTA para o cliente sem que
-/// nada tenha sido vendido — e até hoje ele era liberado por um PIN guardado no
-/// banco do próprio caixa. Quem opera e quem autoriza podiam ser a mesma pessoa.
-///
-/// Aqui o caminho normal passa a ser um código de 6 dígitos que a nuvem manda no
-/// WhatsApp da gerente geral e do dono. Mas o PIN CONTINUA VALENDO COMO SAÍDA:
-/// se a nuvem não responder em 15 s, o caixa cai para o PIN — e a auditoria
-/// registra, num evento DISTINTO, que aquele estorno saiu sem aprovação remota.
+/// nada tenha sido vendido. Já foi PIN do supervisor (segredo no banco do próprio
+/// caixa), já foi código por mensagem com o PIN como saída (segredo copiável e
+/// saída que um funcionário mal-intencionado usava). Agora é UM caminho só: o
+/// código de 6 dígitos do Google Authenticator do dono, conferido na nuvem pela
+/// RPC `pdv_autorizacao_totp`. O segredo vive só no servidor; o caixa nunca vê,
+/// nunca guarda, nunca loga.
 ///
 /// O que esta suíte protege, em ordem de estrago:
-///  · o cliente no balcão nunca fica sem estorno (rede caída ⇒ PIN, sempre);
-///  · o dono consegue LISTAR depois os estornos que escaparam do token;
-///  · o token é de UM estorno só — não serve para estornar outra venda;
-///  · o operador nunca fica preso numa tela sem saída;
-///  · o código digitado não vai parar em log nem em auditoria.
+///  · NENHUM caminho de estorno ou cancelamento passa sem Via=Totp (garantido
+///    pela FONTE dos arquivos que entram no .exe, não só pela máquina de estados);
+///  · não existe saída pelo PIN, nem "sem aprovação remota": sem internet, sem
+///    sessão ou sem autenticador configurado, o estorno simplesmente não sai;
+///  · o código digitado nunca aparece em log nem em auditoria (mascarado);
+///  · a chamada vai com o bearer da SESSÃO do terminal, não com a chave pública;
+///  · o operador nunca fica preso: 3 códigos inválidos e a tela desiste.
 ///
-/// A nuvem aqui é <see cref="FakeAutorizacao"/> (contrato da edge
-/// `pdv-autorizacao`), porque a de verdade acende o celular do dono.
+/// A nuvem aqui é <see cref="FakeTotp"/>, que fala TOTP de verdade (vetores da
+/// RFC 6238 conferidos em FK-*), porque a RPC real ainda não existe neste
+/// ambiente e o segredo do dono não pode viver em máquina de teste.
 /// </summary>
 public static class TestesAutorizacao
 {
     /// <summary>Tela de mentira: o que precisaria de janela vira delegate roteirizável.</summary>
     private sealed class TelaFalsa : ITelaAutorizacao
     {
-        public Func<RespostaSolicitacao, string?, RespostaCodigo>? AoPedirCodigo;
-        public Func<string, EscolhaAposFalha>? AoFalhar;
-        public Operador? PinDevolve;
+        /// <summary>aviso → código digitado (null = o operador cancelou).</summary>
+        public Func<string?, string?>? AoPedirCodigo;
 
-        public int VezesPediuCodigo, VezesPediuPin, VezesAguardou;
+        public int VezesPediuCodigo, VezesAguardou;
         public readonly List<string> Esperas = new();
         public readonly List<string?> Avisos = new();
-        public string? MotivoDoPin;
 
         private sealed class Nada : IDisposable { public void Dispose() { } }
 
@@ -51,37 +52,19 @@ public static class TestesAutorizacao
             return new Nada();
         }
 
-        public Task<RespostaCodigo> PedirCodigoAsync(RespostaSolicitacao pedido, string? aviso)
+        public Task<string?> PedirCodigoAsync(string? aviso)
         {
             VezesPediuCodigo++;
             Avisos.Add(aviso);
-            return Task.FromResult(AoPedirCodigo?.Invoke(pedido, aviso)
-                                   ?? new RespostaCodigo(AcaoCodigo.Cancelar, null));
-        }
-
-        public Task<EscolhaAposFalha> EscolherAposFalhaAsync(string mensagem)
-            => Task.FromResult(AoFalhar?.Invoke(mensagem) ?? EscolhaAposFalha.Desistir);
-
-        public Task<Operador?> PedirPinAsync(string motivo)
-        {
-            VezesPediuPin++;
-            MotivoDoPin = motivo;
-            return Task.FromResult(PinDevolve);
+            return Task.FromResult(AoPedirCodigo?.Invoke(aviso));
         }
     }
 
     /// <summary>
     /// O DISPATCHER DO WPF DE POBRE: uma thread só, com fila e
-    /// <see cref="SynchronizationContext"/>.
-    ///
-    /// Existe porque o estrago que esta suíte não pegava é de THREAD, não de
-    /// lógica: <see cref="TelaFalsa"/> passa em qualquer thread, então um
-    /// `ConfigureAwait(false)` no núcleo ficava verde aqui e derrubava o Pdv.exe
-    /// no primeiro estorno de verdade (janela do WPF só aceita ser tocada pela
-    /// thread que a criou). Trazer WPF para o Pdv.Testes não dá — o projeto é
-    /// net8.0 sem SDK de janela. Mas a REGRA que o WPF impõe é só esta: a
-    /// continuação tem que voltar para a thread que entrou. Um contexto de
-    /// thread única a reproduz inteira, e roda headless.
+    /// <see cref="SynchronizationContext"/>. A regra que o WPF impõe é só esta: a
+    /// continuação tem que voltar para a thread que entrou. Um contexto de thread
+    /// única a reproduz inteira, e roda headless.
     /// </summary>
     private sealed class ThreadDeTela : IDisposable
     {
@@ -89,7 +72,6 @@ public static class TestesAutorizacao
         private readonly ManualResetEventSlim _pronta = new(false);
         private readonly Thread _thread;
 
-        /// <summary>A "thread da UI": é a ela que tudo que toca janela precisa voltar.</summary>
         public int Id;
 
         public ThreadDeTela()
@@ -117,15 +99,11 @@ public static class TestesAutorizacao
             }
         }
 
-        /// <summary>Roda `trabalho` NA thread da tela — o equivalente ao clique do operador.</summary>
         public Task<T> ExecutarAsync<T>(Func<Task<T>> trabalho)
         {
             var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
             async Task Correr()
             {
-                // O catch é o que faz o teste ACUSAR em vez de travar: hoje a
-                // InvalidOperationException do WPF escapa de ResolverAsync, e sem
-                // isto o await do teste ficaria pendurado para sempre.
                 try { tcs.SetResult(await trabalho()); }
                 catch (Exception ex) { tcs.SetException(ex); }
             }
@@ -141,23 +119,14 @@ public static class TestesAutorizacao
         }
     }
 
-    /// <summary>
-    /// Tela que não desenha nada: só anota EM QUE THREAD cada coisa aconteceu —
-    /// inclusive o Dispose do aviso de espera, que é exatamente onde o
-    /// <c>Espera.Dispose</c> de verdade faz <c>_dono.IsEnabled = true</c>.
-    /// </summary>
+    /// <summary>Tela que só anota EM QUE THREAD cada coisa aconteceu, inclusive o Dispose da espera.</summary>
     private sealed class TelaQueAnotaThread : ITelaAutorizacao
     {
         private readonly int _ui;
         public TelaQueAnotaThread(int ui) => _ui = ui;
 
-        public Func<RespostaSolicitacao, string?, RespostaCodigo>? AoPedirCodigo;
-        public Func<string, EscolhaAposFalha>? AoFalhar;
-        public Operador? PinDevolve;
-
-        public int VezesPediuCodigo, VezesPediuPin, VezesAguardou, VezesFechouEspera;
-
-        /// <summary>Cada linha aqui é uma janela tocada da thread errada — no PDV, um crash.</summary>
+        public Func<string?, string?>? AoPedirCodigo;
+        public int VezesPediuCodigo, VezesAguardou, VezesFechouEspera;
         public readonly List<string> ForaDaThreadDaTela = new();
 
         private void Anotar(string onde)
@@ -182,68 +151,25 @@ public static class TestesAutorizacao
             return new Aviso(() => { VezesFechouEspera++; Anotar("Dispose da espera"); });
         }
 
-        public Task<RespostaCodigo> PedirCodigoAsync(RespostaSolicitacao pedido, string? aviso)
+        public Task<string?> PedirCodigoAsync(string? aviso)
         {
             VezesPediuCodigo++;
             Anotar("PedirCodigoAsync");
-            return Task.FromResult(AoPedirCodigo?.Invoke(pedido, aviso)
-                                   ?? new RespostaCodigo(AcaoCodigo.Cancelar, null));
-        }
-
-        public Task<EscolhaAposFalha> EscolherAposFalhaAsync(string mensagem)
-        {
-            Anotar("EscolherAposFalhaAsync");
-            return Task.FromResult(AoFalhar?.Invoke(mensagem) ?? EscolhaAposFalha.Desistir);
-        }
-
-        public Task<Operador?> PedirPinAsync(string motivo)
-        {
-            VezesPediuPin++;
-            Anotar("PedirPinAsync");
-            return Task.FromResult(PinDevolve);
+            return Task.FromResult(AoPedirCodigo?.Invoke(aviso));
         }
     }
 
     private const string Terminal = "Caixa Savassi 1";
     private const string Loja = "American Day Savassi";
+    private const string TerminalUuid = "9a1c0c2e-0000-4000-8000-terminal0001";
 
     private static PedidoAutorizacao PedidoDe(string tefId, string nsu, long centavos, long venda)
         => new(Terminal, Autorizacao.Referencia(tefId, nsu, centavos, venda), centavos,
                Loja: Loja, Operador: "Bia", Venda: venda.ToString(), Forma: "credito", Nsu: nsu);
 
-    /// <summary>O código que a Ingrid recebeu no WhatsApp daquele token.</summary>
-    private static string CodigoDe(FakeAutorizacao fake, RespostaSolicitacao r, string scope = "manager")
-        => r.Id is { Length: > 0 } id && fake.Codigos.TryGetValue(id, out var lista)
-            ? lista.First(c => c.Scope == scope).Codigo
-            : "000000";   // sem token (a nuvem não respondeu): o teste segue e a asserção falha
-
-    /// <summary>Um código de 6 dígitos que com CERTEZA não é de nenhum aprovador daquele token.</summary>
-    private static string ErradoDe(FakeAutorizacao fake, RespostaSolicitacao r)
-    {
-        var certos = r.Id is { Length: > 0 } id && fake.Codigos.TryGetValue(id, out var lista)
-            ? lista.Select(c => c.Codigo).ToHashSet()
-            : new HashSet<string>();
-        for (var n = 0; n < 1_000_000; n++)
-            if (certos.Add(n.ToString("D6"))) return n.ToString("D6");
-        return "000000";
-    }
-
-    /// <summary>
-    /// Espera a nuvem terminar o que o caixa já desistiu de esperar. É o miolo do
-    /// token fantasma: quando o PDV cai para o PIN, a edge NÃO para — ela segue
-    /// criando a linha e mandando o WhatsApp. Sem esperar esse rabo, o teste
-    /// contaria o token antes de ele existir.
-    /// </summary>
-    private static async Task<bool> EsperarAsync(Func<bool> ate, int limiteMs = 8000)
-    {
-        var cron = Stopwatch.StartNew();
-        while (cron.ElapsedMilliseconds < limiteMs)
-        {
-            if (ate()) return true;
-            await Task.Delay(25);
-        }
-        return ate();
-    }
+    private static ClienteAutorizacao ClienteDe(FakeTotp fake, string? token, TimeSpan? tempo = null)
+        => new(_ => Task.FromResult(token), fake.Url, fake.AnonKey, tempo ?? TimeSpan.FromSeconds(5),
+               () => TerminalUuid);
 
     private static string Txt(JsonElement e, string nome)
         => e.TryGetProperty(nome, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
@@ -265,6 +191,34 @@ public static class TestesAutorizacao
         if (raiz is null) return null;
         var alvo = Path.Combine(new[] { raiz }.Concat(partes).ToArray());
         return File.Exists(alvo) ? File.ReadAllText(alvo) : null;
+    }
+
+    /// <summary>Só o que ENTRA no .exe: raiz + Telas + Pdv.Nucleo (sem Pdv.Testes nem Pdv.Instalador).</summary>
+    private static string[] FontesDoExe()
+    {
+        var raiz = Raiz();
+        if (raiz is null) return Array.Empty<string>();
+        return Directory.EnumerateFiles(raiz, "*.cs", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.EnumerateFiles(Path.Combine(raiz, "Telas"), "*.cs", SearchOption.AllDirectories))
+            .Concat(Directory.EnumerateFiles(Path.Combine(raiz, "Pdv.Nucleo"), "*.cs", SearchOption.AllDirectories))
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                     && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+            .ToArray();
+    }
+
+    private static string Trecho(string todo, string de, string ate)
+    {
+        var i = todo.IndexOf(de, StringComparison.Ordinal);
+        if (i < 0) return "";
+        var f = todo.IndexOf(ate, i, StringComparison.Ordinal);
+        return f < 0 ? "" : todo[i..f];
+    }
+
+    private static bool Ordem(string corpo, string primeiro, string depois)
+    {
+        var a = corpo.IndexOf(primeiro, StringComparison.Ordinal);
+        var b = corpo.IndexOf(depois, StringComparison.Ordinal);
+        return a >= 0 && b > a;
     }
 
     /// <summary>Papel declarado dentro do JWT (o "role" do payload), sem validar assinatura.</summary>
@@ -291,591 +245,463 @@ public static class TestesAutorizacao
         {
             Banco.Migrar(arquivo);
             using var cx = Banco.Abrir(arquivo);
-
             var op = new Operador("op-aut", "Bia", "operador");
             Operadores.Salvar(cx, op.Id, op.Nome, "1234", "operador");
-            var sup = new Operador("sup-aut", "Rita", "supervisor");
-            Operadores.Salvar(cx, sup.Id, sup.Nome, "9876", "supervisor");
 
-            using var fake = new FakeAutorizacao();
+            using var fake = new FakeTotp();
+            var segredoRfc = System.Text.Encoding.ASCII.GetBytes("12345678901234567890");
 
-            // ── 1. CONTRATO COM A EDGE ──────────────────────────────────────
-            var cli = new ClienteAutorizacao(fake.Url, "chave-publica-de-teste", TimeSpan.FromSeconds(5));
+            // ── 0. O FAKE FALA TOTP DE VERDADE (vetores da RFC 6238, SHA1, 6 dígitos) ──
+            // Os mesmos quatro vetores são obrigatórios na suíte do banco (ERP): se
+            // os dois lados batem com a RFC, batem entre si.
+            checar(FakeTotp.Codigo(segredoRfc, 59) == "287082", "FK-1 RFC 6238: T=59 → 287082");
+            checar(FakeTotp.Codigo(segredoRfc, 1111111109) == "081804", "FK-2 RFC 6238: T=1111111109 → 081804");
+            checar(FakeTotp.Codigo(segredoRfc, 1234567890) == "005924", "FK-3 RFC 6238: T=1234567890 → 005924");
+            checar(FakeTotp.Codigo(segredoRfc, 2000000000) == "279037", "FK-4 RFC 6238: T=2000000000 → 279037");
+
+            // Relógio FIXO no fake: a suíte não pode depender de virar o passo de 30 s
+            // no meio de um cenário. 1234567890 é o vetor 3 da RFC (T=41152263).
+            var relogio = DateTimeOffset.FromUnixTimeSeconds(1234567890);
+            fake.Relogio = () => relogio;
+            long Passo() => relogio.ToUnixTimeSeconds() / 30;
+            // Um contador só vale UMA vez (replay): entre cenários que precisam de
+            // código aceito, o relógio anda um passo, como o celular do dono andaria.
+            void ProximoPasso() => relogio = relogio.AddSeconds(30);
+
+            // ── 1. CONTRATO DO CLIENTE COM A RPC ────────────────────────────
+            var cli = ClienteDe(fake, fake.Token);
+            var diagnostico = new List<string>();
+            cli.Diagnostico = l => { lock (diagnostico) diagnostico.Add(l); };
+            var codigosDigitados = new List<string>();
+
             var pedido = PedidoDe("paygo-1", "000123", 1200, 142);
+            var codigo1 = fake.CodigoAgora();
+            codigosDigitados.Add(codigo1);
+            var v1 = await cli.ValidarTotpAsync(codigo1, pedido.Referencia, pedido.Tipo,
+                Autorizacao.Detalhe(pedido), CancellationToken.None);
+            checar(v1.Ok && v1.Definitiva && v1.Id is { Length: > 0 } && (v1.Autorizador ?? "").Contains("Brenno"),
+                "CT-1 código do autenticador do dono autoriza: a RPC devolve id do registro e QUEM é o dono"
+                + $" (ok={v1.Ok} motivo={v1.Motivo})");
 
-            var r1 = await cli.SolicitarAsync(pedido, CancellationToken.None);
-            checar(r1.Ok && !string.IsNullOrWhiteSpace(r1.Id) && r1.Destinatarios.Count == 2,
-                "CT-1 solicitar devolve o id do token e para quem o código foi (dono + gerente)");
+            fake.Chamadas.TryPeek(out var primeira);
+            checar(primeira is not null && primeira.Caminho == FakeTotp.Caminho,
+                "CT-2 a chamada é POST /rest/v1/rpc/pdv_autorizacao_totp (a RPC do contrato)");
+            checar(primeira is not null && primeira.Authorization == "Bearer " + fake.Token
+                   && primeira.ApiKey == fake.AnonKey,
+                "CT-3 vai com o bearer da SESSÃO do terminal (usuário authenticated) e a chave pública no apikey");
+            var jc = JsonDocument.Parse(primeira?.Corpo ?? "{}").RootElement;
+            var jd = jc.TryGetProperty("_detalhe", out var det) ? det : default;
+            checar(Txt(jc, "_codigo") == codigo1
+                   && Txt(jc, "_referencia") == pedido.Referencia
+                   && Txt(jc, "_tipo") == "estorno"
+                   && Txt(jc, "_terminal_uuid") == TerminalUuid
+                   && jd.ValueKind == JsonValueKind.Object
+                   && Txt(jd, "venda") == "142" && Txt(jd, "nsu") == "000123" && Num(jd, "valor_cent") == 1200
+                   && Txt(jd, "operador") == "Bia" && Txt(jd, "loja") == Loja,
+                "CT-4 o corpo leva _codigo, _referencia, _tipo, _terminal_uuid e _detalhe (venda, NSU, valor, operador, loja)");
+            checar(!jc.ToString().Contains("_agora", StringComparison.Ordinal),
+                "CT-5 o caixa NÃO manda _agora (o relógio que vale é o do servidor)");
 
-            var codigoIngrid = r1.Ok ? CodigoDe(fake, r1) : "000000";
-            checar(r1.Ok && !JsonSerializer.Serialize(r1).Contains(codigoIngrid),
-                "CT-2 o código NÃO volta para o caixa em lugar nenhum da resposta");
+            var errado = (int.Parse(codigo1) + 1) % 1_000_000;
+            var codigoErrado = errado.ToString("D6");
+            codigosDigitados.Add(codigoErrado);
+            var v2 = await cli.ValidarTotpAsync(codigoErrado, pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            checar(!v2.Ok && v2.Definitiva && v2.Motivo == "codigo invalido" && v2.Id is null && v2.Autorizador is null,
+                "CT-6 código errado volta como recusa DEFINITIVA, sem id e sem nome de dono nenhum");
 
-            var enviado = fake.Chamadas.FirstOrDefault(c => c.Contains("solicitar")) ?? "{}";
-            var jc = JsonDocument.Parse(enviado).RootElement;
-            checar(Txt(jc, "terminal") == Terminal
-                   && Txt(jc, "referencia") == pedido.Referencia
-                   && Num(jc, "valor_cent") == 1200
-                   && Txt(jc, "nsu") == "000123"
-                   && Txt(jc, "venda") == "142",
-                "CT-3 o pedido leva terminal, referência, valor em centavos INTEIROS, venda e NSU");
+            var morta = new ClienteAutorizacao(_ => Task.FromResult<string?>("t"), "http://127.0.0.1:9", "k",
+                TimeSpan.FromSeconds(2));
+            var v3 = await morta.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            checar(!v3.Ok && !v3.Definitiva,
+                "CT-7 nuvem fora do ar não é veredito: volta 'não sei' (e o estorno não sai)");
 
-            var v1 = await cli.ValidarAsync(r1.Id ?? "", codigoIngrid, pedido.Referencia, CancellationToken.None);
-            checar(v1.Ok && v1.AprovadoPor is not null && v1.AprovadoPor.Contains("Ingrid")
-                   && v1.Referencia == pedido.Referencia && v1.ValorCent == 1200,
-                "CT-4 validar devolve QUEM aprovou e repete referência e valor para o caixa conferir");
-
-            var r2 = await cli.SolicitarAsync(PedidoDe("paygo-2", "000124", 500, 143), CancellationToken.None);
-            var v2 = await cli.ValidarAsync(r2.Id ?? "", "999999", null, CancellationToken.None);
-            checar(!v2.Ok && v2.Definitiva && v2.Motivo == "codigo_invalido",
-                "CT-5 código errado volta como recusa DEFINITIVA (o caixa não fica esperando)");
-
-            var morta = new ClienteAutorizacao("http://127.0.0.1:9", "k", TimeSpan.FromSeconds(2));
-            var r3 = await morta.SolicitarAsync(pedido, CancellationToken.None);
-            checar(!r3.Ok && !r3.Definitiva,
-                "CT-6 nuvem fora do ar não é veredito: volta 'não sei' e o PDV pode cair para o PIN");
-
-            checar(ClienteAutorizacao.TempoPadrao == TimeSpan.FromSeconds(15),
-                "CT-7 o tempo padrão do cliente é 15 s (o combinado com o dono)");
+            checar(ClienteAutorizacao.TempoPadrao == TimeSpan.FromSeconds(10),
+                "CT-8 o tempo padrão do cliente é curto (10 s): o cliente está no balcão");
 
             fake.AtrasoMs = 4000;
-            var lento = new ClienteAutorizacao(fake.Url, "k", TimeSpan.FromMilliseconds(700));
+            var lento = ClienteDe(fake, fake.Token, TimeSpan.FromMilliseconds(700));
             var cron = Stopwatch.StartNew();
-            var r4 = await lento.SolicitarAsync(pedido, CancellationToken.None);
+            var v4 = await lento.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
             cron.Stop();
             fake.AtrasoMs = 0;
-            checar(!r4.Ok && !r4.Definitiva && cron.ElapsedMilliseconds < 2500,
-                "CT-8 nuvem lenta não segura o caixa: o cliente desiste no tempo configurado");
+            checar(!v4.Ok && !v4.Definitiva && cron.ElapsedMilliseconds < 2500,
+                "CT-9 nuvem lenta não segura o caixa: o cliente desiste no tempo configurado");
 
-            // ── 2. HOMOLOGAÇÃO CONTINUA PASSANDO DIRETO ─────────────────────
-            // Os passos 20/21/22/54 do roteiro PayGo são estornos: se travarem,
-            // o dono não homologa.
-            // Daqui para baixo o assunto é o FLUXO, não o rate limit: solta o teto de
-            // solicitações do fake (o do rate limit é o AT-18, que baixa de novo).
-            fake.MaxSolicitacoes = 99;
+            var antesSemSessao = fake.Chamadas.Count;
+            var semSessao = ClienteDe(fake, null);
+            var v5 = await semSessao.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            checar(!v5.Ok && v5.Definitiva && v5.Motivo == ClienteAutorizacao.MotivoSemSessao
+                   && fake.Chamadas.Count == antesSemSessao,
+                "CT-10 terminal sem sessão na nuvem: recusa definitiva SEM ir à rede (não manda código com a chave pública)");
 
-            // ── A CONFIGURAÇÃO NÃO USA APROVAÇÃO REMOTA ───────────────
-            // Chegou a usar (código no WhatsApp do dono e da gerente) e SAIU em
-            // 28/08: num produto SaaS a senha de administrador é do dono da loja,
-            // escolhida por ele no painel — depender do celular de alguém para
-            // abrir a configuração trava o suporte de madrugada. O `Tipo` do
-            // pedido continua existindo porque a nuvem o aceita, mas nada no PDV
-            // pede autorização remota para configurar.
-            {
-                string? fonte = null;
-                for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
-                {
-                    var alvo = Path.Combine(d.FullName, "MainWindow.xaml.cs");
-                    if (File.Exists(alvo)) { fonte = File.ReadAllText(alvo); break; }
-                }
-                checar(fonte is not null, "achei a fonte da janela principal");
-                var i = fonte?.IndexOf("private void AbrirConfigProtegida()", StringComparison.Ordinal) ?? -1;
-                checar(i >= 0, "AbrirConfigProtegida é síncrono de novo (sem ida à nuvem)");
-                var corpo = i < 0 ? "" : fonte![i..Math.Min(fonte.Length, i + 1200)];
-                checar(corpo.Contains("SenhaAdminConfere", StringComparison.Ordinal),
-                    "a configuração é liberada pela senha de administrador");
-                checar(!corpo.Contains("ResolverAsync", StringComparison.Ordinal),
-                    "e NÃO pede código no WhatsApp");
-            }
+            var bearerErrado = ClienteDe(fake, "outro-token");
+            var v6 = await bearerErrado.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            checar(!v6.Ok && v6.Definitiva && (v6.Motivo ?? "").Contains("401"),
+                "CT-11 sessão recusada pela nuvem (401 do PostgREST) é veredito definitivo, com o HTTP no motivo");
 
-            // AT-1 guarda o que foi REMOVIDO: existia um modo de homologação que
-            // autorizava estorno sem PIN, sem token e sem tocar na nuvem. Era porta
-            // dos fundos num caixa de verdade — quem ligasse a config estornava
-            // sozinho. Saiu quando a operação começou, e este teste existe para que
-            // ninguém o traga de volta sem perceber.
-            var tela = new TelaFalsa { PinDevolve = sup };
-            Vendas.GravarConfig(cx, "homologacao", "1");
-            var chamadasAntes = fake.Chamadas.Count;
-            var dHom = await Autorizacao.ResolverAsync(cx, cli, pedido, op, tela, CancellationToken.None);
-            Vendas.GravarConfig(cx, "homologacao", "0");
-            checar(dHom.Via != ViaAutorizacao.Homologacao && fake.Chamadas.Count > chamadasAntes,
-                "AT-1 a config 'homologacao' NÃO autoriza mais nada: a autorização é pedida igual");
+            fake.EngolirProximas = 1;
+            var v7 = await ClienteDe(fake, fake.Token, TimeSpan.FromSeconds(3))
+                .ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            checar(!v7.Ok && !v7.Definitiva,
+                "CT-12 conexão que cai no meio (sem resposta) também é 'não sei', nunca exceção");
 
-            // ── 3. NUVEM CAÍDA ⇒ PIN, E A AUDITORIA DENUNCIA ────────────────
-            tela = new TelaFalsa { PinDevolve = sup };
-            var dPin = await Autorizacao.ResolverAsync(cx, morta, pedido, op, tela, CancellationToken.None);
-            checar(dPin.Via == ViaAutorizacao.Pin && dPin.Autorizado && dPin.Supervisor?.Id == sup.Id
-                   && tela.VezesPediuPin == 1,
-                "AT-2 nuvem fora do ar cai para o PIN do supervisor (o cliente não fica sem estorno)");
-            checar(tela.Esperas.Any(e => e.Contains("autoriza", StringComparison.OrdinalIgnoreCase)),
-                "AT-3 o caixa vê 'enviando pedido de autorização' enquanto a nuvem é chamada");
+            // O CÓDIGO NUNCA VAI PARA LOG EM CLARO. O cliente escreve uma linha de
+            // diagnóstico por tentativa (status, motivo): o código aparece só mascarado.
+            var linhas = diagnostico.ToArray();
+            checar(linhas.Length >= 2
+                   && linhas.All(l => codigosDigitados.All(c => !l.Contains(c, StringComparison.Ordinal)))
+                   && linhas.Any(l => l.Contains(Autorizacao.Mascarar(codigo1), StringComparison.Ordinal)),
+                "CT-13 o diagnóstico do cliente registra a tentativa com o código MASCARADO, nunca em claro"
+                + $" ({linhas.Length} linha(s))");
+            checar(Autorizacao.Mascarar("287082") == "******" && Autorizacao.Mascarar("") == ""
+                   && Autorizacao.Mascarar(null) == "",
+                "CT-14 a máscara não deixa dígito nenhum (só o tamanho)");
 
-            cx.Execute("DELETE FROM outbox");
-            Autorizacao.AuditarSemAprovacaoRemota(cx, dPin, op.Id, "venda=142 nsu=000123", pedido, "venda-142");
-            Caixa.Auditar(cx, null, "tef_estorno", op.Id, dPin.Autorizador,
-                "venda=142 nsu=000123" + Autorizacao.Trilha(dPin));
-            checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento = @E",
-                       new { E = Autorizacao.EventoSemAprovacaoRemota }) == 1,
-                "AT-4 estorno sem aprovação remota vira EVENTO PRÓPRIO — o dono consegue listar depois");
-            checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento = 'tef_estorno'") == 1,
-                "AT-5 ...e a linha 'tef_estorno' de sempre continua lá (relatório não perde linha)");
-            checar((cx.ExecuteScalar<string>(
-                       "SELECT detalhe FROM auditoria WHERE evento = 'tef_estorno' ORDER BY id DESC LIMIT 1") ?? "")
-                   .Contains("SEM APROVAÇÃO REMOTA"),
-                "AT-6 a própria linha do estorno diz que saiu sem aprovação remota");
+            // ── 2. A MÁQUINA DE ESTADOS ─────────────────────────────────────
+            fake.ZerarBaldes();
+            fake.UltimoContador = 0;
 
-            // ── 3b. O FATO TEM QUE SAIR DO DISCO DA LOJA ────────────────────
-            //
-            // A linha de auditoria acima mora em C:/ProgramData/PdvNativo/pdv.db,
-            // no PC DAQUELE caixa. Nenhuma tela do PDV lê a tabela `auditoria` e
-            // nada a sincroniza — quem sincroniza é o outbox. Sem a linha na fila,
-            // "o dono consegue listar depois" só se cumpre se ele for até a loja,
-            // abrir o SQLite do caixa certo e rodar a consulta na mão.
-            //
-            // A nuvem também não reconstrói a lista sozinha: quando a internet cai
-            // ANTES do `solicitar`, não existe nem linha em pdv_autorizacao_token —
-            // e um token que ficou aberto é indistinguível entre "o operador
-            // cancelou" e "caiu para o PIN".
-            var filaSem = cx.Query("SELECT tipo, ref_id, client_key, payload FROM outbox").ToList();
-            checar(filaSem.Count == 1 && (string)filaSem[0].tipo == Autorizacao.TipoNaFila,
-                "AT-4b o estorno sem aprovação remota TAMBÉM entra na fila da nuvem "
-                + $"(outbox: {filaSem.Count} linha(s) — {string.Join(", ", filaSem.Select(f => (string)f.tipo))})");
-            var jFila = JsonDocument.Parse(filaSem.Count == 1 ? (string)filaSem[0].payload : "{}").RootElement;
-            checar(filaSem.Count == 1
-                   && (string)filaSem[0].client_key == pedido.Referencia
-                   && (string)filaSem[0].ref_id == "venda-142"
-                   && Txt(jFila, "venda") == "142" && Txt(jFila, "nsu") == "000123"
-                   && Num(jFila, "valor_cent") == 1200
-                   && Txt(jFila, "via") == "pin"
-                   && Txt(jFila, "autorizado_por") == sup.Id
-                   && Txt(jFila, "motivo").Length > 0
-                   && Txt(jFila, "referencia") == pedido.Referencia,
-                "AT-4c a linha da fila leva venda, NSU, valor em centavos, quem liberou pelo PIN e por que o token não valeu");
-            checar(!jFila.ToString().Contains(codigoIngrid, StringComparison.Ordinal),
-                "AT-4d o código do WhatsApp NÃO viaja no payload da fila");
-            // Tipo com handler mas FORA do SELECT da varredura já aconteceu uma vez
-            // (kds_pronto): a linha existia, o handler existia, e o aviso nunca saía
-            // do lugar. Aqui a checagem roda a MESMA consulta que a Drenagem roda.
-            var selecionavel = cx.ExecuteScalar<int>(
-                "SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL AND desistido_em IS NULL "
-                + $"AND tipo IN ('{string.Join("','", Drenagem.TiposComHandler)}')");
-            checar(Drenagem.TiposComHandler.Contains(Autorizacao.TipoNaFila) && selecionavel == 1,
-                "AT-4e a linha é SELECIONÁVEL pela varredura da fila (tipo fora do filtro = fila eterna e invisível)");
-
-            // Auditoria e fila nascem JUNTAS ou não nascem: a mesma transação. Um
-            // fato auditado que não foi enfileirado é exatamente o buraco de cima.
-            cx.Execute("DELETE FROM auditoria; DELETE FROM outbox");
-            var estouroTx = "";
-            try
-            {
-                using var txRollback = cx.BeginTransaction();
-                Autorizacao.AuditarSemAprovacaoRemota(cx, dPin, op.Id, "venda=142 nsu=000123",
-                    pedido, "venda-142", txRollback);
-                txRollback.Rollback();
-            }
-            catch (Exception ex) { estouroTx = $" — e ainda ESTOUROU {ex.GetType().Name}: {ex.Message}"; }
-            checar(estouroTx.Length == 0
-                   && cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria") == 0
-                   && cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox") == 0,
-                "AT-4f auditoria e fila entram na MESMA transação do estorno (rollback não deixa fato órfão)"
-                + estouroTx);
-            cx.Execute("DELETE FROM auditoria; DELETE FROM outbox");
-
-            // ── 4. TOKEN VÁLIDO ⇒ AUTORIZA E DIZ QUEM APROVOU ───────────────
-            cx.Execute("DELETE FROM auditoria");
-            tela = new TelaFalsa
-            {
-                PinDevolve = sup,
-                AoPedirCodigo = (p, _) => new RespostaCodigo(AcaoCodigo.Confirmar, CodigoDe(fake, p)),
-            };
+            // AT-1 caminho feliz
+            var tela = new TelaFalsa { AoPedirCodigo = _ => fake.CodigoAgora() };
             var pedidoA = PedidoDe("paygo-A", "000200", 1200, 200);
-            var dTok = await Autorizacao.ResolverAsync(cx, cli, pedidoA, op, tela, CancellationToken.None);
-            checar(dTok.Via == ViaAutorizacao.Token && dTok.Autorizado
-                   && (dTok.AprovadoPor ?? "").Contains("Ingrid") && !string.IsNullOrWhiteSpace(dTok.TokenId)
-                   && tela.VezesPediuPin == 0,
-                "AT-7 código certo autoriza e a auditoria sabe QUEM aprovou (não 'alguém aprovou')");
+            var dOk = await Autorizacao.ResolverAsync(cli, pedidoA, tela, CancellationToken.None);
+            checar(dOk.Via == ViaAutorizacao.Totp && dOk.Autorizado && !dOk.SemAprovacaoRemota
+                   && (dOk.AprovadoPor ?? "").Contains("Brenno") && dOk.TokenId is { Length: > 8 }
+                   && tela.VezesPediuCodigo == 1 && tela.Avisos[0] is null,
+                "AT-1 código certo autoriza com Via=Totp e a auditoria sabe QUEM é o dono"
+                + $" (via={dOk.Via} motivo={dOk.Motivo})");
+            checar(tela.Esperas.Count == 1 && tela.Esperas[0].Contains("Conferindo", StringComparison.Ordinal),
+                "AT-2 o caixa vê 'Conferindo o código' enquanto a nuvem confere (e nada de 'enviando pedido')");
+            checar(dOk.Autorizador == "totp:" + dOk.TokenId![..8],
+                "AT-3 a coluna `autorizador` da auditoria leva a marca totp:<8 chars do registro>");
 
-            Autorizacao.AuditarSemAprovacaoRemota(cx, dTok, op.Id, "venda=200", pedidoA, "venda-200");
-            Caixa.Auditar(cx, null, "tef_estorno", op.Id, dTok.Autorizador,
-                "venda=200 nsu=000200" + Autorizacao.Trilha(dTok));
-            checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento = @E",
-                       new { E = Autorizacao.EventoSemAprovacaoRemota }) == 0,
-                "AT-8 estorno aprovado por token NÃO entra na lista dos que escaparam");
-            checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo = @T",
-                       new { T = Autorizacao.TipoNaFila }) == 0,
-                "AT-8b ...e também não enfileira nada para a nuvem (a fila é só dos que escaparam)");
-            var detalheTok = cx.ExecuteScalar<string>(
-                "SELECT detalhe FROM auditoria WHERE evento = 'tef_estorno' ORDER BY id DESC LIMIT 1") ?? "";
-            checar(detalheTok.Contains("Ingrid") && dTok.TokenId is { Length: >= 8 } tid && detalheTok.Contains(tid[..8]),
-                "AT-9 a linha do estorno guarda o nome de quem aprovou e o id do token");
+            // AT-4 replay: o MESMO código, de novo, não vale (o contador só vale uma vez)
+            var codigoUsado = fake.CodigoAgora();
+            var vezesReplay = 0;
+            tela = new TelaFalsa { AoPedirCodigo = _ => ++vezesReplay == 1 ? codigoUsado : null };
+            var dReplay = await Autorizacao.ResolverAsync(cli, PedidoDe("paygo-R", "000201", 500, 201), tela,
+                CancellationToken.None);
+            fake.Log.TryPeek(out _);
+            var ultimaTentativa = fake.Log.LastOrDefault();
+            checar(!dReplay.Autorizado && dReplay.Via == ViaAutorizacao.Recusada && tela.VezesPediuCodigo == 2
+                   && (tela.Avisos[1] ?? "").Contains("inválido", StringComparison.Ordinal)
+                   && ultimaTentativa is { Ok: false, Motivo: "codigo invalido" },
+                "AT-4 o código que acabou de autorizar NÃO autoriza outro estorno (replay recusado como inválido)");
 
-            var codigoUsado = CodigoDe(fake, new RespostaSolicitacao(true, true, null, dTok.TokenId, null, 0, 0, 0,
-                Array.Empty<DestinatarioAutorizacao>()));
-            checar(cx.ExecuteScalar<int>(
-                       "SELECT COUNT(*) FROM auditoria WHERE detalhe LIKE '%' || @C || '%'",
-                       new { C = codigoUsado }) == 0,
-                "AT-10 o código digitado NUNCA é gravado na auditoria");
+            // AT-5 três inválidos: a tela avisa, deixa tentar, e na terceira desiste
+            fake.ZerarBaldes();
+            var chamadasAntes = fake.Chamadas.Count;
+            tela = new TelaFalsa { AoPedirCodigo = _ => "000000" };
+            var dTres = await Autorizacao.ResolverAsync(cli, PedidoDe("paygo-3", "000202", 800, 202), tela,
+                CancellationToken.None);
+            checar(!dTres.Autorizado && dTres.Via == ViaAutorizacao.Recusada && tela.VezesPediuCodigo == 3
+                   && fake.Chamadas.Count == chamadasAntes + 3 && !dTres.Avisado
+                   && dTres.Motivo.Contains("3 vezes", StringComparison.Ordinal)
+                   && dTres.Motivo.EndsWith("Estorno não autorizado.", StringComparison.Ordinal),
+                "AT-5 três códigos inválidos: 3 pedidos de código, 3 idas à nuvem, e o estorno não sai"
+                + $" (pediu {tela.VezesPediuCodigo}x · motivo={dTres.Motivo})");
+            checar(tela.Avisos.Count == 3 && tela.Avisos[0] is null
+                   && tela.Avisos.Skip(1).All(a => a is not null && a.Contains("inválido", StringComparison.Ordinal)
+                                                   && !a.Contains("\n") && a.Length < 60),
+                "AT-6 entre uma tentativa e outra o aviso é curto, de uma linha: 'Código inválido. Tente de novo.'");
 
-            // ── 5. TOKEN DE OUTRO ESTORNO NÃO SERVE ─────────────────────────
-            var pedidoB = PedidoDe("paygo-B", "000201", 120000, 201);
-            checar(pedidoA.Referencia != pedidoB.Referencia,
-                "AT-11 cada estorno tem referência própria (NSU + valor + venda)");
+            // AT-7 dois inválidos e o certo: autoriza na terceira
+            fake.ZerarBaldes();
+            ProximoPasso();
+            var vezes7 = 0;
+            tela = new TelaFalsa { AoPedirCodigo = _ => ++vezes7 < 3 ? "000000" : fake.CodigoAgora() };
+            var dTerceira = await Autorizacao.ResolverAsync(cli, PedidoDe("paygo-7", "000203", 900, 203), tela,
+                CancellationToken.None);
+            checar(dTerceira.Via == ViaAutorizacao.Totp && tela.VezesPediuCodigo == 3,
+                "AT-7 dois erros de digitação e o código certo na terceira: autoriza");
 
-            var rA = await cli.SolicitarAsync(pedidoA, CancellationToken.None);
-            var codA = CodigoDe(fake, rA);
-            var cruzado = await cli.ValidarAsync(rA.Id ?? "", codA, pedidoB.Referencia, CancellationToken.None);
-            checar(!cruzado.Ok && cruzado.Motivo == "referencia_divergente",
-                "AT-12 token do estorno de R$ 12,00 NÃO autoriza o estorno de R$ 1.200,00");
-            var certo = await cli.ValidarAsync(rA.Id ?? "", codA, pedidoA.Referencia, CancellationToken.None);
-            checar(certo.Ok,
-                "AT-13 ...e a recusa cruzada não queimou o token legítimo do estorno certo");
+            // AT-8 rate limit: 5 falhas em 10 min e a nuvem nem testa o código
+            fake.ZerarBaldes();
+            for (var n = 0; n < 5; n++)
+                await cli.ValidarTotpAsync("000000", "estorno:x", "estorno", null, CancellationToken.None);
+            var certoMasTarde = fake.CodigoAgora();
+            tela = new TelaFalsa { AoPedirCodigo = _ => certoMasTarde };
+            var dRl = await Autorizacao.ResolverAsync(cli, PedidoDe("paygo-RL", "000204", 700, 204), tela,
+                CancellationToken.None);
+            var tentativaRl = fake.Log.LastOrDefault();
+            checar(!dRl.Autorizado && tela.VezesPediuCodigo == 1
+                   && dRl.Motivo.Contains("aguarde", StringComparison.OrdinalIgnoreCase)
+                   && tentativaRl is { Ok: false, TestouOCodigo: false },
+                "AT-8 depois de 5 falhas em 10 min o código certo é recusado SEM ser testado, e a tela não insiste"
+                + $" (motivo={dRl.Motivo})");
+            fake.ZerarBaldes();
 
-            // ── 6. O OPERADOR NUNCA FICA PRESO ──────────────────────────────
-            // 5 chutes errados queimam o token: a tela oferece o PIN e a venda anda.
-            tela = new TelaFalsa
-            {
-                PinDevolve = sup,
-                AoPedirCodigo = (_, _) => new RespostaCodigo(AcaoCodigo.Confirmar, "000000"),
-                AoFalhar = _ => EscolhaAposFalha.Pin,
-            };
-            var pedidoC = PedidoDe("paygo-C", "000202", 800, 202);
-            var dQueimou = await Autorizacao.ResolverAsync(cx, cli, pedidoC, op, tela, CancellationToken.None);
-            checar(dQueimou.Via == ViaAutorizacao.Pin && dQueimou.Autorizado && tela.VezesPediuPin == 1,
-                "AT-14 token queimado por erro de digitação não prende o operador: sobra o PIN");
-            checar(dQueimou.SemAprovacaoRemota && dQueimou.Motivo.Length > 0,
-                "AT-15 ...e esse estorno também entra na lista dos que saíram sem aprovação remota");
+            // AT-9 autenticador não configurado
+            fake.Configurado = false;
+            tela = new TelaFalsa { AoPedirCodigo = _ => fake.CodigoAgora() };
+            var dSemCfg = await Autorizacao.ResolverAsync(cli, PedidoDe("paygo-C", "000205", 600, 205), tela,
+                CancellationToken.None);
+            fake.Configurado = true;
+            checar(!dSemCfg.Autorizado && tela.VezesPediuCodigo == 1
+                   && dSemCfg.Motivo.Contains("utenticador", StringComparison.Ordinal),
+                "AT-9 dono sem autenticador configurado: o estorno não sai e o motivo diz isso"
+                + $" (motivo={dSemCfg.Motivo})");
 
-            // Desistir é desistir: ninguém autoriza nada.
-            tela = new TelaFalsa
-            {
-                PinDevolve = sup,
-                AoPedirCodigo = (_, _) => new RespostaCodigo(AcaoCodigo.Cancelar, null),
-            };
-            var dDesistiu = await Autorizacao.ResolverAsync(cx, cli,
-                PedidoDe("paygo-D", "000203", 900, 203), op, tela, CancellationToken.None);
-            checar(!dDesistiu.Autorizado && dDesistiu.Via == ViaAutorizacao.Recusada && tela.VezesPediuPin == 0,
-                "AT-16 operador que desiste da tela do código não estorna nada");
+            // AT-10 sem rede: desiste na hora, com o texto combinado
+            tela = new TelaFalsa { AoPedirCodigo = _ => "123456" };
+            var dRede = await Autorizacao.ResolverAsync(morta, PedidoDe("paygo-N", "000206", 400, 206), tela,
+                CancellationToken.None);
+            checar(!dRede.Autorizado && dRede.Via == ViaAutorizacao.Recusada && tela.VezesPediuCodigo == 1
+                   && !dRede.Avisado && dRede.Motivo == "Sem internet. Estorno não autorizado.",
+                "AT-10 sem internet: 'Sem internet. Estorno não autorizado.' e desiste (não existe saída pelo PIN)"
+                + $" (motivo={dRede.Motivo})");
 
-            // "Não recebi": pede outro código, e o novo vale.
-            var vezes = 0;
-            tela = new TelaFalsa
-            {
-                PinDevolve = sup,
-                AoPedirCodigo = (p, _) => ++vezes == 1
-                    ? new RespostaCodigo(AcaoCodigo.NovoCodigo, null)
-                    : new RespostaCodigo(AcaoCodigo.Confirmar, CodigoDe(fake, p)),
-            };
-            fake.MaxSolicitacoes = 99;
-            var dReenvio = await Autorizacao.ResolverAsync(cx, cli,
-                PedidoDe("paygo-E", "000204", 1000, 204), op, tela, CancellationToken.None);
-            checar(dReenvio.Via == ViaAutorizacao.Token && vezes == 2,
-                "AT-17 'não recebi' pede um código novo e o novo autoriza");
+            var pedidoCanc = new PedidoAutorizacao(Terminal, Autorizacao.ReferenciaCancelamento("v-1", 207, 300), 300,
+                Loja: Loja, Operador: "Bia", Venda: "207", Forma: "dinheiro") { Tipo = "cancelamento" };
+            tela = new TelaFalsa { AoPedirCodigo = _ => "123456" };
+            var dRedeCanc = await Autorizacao.ResolverAsync(morta, pedidoCanc, tela, CancellationToken.None);
+            checar(dRedeCanc.Motivo == "Sem internet. Cancelamento não autorizado.",
+                "AT-11 no cancelamento de venda o texto fala em cancelamento, não em estorno");
 
-            // Recusa definitiva da edge (429/sem aprovadores) não faz o caixa esperar 15 s.
-            fake.MaxSolicitacoes = 0;
-            tela = new TelaFalsa { PinDevolve = sup };
-            var cronRl = Stopwatch.StartNew();
-            var dRl = await Autorizacao.ResolverAsync(cx, cli,
-                PedidoDe("paygo-F", "000205", 700, 205), op, tela, CancellationToken.None);
-            cronRl.Stop();
-            fake.MaxSolicitacoes = 99;
-            checar(dRl.Via == ViaAutorizacao.Pin && tela.VezesPediuCodigo == 0 && cronRl.ElapsedMilliseconds < 3000,
-                "AT-18 recusa definitiva da nuvem cai para o PIN NA HORA (não espera o tempo todo)");
+            // AT-12 tipo viaja para a RPC (o log do servidor separa estorno de cancelamento)
+            ProximoPasso();
+            tela = new TelaFalsa { AoPedirCodigo = _ => fake.CodigoAgora() };
+            var dCanc = await Autorizacao.ResolverAsync(cli, pedidoCanc, tela, CancellationToken.None);
+            var ultimaChamada = fake.Chamadas.LastOrDefault();
+            var jCanc = JsonDocument.Parse(ultimaChamada?.Corpo ?? "{}").RootElement;
+            checar(dCanc.Via == ViaAutorizacao.Totp && Txt(jCanc, "_tipo") == "cancelamento"
+                   && Txt(jCanc, "_referencia").StartsWith("cancelamento:", StringComparison.Ordinal),
+                "AT-12 o cancelamento de venda vai à RPC com _tipo=cancelamento e a referência própria");
 
-            // PIN errado na saída de emergência: não autoriza (é a regra de hoje).
-            tela = new TelaFalsa { PinDevolve = null };
-            var dPinErrado = await Autorizacao.ResolverAsync(cx, morta,
-                PedidoDe("paygo-G", "000206", 600, 206), op, tela, CancellationToken.None);
-            checar(!dPinErrado.Autorizado && dPinErrado.Via == ViaAutorizacao.Recusada,
-                "AT-19 PIN que não confere continua não autorizando estorno nenhum");
+            // AT-13 o operador cancela na tela: nada é chamado
+            chamadasAntes = fake.Chamadas.Count;
+            tela = new TelaFalsa { AoPedirCodigo = _ => null };
+            var dCancelou = await Autorizacao.ResolverAsync(cli, PedidoDe("paygo-D", "000208", 900, 208), tela,
+                CancellationToken.None);
+            checar(!dCancelou.Autorizado && dCancelou.Avisado && fake.Chamadas.Count == chamadasAntes,
+                "AT-13 operador que cancela a tela do código não estorna nada e a nuvem nem é chamada");
 
-            // ── 6b. O TOKEN FANTASMA ────────────────────────────────────────
-            //
-            // O caixa espera 15 s e cai para o PIN. A edge NÃO SABE DISSO: ela
-            // termina o trabalho — cria a linha do token e manda o WhatsApp —
-            // depois de o caixa já ter desistido. O estrago não é teórico:
-            //
-            //  · o celular da Ingrid acende às 22h para um estorno que já saiu
-            //    pelo PIN, e um aviso que não corresponde a nada é um aviso que
-            //    se aprende a ignorar;
-            //  · a linha do fantasma OCUPA UMA DAS 5 VAGAS de 10 minutos daquele
-            //    caixa, porque o rate limit conta LINHAS CRIADAS na janela —
-            //    queimadas ou não.
-            //
-            // A edge não tem como adivinhar que o caixa desistiu. O que ela pode
-            // é ser IDEMPOTENTE: a segunda tentativa do MESMO estorno reaproveita
-            // o fantasma em vez de criar outro, e o código que já está no celular
-            // da Ingrid passa a valer. O desperdício vira o token do estorno.
-            {
-                var pedidoSO = PedidoDe("paygo-SO6", "000207", 4300, 207);
+            // AT-14 sem nuvem configurada / sem sessão: recusa, sem tela de PIN
+            var dSemNuvem = await Autorizacao.ResolverAsync(null, PedidoDe("paygo-E", "000209", 900, 209),
+                new TelaFalsa(), CancellationToken.None);
+            checar(!dSemNuvem.Autorizado && dSemNuvem.Via == ViaAutorizacao.Recusada && !dSemNuvem.Avisado
+                   && dSemNuvem.Motivo.EndsWith("Estorno não autorizado.", StringComparison.Ordinal),
+                "AT-14 caixa sem nuvem configurada: estorno não sai (e não há PIN para cair)");
+            tela = new TelaFalsa { AoPedirCodigo = _ => "123456" };
+            var dSemSessao = await Autorizacao.ResolverAsync(semSessao, PedidoDe("paygo-F", "000210", 900, 210), tela,
+                CancellationToken.None);
+            checar(!dSemSessao.Autorizado && tela.VezesPediuCodigo == 1
+                   && dSemSessao.Motivo.Contains("sessão", StringComparison.Ordinal),
+                "AT-15 caixa sem sessão na nuvem: estorno não sai e o motivo diz 'sessão'"
+                + $" (motivo={dSemSessao.Motivo})");
 
-                // 15 s e 5 s aqui viram 500 ms e 1200 ms: a suíte não pode parar
-                // meio minuto para provar uma corrida de relógio.
-                fake.AtrasoMs = 1200;
-                var impaciente = new ClienteAutorizacao(fake.Url, "k", TimeSpan.FromMilliseconds(500));
-                var criadosAntes = fake.TokensCriados;
-                var msgAntes = fake.Mensagens;
-                tela = new TelaFalsa { PinDevolve = sup };
-                var dFantasma = await Autorizacao.ResolverAsync(cx, impaciente, pedidoSO, op, tela,
-                    CancellationToken.None);
-                fake.AtrasoMs = 0;
-                await EsperarAsync(() => fake.TokensCriados > criadosAntes);
+            // AT-16 a janela de tolerância é ±1 passo; ±2 não vale
+            fake.ZerarBaldes();
+            fake.UltimoContador = 0;
+            var vMenos1 = await cli.ValidarTotpAsync(fake.CodigoAgora(-1), "estorno:j1", "estorno", null, CancellationToken.None);
+            fake.UltimoContador = 0;
+            var vMais1 = await cli.ValidarTotpAsync(fake.CodigoAgora(+1), "estorno:j2", "estorno", null, CancellationToken.None);
+            fake.UltimoContador = 0;
+            var vMenos2 = await cli.ValidarTotpAsync(fake.CodigoAgora(-2), "estorno:j3", "estorno", null, CancellationToken.None);
+            var vMais2 = await cli.ValidarTotpAsync(fake.CodigoAgora(+2), "estorno:j4", "estorno", null, CancellationToken.None);
+            checar(vMenos1.Ok && vMais1.Ok && !vMenos2.Ok && !vMais2.Ok,
+                "AT-16 código do passo anterior ou do seguinte vale (relógio do celular atrasado 30 s); ±2 não");
+            // E o replay por contador: aceitar T+1 e depois recusar T (que é menor)
+            fake.UltimoContador = 0;
+            var vFrente = await cli.ValidarTotpAsync(fake.CodigoAgora(+1), "estorno:j5", "estorno", null, CancellationToken.None);
+            var vAtras = await cli.ValidarTotpAsync(fake.CodigoAgora(0), "estorno:j6", "estorno", null, CancellationToken.None);
+            checar(vFrente.Ok && !vAtras.Ok && fake.UltimoContador == Passo() + 1,
+                "AT-17 depois de aceitar o código de T+1, o de T não vale mais (contador só anda para a frente)");
+            fake.ZerarBaldes();
 
-                checar(dFantasma.Via == ViaAutorizacao.Pin && tela.VezesPediuCodigo == 0
-                       && fake.TokensCriados == criadosAntes + 1 && fake.Mensagens == msgAntes + 2,
-                    "SO-6a nuvem lenta: o caixa sai pelo PIN, mas o token JÁ nasceu e o WhatsApp JÁ saiu "
-                    + $"(tokens criados {criadosAntes}→{fake.TokensCriados}, mensagens {msgAntes}→{fake.Mensagens})");
+            // ── 3. AUDITORIA: quem aprovou entra, o código nunca ────────────
+            cx.Execute("DELETE FROM auditoria");
+            var trilha = Autorizacao.Trilha(dOk);
+            Caixa.Auditar(cx, null, "tef_estorno", op.Id, dOk.Autorizador, "venda=200 nsu=000200" + trilha);
+            var detalhe = cx.ExecuteScalar<string>("SELECT detalhe FROM auditoria ORDER BY id DESC LIMIT 1") ?? "";
+            var autorizador = cx.ExecuteScalar<string>("SELECT autorizador FROM auditoria ORDER BY id DESC LIMIT 1") ?? "";
+            checar(detalhe.Contains("Brenno", StringComparison.Ordinal)
+                   && detalhe.Contains("autenticador do dono", StringComparison.Ordinal)
+                   && detalhe.Contains(dOk.TokenId![..8], StringComparison.Ordinal)
+                   && autorizador == dOk.Autorizador,
+                "AU-1 a linha do estorno diz que foi o autenticador do dono, o nome dele e o id do registro na nuvem");
+            var todosOsCodigos = fake.Chamadas.Select(c => Txt(JsonDocument.Parse(c.Corpo).RootElement, "_codigo"))
+                .Where(c => c.Length == 6).Distinct().ToList();
+            checar(todosOsCodigos.Count > 0 && cx.ExecuteScalar<int>(
+                       "SELECT COUNT(*) FROM auditoria WHERE " +
+                       string.Join(" OR ", todosOsCodigos.Select((_, i) => $"detalhe LIKE '%' || @C{i} || '%'")),
+                       todosOsCodigos.Select((c, i) => new KeyValuePair<string, object>($"C{i}", c))
+                           .ToDictionary(k => k.Key, k => k.Value)) == 0,
+                "AU-2 nenhum código digitado nesta suíte aparece na auditoria");
+            checar(Autorizacao.Trilha(dTres) == "" && Autorizacao.Trilha(dRede) == "",
+                "AU-3 recusa não tem trilha (não existe 'liberado pelo PIN' nem 'sem aprovação remota')");
 
-                // O código que a Ingrid recebeu há 20 segundos continua no celular
-                // dela. O id, o caixa nunca chegou a ver.
-                var idFantasma = fake.TokenVivoDe(Terminal, pedidoSO.Referencia);
-                var noCelularDaIngrid = idFantasma is not null && fake.Codigos.TryGetValue(idFantasma, out var lst)
-                    ? lst.First(c => c.Scope == "manager").Codigo
-                    : "000000";
-
-                var criadosFantasma = fake.TokensCriados;
-                var msgFantasma = fake.Mensagens;
-                RespostaSolicitacao? naTela = null;
-                tela = new TelaFalsa
-                {
-                    PinDevolve = sup,
-                    AoPedirCodigo = (p, _) => { naTela = p; return new RespostaCodigo(AcaoCodigo.Confirmar, noCelularDaIngrid); },
-                };
-                var dRetomada = await Autorizacao.ResolverAsync(cx, cli, pedidoSO, op, tela, CancellationToken.None);
-
-                checar(dRetomada.Via == ViaAutorizacao.Token && idFantasma is not null
-                       && dRetomada.TokenId == idFantasma,
-                    "SO-6b a segunda tentativa do MESMO estorno reaproveita o token fantasma "
-                    + $"(fantasma {idFantasma ?? "(nenhum)"} · caixa recebeu {dRetomada.TokenId ?? "(nada)"})");
-                checar(fake.TokensCriados == criadosFantasma,
-                    "SO-6c ...sem gastar outra das 5 vagas de 10 min daquele caixa "
-                    + $"(tokens criados {criadosFantasma}→{fake.TokensCriados})");
-                checar(fake.Mensagens == msgFantasma,
-                    "SO-6d ...e sem acender o celular da Ingrid de novo "
-                    + $"(mensagens {msgFantasma}→{fake.Mensagens})");
-                checar(naTela is { Reaproveitado: true },
-                    "SO-6e a tela sabe que o código é o que JÁ foi mandado (senão o operador espera "
-                    + "uma mensagem que não vem)");
-
-                // O relógio da tela é montado com `validade_segundos`. Num token
-                // reaproveitado ele tem que ser o que SOBRA — devolver os 5 minutos
-                // inteiros faz a tela prometer tempo que não existe, e o operador
-                // descobre no meio da digitação com o cliente esperando.
-                fake.ValidadeSegundos = 60;
-                var pedidoRel = PedidoDe("paygo-SO6b", "000208", 500, 208);
-                var rel1 = await cli.SolicitarAsync(pedidoRel, CancellationToken.None);
-                await Task.Delay(1100);
-                var rel2 = await cli.SolicitarAsync(pedidoRel, CancellationToken.None);
-                fake.ValidadeSegundos = 300;
-                checar(rel2.Ok && rel2.Reaproveitado && rel2.Id == rel1.Id
-                       && rel2.ValidadeSegundos > 0 && rel2.ValidadeSegundos < 60,
-                    "SO-6f o token reaproveitado devolve o tempo que SOBRA, não a validade cheia "
-                    + $"(sobrou {rel2.ValidadeSegundos}s de {fake.ValidadeSegundos}s)");
-
-                // E o contra-exemplo que decide o desenho: "não recebi" TEM que
-                // mandar mensagem nova, senão o botão vira enfeite e o operador
-                // clica até sobrar só o PIN.
-                var criadosReenvio = fake.TokensCriados;
-                var msgReenvio = fake.Mensagens;
-                var rReenvio = await cli.SolicitarAsync(pedidoRel, CancellationToken.None, reenviar: true);
-                checar(rReenvio.Ok && !rReenvio.Reaproveitado && rReenvio.Id != rel1.Id
-                       && fake.TokensCriados == criadosReenvio + 1 && fake.Mensagens == msgReenvio + 2,
-                    "SO-6g 'não recebi' continua queimando o anterior e mandando código NOVO "
-                    + $"(tokens criados {criadosReenvio}→{fake.TokensCriados}, mensagens {msgReenvio}→{fake.Mensagens})");
-            }
-
-            // ── 7. TUDO QUE TOCA JANELA VOLTA PARA A THREAD DA TELA ─────────
-            //
-            // O buraco que a TelaFalsa não enxerga. No WPF, uma janela só pode ser
-            // tocada pela thread que a criou: `_dono.IsEnabled = true` no
-            // Espera.Dispose, ou um `new Window` de outra thread, é
-            // InvalidOperationException na hora. E o caminho do estorno não tem
-            // rede embaixo — EstornarTefAsync não tem catch, o `async void`
-            // MenuTef tem finally mas não catch, e o App não tem
-            // DispatcherUnhandledException: exceção ali ENCERRA O PROCESSO com o
-            // cliente no balcão, sem nem oferecer o PIN.
-            //
-            // Um `await ... .ConfigureAwait(false)` no meio da máquina de estados
-            // faz exatamente isso: a continuação (o Dispose do `using`, a próxima
-            // tela) volta numa thread do pool. Todos os testes acima ficam verdes
-            // porque a TelaFalsa aceita qualquer thread e a homologação retorna
-            // antes de criar Espera.
-            //
-            // Aqui a nuvem é HTTP de verdade (FakeAutorizacao), então nenhum await
-            // completa síncrono — é o cenário da loja.
+            // ── 4. TUDO QUE TOCA JANELA VOLTA PARA A THREAD DA TELA ─────────
             {
                 using var ui = new ThreadDeTela();
-                fake.MaxSolicitacoes = 99;
+                fake.ZerarBaldes();
+                fake.UltimoContador = 0;   // o AT-17 deixou o contador em T+1
+                ProximoPasso();
 
-                // 7a. Caminho feliz do token: Aguardando ×2 (+ os dois Dispose) e PedirCodigoAsync.
-                var telaUi = new TelaQueAnotaThread(ui.Id) { PinDevolve = sup };
-                telaUi.AoPedirCodigo = (p, _) => new RespostaCodigo(AcaoCodigo.Confirmar, CodigoDe(fake, p));
-                var pedidoUi = PedidoDe("paygo-UI", "000301", 2500, 301);
+                var telaUi = new TelaQueAnotaThread(ui.Id) { AoPedirCodigo = _ => fake.CodigoAgora() };
                 DesfechoAutorizacao dUi;
-                string estouroUi = "";
+                var estouroUi = "";
                 try
                 {
-                    dUi = await ui.ExecutarAsync(() =>
-                        Autorizacao.ResolverAsync(cx, cli, pedidoUi, op, telaUi, CancellationToken.None));
+                    dUi = await ui.ExecutarAsync(() => Autorizacao.ResolverAsync(cli,
+                        PedidoDe("paygo-UI", "000301", 2500, 301), telaUi, CancellationToken.None));
                 }
                 catch (Exception ex)
                 {
                     estouroUi = $" — e ainda ESCAPOU {ex.GetType().Name}: {ex.Message}";
-                    dUi = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, null, "estourou");
+                    dUi = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, "estourou");
                 }
-                checar(dUi.Via == ViaAutorizacao.Token
-                       && telaUi.VezesAguardou == 2 && telaUi.VezesFechouEspera == 2
+                checar(dUi.Via == ViaAutorizacao.Totp && telaUi.VezesAguardou == 1 && telaUi.VezesFechouEspera == 1
                        && telaUi.ForaDaThreadDaTela.Count == 0,
-                    "UI-1 no caminho do token, toda chamada de tela e todo fechamento de espera cai na thread da tela"
+                    "UI-1 no caminho feliz, a tela e o fechamento da espera caem na thread da tela"
+                    + $" (via={dUi.Via} esperas={telaUi.VezesAguardou}/{telaUi.VezesFechouEspera})"
                     + (telaUi.ForaDaThreadDaTela.Count > 0
                         ? " — FORA DELA: " + string.Join(" · ", telaUi.ForaDaThreadDaTela) : "")
                     + estouroUi);
 
-                // 7b. Caminho da SAÍDA DO PIN: código sempre errado até o token
-                // queimar, EscolherAposFalhaAsync e PedirPinAsync. É o caminho que
-                // o dono garantiu que existe — e é o que o crash apagava.
-                var telaPin = new TelaQueAnotaThread(ui.Id)
-                {
-                    PinDevolve = sup,
-                    AoFalhar = _ => EscolhaAposFalha.Pin,
-                };
-                telaPin.AoPedirCodigo = (p, _) => new RespostaCodigo(AcaoCodigo.Confirmar, ErradoDe(fake, p));
-                DesfechoAutorizacao dUiPin;
-                string estouroPin = "";
+                var telaTres = new TelaQueAnotaThread(ui.Id) { AoPedirCodigo = _ => "000000" };
+                DesfechoAutorizacao dUiTres;
+                var estouroTres = "";
                 try
                 {
-                    dUiPin = await ui.ExecutarAsync(() => Autorizacao.ResolverAsync(cx, cli,
-                        PedidoDe("paygo-UI2", "000302", 900, 302), op, telaPin, CancellationToken.None));
+                    dUiTres = await ui.ExecutarAsync(() => Autorizacao.ResolverAsync(cli,
+                        PedidoDe("paygo-UI2", "000302", 900, 302), telaTres, CancellationToken.None));
                 }
                 catch (Exception ex)
                 {
-                    estouroPin = $" — e ainda ESCAPOU {ex.GetType().Name}: {ex.Message}";
-                    dUiPin = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null, null, "estourou");
+                    estouroTres = $" — e ainda ESCAPOU {ex.GetType().Name}: {ex.Message}";
+                    dUiTres = new DesfechoAutorizacao(ViaAutorizacao.Totp, null, null, "estourou");
                 }
-                checar(dUiPin.Via == ViaAutorizacao.Pin && telaPin.VezesPediuPin == 1
-                       && telaPin.ForaDaThreadDaTela.Count == 0,
-                    "UI-2 a saída do PIN (código queimado → escolha → PIN) também roda inteira na thread da tela"
-                    + (telaPin.ForaDaThreadDaTela.Count > 0
-                        ? " — FORA DELA: " + string.Join(" · ", telaPin.ForaDaThreadDaTela) : "")
-                    + estouroPin);
+                checar(dUiTres.Via == ViaAutorizacao.Recusada && telaTres.VezesPediuCodigo == 3
+                       && telaTres.VezesFechouEspera == 3 && telaTres.ForaDaThreadDaTela.Count == 0,
+                    "UI-2 o caminho das três tentativas também roda inteiro na thread da tela"
+                    + (telaTres.ForaDaThreadDaTela.Count > 0
+                        ? " — FORA DELA: " + string.Join(" · ", telaTres.ForaDaThreadDaTela) : "")
+                    + estouroTres);
+                fake.ZerarBaldes();
 
-                // 7c. A causa, em vez do sintoma: ConfigureAwait(false) num await
-                // cuja continuação toca a tela é o que joga a continuação no pool.
-                // Dentro do ClienteAutorizacao ele é CERTO (ninguém ali encosta em
-                // janela) — por isso a varredura é só da máquina de estados.
                 var fonteAut = Fonte("Pdv.Nucleo", "Autorizacao.cs") ?? "";
-                var iRes = fonteAut.IndexOf("public static async Task<DesfechoAutorizacao> ResolverAsync", StringComparison.Ordinal);
-                var iFim = fonteAut.IndexOf("private static string MotivoDaSolicitacao", StringComparison.Ordinal);
-                var corpoRes = iRes >= 0 && iFim > iRes ? fonteAut[iRes..iFim] : "";
+                var corpoRes = Trecho(fonteAut, "public static async Task<DesfechoAutorizacao> ResolverAsync",
+                    "private static string TextoDoMotivo");
                 checar(corpoRes.Length > 0 && !corpoRes.Contains("ConfigureAwait(false)", StringComparison.Ordinal),
                     "UI-3 a máquina de estados não usa ConfigureAwait(false) (a continuação tem que voltar ao Dispatcher)");
             }
 
-            // ── 8. A TELA DO ESTORNO REALMENTE USA ISTO ─────────────────────
-            // Tudo acima pode estar verde com a tela ainda chamando o PIN direto.
-            // EstornarTefAsync é code-behind de WPF (não dá para instanciar num
-            // teste), então se confere a fonte — mesma técnica da trava de
-            // instância única.
+            // ── 5. GARANTIA POR FONTE: NENHUM CAMINHO SEM Via=Totp ──────────
+            // A máquina de estados pode estar certa e a tela ainda fabricar um
+            // DesfechoAutorizacao "aprovado" por conta própria (foi assim que o PIN
+            // de emergência morava no catch do estorno). Aqui varre-se TUDO que
+            // entra no .exe: só Recusada e Totp podem ser construídos, e só o
+            // núcleo constrói Totp.
+            {
+                var fontes = FontesDoExe();
+                var construcoes = new List<string>();
+                var forasDoNucleo = new List<string>();
+                var rx = new Regex(@"new\s+DesfechoAutorizacao\s*\(\s*ViaAutorizacao\.(\w+)", RegexOptions.Compiled);
+                foreach (var f in fontes)
+                {
+                    var t = File.ReadAllText(f);
+                    foreach (Match m in rx.Matches(t))
+                    {
+                        var via = m.Groups[1].Value;
+                        if (via is not ("Recusada" or "Totp")) construcoes.Add($"{Path.GetFileName(f)}: {via}");
+                        if (via == "Totp" && !f.EndsWith(Path.Combine("Pdv.Nucleo", "Autorizacao.cs"), StringComparison.Ordinal))
+                            forasDoNucleo.Add(Path.GetFileName(f));
+                    }
+                    if (Regex.IsMatch(t, @"with\s*\{[^}]*\bVia\s*=")) construcoes.Add($"{Path.GetFileName(f)}: with {{ Via = }}");
+                }
+                checar(fontes.Length > 0 && construcoes.Count == 0,
+                    "FT-1 em todo fonte do .exe só existe DesfechoAutorizacao com Via=Recusada ou Via=Totp"
+                    + (construcoes.Count > 0 ? " — ACHEI: " + string.Join(", ", construcoes) : ""));
+                checar(forasDoNucleo.Count == 0,
+                    "FT-2 só o núcleo (Autorizacao.cs) fabrica Via=Totp; tela nenhuma aprova por conta própria"
+                    + (forasDoNucleo.Count > 0 ? " — ACHEI EM: " + string.Join(", ", forasDoNucleo) : ""));
+
+                var nomes = Enum.GetNames(typeof(ViaAutorizacao));
+                checar(nomes.Contains("Totp") && !nomes.Contains("Pin") && !nomes.Contains("Token"),
+                    "FT-3 ViaAutorizacao tem Totp e não tem mais Pin nem Token (não há o que produzi-los)");
+                checar(typeof(ITelaAutorizacao).GetMethod("PedirPinAsync") is null
+                       && typeof(ITelaAutorizacao).GetMethod("EscolherAposFalhaAsync") is null
+                       && typeof(ITelaAutorizacao).GetMethod("PedirCodigoAsync") is not null,
+                    "FT-4 a tela da autorização não tem mais PedirPinAsync nem escolha depois da falha");
+                var metodosRemota = typeof(IAutorizacaoRemota).GetMethods().Select(m => m.Name).OrderBy(n => n).ToArray();
+                checar(metodosRemota.SequenceEqual(new[] { "ValidarTotpAsync" }),
+                    "FT-5 a nuvem da autorização tem UM método: ValidarTotpAsync (sem solicitar, sem validar token)"
+                    + $" ({string.Join(", ", metodosRemota)})");
+
+                foreach (var (pasta, nome) in new[] { ("Pdv.Nucleo", "Autorizacao.cs"), ("Telas", "TelaAutorizacao.cs"), ("Telas", "PedirCodigo.cs") })
+                {
+                    var t = Fonte(pasta, nome) ?? "";
+                    var sobras = new[] { "PedirPinAsync", "PedirSenha", "AutorizarSupervisor", "SolicitarAsync", "WhatsApp", "AcaoCodigo.Pin", "NovoCodigo" }
+                        .Where(s => t.Contains(s, StringComparison.Ordinal)).ToList();
+                    checar(t.Length > 0 && sobras.Count == 0,
+                        $"FT-6 {nome} não tem sobra de PIN nem de mensagem no celular"
+                        + (sobras.Count > 0 ? " — ACHEI: " + string.Join(", ", sobras) : ""));
+                }
+
+                var pedirCodigo = Fonte("Telas", "PedirCodigo.cs") ?? "";
+                checar(pedirCodigo.Contains("Código do autenticador do dono", StringComparison.Ordinal)
+                       && pedirCodigo.Contains("MaxLength = 6", StringComparison.Ordinal)
+                       && !pedirCodigo.Contains("PIN", StringComparison.Ordinal)
+                       && !pedirCodigo.Contains("Não recebi", StringComparison.Ordinal),
+                    "FT-7 a tela do código pede 'Código do autenticador do dono', 6 dígitos, sem 'novo código' e sem PIN");
+                var corpoEspera = Trecho(pedirCodigo, "public sealed class Espera", "public static class PedirCodigo");
+                checar(corpoEspera.Contains("Dispatcher.Invoke", StringComparison.Ordinal),
+                    "FT-8 o Dispose do aviso de espera marshala para a thread da UI (não estoura se vier do pool)");
+
+                var servicos = Fonte("Servicos.cs") ?? "";
+                var corpoAutorizador = Trecho(servicos, "public static ClienteAutorizacao Autorizador()", "\n    }");
+                checar(corpoAutorizador.Contains("TokenAsync", StringComparison.Ordinal)
+                       && !corpoAutorizador.Contains("AnonKey", StringComparison.Ordinal),
+                    "FT-9 Servicos.Autorizador entrega o bearer da SESSÃO do terminal (Nuvem.TokenAsync), não a chave pública");
+            }
+
+            // ── 6. A TELA DO ESTORNO REALMENTE USA ISTO ─────────────────────
             {
                 var fonte = Fonte("Telas", "Venda.xaml.cs") ?? "";
                 checar(fonte.Length > 0, "TL-1 achei a fonte da tela de venda para conferir o estorno");
-
-                var i = fonte.IndexOf("private async Task EstornarTefAsync", StringComparison.Ordinal);
-                var fim = i < 0 ? -1 : fonte.IndexOf("\n    /// <summary>", i, StringComparison.Ordinal);
-                var corpo = i < 0 || fim < 0 ? "" : fonte[i..fim];
+                var corpo = Trecho(fonte, "private async Task EstornarTefAsync", "\n    /// <summary>");
 
                 checar(corpo.Contains("Autorizacao.ResolverAsync", StringComparison.Ordinal),
-                    "TL-2 o estorno passa pela autorização por token (não mais pelo PIN direto)");
-                checar(corpo.Length > 0 && !corpo.Contains("PedirSenha.Mostrar", StringComparison.Ordinal),
-                    "TL-3 não sobrou nenhuma porta lateral pedindo PIN dentro do estorno");
+                    "TL-2 o estorno passa pela autorização do núcleo");
+                var portas = new[] { "PedirSenha.Mostrar", "PedirPinAsync", "AutorizarSupervisor", "ViaAutorizacao.Totp", "WhatsApp", "Supervisor" }
+                    .Where(s => corpo.Contains(s, StringComparison.Ordinal)).ToList();
+                checar(corpo.Length > 0 && portas.Count == 0,
+                    "TL-3 não sobrou porta lateral no estorno: sem PIN, sem senha, sem fabricar aprovação"
+                    + (portas.Count > 0 ? " — ACHEI: " + string.Join(", ", portas) : ""));
                 checar(corpo.Contains("Autorizacao.Referencia(", StringComparison.Ordinal)
                        && corpo.Contains("l.tef_id", StringComparison.Ordinal),
                     "TL-4 a referência mandada à nuvem é a daquele estorno (transação + NSU + valor + venda)");
-
-                var confirma = corpo.IndexOf("Dialogo.Confirmar", StringComparison.Ordinal);
-                var autoriza = corpo.IndexOf("Autorizacao.ResolverAsync", StringComparison.Ordinal);
-                checar(confirma >= 0 && autoriza > confirma,
-                    "TL-5 o WhatsApp só sai depois de o operador confirmar (não a cada estorno aberto e abandonado)");
-
-                var cnc = corpo.IndexOf("if (!d.Pago)", StringComparison.Ordinal);
-                var linhaPropria = corpo.IndexOf("Autorizacao.AuditarSemAprovacaoRemota", StringComparison.Ordinal);
-                checar(linhaPropria > 0 && cnc > 0 && linhaPropria > cnc,
-                    "TL-6 a linha 'escapou do token' só é gravada com o estorno CONSUMADO (depois do CNC)");
-                // Na LINHA DO ESTORNO CONSUMADO, não em qualquer outra: o detalhe do
-                // `tef_estorno` é onde o dono lê quem aprovou.
+                checar(Ordem(corpo, "Dialogo.Confirmar", "Autorizacao.ResolverAsync"),
+                    "TL-5 o código só é pedido depois de o operador confirmar o estorno");
+                checar(Ordem(corpo, "Autorizacao.ResolverAsync", "if (!aut.Autorizado)")
+                       && Ordem(corpo, "if (!aut.Autorizado)", "cli.CancelarAsync"),
+                    "TL-6 sem autorização o método retorna ANTES do CNC (nada é estornado)");
                 var dec = corpo.IndexOf("var detalhe = $\"", StringComparison.Ordinal);
                 var linhaDetalhe = dec < 0 ? "" : corpo[dec..corpo.IndexOf('\n', dec)];
                 checar(linhaDetalhe.Contains("{trilha}", StringComparison.Ordinal),
-                    "TL-7 a linha normal do estorno carrega a trilha (quem aprovou, ou o aviso)");
-
-                // O ESTORNO NÃO PODE DERRUBAR O CAIXA. MenuTef é `async void` com
-                // finally mas sem catch, e não existe DispatcherUnhandledException
-                // no App: sem catch AQUI, exceção na autorização encerra o Pdv.exe
-                // com o cliente no balcão — e sem oferecer o PIN.
-                var iAut = corpo.IndexOf("Autorizacao.ResolverAsync", StringComparison.Ordinal);
+                    "TL-7 a linha normal do estorno carrega a trilha (quem aprovou pelo autenticador)");
                 var iCatch = corpo.IndexOf("catch (Exception ex)", StringComparison.Ordinal);
-                var iPinEmerg = corpo.IndexOf("PedirPinAsync", StringComparison.Ordinal);
-                checar(iAut > 0 && iCatch > iAut && iPinEmerg > iCatch,
-                    "TL-8 falha na autorização não mata o PDV: tem catch e cai para o PIN do supervisor");
-
-                // O aviso de espera é fechado pelo Dispose de um `using` no meio de
-                // awaits: se a continuação voltar fora da thread da UI, ele estoura.
-                var fonteEspera = Fonte("Telas", "PedirCodigo.cs") ?? "";
-                var iEsp = fonteEspera.IndexOf("public sealed class Espera", StringComparison.Ordinal);
-                var iPed = fonteEspera.IndexOf("public static class PedirCodigo", StringComparison.Ordinal);
-                var corpoEspera = iEsp >= 0 && iPed > iEsp ? fonteEspera[iEsp..iPed] : "";
-                checar(corpoEspera.Contains("Dispatcher.Invoke", StringComparison.Ordinal),
-                    "TL-9 o Dispose do aviso de espera marshala para a thread da UI (não estoura se vier do pool)");
-
-                // Token reaproveitado significa que NÃO saiu mensagem nova. Se a
-                // tela não disser isso, o operador fica olhando para o celular
-                // esperando um WhatsApp que não vem — e aperta "não recebi" sem
-                // precisar, gastando uma vaga do balde e acendendo o celular da
-                // Ingrid pela segunda vez, que é justamente o que o
-                // reaproveitamento economizou.
-                checar(fonteEspera.Contains("pedido.Reaproveitado", StringComparison.Ordinal)
-                       && fonteEspera.Contains("não saiu mensagem nova", StringComparison.Ordinal),
-                    "TL-10 a tela do código avisa quando o token é o que JÁ tinha sido mandado");
+                var corpoCatch = iCatch < 0 ? "" : corpo[iCatch..Math.Min(corpo.Length, iCatch + 1200)];
+                checar(Ordem(corpo, "Autorizacao.ResolverAsync", "catch (Exception ex)")
+                       && corpoCatch.Contains("ViaAutorizacao.Recusada", StringComparison.Ordinal),
+                    "TL-8 falha na autorização não mata o PDV: tem catch, e o catch RECUSA (não libera por outro caminho)");
+                checar(!corpo.Contains("AuditarSemAprovacaoRemota", StringComparison.Ordinal),
+                    "TL-9 não existe mais 'estorno sem aprovação remota' para registrar");
             }
 
-            // ── 8b. CANCELAR VENDA E NOTA SEM MAQUININHA (CV-*) ──────────────
-            // O FURO QUE ISTO FECHA: cancelar a VENDA e cancelar a NFC-e moravam
-            // DENTRO do estorno, e o estorno abria só com TEF integrado. Em loja de
-            // maquininha AVULSA, `Servicos.Operavel()` devolve null e o operador lia
-            // "chame o gerente para configurar" — conselho errado: ele não precisa de
-            // maquininha, precisa cancelar uma nota, e o relógio dos 30 minutos da
-            // SEFAZ está correndo. Não existia caminho nenhum: a janela fechava.
-            //
-            // São TRÊS atos, e só o terceiro precisa de TEF:
-            //   · cancelar a VENDA                 → banco local, nada de maquininha
-            //   · cancelar a NFC-e (evento 110111) → agente fiscal em 127.0.0.1 (tem o A1)
-            //   · estornar o cartão eletronicamente → maquininha integrada
-            //
-            // Code-behind de WPF não se instancia num teste (o Pdv.Testes é console):
-            // a fonte é lida, como nos TL-* acima e na trava de instância única.
+            // ── 6b. CANCELAR VENDA E NOTA SEM MAQUININHA (CV-*) ──────────────
             {
                 var fonte = Fonte("Telas", "Venda.xaml.cs") ?? "";
                 var xaml = Fonte("Telas", "Venda.xaml") ?? "";
 
-                static string Trecho(string todo, string de, string ate)
-                {
-                    var i = todo.IndexOf(de, StringComparison.Ordinal);
-                    if (i < 0) return "";
-                    var f = todo.IndexOf(ate, i, StringComparison.Ordinal);
-                    return f < 0 ? "" : todo[i..f];
-                }
-                static bool Ordem(string corpo, string primeiro, string depois)
-                {
-                    var a = corpo.IndexOf(primeiro, StringComparison.Ordinal);
-                    var b = corpo.IndexOf(depois, StringComparison.Ordinal);
-                    return a >= 0 && b > a;
-                }
-
-                // O operador de maquininha avulsa tem que ACHAR isto. A porta continua
-                // sendo a mesma (botão da barra → menu), mas um botão escrito "Cartão"
-                // é exatamente o que escondia o cancelamento de quem não tem cartão
-                // integrado.
                 checar(xaml.Contains("Click=\"MenuCancelamento\"", StringComparison.Ordinal)
                        && xaml.Contains("Cancelar venda", StringComparison.Ordinal),
                     "CV-1 a barra tem um botão que DIZ que cancela venda (não só 'Cartão')");
 
                 var menu = Trecho(fonte, "private async void MenuCancelamento", "private static void GuardarPasso");
                 checar(menu.Length > 0, "CV-2 achei o menu de cancelamento na tela de venda");
-
-                // O PECADO ORIGINAL: `if (Servicos.Operavel() is null) return;` no TOPO
-                // do menu trancava os três atos atrás do TEF.
-                checar(menu.Length > 0
-                       && !menu.Contains("não tem maquininha ligada a ele", StringComparison.Ordinal),
+                checar(menu.Length > 0 && !menu.Contains("não tem maquininha ligada a ele", StringComparison.Ordinal),
                     "CV-3 o menu não manda mais 'chame o gerente para configurar' a quem quer cancelar uma nota");
                 checar(Ordem(menu, "CancelarVendaAsync", "Servicos.Operavel()"),
                     "CV-4 o cancelamento vem ANTES de qualquer checagem de maquininha (o TEF só barra o estorno)");
@@ -886,70 +712,70 @@ public static class TestesAutorizacao
                        && !corpo.Contains("Servicos.Operavel()", StringComparison.Ordinal)
                        && !corpo.Contains("IProvedorTefOperavel", StringComparison.Ordinal),
                     "CV-6 o cancelamento funciona COM ou SEM TEF (não toca no provedor da maquininha)");
-
-                // A ORDEM É O CORAÇÃO: nota primeiro, venda depois. Ao contrário sobra
-                // NFC-e válida para venda que não existe mais — e `Vendas.Cancelar`
-                // recusa exatamente isso (teste "Cancele a nota na SEFAZ").
                 checar(Ordem(corpo, "CancelamentoFiscal.CancelarAsync", "Vendas.Cancelar"),
                     "CV-7 cancela a NOTA antes da VENDA (nota viva para venda morta não pode existir)");
-
-                // "Não sei" (agente mudo/timeout) NUNCA pode virar "cancelada" — nem na
-                // tela nem no banco. A SEFAZ pode ter registrado o evento com a resposta
-                // perdida na volta.
                 checar(corpo.Contains("rc.Indisponivel", StringComparison.Ordinal)
                        && Ordem(corpo, "rc.Indisponivel", "fiscal_status = 'cancelada'"),
                     "CV-8 agente indisponível não vira nota cancelada no banco");
-
-                // Cancelar nota é ato fiscal: mesmo caminho de autorização do estorno.
-                checar(corpo.Contains("Autorizacao.ResolverAsync", StringComparison.Ordinal)
-                       && !corpo.Contains("PedirSenha.Mostrar", StringComparison.Ordinal),
-                    "CV-9 passa pela autorização por token (sem porta lateral pedindo PIN)");
+                var portas = new[] { "PedirSenha.Mostrar", "PedirPinAsync", "AutorizarSupervisor", "ViaAutorizacao.Totp", "WhatsApp", "Supervisor", "AuditarSemAprovacaoRemota" }
+                    .Where(s => corpo.Contains(s, StringComparison.Ordinal)).ToList();
+                checar(corpo.Contains("Autorizacao.ResolverAsync", StringComparison.Ordinal) && portas.Count == 0,
+                    "CV-9 passa pela autorização do núcleo, sem porta lateral"
+                    + (portas.Count > 0 ? " — ACHEI: " + string.Join(", ", portas) : ""));
                 checar(Ordem(corpo, "Dialogo.Confirmar", "Autorizacao.ResolverAsync"),
-                    "CV-10 o WhatsApp da gerência só acende depois de o operador confirmar");
+                    "CV-10 o código só é pedido depois de o operador confirmar");
+                var iCatch = corpo.IndexOf("catch (Exception ex)", StringComparison.Ordinal);
+                var corpoCatch = iCatch < 0 ? "" : corpo[iCatch..Math.Min(corpo.Length, iCatch + 1200)];
                 checar(Ordem(corpo, "Autorizacao.ResolverAsync", "catch (Exception ex)")
-                       && Ordem(corpo, "catch (Exception ex)", "PedirPinAsync"),
-                    "CV-11 falha na autorização não derruba o PDV: cai para o PIN do supervisor");
-                checar(corpo.Contains("Autorizacao.AuditarSemAprovacaoRemota", StringComparison.Ordinal),
-                    "CV-12 cancelamento que escapou do token também entra na lista do dono");
-
-                // O MAL-ENTENDIDO QUE CUSTA DINHEIRO: cancelar a nota NÃO devolve nada
-                // ao cliente. Em maquininha avulsa o estorno é na mão, na maquininha.
+                       && corpoCatch.Contains("ViaAutorizacao.Recusada", StringComparison.Ordinal),
+                    "CV-11 falha na autorização não derruba o PDV, e o catch RECUSA");
+                checar(corpo.Contains("Tipo = \"cancelamento\"", StringComparison.Ordinal)
+                       && corpo.Contains("Autorizacao.ReferenciaCancelamento(", StringComparison.Ordinal),
+                    "CV-12 o pedido vai como tipo 'cancelamento' com referência própria (o log da nuvem separa os dois atos)");
+                checar(Ordem(corpo, "Autorizacao.ResolverAsync", "if (!aut.Autorizado)")
+                       && Ordem(corpo, "if (!aut.Autorizado)", "CancelamentoFiscal.CancelarAsync")
+                       && Ordem(corpo, "if (!aut.Autorizado)", "Vendas.Cancelar"),
+                    "CV-13 sem autorização nada é cancelado (nem nota, nem venda)");
                 checar(corpo.Contains("CancelamentoVenda", StringComparison.Ordinal)
-                       && corpo.Contains("AvisoDoDinheiro", StringComparison.Ordinal),
-                    "CV-13 a tela diz, em letras, que NENHUM dinheiro volta sozinho");
-
-                // O RELÓGIO: 30 min da autorização, e depois disso a mensagem tem que
-                // parar de prometer o que a SEFAZ não faz mais.
-                checar(corpo.Contains("TextoDaNota", StringComparison.Ordinal),
-                    "CV-14 a tela mostra quanto tempo resta do prazo da nota");
+                       && corpo.Contains("AvisoDoDinheiro", StringComparison.Ordinal)
+                       && corpo.Contains("TextoDaNota", StringComparison.Ordinal),
+                    "CV-14 a tela diz que NENHUM dinheiro volta sozinho e mostra o prazo da nota");
             }
 
-            // ── 9. O QUE O .EXE NÃO PODE CARREGAR ───────────────────────────
-            // O binário fica numa loja: quem copiar o arquivo tem a chave que
-            // estiver dentro dele. Com service_role, isso seria o banco inteiro.
+            // ── 7. A CONFIGURAÇÃO CONTINUA PELA SENHA DE ADMINISTRADOR ──────
             {
-                // Só o que ENTRA no .exe: raiz + Telas + Pdv.Nucleo (o Pdv.csproj exclui
-                // Pdv.Testes e Pdv.Instalador). Varrer o repositório inteiro faria este
-                // teste achar a si mesmo e chamar de vazamento.
-                var raiz = Raiz();
-                var doExe = raiz is null ? Array.Empty<string>() : Directory
-                    .EnumerateFiles(raiz, "*.cs", SearchOption.TopDirectoryOnly)
-                    .Concat(Directory.EnumerateFiles(Path.Combine(raiz, "Telas"), "*.cs", SearchOption.AllDirectories))
-                    .Concat(Directory.EnumerateFiles(Path.Combine(raiz, "Pdv.Nucleo"), "*.cs", SearchOption.AllDirectories))
-                    .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                             && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
-                    .ToArray();
+                var fonte = Fonte("MainWindow.xaml.cs") ?? "";
+                var i = fonte.IndexOf("private void AbrirConfigProtegida()", StringComparison.Ordinal);
+                var corpo = i < 0 ? "" : fonte[i..Math.Min(fonte.Length, i + 1200)];
+                checar(corpo.Contains("SenhaAdminConfere", StringComparison.Ordinal)
+                       && !corpo.Contains("ResolverAsync", StringComparison.Ordinal),
+                    "CF-1 a configuração é liberada pela senha de administrador, não pelo autenticador");
+            }
+
+            // ── 8. O QUE O .EXE NÃO PODE CARREGAR ───────────────────────────
+            {
+                var doExe = FontesDoExe();
                 var comSegredo = doExe
                     .Where(f => File.ReadAllText(f) is var t
                              && (t.Contains("\"role\":\"service_role\"") || t.Contains("SUPABASE_SERVICE_ROLE")
                                  || t.Split('"').Any(pedaco => PapelDoJwt(pedaco) == "service_role")))
                     .ToList();
-                checar(raiz is not null && doExe.Length > 0 && comSegredo.Count == 0,
+                checar(doExe.Length > 0 && comSegredo.Count == 0,
                     "SEG-1 nenhum fonte que entra no .exe carrega chave service_role" +
                     (comSegredo.Count > 0 ? " — ACHEI EM: " + string.Join(", ", comSegredo) : ""));
-
                 checar(PapelDoJwt(Nuvem.AnonKey) == "anon",
-                    "SEG-2 a chave embutida no .exe é a pública (role=anon), a mesma que a edge espera");
+                    "SEG-2 a chave embutida no .exe é a pública (role=anon)");
+                // O segredo do autenticador vive SÓ no servidor: nem base32, nem
+                // otpauth, nem HMAC no que entra no .exe.
+                var comTotp = doExe
+                    .Where(f => File.ReadAllText(f) is var t
+                             && (t.Contains("otpauth://", StringComparison.Ordinal)
+                                 || t.Contains("HMACSHA1", StringComparison.Ordinal)
+                                 || t.Contains("GEZDGNBV", StringComparison.Ordinal)))
+                    .ToList();
+                checar(comTotp.Count == 0,
+                    "SEG-3 o .exe não calcula TOTP nem conhece segredo: quem confere é a nuvem" +
+                    (comTotp.Count > 0 ? " — ACHEI EM: " + string.Join(", ", comTotp) : ""));
             }
         }
         finally

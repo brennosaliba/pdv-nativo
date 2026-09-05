@@ -106,6 +106,12 @@ if (args.Length >= 4 && args[0] == "--foto-venda")
 if (args.Length >= 4 && args[0] == "--foto-kds")
     return FotoKds.Rodar(args);
 
+// Modo FOTO da tela do código do autenticador do dono, por cima da venda (ver
+// Pdv.Testes/FotoCodigo.cs). Cópia do banco do caixa, nuvem morta.
+//   Pdv.Testes.exe --foto-codigo saida.png 1024 768 [claro|escuro] [aviso]
+if (args.Length >= 4 && args[0] == "--foto-codigo")
+    return FotoCodigo.Rodar(args);
+
 // Gera o icone do exe (mmtech, conceito B) num .ico multi-resolucao.
 //   Pdv.Testes.exe --gerar-icone saida.ico
 if (args.Length >= 2 && args[0] == "--gerar-icone")
@@ -1375,11 +1381,12 @@ Console.WriteLine();
 Console.WriteLine("--- Ordem das categorias e da grade (alfabetica pt-BR) ---");
 TestesCategorias.Rodar((cond, nome) => Check("categoria: " + nome, cond));
 
-// -- AUTORIZACAO DE ESTORNO: token de WhatsApp, PIN como saida ----------------
-// Estorno e o unico ponto onde dinheiro VOLTA sem venda. Ate hoje bastava o PIN
-// guardado no banco do proprio caixa; agora quem autoriza esta fora da loja.
+// -- AUTORIZACAO DE ESTORNO: codigo do autenticador do dono (TOTP), e so ele ---
+// Estorno e o unico ponto onde dinheiro VOLTA sem venda. Ja foi PIN local, ja foi
+// codigo por mensagem com PIN como saida; agora so o Google Authenticator do dono
+// libera, e quem confere e a nuvem. Sem codigo, sem estorno.
 Console.WriteLine();
-Console.WriteLine("--- Autorizacao de estorno (token por WhatsApp) ---");
+Console.WriteLine("--- Autorizacao de estorno (autenticador do dono) ---");
 await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome, cond));
 
 // -- ATUALIZAR O CAIXA: o botao que baixa e entrega ao instalador -------------

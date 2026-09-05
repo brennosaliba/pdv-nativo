@@ -892,13 +892,14 @@ public sealed class Drenagem : IDisposable
           Autorizacao.TipoNaFila };
 
     /// <summary>
-    /// Sobe o estorno que ESCAPOU do token de WhatsApp (saiu pelo PIN do supervisor,
-    /// ou pelo modo de homologacao) para pdv_estornos_sem_aprovacao. E' a lista que o
-    /// dono pediu — e ate aqui ela existia so no SQLite do caixa, que ninguem le.
+    /// HISTORICO (04/09/2026): sobe para pdv_estornos_sem_aprovacao as linhas de estorno
+    /// que saiam pelo PIN do supervisor ou pelo modo de homologacao. Nada mais enfileira
+    /// isto (o estorno agora so sai pelo autenticador do dono), mas um caixa pode ainda
+    /// ter linhas antigas na fila: o handler fica para elas drenarem.
     ///
-    /// O payload ja vem completo do nucleo (Autorizacao.AuditarSemAprovacaoRemota);
-    /// aqui so entram os dois campos que sao do TERMINAL e nao do estorno, e que
-    /// podem ter mudado entre o estorno e o envio (a fila espera a rede voltar).
+    /// O payload ja vem completo do nucleo (Autorizacao.AuditarSemAprovacaoRemota, da
+    /// versao anterior); aqui so entram os dois campos que sao do TERMINAL e nao do
+    /// estorno, e que podem ter mudado entre o estorno e o envio.
     ///
     /// client_key = referencia do estorno: replay da fila nao vira linha dobrada.
     /// </summary>

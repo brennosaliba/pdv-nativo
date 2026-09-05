@@ -304,7 +304,7 @@ public static class FotoVenda
     /// O diálogo é outra Window: renderizar só o conteúdo da janela principal o deixaria
     /// de fora, e a foto mentiria que ele não existe.
     /// </summary>
-    private static void Salvar(string saida, int w, int h, Window janela, Window? dialogo)
+    internal static void Salvar(string saida, int w, int h, Window janela, Window? dialogo)
     {
         var principal = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
         principal.Render((Visual)janela.Content);

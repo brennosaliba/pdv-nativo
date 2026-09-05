@@ -376,20 +376,51 @@ public static class Servicos
     private static ClienteAutorizacao? _autorizador;
 
     /// <summary>
-    /// Quem pede o código de autorização de estorno à nuvem.
+    /// Quem confere na nuvem o código do autenticador do dono (RPC pdv_autorizacao_totp).
     ///
-    /// Vai com a CHAVE PÚBLICA e sem sessão de usuário, de propósito: a edge é
-    /// deployada com --no-verify-jwt e se defende sozinha. Exigir login aqui
-    /// tornaria a autorização refém do token de 1 h do terminal — e o momento em
-    /// que ela é chamada (cliente no balcão pedindo o dinheiro de volta) é o pior
-    /// possível para descobrir que a sessão venceu.
+    /// Vai com o bearer da SESSÃO do terminal (Nuvem.TokenAsync renova sozinho): a
+    /// RPC é executável por `authenticated`, e é a sessão que diz de qual loja o
+    /// pedido vem. Terminal sem conta na nuvem não estorna, e é assim de propósito.
+    ///
+    /// O terminal_uuid é o balde do rate limit na nuvem (5 falhas em 10 min).
     ///
     /// Um por processo: o HttpClient de baixo é o do <see cref="Pdv.Nucleo.Fiscal"/>,
-    /// único do PDV inteiro.
+    /// único do PDV inteiro. O diagnóstico (uma linha por tentativa, código sempre
+    /// mascarado) vai para ProgramData\PdvNativo\autorizacao.txt.
     /// </summary>
     public static ClienteAutorizacao Autorizador()
     {
-        lock (Trava) return _autorizador ??= new ClienteAutorizacao(UrlNuvem());
+        lock (Trava)
+            // URL FIXA de proposito (revisao 04/09): o veredito do estorno nao pode depender de uma
+            // linha editavel do SQLite local (config.supabase_url); quem trocasse a URL por um
+            // servidor de mentira teria "ok" sem codigo. O TOTP fala SO com o projeto de producao.
+            return _autorizador ??= new ClienteAutorizacao(ct => Nuvem().TokenAsync(ct), Pdv.Nucleo.Nuvem.UrlPadrao,
+                terminalUuid: TerminalUuid)
+            {
+                Diagnostico = linha => AnotarDiagnostico("autorizacao.txt", linha),
+            };
+    }
+
+    private static string? TerminalUuid()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            return cx.ExecuteScalar<string?>("SELECT terminal_uuid FROM terminal LIMIT 1");
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Uma linha por evento num arquivo de diagnóstico em ProgramData; passando de 1 MB, recomeça.</summary>
+    private static void AnotarDiagnostico(string arquivo, string texto)
+    {
+        try
+        {
+            var caminho = System.IO.Path.Combine(Banco.Pasta, arquivo);
+            if (System.IO.File.Exists(caminho) && new System.IO.FileInfo(caminho).Length > 1_000_000) System.IO.File.Delete(caminho);
+            System.IO.File.AppendAllText(caminho, DateTime.Now.ToString("dd/MM HH:mm:ss") + "  " + texto + Environment.NewLine);
+        }
+        catch { /* diagnóstico nunca atrapalha a operação */ }
     }
 
     /// <summary>
