@@ -233,6 +233,34 @@ public static class TestesKds
             Kds.CancelarPorVenda(vendaId);
             checar(Kds.Pendentes() == 0, "venda cancelada tira o pedido da produção");
 
+            // ── combo do balcao (05/09): escolhas_json vira o conteudo do card ──
+            // Sem isto a cozinha lia "1x COMBO 10 DONUTS" e nao tinha o que produzir.
+            {
+                var vCombo = SemearVenda(arquivo, numero: 9);
+                using (var cxE = Banco.Abrir())
+                    cxE.Execute("UPDATE venda_item SET descricao = 'COMBO 10 DONUTS', escolhas_json = @j WHERE venda_id = @v",
+                        new
+                        {
+                            v = vCombo,
+                            j = Combos.ParaJson(new[]
+                            {
+                                new Escolha("d-ovo", "5", "DONUT OVOMALTINE", "regra-donuts", 2, "Donuts"),
+                                new Escolha("d-ninho", "4", "DONUT NINHO", "regra-donuts", 8, "Donuts"),
+                            }),
+                        });
+                var tCombo = Kds.DoBalcao(vCombo);
+                var lidoCombo = Kds.Abertos().First(x => x.Id == tCombo);
+                checar(lidoCombo.Itens[0].Escolhas is { Count: 2 }
+                       && lidoCombo.Itens[0].Escolhas[0] == "Donuts: 2x Ovomaltine"
+                       && lidoCombo.Itens[0].Escolhas[1] == "Donuts: 8x Ninho",
+                    "DoBalcao: escolhas_json vira TicketItem.Escolhas 'Donuts: 2x Ovomaltine' / 'Donuts: 8x Ninho'");
+                var comanda = Kds.ComandaLinhas(lidoCombo).Select(LinhaEscala.Limpa).ToList();
+                checar(comanda.Count(l => l.Contains("[ ]", StringComparison.Ordinal)) == 3
+                       && comanda.Any(l => l.Contains("[ ]", StringComparison.Ordinal) && l.Contains("8x Ninho", StringComparison.Ordinal)),
+                    "a comanda de cozinha do combo do balcao tem um [ ] por sabor (1 item + 2 sabores = 3)");
+                Kds.CancelarPorVenda(vCombo);
+            }
+
             // ── itens sobrevivem à ida e volta do JSON ──────────────────────
             var t3 = Kds.DoDelivery("order-B", "5678", "Sicrano", itens);
             var lido = Kds.Abertos().First(x => x.Id == t3);

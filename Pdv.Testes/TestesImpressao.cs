@@ -32,6 +32,7 @@ public static class TestesImpressao
             SeletorDaAbaDelivery(checar);
             ComandaNaBobinaCerta(checar);
             await NoPapelAsync(checar);
+            await ComboNoPapelAsync(checar);
         }
         finally
         {
@@ -396,6 +397,38 @@ public static class TestesImpressao
         checar(alturas.TryGetValue(58.0, out var a58) && alturas.TryGetValue(80.0, out var a80) && a58 > a80,
             $"em 58 mm o mesmo cupom fica mais COMPRIDO ({(alturas.TryGetValue(58.0, out var x) ? x : -1)} px contra " +
             $"{(alturas.TryGetValue(80.0, out var y) ? y : -1)} px) — o texto reflui em vez de sumir");
+    }
+
+    /// <summary>
+    /// COMBO no cupom (05/09/2026): as escolhas saem como sub-linhas SEM valor logo abaixo
+    /// da linha do combo. A prova no papel: o MESMO cupom com um combo de duas escolhas
+    /// fica mais COMPRIDO que sem elas (as sub-linhas foram desenhadas) e o total do
+    /// documento não muda (a NFC-e e a soma continuam sendo a linha do combo).
+    /// </summary>
+    private static async Task ComboNoPapelAsync(Action<bool, string> checar)
+    {
+        Pdv.Impressao.PapelMm = Texto(80);
+        var basico = Servicos.CupomDeExemplo("LOJA DE TESTE", "62177839000238", 3);
+        var semCombo = basico.Itens[0] with { Descricao = "COMBO 10 DONUTS" };
+        var comCombo = semCombo with { Escolhas = new[] { "3x Donut Ovomaltine", "7x Donut Churros" } };
+        var alturas = new Dictionary<string, int>();
+        foreach (var (rotulo, item) in new[] { ("sem", semCombo), ("com", comCombo) })
+        {
+            var png = Path.Combine(Path.GetTempPath(), $"pdv-combo-cupom-{rotulo}-{Guid.NewGuid():N}.png");
+            try
+            {
+                var dados = basico with { Itens = new[] { item }.Concat(basico.Itens.Skip(1)).ToList() };
+                var erro = await Pdv.Impressao.PreVisualizarAsync(dados, png);
+                checar(erro is null, $"cupom {rotulo} combo: desenhou ({erro ?? "ok"})");
+                if (erro is null) alturas[rotulo] = TamanhoPng(png).Altura;
+            }
+            finally { try { File.Delete(png); } catch { /* temp */ } }
+        }
+        checar(alturas.TryGetValue("com", out var com) && alturas.TryGetValue("sem", out var sem) && com > sem,
+            $"o cupom com as duas escolhas do combo fica mais comprido ({(alturas.TryGetValue("com", out var a) ? a : -1)} px contra " +
+            $"{(alturas.TryGetValue("sem", out var b) ? b : -1)} px): as sub-linhas foram para o papel");
+        checar(comCombo.Total == semCombo.Total && Pdv.Impressao.SubLinhasEscolhas(comCombo).All(l => !l.Contains("R$")),
+            "as sub-linhas do combo não têm valor e o total da linha é o mesmo com ou sem elas");
     }
 
     /// <summary>Largura e altura lidas do cabeçalho IHDR do PNG — sem decodificar a imagem.</summary>

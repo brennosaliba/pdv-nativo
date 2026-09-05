@@ -97,6 +97,7 @@ if (args.Length >= 2 && args[0] == "--conferir-pacote")
 
 // Modo FOTO: fotografa a tela de venda numa resolução (ver Pdv.Testes/FotoVenda.cs).
 //   Pdv.Testes.exe --foto-venda saida.png 1024 768 [categoria] [claro|escuro] [item;item]
+//     [combo:<combo>=<sabor>x<n>,<sabor>x<n>] [combo-aberto:<combo>=<sabor>x<n>,...]
 if (args.Length >= 4 && args[0] == "--foto-venda")
     return FotoVenda.Rodar(args);
 
@@ -1555,6 +1556,15 @@ try { File.Delete(arquivo); } catch { }
 Console.WriteLine();
 Console.WriteLine("--- Menus da barra da venda (itens, ordem, handler, topo mais baixo) ---");
 TestesMenuBarra.Rodar((cond, nome) => Check("menu-barra: " + nome, cond));
+
+// -- 05/09/2026: COMBO com sub-escolhas no caixa --------------------------------
+// "COMBO 10 DONUTS" vendia como uma linha sem conteudo e o estoque baixava "10 de
+// um sabor qualquer". Parser da descida, fonte servidor ∪ local, estado do dialogo
+// (minimo/maximo/tudo igual), venda composta (escolhas_json, p_escolhas com seq,
+// RPC certa na fila contra o Supabase de mentira), nota com 1 det, e a tela em STA.
+Console.WriteLine();
+Console.WriteLine("--- Combo com sub-escolhas (dialogo, comanda, venda composta, fila, KDS) ---");
+await TestesCombos.RodarAsync((cond, nome) => Check("combo: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

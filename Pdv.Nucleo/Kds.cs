@@ -141,11 +141,21 @@ public static class Kds
             new { id = vendaId });
         if (v is null) return null;
 
+        // escolhas_json (05/09): o que o cliente montou no combo vira TicketItem.Escolhas
+        // no formato que o card e a comanda ja desenham ("Donuts: 2x Ovomaltine"),
+        // multiplicado pelas unidades da linha. Sem isto a cozinha lia "1x COMBO 10
+        // DONUTS" e nao tinha o que produzir.
         var itens = cx.Query(
-            @"SELECT descricao, qtd_milesimo, gratis_milesimo FROM venda_item
+            @"SELECT descricao, qtd_milesimo, gratis_milesimo, escolhas_json FROM venda_item
                WHERE venda_id = @id AND cancelado = 0 ORDER BY seq", new { id = vendaId })
-            .Select(i => new TicketItem((string)i.descricao, (int)(long)i.qtd_milesimo,
-                (long)i.gratis_milesimo > 0 ? "brinde" : null))
+            .Select(i =>
+            {
+                var qtd = (int)(long)i.qtd_milesimo;
+                var escolhas = Combos.LinhasKds(Combos.DeJson(i.escolhas_json as string), Math.Max(1, qtd / 1000));
+                return new TicketItem((string)i.descricao, qtd,
+                    (long)i.gratis_milesimo > 0 ? "brinde" : null,
+                    escolhas.Count > 0 ? escolhas : null);
+            })
             .ToList();
         if (itens.Count == 0) return null;
 

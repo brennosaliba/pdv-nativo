@@ -307,5 +307,27 @@ public static class TestesPromocoes
                 "DescreveRegra sem travessao: " + frase);
         }
         checar(!Promocoes.DescreveQuando(lxJanela, "A").Contains('–'), "DescreveQuando sem meia-risca na faixa de hora");
+
+        // ══════════════════════════════════════════════════════════════════
+        // 05/09/2026: produto-COMBO com sub-escolhas na comanda. A composicao e
+        // conteudo de uma linha; a promocao e preco sobre linhas. Percentual sobre
+        // o combo aplica na linha-mae; produto-combo dentro de promocao de combo ou
+        // como brinde de compre-e-ganhe e ignorado nesta onda.
+        // ══════════════════════════════════════════════════════════════════
+        var combos = new HashSet<string> { "COMBO10" };
+        var pctCombo = P("""{"id":"pc","nome":"10 no combo","tipo":"percentual","percentual":10,"alvo":"produtos","produto_ids":["COMBO10"],"ativa":true,"inicio":"2026-01-01","fim":null}""");
+        av = Promocoes.AvaliarCarrinho(new[] { pctCombo }, new[] { It("COMBO10", 9900, 1, "Combos") }, sexta, combos);
+        checar(av.PromoId == "pc" && av.DescontoCent[0] == 990,
+            "percentual sobre o produto-combo aplica na linha-mae (10% de 99,00 = 9,90)");
+        var cbComCombo = P("""{"id":"cbc","nome":"combo do combo","tipo":"combo","ativa":true,"inicio":"2026-01-01","fim":null,"combo":{"itens":[{"produto_id":"COMBO10","qtd":1},{"produto_id":"D","qtd":1}],"preco_cent":9000},"config":{"combo":{"modo":"preco","preco_cent":9000}}}""");
+        checar(Promocoes.AvaliarCarrinho(new[] { cbComCombo }, new[] { It("COMBO10", 9900, 1, "Combos"), It("D", 800) }, sexta, combos).TotalCent == 0,
+            "promocao de combo que lista um produto-combo e IGNORADA");
+        checar(Promocoes.AvaliarCarrinho(new[] { cbComCombo }, new[] { It("COMBO10", 9900, 1, "Combos"), It("D", 800) }, sexta).TotalCent == 1700,
+            "controle: sem saber que COMBO10 e combo (chamada antiga), a mesma promocao aplica (17,00)");
+        var cgCombo = P(Cg("lista", ",\"ganha\":[\"COMBO10\"]", "\"alvo\":\"produtos\",\"produto_ids\":[\"A\"]"));
+        checar(Promocoes.AvaliarCarrinho(new[] { cgCombo }, new[] { It("A", 9900), It("COMBO10", 9900, 1, "Combos") }, sexta, combos).TotalCent == 0,
+            "compre e ganhe: produto-combo nunca e brinde");
+        checar(Promocoes.AvaliarCarrinho(new[] { cgCombo }, new[] { It("A", 9900), It("COMBO10", 9900, 1, "Combos") }, sexta).TotalCent == 9900,
+            "controle: sem a lista de combos o brinde sairia (chamada antiga)");
     }
 }

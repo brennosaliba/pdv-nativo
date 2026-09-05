@@ -263,7 +263,15 @@ public static class Promocoes
     /// zero em todas = nenhuma. As outras com desconto viram Perdedoras, para a
     /// comanda explicar ao operador o que não valeu junto.
     /// </summary>
-    public static Avaliacao AvaliarCarrinho(IEnumerable<Promo> promos, IReadOnlyList<ItemCarrinho> itens, DateTime agora)
+    /// <param name="combos">
+    /// Produtos que sao COMBO com sub-escolhas (05/09). A composicao e conteudo de uma
+    /// linha; a promocao e preco sobre linhas. Percentual/valor sobre o combo aplica na
+    /// linha-mae normalmente; o que NAO vale nesta onda e produto-combo dentro de
+    /// promocao de combo nem como brinde de compre-e-ganhe: essas sao ignoradas.
+    /// Nulo = nenhum produto e combo (chamadas antigas).
+    /// </param>
+    public static Avaliacao AvaliarCarrinho(IEnumerable<Promo> promos, IReadOnlyList<ItemCarrinho> itens, DateTime agora,
+        ISet<string>? combos = null)
     {
         var n = itens.Count;
         var vazio = new Avaliacao(null, null, null, new long[n], new int[n], Array.Empty<Candidata>(), null);
@@ -283,12 +291,15 @@ public static class Promocoes
                     break;
                 case "combo":
                     if (!DiaBate(p, agora)) continue;
+                    // produto-combo dentro de promocao de combo: fora desta onda
+                    if (combos is not null && p.Combo is not null
+                        && p.Combo.Itens.Any(ci => combos.Contains(ci.ProdutoId))) continue;
                     Combo(p, itens, d);
                     break;
                 case "compre_ganhe":
                     if (!DiaBate(p, agora)) continue;
                     if (p.GanhaRegra == GanhaRegra.Desconhecida) continue;
-                    dica = Parear(p, itens, d, g);
+                    dica = Parear(p, itens, d, g, combos);
                     break;
                 default:
                     for (var i = 0; i < n; i++)
@@ -396,14 +407,17 @@ public static class Promocoes
     /// o item comprado, em qualquer regra. "Qualquer item" (legado) vale como
     /// "qualquer item de valor igual ou menor".
     /// </summary>
-    private static string? Parear(Promo p, IReadOnlyList<ItemCarrinho> itens, long[] d, int[] g)
+    private static string? Parear(Promo p, IReadOnlyList<ItemCarrinho> itens, long[] d, int[] g,
+        ISet<string>? combos = null)
     {
         var unidades = Unidades(itens);
         var compras = unidades.Where(u => AlvoBate(p, u.ProdutoId, u.Categoria)).ToList();
         if (compras.Count == 0) return null;
         var brindes = unidades.Where(u =>
             (p.GanhaRegra == GanhaRegra.MesmoProduto || p.Ganha is null || p.Ganha.Contains(u.ProdutoId))
-            && (p.TetoCent is null || u.PrecoCent <= p.TetoCent)).ToList();
+            && (p.TetoCent is null || u.PrecoCent <= p.TetoCent)
+            // produto-combo nunca e brinde nesta onda (a composicao dele e conteudo, nao preco)
+            && (combos is null || !combos.Contains(u.ProdutoId))).ToList();
         var usada = new HashSet<Unidade>(ReferenceEqualityComparer.Instance);
         var pares = 0;
         foreach (var b in brindes.OrderByDescending(u => u.PrecoCent).ThenBy(u => u.Linha))

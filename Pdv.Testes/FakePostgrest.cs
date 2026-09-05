@@ -43,6 +43,18 @@ public sealed class FakePostgrest : IDisposable
     public int Vinculos;
 
     /// <summary>
+    /// COMBOS (05/09): o que pdv_combos_ativos responde (um array jsonb, um por
+    /// produto-combo). "[]" = loja sem combo. E o p_escolhas que chegou por
+    /// pdv_registrar_venda_composta, por client_key (o que a RPC real grava em
+    /// pdv_combo_escolhas); a RPC de venda comum NUNCA recebe escolhas.
+    /// </summary>
+    public volatile string CombosAtivos = "[]";
+    /// <summary>Encena o servidor SEM a RPC composta (exe publicado antes da migration): PostgREST responde 404 PGRST202.</summary>
+    public volatile bool CompostaAusente;
+    public ConcurrentDictionary<string, string> EscolhasRecebidas { get; } = new();
+    public ConcurrentDictionary<string, int> ChamadasPorRpc { get; } = new();
+
+    /// <summary>
     /// A LISTA DE FUNCIONÁRIOS DO PAINEL, do jeito que `pdv_operadores_sync` devolve.
     /// É por aqui que o teste encena o encontro entre o operador que nasceu NO CAIXA e
     /// o que o painel governa — o cruzamento onde os dois viravam duas pessoas.
@@ -117,11 +129,42 @@ public sealed class FakePostgrest : IDisposable
             {
                 case "/rest/v1/rpc/pdv_registrar_venda":
                 {
+                    ChamadasPorRpc.AddOrUpdate("pdv_registrar_venda", 1, (_, n) => n + 1);
                     if (chave is null) { Responder(ctx, 200, """{"ok":false,"error":"sem_client_key"}"""); return; }
                     var saleId = Vendas.GetOrAdd(chave, _ => Guid.NewGuid().ToString());
                     Responder(ctx, 200, $$"""{"ok":true,"sale_id":"{{saleId}}"}""");
                     return;
                 }
+                case "/rest/v1/rpc/pdv_registrar_venda_composta":
+                {
+                    // o invólucro real: mesma venda + p_escolhas; idempotente pela
+                    // client_key (repetir NAO duplica as escolhas)
+                    ChamadasPorRpc.AddOrUpdate("pdv_registrar_venda_composta", 1, (_, n) => n + 1);
+                    if (CompostaAusente)
+                    {
+                        Responder(ctx, 404, """{"code":"PGRST202","details":"Searched for the function public.pdv_registrar_venda_composta with parameters p_business_date, p_client_key, p_escolhas but no matches were found in the schema cache.","hint":null,"message":"Could not find the function public.pdv_registrar_venda_composta(p_business_date, p_client_key, p_escolhas) in the schema cache"}""");
+                        return;
+                    }
+                    if (chave is null) { Responder(ctx, 200, """{"ok":false,"error":"sem_client_key"}"""); return; }
+                    var nova = !Vendas.ContainsKey(chave);
+                    var saleId = Vendas.GetOrAdd(chave, _ => Guid.NewGuid().ToString());
+                    if (nova)
+                    {
+                        try
+                        {
+                            using var d = JsonDocument.Parse(corpo);
+                            if (d.RootElement.TryGetProperty("p_escolhas", out var pe) && pe.ValueKind == JsonValueKind.Array)
+                                EscolhasRecebidas[chave] = pe.GetRawText();
+                        }
+                        catch { }
+                    }
+                    Responder(ctx, 200, $$"""{"ok":true,"sale_id":"{{saleId}}","idempotente":{{(nova ? "false" : "true")}}}""");
+                    return;
+                }
+                case "/rest/v1/rpc/pdv_combos_ativos":
+                    ChamadasPorRpc.AddOrUpdate("pdv_combos_ativos", 1, (_, n) => n + 1);
+                    Responder(ctx, 200, CombosAtivos);
+                    return;
                 case "/rest/v1/rpc/pdv_operadores_sync":
                     // O painel devolve o hash PRONTO (mesmo PBKDF2 do caixa) — quem baixa
                     // só copia. Nomes de campo são CONTRATO com Nuvem.BaixarOperadoresAsync.

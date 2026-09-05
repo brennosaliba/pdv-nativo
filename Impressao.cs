@@ -12,10 +12,16 @@ using QRCoder;
 namespace Pdv;
 
 /// <summary>Uma linha da tabela de itens do cupom.</summary>
+/// <param name="Escolhas">
+/// O que o cliente montou dentro de um COMBO ("2x Donut Ovomaltine"), sub-linhas SEM
+/// valor logo abaixo do item: o total continua na linha do combo e a NFC-e nao muda.
+/// Nulo em item simples.
+/// </param>
 public sealed record ItemCupom(
     string Codigo, string Descricao, Quantidade Qtd, string Unidade,
     Dinheiro Unitario, Dinheiro Total,
-    Dinheiro Desconto = default, string? Motivo = null, int UnidadesGratis = 0);
+    Dinheiro Desconto = default, string? Motivo = null, int UnidadesGratis = 0,
+    IReadOnlyList<string>? Escolhas = null);
 
 /// <summary>
 /// Uma linha do bloco de pagamento. `Forma` já vem legível ("Dinheiro", "Cartão de débito").
@@ -1209,6 +1215,9 @@ public static class Impressao
                         ? $"     {i.UnidadesGratis} GRATIS ({i.Motivo ?? "promocao"})"
                         : $"     desconto ({i.Motivo ?? "promocao"})", "-" + Valor(i.Desconto), papel.Colunas),
                     Corpo));
+            // combo (05/09): o que o cliente montou, sem valor (o total ja esta na linha)
+            foreach (var sub in SubLinhasEscolhas(i))
+                pilha.Children.Add(Texto(sub, Corpo, quebra: true));
             seq++;
         }
 
@@ -1352,6 +1361,14 @@ public static class Impressao
     }
 
     // ── PEÇAS DO VISUAL ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// As sub-linhas de um item de combo no cupom: "     2x Donut Ovomaltine", uma por
+    /// escolha, SEM valor nenhum (o total e o da linha do combo, que ja saiu acima).
+    /// Item simples devolve vazio. Pura, para a suite provar o papel sem desenhar.
+    /// </summary>
+    public static IReadOnlyList<string> SubLinhasEscolhas(ItemCupom i)
+        => i.Escolhas is { Count: > 0 } e ? e.Select(s => "     " + s).ToList() : Array.Empty<string>();
 
     private static TextBlock Texto(string conteudo, double tamanho, FontFamily? fonte = null,
         bool negrito = false, bool centro = false, bool quebra = false,

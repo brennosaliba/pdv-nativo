@@ -1172,11 +1172,13 @@ public partial class Pagamento : UserControl
         for (var k = 0; k < _itens.Count; k++)
         {
             var i = _itens[k];
+            // combo: as escolhas viram sub-linhas sem valor (05/09); o total fica na linha
+            var escolhas = i.TemEscolhas ? Nucleo.Combos.LinhasCupom(i.Escolhas) : null;
             r.Add(descontoNoItem || i.Desconto.Centavos == 0
                 ? new ItemCupom(i.Codigo ?? "", i.Descricao, i.Qtd, i.Unidade, i.Preco, i.Total,
-                    i.Desconto, i.PromoNome, (int)(i.GratisMilesimos / 1000))
+                    i.Desconto, i.PromoNome, (int)(i.GratisMilesimos / 1000), escolhas)
                 : new ItemCupom(i.Codigo ?? "", i.Descricao, i.Qtd, i.Unidade,
-                    Dinheiro.DeReais(fiscais[k].VUnit), i.Total));
+                    Dinheiro.DeReais(fiscais[k].VUnit), i.Total, Escolhas: escolhas));
         }
         return r;
     }

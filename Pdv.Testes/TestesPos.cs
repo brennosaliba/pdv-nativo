@@ -229,39 +229,14 @@ public static class TestesPos
         var anterior = Banco.CaminhoForcado;
         Banco.CaminhoForcado = arquivo;
         Exception? erro = null;
-        var t = new Thread(() =>
-        {
-            try { TelaSta(checar); }
-            catch (Exception ex) { erro = ex; }
-        });
-        t.SetApartmentState(ApartmentState.STA);
-        t.Start();
-        t.Join();
+        // no Application compartilhado da bateria (HostWpf): o WPF so deixa criar um
+        try { HostWpf.Executar(() => Passos(checar)); }
+        catch (Exception ex) { erro = ex; }
         Banco.CaminhoForcado = anterior;
         checar(erro is null, "tela: a tela de pagamento subiu e os passos rodaram (" + (erro?.ToString() ?? "ok") + ")");
     }
 
     private const BindingFlags P = BindingFlags.NonPublic | BindingFlags.Instance;
-
-    private static void TelaSta(Action<bool, string> checar)
-    {
-        static ResourceDictionary Dic(string caminho) => new()
-        {
-            Source = new Uri($"pack://application:,,,/Pdv;component/{caminho}", UriKind.Absolute),
-        };
-        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-        app.Resources.MergedDictionaries.Add(Dic("Temas/Claro.xaml"));
-        app.Resources.MergedDictionaries.Add(Dic("Estilos.xaml"));
-        Exception? erro = null;
-        app.Startup += (_, _) =>
-        {
-            try { Passos(checar); }
-            catch (Exception ex) { erro = ex; }
-            finally { app.Shutdown(); }
-        };
-        app.Run();
-        if (erro is not null) throw erro;
-    }
 
     private static void Passos(Action<bool, string> checar)
     {

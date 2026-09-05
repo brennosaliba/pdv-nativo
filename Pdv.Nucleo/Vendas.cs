@@ -9,14 +9,23 @@ namespace Pdv.Nucleo;
 /// Uma linha da venda. Preco é o de TABELA; Desconto é o da promoção de carrinho
 /// (03/09/2026) e Total = Preco × Qtd − Desconto. Os 12 posicionais antigos
 /// continuam valendo (desconto zero).
+///
+/// <paramref name="Escolhas"/> (05/09/2026): o que o cliente montou dentro de um
+/// COMBO, por unidade da linha. Nulo em item simples. Nao vira linha fiscal nem
+/// linha de p_itens: vai em venda_item.escolhas_json, na chave `escolhas` do item
+/// e em p_escolhas da RPC composta. A nota continua com UM det por linha.
 /// </summary>
 public sealed record LinhaVenda(
     string? ProdutoId, string? Codigo, string Descricao,
     Quantidade Qtd, Dinheiro Preco, Dinheiro Total,
     string Unidade, string? Ncm, string? Cest, string? Csosn, string? Cfop, int Origem,
-    Dinheiro Desconto = default, string? PromoId = null, string? PromoNome = null, long GratisMilesimos = 0)
+    Dinheiro Desconto = default, string? PromoId = null, string? PromoNome = null, long GratisMilesimos = 0,
+    IReadOnlyList<Escolha>? Escolhas = null)
 {
     public Dinheiro Bruto => Preco.VezesQtd(Qtd.Milesimos);
+
+    /// <summary>Linha de combo com as escolhas registradas (lista vazia nao conta).</summary>
+    public bool TemEscolhas => Escolhas is { Count: > 0 };
 }
 
 /// <summary>
@@ -149,16 +158,17 @@ public static class Vendas
                 INSERT INTO venda_item (id, venda_id, seq, produto_id, codigo, descricao,
                                         qtd_milesimo, preco_cent, desconto_cent, total_cent,
                                         unidade, ncm, cest, csosn, cfop, origem, cancelado,
-                                        promo_id, gratis_milesimo)
+                                        promo_id, gratis_milesimo, escolhas_json)
                 VALUES (@Id,@V,@Seq,@Prod,@Cod,@Desc,@Qtd,@Preco,@DescCent,@Tot,@Un,@Ncm,@Cest,@Csosn,@Cfop,@Orig,0,
-                        @PromoId,@Gratis)
+                        @PromoId,@Gratis,@Escolhas)
                 """,
                 new { Id = Guid.NewGuid().ToString(), V = vendaId, Seq = seq++,
                       Prod = i.ProdutoId, Cod = i.Codigo, Desc = i.Descricao,
                       Qtd = i.Qtd.Milesimos, Preco = i.Preco.Centavos, DescCent = i.Desconto.Centavos,
                       Tot = i.Total.Centavos,
                       Un = i.Unidade, Ncm = i.Ncm, Cest = i.Cest, Csosn = i.Csosn,
-                      Cfop = i.Cfop, Orig = i.Origem, PromoId = i.PromoId, Gratis = i.GratisMilesimos }, tx);
+                      Cfop = i.Cfop, Orig = i.Origem, PromoId = i.PromoId, Gratis = i.GratisMilesimos,
+                      Escolhas = i.TemEscolhas ? Combos.ParaJson(i.Escolhas) : null }, tx);
 
         foreach (var p in pagamentos)
             cx.Execute("""
@@ -189,27 +199,55 @@ public static class Vendas
         // da nuvem, para o dreno ser um POST direto, sem transformação. Transformar na
         // hora do envio é onde se erra nome de campo — e o erro só aparece dias depois,
         // na venda que não subiu.
+        //
+        // COMBO COM ESCOLHAS (05/09): a linha do combo continua sendo UMA linha de
+        // p_itens (uma linha fiscal, o preco do combo). O que o cliente montou vai na
+        // chave `escolhas` do item e, achatado com o `seq` da linha, em `p_escolhas`
+        // da RPC pdv_registrar_venda_composta: e o que o motor de estoque le para
+        // baixar pelos sabores. Venda sem combo continua "venda", byte a byte igual.
+        var composta = itens.Any(i => i.TemEscolhas);
         if (homologacao)
             Caixa.Auditar(cx, tx, "venda_homologacao", operador.Id, null,
                 $"venda={numero} total={total.Formatado()} ficou SÓ no caixa (modo de homologação ligado)");
-        else Caixa.Enfileirar(cx, tx, "venda", vendaId, clientKey, new
+        else Caixa.Enfileirar(cx, tx, composta ? "venda_composta" : "venda", vendaId, clientKey, ComEscolhas(composta ? EscolhasAchatadas(itens) : null, new
         {
-            p_itens = itens.Select(i => new
-            {
-                pdv_product_id = i.ProdutoId,
-                codigo = i.Codigo,
-                descricao = i.Descricao,
-                ncm = i.Ncm,
-                csosn = i.Csosn,
-                unidade = i.Unidade,
-                qtd = i.Qtd.Milesimos / 1000m,
-                valor_unitario = i.Preco.Reais,
-                // 03/09: desconto por item (reais) e a promoção que o deu. A RPC
-                // pdv_registrar_venda lê `desconto` por item; quem não lê, ignora.
-                desconto = i.Desconto.Reais,
-                promocao_id = i.PromoId,
-                promocao_nome = i.PromoNome,
-            }).ToArray(),
+            p_itens = itens.Select(i => i.TemEscolhas
+                ? (object)new
+                {
+                    pdv_product_id = i.ProdutoId,
+                    codigo = i.Codigo,
+                    descricao = i.Descricao,
+                    ncm = i.Ncm,
+                    csosn = i.Csosn,
+                    unidade = i.Unidade,
+                    qtd = i.Qtd.Milesimos / 1000m,
+                    valor_unitario = i.Preco.Reais,
+                    desconto = i.Desconto.Reais,
+                    promocao_id = i.PromoId,
+                    promocao_nome = i.PromoNome,
+                    // por UNIDADE da linha (o motor multiplica pela qtd do item)
+                    escolhas = i.Escolhas!.Select(e => new
+                    {
+                        produto_id = e.ProdutoId, plu = e.Plu, nome = e.Nome, qtd = e.Qtd,
+                        grupo_regra_id = e.GrupoId,
+                    }).ToArray(),
+                }
+                : new
+                {
+                    pdv_product_id = i.ProdutoId,
+                    codigo = i.Codigo,
+                    descricao = i.Descricao,
+                    ncm = i.Ncm,
+                    csosn = i.Csosn,
+                    unidade = i.Unidade,
+                    qtd = i.Qtd.Milesimos / 1000m,
+                    valor_unitario = i.Preco.Reais,
+                    // 03/09: desconto por item (reais) e a promoção que o deu. A RPC
+                    // pdv_registrar_venda lê `desconto` por item; quem não lê, ignora.
+                    desconto = i.Desconto.Reais,
+                    promocao_id = i.PromoId,
+                    promocao_nome = i.PromoNome,
+                }).ToArray(),
             // 04/09: `origem` diz se o cartão passou pela maquininha integrada ("tef") ou
             // numa avulsa ("pos"). A forma continua sendo a REAL (credito/debito/pix/
             // voucher): o servidor normaliza `metodo` e ignora o campo extra.
@@ -235,7 +273,7 @@ public static class Vendas
             p_observacao = promoNome is null ? (string?)null : "Promoção: " + promoNome,
             p_client_key = clientKey,
             p_business_date = sessao.BusinessDate,
-        });
+        }));
 
         // A COMANDA VIROU VENDA: o rascunho morre AQUI, na mesma transação. Fora dela
         // (na tela, depois do commit) uma queda entre gravar e limpar deixaria um
@@ -254,6 +292,47 @@ public static class Vendas
         catch { /* fila de preparo nunca e motivo para perder venda */ }
 
         return new VendaGravada(vendaId, clientKey, numero, total, sessao.BusinessDate);
+    }
+
+    /// <summary>
+    /// O corpo da venda e, SO na composta, a chave `p_escolhas` a mais. A venda comum
+    /// sai byte a byte como sempre saiu: nem `p_escolhas: null`, porque o PostgREST
+    /// casa a RPC pelos NOMES dos parametros e pdv_registrar_venda nao tem esse.
+    /// </summary>
+    internal static object ComEscolhas(object[]? escolhas, object corpo)
+    {
+        if (escolhas is null) return corpo;
+        var obj = JsonSerializer.SerializeToNode(corpo)!.AsObject();
+        // so na venda composta: [{seq, combo_id, produto_id, quantidade, nome, grupo_regra_id}],
+        // seq = posicao em p_itens (1-based) = pdv_sale_items.seq = venda_item.seq
+        obj["p_escolhas"] = JsonSerializer.SerializeToNode(escolhas);
+        return obj;
+    }
+
+    /// <summary>
+    /// p_escolhas da RPC pdv_registrar_venda_composta: uma linha por escolha, com o
+    /// `seq` da linha do combo (1-based, a mesma numeracao de venda_item.seq e de
+    /// pdv_sale_items.seq). Quantidade por UNIDADE do combo.
+    /// </summary>
+    internal static object[] EscolhasAchatadas(IReadOnlyList<LinhaVenda> itens)
+    {
+        var r = new List<object>();
+        for (var k = 0; k < itens.Count; k++)
+        {
+            var i = itens[k];
+            if (!i.TemEscolhas) continue;
+            foreach (var e in i.Escolhas!)
+                r.Add(new
+                {
+                    seq = k + 1,
+                    combo_id = i.ProdutoId,
+                    produto_id = e.ProdutoId,
+                    quantidade = e.Qtd,
+                    nome = e.Nome,
+                    grupo_regra_id = e.GrupoId,
+                });
+        }
+        return r.ToArray();
     }
 
     /// <summary>

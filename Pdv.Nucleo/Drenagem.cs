@@ -205,6 +205,11 @@ public sealed class Drenagem : IDisposable
         var (ok, erro) = tipo switch
         {
             "venda" => await EnviarVendaAsync((string)item.payload, refId, vendaNaNuvem, token, ct).ConfigureAwait(false),
+            // 05/09: venda com combo. Mesmo corpo da venda + p_escolhas, noutra RPC
+            // (pdv_registrar_venda_composta), que grava as escolhas ao lado da venda.
+            // Caixa antigo nunca enfileira isto; caixa novo sem combo continua "venda".
+            "venda_composta" => await EnviarVendaAsync((string)item.payload, refId, vendaNaNuvem, token, ct,
+                                                        "pdv_registrar_venda_composta").ConfigureAwait(false),
             "nfce_vinculo" => await VincularNotaAsync((string)item.payload, refId, vendaNaNuvem, token, ct).ConfigureAwait(false),
             "fechamento" => await EnviarFechamentoAsync((string)item.payload, refId, token, ct).ConfigureAwait(false),
             // Sangria/suprimento: alimenta o painel antifraude (sinal de sangria).
@@ -423,9 +428,17 @@ public sealed class Drenagem : IDisposable
     }
 
     private async Task<(bool? Ok, string? Erro)> EnviarVendaAsync(string payload, string refId,
-        Dictionary<string, string> vendaNaNuvem, string token, CancellationToken ct)
+        Dictionary<string, string> vendaNaNuvem, string token, CancellationToken ct,
+        string rpc = "pdv_registrar_venda")
     {
-        var (status, corpo) = await RpcAsync("pdv_registrar_venda", payload, token, ct).ConfigureAwait(false);
+        var (status, corpo) = await RpcAsync(rpc, payload, token, ct).ConfigureAwait(false);
+        // 05/09: RPC nova (venda composta) que a nuvem AINDA nao tem. O PostgREST responde
+        // 404 PGRST202 ("could not find the function"), que a regra geral trata como
+        // recusa permanente: 12 varreduras depois a venda iria para o cemiterio com o
+        // dinheiro ja recebido e o cupom ja emitido, so porque o exe subiu antes da
+        // migration. E dependencia nao satisfeita, nao recusa: espera, com o motivo.
+        if (RpcAusente(status, corpo) && rpc != "pdv_registrar_venda")
+            return (null, $"a nuvem ainda nao tem {rpc} (aplicar a migration do ERP antes deste caixa)");
         if (status is < 200 or >= 300) return DesfechoDeStatus(status, corpo);
         try
         {
@@ -841,7 +854,7 @@ public sealed class Drenagem : IDisposable
         {
             using var cx = Banco.Abrir();
             return cx.ExecuteScalar<long>(
-                "SELECT COUNT(*) FROM outbox WHERE tipo = 'venda' AND client_key = @K "
+                "SELECT COUNT(*) FROM outbox WHERE tipo IN ('venda','venda_composta') AND client_key = @K "
                 + "AND enviado_em IS NULL AND desistido_em IS NULL",
                 new { K = clientKey }) > 0;
         }
@@ -887,7 +900,7 @@ public sealed class Drenagem : IDisposable
     /// nunca saiu do lugar. Revisao adversarial pegou; o teste agora vigia.
     /// </summary>
     public static readonly string[] TiposComHandler =
-        { "venda", "nfce_vinculo", "venda_cancelada", "fechamento",
+        { "venda", "venda_composta", "nfce_vinculo", "venda_cancelada", "fechamento",
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
           Autorizacao.TipoNaFila };
 
@@ -1024,6 +1037,10 @@ public sealed class Drenagem : IDisposable
     ///  · 5xx / 0 → transitório (rede/servidor doente: tenta na próxima varredura).
     /// Só chamar com status FORA de 2xx (sucesso é decidido pelo corpo, no chamador).
     /// </summary>
+    /// <summary>404 com PGRST202 = a funcao nao existe no schema cache do PostgREST (RPC ainda nao publicada).</summary>
+    internal static bool RpcAusente(int status, string? corpo)
+        => status == 404 && corpo is not null && corpo.Contains("PGRST202", StringComparison.Ordinal);
+
     internal static (bool? Ok, string? Erro) DesfechoDeStatus(int status, string? corpo)
     {
         var erro = status == 0 ? "sem resposta (rede/timeout)" : $"HTTP {status}: {Corta(corpo)}";

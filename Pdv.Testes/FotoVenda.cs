@@ -20,6 +20,16 @@ namespace Pdv.Testes;
 /// janela do tamanho pedido e grava um PNG: o que a loja vê, antes de publicar.
 ///
 /// Uso: Pdv.Testes.exe --foto-venda saida.png largura altura [categoria] [claro|escuro] [item;item] [pagar:4,00] [menu:cancelar|menu:fechar] [tef|tef+pos|semtef]
+///                      [combo:87=4x3,7x7] [combo-aberto:87=4x3]
+///
+/// `combo:<plu do combo>=<plu do sabor>x<n>,...` (05/09, qualquer posição): semeia na
+/// CÓPIA do banco uma composição para o produto-combo (um grupo com a família dos
+/// sabores, mínimo e máximo = o número do nome, "COMBO 10 DONUTS" = 10) e põe na comanda
+/// a linha do combo já com essas escolhas, para fotografar a sub-linha dos sabores.
+/// `combo-aberto:` faz o mesmo e ainda abre o diálogo dos sabores pré-preenchido, que
+/// sai na foto por cima da tela (mesmo truque do POS: é outra Window). Um sabor de
+/// OUTRA família (`combo-aberto:87=4x3,7x6,56x1`, 56 = água) não entra na fonte e sai
+/// no bloco "Fora do combo" (docs/venda-fotos/combo-fora-1024.png).
 ///
 /// `menu:cancelar` / `menu:fechar` (04/09): abre um dos dois menus da barra de cima
 /// antes de fotografar. Dá para pôr em qualquer posição: é tirado dos argumentos
@@ -49,6 +59,11 @@ public static class FotoVenda
                                          || a.Equals("tef+pos", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("semtef", StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant();
         args = args.Where(a => a != modo).ToArray();
+        var comboArg = args.FirstOrDefault(a => a.StartsWith("combo:", StringComparison.OrdinalIgnoreCase)
+                                             || a.StartsWith("combo-aberto:", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => a != comboArg).ToArray();
+        var comboAberto = comboArg?.StartsWith("combo-aberto:", StringComparison.OrdinalIgnoreCase) == true;
+        var comboSpec = comboArg?[(comboArg.IndexOf(':') + 1)..];
         var comTef = modo is "tef" or "tef+pos";
         var abrirPos = modo == "tef+pos";
         var semTef = modo == "semtef";
@@ -74,10 +89,18 @@ public static class FotoVenda
         var fixture = Path.Combine(Path.GetTempPath(), "foto-venda-" + Guid.NewGuid().ToString("N")[..8] + ".db");
         File.Copy(origem, fixture);
         Banco.CaminhoForcado = fixture;
+        // a cópia pode vir de um exe anterior (sem a tabela `combo`): migra a CÓPIA
+        if (comboSpec is not null) Banco.Migrar(fixture);
         string opId, opNome;
+        (string ComboId, List<Escolha> Escolhas)? combo = null;
         using (var cx = Banco.Abrir())
         {
             cx.Execute("UPDATE terminal SET api_base = 'http://127.0.0.1:9'");
+            if (comboSpec is not null)
+            {
+                combo = SemearCombo(cx, comboSpec);
+                if (combo is null) { Console.Error.WriteLine("foto-venda: combo não achado no catálogo: " + comboSpec); return 2; }
+            }
             var op = cx.QueryFirstOrDefault<(string? id, string? nome)>(
                 "SELECT id, nome FROM operador ORDER BY nome LIMIT 1");
             opId = op.id ?? "op-foto";
@@ -101,7 +124,8 @@ public static class FotoVenda
         {
             try
             {
-                codigo = Fotografar(saida, w, h, categoria, tema, itens, operador, sessao, pagar, menu, comTef, abrirPos);
+                codigo = Fotografar(saida, w, h, categoria, tema, itens, operador, sessao, pagar, menu, comTef, abrirPos,
+                                    combo, comboAberto);
             }
             catch (Exception ex)
             {
@@ -116,9 +140,54 @@ public static class FotoVenda
         return codigo;
     }
 
+    /// <summary>
+    /// "87=4x3,7x7": grava em `combo` (na cópia) a composição do produto de PLU 87, com UM
+    /// grupo cujo nome e cuja fonte são a família dos sabores ("Donuts": todo produto ativo
+    /// de categoria que começa com essa palavra), e devolve as escolhas pedidas. É o
+    /// payload no shape de pdv_combos_ativos, o mesmo que o caixa parseia de verdade.
+    /// </summary>
+    private static (string ComboId, List<Escolha> Escolhas)? SemearCombo(Microsoft.Data.Sqlite.SqliteConnection cx, string spec)
+    {
+        var partes = spec.Split('=', 2);
+        if (partes.Length != 2) return null;
+        var combo = cx.QueryFirstOrDefault<(string id, string nome)>(
+            "SELECT id, nome FROM produto WHERE plu = @p AND ativo = 1", new { p = partes[0].Trim() });
+        if (combo.id is null) return null;
+        var escolhas = new List<Escolha>();
+        string? familia = null;
+        foreach (var e in partes[1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var px = e.Split('x', 2);
+            var sabor = cx.QueryFirstOrDefault<(string id, string plu, string nome, string categoria)>(
+                "SELECT id, plu, nome, categoria FROM produto WHERE plu = @p AND ativo = 1", new { p = px[0].Trim() });
+            if (sabor.id is null) { Console.Error.WriteLine("foto-venda: sabor não achado: " + px[0]); continue; }
+            familia ??= (sabor.categoria ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Escolha";
+            escolhas.Add(new Escolha(sabor.id, sabor.plu, sabor.nome, "regra-foto", px.Length > 1 ? int.Parse(px[1]) : 1, familia));
+        }
+        familia ??= "Escolha";
+        var numero = System.Text.RegularExpressions.Regex.Match(combo.nome, "[0-9]+");
+        var qtd = numero.Success ? int.Parse(numero.Value) : Math.Max(1, escolhas.Sum(x => x.Qtd));
+        var fonte = cx.Query<(string id, string plu, string nome)>(
+                "SELECT id, plu, nome FROM produto WHERE ativo = 1 AND categoria LIKE @c AND id <> @me ORDER BY nome",
+                new { c = familia + "%", me = combo.id })
+            .Select(x => new { produto_id = x.id, plu = x.plu, nome = x.nome }).ToArray();
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            produto_id = combo.id, plu = partes[0].Trim(), nome = combo.nome,
+            grupos = new[]
+            {
+                new { id = "regra-foto", nome = familia, min = qtd, max = qtd,
+                      fonte = new { tipo = "itens", grupo = (string?)null, itens = fonte } },
+            },
+        });
+        cx.Execute("INSERT OR REPLACE INTO combo (produto_id, payload) VALUES (@i, @p)", new { i = combo.id, p = payload });
+        return (combo.id, escolhas);
+    }
+
     private static int Fotografar(string saida, int w, int h, string categoria, string tema,
                                   string[] itens, Operador operador, Sessao sessao, decimal? pagar,
-                                  string? menu = null, bool abrirPagamento = false, bool abrirPos = false)
+                                  string? menu = null, bool abrirPagamento = false, bool abrirPos = false,
+                                  (string ComboId, List<Escolha> Escolhas)? combo = null, bool comboAberto = false)
     {
         // a tela de pagamento abre com "pagar:" (lança uma parte) ou com tef/tef+pos (só abre)
         abrirPagamento |= pagar is not null;
@@ -181,6 +250,17 @@ public static class FotoVenda
                         tipo.GetMethod("RepintarCategorias", P)!.Invoke(tela, null);
                         tipo.GetMethod("PintarProdutos", P)!.Invoke(tela, null);
                     }
+                    if (combo is { } cb)
+                    {
+                        // a linha do combo entra JÁ com as escolhas (sem passar pelo diálogo):
+                        // é a sub-linha "3x Ovomaltine · 7x Churros" que se quer fotografar
+                        var produto = ((System.Collections.IEnumerable)tipo.GetField("_catalogo", P)!.GetValue(tela)!)
+                            .Cast<Pdv.Telas.Produto>().FirstOrDefault(p => p.Id == cb.ComboId);
+                        var comanda = (List<Pdv.Telas.ItemComanda>)tipo.GetField("_comanda", P)!.GetValue(tela)!;
+                        if (produto is null) erros.Add("combo não está no catálogo da tela");
+                        else comanda.Insert(0, new Pdv.Telas.ItemComanda { Produto = produto, Escolhas = cb.Escolhas.ToList() });
+                        tipo.GetMethod("PintarComanda", P)!.Invoke(tela, null);
+                    }
                     if (itens.Length > 0)
                     {
                         var catalogo = (System.Collections.IEnumerable)tipo.GetField("_catalogo", P)!.GetValue(tela)!;
@@ -204,6 +284,30 @@ public static class FotoVenda
                     var tipo = typeof(Pdv.Telas.Venda);
                     const BindingFlags P = BindingFlags.NonPublic | BindingFlags.Instance;
                     tipo.GetMethod("Finalizar", P)!.Invoke(tela, new object?[] { null, new RoutedEventArgs() });
+                }
+                else if (comboAberto && combo is { } cbAberto && etapa == 2)
+                {
+                    // abre o diálogo dos sabores pré-preenchido; modal, então a foto sai por um
+                    // timer armado ANTES (o mesmo truque do POS, abaixo)
+                    var tipo = typeof(Pdv.Telas.Venda);
+                    const BindingFlags P = BindingFlags.NonPublic | BindingFlags.Instance;
+                    var combos = (Dictionary<string, Combos.ComboDef>)tipo.GetField("_combos", P)!.GetValue(tela)!;
+                    var catalogoLocal = (List<Combos.ProdutoLocal>)tipo.GetMethod("CatalogoLocal", P)!.Invoke(tela, null)!;
+                    if (!combos.TryGetValue(cbAberto.ComboId, out var def)) { erros.Add("a tela não carregou o combo semeado"); return; }
+                    var foto = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
+                    foto.Tick += (_, _) =>
+                    {
+                        foto.Stop();
+                        var dialogo = Application.Current.Windows.OfType<Window>()
+                            .FirstOrDefault(x => x != janela && x.Owner == janela && x.IsVisible);
+                        if (dialogo is null) erros.Add("o diálogo do combo não abriu");
+                        Salvar(saida, w, h, janela, dialogo);
+                        salvo = true;
+                        Console.WriteLine($"foto-venda: {saida} ({w}x{h}, tema {tema}, diálogo do combo {(dialogo is null ? "ausente" : "aberto")})");
+                        dialogo?.Close();
+                    };
+                    foto.Start();
+                    Pdv.Telas.DialogoCombo.Abrir(janela, def, catalogoLocal, cbAberto.Escolhas);
                 }
                 else if (menu is not null && etapa == 2)
                 {

@@ -12,10 +12,16 @@ namespace Pdv.Nucleo;
 /// promoção do dia aplicada. Restaurar pelo catálogo atual traria o preço de tabela
 /// e mudaria o total que o cliente já ouviu em voz alta.
 /// </summary>
+/// <param name="EscolhasJson">
+/// O que o cliente montou dentro de um COMBO (Escolha[] em JSON, por unidade da linha).
+/// Nulo em item simples. O default e OBRIGATORIO: o rascunho gravado por um exe anterior
+/// nao tem o campo, e ele precisa continuar desserializando na queda de energia.
+/// </param>
 public sealed record ItemRascunho(
     string ProdutoId, string? Plu, string Nome, string Categoria,
     long PrecoCent, long QtdMilesimos, string Unidade,
-    string? Ncm, string? Cest, string? Csosn, int Origem, string? Foto);
+    string? Ncm, string? Cest, string? Csosn, int Origem, string? Foto,
+    string? EscolhasJson = null);
 
 /// <summary>
 /// A comanda em andamento, do jeito que ela volta depois do religamento.

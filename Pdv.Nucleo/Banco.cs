@@ -153,6 +153,10 @@ public static class Banco
             "ALTER TABLE kds_ticket ADD COLUMN agendado INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE kds_ticket ADD COLUMN agendado_para TEXT",
             "ALTER TABLE kds_ticket ADD COLUMN agendado_ate TEXT",
+            // 05/09/2026: combo com sub-escolhas. O que o cliente montou dentro da
+            // caixa ("2x Ovomaltine, 3x Ninho"), JSON de Escolha[] por unidade da
+            // linha. NULL = item simples (e toda venda anterior a esta coluna).
+            "ALTER TABLE venda_item ADD COLUMN escolhas_json TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }
@@ -403,6 +407,14 @@ public static class Banco
           id            TEXT PRIMARY KEY,
           payload       TEXT NOT NULL,
           atualizado_em TEXT NOT NULL
+        );
+
+        -- ── COMBOS (espelho de pdv_combos_ativos, um jsonb por produto-combo) ──
+        -- Mesmo padrao de `promo`: o servidor ja resolveu heranca de categoria e
+        -- expandiu as fontes; o caixa so parseia (Combos.cs) na carga.
+        CREATE TABLE IF NOT EXISTS combo (
+          produto_id    TEXT PRIMARY KEY,
+          payload       TEXT NOT NULL
         );
 
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────

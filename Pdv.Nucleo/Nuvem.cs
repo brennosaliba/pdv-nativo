@@ -487,6 +487,45 @@ public sealed class Nuvem
         catch { return -1; }
     }
 
+    /// <summary>
+    /// Espelha os COMBOS da loja (RPC pdv_combos_ativos: um jsonb por produto-combo,
+    /// com heranca de categoria resolvida e fontes ja expandidas) na tabela local
+    /// `combo`. Substitui tudo, como as promocoes. Sem sessao, sem rede ou RPC ainda
+    /// inexistente no servidor devolve -1 e o espelho anterior fica.
+    /// </summary>
+    public async Task<int> BaixarCombosAsync(SqliteConnection cx, string loja)
+    {
+        try
+        {
+            if (!await SessaoOkAsync().ConfigureAwait(false)) return -1;
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_combos_ativos");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _loja = loja }), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return -1;
+
+            var corpo = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(corpo);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return -1;
+
+            using var tx = cx.BeginTransaction();
+            cx.Execute("DELETE FROM combo", transaction: tx);
+            var n = 0;
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                var id = e.TryGetProperty("produto_id", out var i) && i.ValueKind == JsonValueKind.String
+                    ? i.GetString() : null;
+                if (id is null) continue;
+                cx.Execute("INSERT OR REPLACE INTO combo (produto_id, payload) VALUES (@i, @p)",
+                    new { i = id, p = e.GetRawText() }, tx);
+                n++;
+            }
+            tx.Commit();
+            return n;
+        }
+        catch { return -1; }
+    }
+
     /// <summary>Status atual (efetivo) de pedidos ESPECIFICOS - a reconciliacao
     /// dos tickets que ficaram fora da janela do feed. Falha devolve lista
     /// vazia: os tickets ficam como estao ate o proximo ciclo.</summary>

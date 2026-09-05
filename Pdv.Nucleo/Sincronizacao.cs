@@ -268,6 +268,11 @@ public static class Sincronizacao
             try { await nuvem.BaixarPromocoesAsync(cx, lojaPromo).ConfigureAwait(false); }
             catch { /* espelho anterior continua valendo */ }
 
+            // combos com sub-escolhas descem logo depois, pelo mesmo motivo
+            andamento?.Report("Baixando os combos…");
+            try { await nuvem.BaixarCombosAsync(cx, lojaPromo).ConfigureAwait(false); }
+            catch { /* espelho anterior continua valendo */ }
+
             // operadores criados no painel passam a logar no caixa (CPF + senha)
             andamento?.Report("Atualizando os operadores…");
             try { await nuvem.BaixarOperadoresAsync(cx).ConfigureAwait(false); }
@@ -298,7 +303,7 @@ public static class Sincronizacao
     /// carimbos de hora: a baixada regrava as linhas a cada sincronização, então
     /// comparar "atualizado" acusaria mudança sempre e o "tudo em dia" nunca sairia.
     /// </summary>
-    private static string ImpressaoDigital(Microsoft.Data.Sqlite.SqliteConnection cx)
+    internal static string ImpressaoDigital(Microsoft.Data.Sqlite.SqliteConnection cx)
     {
         var partes = cx.Query<string>("""
             SELECT id||'§'||nome||'§'||COALESCE(plu,'')||'§'||COALESCE(ean,'')||'§'||COALESCE(categoria,'')
@@ -311,7 +316,9 @@ public static class Sincronizacao
                 "SELECT id||'§'||nome||'§'||pin_hash||'§'||perfil||'§'||ativo FROM operador ORDER BY id"))
             // promocao entra na digital: sem isto, publicar so promocao dizia
             // "tudo em dia" pro operador - o bug exato que o dono viu na quinta
-            .Concat(cx.Query<string>("SELECT id||'§'||payload FROM promo ORDER BY id"));
+            .Concat(cx.Query<string>("SELECT id||'§'||payload FROM promo ORDER BY id"))
+            // combo tambem: cadastrar a composicao no painel tem que acordar o caixa
+            .Concat(cx.Query<string>("SELECT produto_id||'§'||payload FROM combo ORDER BY produto_id"));
         using var sha = System.Security.Cryptography.SHA256.Create();
         return Convert.ToHexString(sha.ComputeHash(
             System.Text.Encoding.UTF8.GetBytes(string.Join("\n", partes))));
@@ -356,7 +363,7 @@ public static class Sincronizacao
                        COALESCE(SUM(v.total_cent), 0)                              AS valor
                   FROM outbox o
                   JOIN venda  v ON v.id = o.ref_id
-                 WHERE o.tipo = 'venda'
+                 WHERE o.tipo IN ('venda','venda_composta')
                    AND v.status = 'finalizada'
                    AND v.homologacao = 0
                    AND (o.enviado_em IS NULL OR {SqlDesistiu})
@@ -368,7 +375,7 @@ public static class Sincronizacao
                 SELECT o.ultimo_erro
                   FROM outbox o
                   JOIN venda  v ON v.id = o.ref_id
-                 WHERE o.tipo = 'venda' AND v.status = 'finalizada' AND v.homologacao = 0
+                 WHERE o.tipo IN ('venda','venda_composta') AND v.status = 'finalizada' AND v.homologacao = 0
                    AND {SqlDesistiu}
                  GROUP BY o.ultimo_erro
                  ORDER BY COUNT(*) DESC
@@ -387,7 +394,7 @@ public static class Sincronizacao
                        CASE WHEN {SqlDesistiu} THEN 1 ELSE 0 END   AS desistiu
                   FROM outbox o
                   JOIN venda  v ON v.id = o.ref_id
-                 WHERE o.tipo = 'venda'
+                 WHERE o.tipo IN ('venda','venda_composta')
                    AND v.status = 'finalizada'
                    AND v.homologacao = 0
                    AND (o.enviado_em IS NULL OR {SqlDesistiu})

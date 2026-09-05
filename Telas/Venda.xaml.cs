@@ -24,6 +24,13 @@ public sealed class ItemComanda
     public long DescontoCent { get; set; }
     public int UnidadesGratis { get; set; }
     public string? PromoNome { get; set; }
+    /// <summary>
+    /// O que o cliente montou dentro de um COMBO, por unidade da linha (05/09/2026).
+    /// Nulo em item simples; nulo tambem num combo restaurado de rascunho antigo, e
+    /// ai a linha pede as escolhas ao toque e o Finalizar recusa ate ter todas.
+    /// </summary>
+    public List<Escolha>? Escolhas { get; set; }
+    public bool EhCombo => Escolhas is not null;
     public Dinheiro Bruto => Produto.Preco.VezesQtd(Qtd.Milesimos);
     public Dinheiro Total => new(Bruto.Centavos - DescontoCent);
 }
@@ -875,6 +882,13 @@ public partial class Venda : UserControl
     private Dictionary<string, Nucleo.Promocoes.ProdutoPromo> _promoVitrine = new();
     private string _assinaturaPromo = "";
 
+    /// <summary>Combos com sub-escolhas, por produto_id (espelho de pdv_combos_ativos).</summary>
+    private Dictionary<string, Nucleo.Combos.ComboDef> _combos = new();
+
+    /// <summary>O catalogo do jeito que Combos.ResolverFonte precisa (id, plu, nome, categoria).</summary>
+    private List<Nucleo.Combos.ProdutoLocal> CatalogoLocal()
+        => _catalogo.Select(p => new Nucleo.Combos.ProdutoLocal(p.Id, p.Plu, p.Nome, p.Categoria)).ToList();
+
     /// <summary>Preço efetivo AGORA (motor de promoções). Base intacta quando
     /// nada se aplica; entre promoções vale a melhor pro cliente.</summary>
     private (Dinheiro Preco, string? Promo) PrecoDe(Produto p)
@@ -892,6 +906,7 @@ public partial class Venda : UserControl
         using var cx = Banco.Abrir();
         _promos = Nucleo.Promocoes.Carregar(cx);
         _promoVitrine = Nucleo.Promocoes.ProdutosEmPromocao(_promos, DateTime.Now);
+        _combos = Nucleo.Combos.Carregar(cx);
         // Sem ORDER BY: quem ordena é o Núcleo, em pt-BR. O SQLite compara texto por BYTE,
         // e com isso ÁGUA MINERAL COM GÁS aparecia no FIM de Bebidas, depois de SUCO UVA
         // (defeito que o dono viu no balcão) — ver Pdv.Nucleo/Categorias.cs.
@@ -1432,10 +1447,36 @@ public partial class Venda : UserControl
         // entra como desconto na linha pelo motor, em PintarComanda. O card mostra
         // o preço efetivo; a comanda mostra o de tabela e o desconto ao lado.
 
+        // COMBO com sub-escolhas (05/09): abre o dialogo dos sabores. Cancelou, nada
+        // entra. E cada toque e uma CAIXA NOVA (linha propria): o "segundo toque
+        // incrementa" nao vale aqui, porque a segunda caixa costuma ter sabores
+        // diferentes. Quem quer a mesma caixa de novo usa o "+" da linha.
+        if (_combos.TryGetValue(p.Id, out var def))
+        {
+            var escolhas = DialogoCombo.Abrir(Window.GetWindow(this)!, def, CatalogoLocal());
+            if (escolhas is null) return;
+            _comanda.Insert(0, new ItemComanda { Produto = p, Escolhas = escolhas });
+            PintarComanda();
+            return;
+        }
+
         // segundo toque no mesmo produto INCREMENTA — não cria linha nova
-        var existente = _comanda.FirstOrDefault(i => i.Produto.Id == p.Id);
+        var existente = _comanda.FirstOrDefault(i => i.Produto.Id == p.Id && !i.EhCombo);
         if (existente is not null) existente.Qtd = new Quantidade(existente.Qtd.Milesimos + 1000);
         else _comanda.Insert(0, new ItemComanda { Produto = p });   // novo entra no TOPO
+        PintarComanda();
+    }
+
+    /// <summary>
+    /// Reabre o dialogo do combo de uma linha, com os contadores como estao (toque na
+    /// sub-linha dos sabores, ou combo restaurado de rascunho antigo sem escolhas).
+    /// </summary>
+    private void EditarCombo(ItemComanda item)
+    {
+        if (!_combos.TryGetValue(item.Produto.Id, out var def)) return;
+        var novo = DialogoCombo.Abrir(Window.GetWindow(this)!, def, CatalogoLocal(), item.Escolhas);
+        if (novo is null) return;
+        item.Escolhas = novo;
         PintarComanda();
     }
 
@@ -1459,7 +1500,7 @@ public partial class Venda : UserControl
         var carrinho = _comanda.Select(i => new Nucleo.Promocoes.ItemCarrinho(
             i.Produto.Id, i.Produto.Categoria, i.Produto.Preco.Centavos,
             Math.Max(0, i.Qtd.Milesimos - CoberturaDe(i) * 1000L))).ToList();
-        var av = Nucleo.Promocoes.AvaliarCarrinho(_promos, carrinho, agora);
+        var av = Nucleo.Promocoes.AvaliarCarrinho(_promos, carrinho, agora, _combos.Keys.ToHashSet());
         for (var k = 0; k < _comanda.Count; k++)
         {
             _comanda[k].DescontoCent = av.DescontoCent[k];
@@ -1545,7 +1586,7 @@ public partial class Venda : UserControl
                     i.Produto.Id, i.Produto.Plu, i.Produto.Nome, i.Produto.Categoria,
                     i.Produto.Preco.Centavos, i.Qtd.Milesimos, i.Produto.Unidade,
                     i.Produto.Ncm, i.Produto.Cest, i.Produto.Csosn, i.Produto.Origem,
-                    i.Produto.Foto)).ToList(),
+                    i.Produto.Foto, Nucleo.Combos.ParaJson(i.Escolhas))).ToList(),
                 Dinheiro.Zero, _cortesiaCodigo, _cortesiaCobertura);
         }
         catch { /* rascunho é conforto, não dinheiro: nunca atrapalha a venda */ }
@@ -1620,6 +1661,9 @@ public partial class Venda : UserControl
                     _catalogo.FirstOrDefault(c => c.Id == i.ProdutoId)?.Preco ?? new Dinheiro(i.PrecoCent),
                     i.Unidade, i.Ncm, i.Cest, i.Csosn, i.Origem, i.Foto),
                 Qtd = new Quantidade(i.QtdMilesimos),
+                // rascunho de exe antigo nao tem o campo: combo volta sem escolhas e a
+                // linha pede os sabores ao toque (o Finalizar nao deixa passar sem eles)
+                Escolhas = Nucleo.Combos.DeJson(i.EscolhasJson),
             });
 
         // A cortesia volta junto: sem ela o operador cobraria o que já tinha sido
@@ -1669,6 +1713,7 @@ public partial class Venda : UserControl
         // uma letra por linha, ou nada. Os controles agora têm a própria linha.
         g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // nome · total
         g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // qtd × unitário
+        g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // sabores do combo (so combo)
         g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });   // − qtd + 🗑
         g.ColumnDefinitions.Add(new ColumnDefinition());
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1705,6 +1750,35 @@ public partial class Venda : UserControl
         };
         Grid.SetRow(unitario, 1); Grid.SetColumn(unitario, 0);
         g.Children.Add(unitario);
+
+        // COMBO (05/09): a sub-linha dos sabores, "2x Ovomaltine · 3x Ninho", em fonte
+        // menor, numa linha so (corta com "…"). Toque reabre o dialogo pre-preenchido.
+        // Combo sem escolhas (rascunho de exe antigo) pede os sabores no mesmo lugar.
+        if (_combos.ContainsKey(item.Produto.Id))
+        {
+            var texto = item.Escolhas is { Count: > 0 }
+                ? Nucleo.Combos.Resumo(item.Escolhas)
+                : "Toque para escolher os sabores";
+            var sub = new Button
+            {
+                Style = (Style)Application.Current.Resources["BotaoBase"],
+                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                Padding = new Thickness(0, 4, 0, 4), MinHeight = 30,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 4, 0, 0),
+                Content = new TextBlock
+                {
+                    Text = texto, FontSize = 12,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Foreground = (Brush)Application.Current.Resources[item.Escolhas is { Count: > 0 } ? "TextoFraco" : "Erro"],
+                },
+            };
+            AutomationProperties.SetName(sub, $"Sabores {item.Produto.Nome}");
+            sub.Click += (_, _) => EditarCombo(item);
+            Grid.SetRow(sub, 2); Grid.SetColumn(sub, 0); Grid.SetColumnSpan(sub, 2);
+            g.Children.Add(sub);
+        }
 
         // Padding zerado de propósito: o BotaoBase reserva 18px de cada lado, o que
         // num botão de 42px não deixa espaço nenhum e o símbolo some.
@@ -1763,7 +1837,7 @@ public partial class Venda : UserControl
         controles.Children.Add(lixeira);
 
         controles.HorizontalAlignment = HorizontalAlignment.Right;
-        Grid.SetRow(controles, 2); Grid.SetColumn(controles, 0); Grid.SetColumnSpan(controles, 2);
+        Grid.SetRow(controles, 3); Grid.SetColumn(controles, 0); Grid.SetColumnSpan(controles, 2);
         g.Children.Add(controles);
 
         borda.Child = g;
@@ -1891,6 +1965,22 @@ public partial class Venda : UserControl
                 $"antes={new Dinheiro(antes).Formatado()} agora={new Dinheiro(agora.TotalCent).Formatado()} promo={agora.PromoNome}");
             return;
         }
+        // COMBO INCOMPLETO NAO VENDE (05/09): sem os sabores a baixa de estoque vira
+        // "10 de um sabor qualquer". Uma linha, e o operador volta para a comanda.
+        // Escolha com id de grupo velho (o painel republicou a composicao) e realocada
+        // pela fonte, nao descartada; a que nenhum grupo aceita e "fora do combo" e
+        // barra aqui com o motivo. Liberou, a linha passa a carregar os ids vigentes.
+        var catalogoLocal = CatalogoLocal();
+        foreach (var i in _comanda)
+        {
+            if (!_combos.TryGetValue(i.Produto.Id, out var defCombo)) continue;
+            if (Nucleo.Combos.Pendencia(defCombo, i.Escolhas, catalogoLocal) is string pendencia)
+            {
+                Dialogo.Avisar(dono, "Combo incompleto", pendencia);
+                return;
+            }
+            i.Escolhas = Nucleo.Combos.Realocar(defCombo, i.Escolhas, catalogoLocal);
+        }
         var itens = new List<LinhaVenda>();
         foreach (var i in _comanda)
         {
@@ -1906,7 +1996,8 @@ public partial class Venda : UserControl
                 qtdCobrada, i.Produto.Preco, new Dinheiro(bruto.Centavos - desconto.Centavos), i.Produto.Unidade,
                 i.Produto.Ncm, i.Produto.Cest, i.Produto.Csosn, null, i.Produto.Origem,
                 desconto, desconto.Centavos > 0 ? agora.PromoId : null,
-                desconto.Centavos > 0 ? agora.PromoNome : null, i.UnidadesGratis * 1000L));
+                desconto.Centavos > 0 ? agora.PromoNome : null, i.UnidadesGratis * 1000L,
+                i.Escolhas is { Count: > 0 } ? i.Escolhas : null));
         }
 
         // Cortesia cobrindo a comanda INTEIRA: não há venda a cobrar nem nota a
