@@ -52,10 +52,13 @@ public static class TestesAutorizacao
             return new Nada();
         }
 
-        public Task<string?> PedirCodigoAsync(string? aviso)
+        public readonly List<string> Niveis = new();
+
+        public Task<string?> PedirCodigoAsync(string? aviso, string nivel)
         {
             VezesPediuCodigo++;
             Avisos.Add(aviso);
+            Niveis.Add(nivel);
             return Task.FromResult(AoPedirCodigo?.Invoke(aviso));
         }
     }
@@ -151,7 +154,7 @@ public static class TestesAutorizacao
             return new Aviso(() => { VezesFechouEspera++; Anotar("Dispose da espera"); });
         }
 
-        public Task<string?> PedirCodigoAsync(string? aviso)
+        public Task<string?> PedirCodigoAsync(string? aviso, string nivel)
         {
             VezesPediuCodigo++;
             Anotar("PedirCodigoAsync");
@@ -278,7 +281,7 @@ public static class TestesAutorizacao
             var codigo1 = fake.CodigoAgora();
             codigosDigitados.Add(codigo1);
             var v1 = await cli.ValidarTotpAsync(codigo1, pedido.Referencia, pedido.Tipo,
-                Autorizacao.Detalhe(pedido), CancellationToken.None);
+                Autorizacao.Detalhe(pedido), "dono", CancellationToken.None);
             checar(v1.Ok && v1.Definitiva && v1.Id is { Length: > 0 } && (v1.Autorizador ?? "").Contains("Brenno"),
                 "CT-1 código do autenticador do dono autoriza: a RPC devolve id do registro e QUEM é o dono"
                 + $" (ok={v1.Ok} motivo={v1.Motivo})");
@@ -305,13 +308,13 @@ public static class TestesAutorizacao
             var errado = (int.Parse(codigo1) + 1) % 1_000_000;
             var codigoErrado = errado.ToString("D6");
             codigosDigitados.Add(codigoErrado);
-            var v2 = await cli.ValidarTotpAsync(codigoErrado, pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            var v2 = await cli.ValidarTotpAsync(codigoErrado, pedido.Referencia, pedido.Tipo, null, "dono", CancellationToken.None);
             checar(!v2.Ok && v2.Definitiva && v2.Motivo == "codigo invalido" && v2.Id is null && v2.Autorizador is null,
                 "CT-6 código errado volta como recusa DEFINITIVA, sem id e sem nome de dono nenhum");
 
             var morta = new ClienteAutorizacao(_ => Task.FromResult<string?>("t"), "http://127.0.0.1:9", "k",
                 TimeSpan.FromSeconds(2));
-            var v3 = await morta.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            var v3 = await morta.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, "dono", CancellationToken.None);
             checar(!v3.Ok && !v3.Definitiva,
                 "CT-7 nuvem fora do ar não é veredito: volta 'não sei' (e o estorno não sai)");
 
@@ -321,7 +324,7 @@ public static class TestesAutorizacao
             fake.AtrasoMs = 4000;
             var lento = ClienteDe(fake, fake.Token, TimeSpan.FromMilliseconds(700));
             var cron = Stopwatch.StartNew();
-            var v4 = await lento.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            var v4 = await lento.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, "dono", CancellationToken.None);
             cron.Stop();
             fake.AtrasoMs = 0;
             checar(!v4.Ok && !v4.Definitiva && cron.ElapsedMilliseconds < 2500,
@@ -329,19 +332,19 @@ public static class TestesAutorizacao
 
             var antesSemSessao = fake.Chamadas.Count;
             var semSessao = ClienteDe(fake, null);
-            var v5 = await semSessao.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            var v5 = await semSessao.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, "dono", CancellationToken.None);
             checar(!v5.Ok && v5.Definitiva && v5.Motivo == ClienteAutorizacao.MotivoSemSessao
                    && fake.Chamadas.Count == antesSemSessao,
                 "CT-10 terminal sem sessão na nuvem: recusa definitiva SEM ir à rede (não manda código com a chave pública)");
 
             var bearerErrado = ClienteDe(fake, "outro-token");
-            var v6 = await bearerErrado.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+            var v6 = await bearerErrado.ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, "dono", CancellationToken.None);
             checar(!v6.Ok && v6.Definitiva && (v6.Motivo ?? "").Contains("401"),
                 "CT-11 sessão recusada pela nuvem (401 do PostgREST) é veredito definitivo, com o HTTP no motivo");
 
             fake.EngolirProximas = 1;
             var v7 = await ClienteDe(fake, fake.Token, TimeSpan.FromSeconds(3))
-                .ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, CancellationToken.None);
+                .ValidarTotpAsync("000000", pedido.Referencia, pedido.Tipo, null, "dono", CancellationToken.None);
             checar(!v7.Ok && !v7.Definitiva,
                 "CT-12 conexão que cai no meio (sem resposta) também é 'não sei', nunca exceção");
 
@@ -418,7 +421,7 @@ public static class TestesAutorizacao
             // AT-8 rate limit: 5 falhas em 10 min e a nuvem nem testa o código
             fake.ZerarBaldes();
             for (var n = 0; n < 5; n++)
-                await cli.ValidarTotpAsync("000000", "estorno:x", "estorno", null, CancellationToken.None);
+                await cli.ValidarTotpAsync("000000", "estorno:x", "estorno", null, "dono", CancellationToken.None);
             var certoMasTarde = fake.CodigoAgora();
             tela = new TelaFalsa { AoPedirCodigo = _ => certoMasTarde };
             var dRl = await Autorizacao.ResolverAsync(cli, PedidoDe("paygo-RL", "000204", 700, 204), tela,
@@ -493,18 +496,18 @@ public static class TestesAutorizacao
             // AT-16 a janela de tolerância é ±1 passo; ±2 não vale
             fake.ZerarBaldes();
             fake.UltimoContador = 0;
-            var vMenos1 = await cli.ValidarTotpAsync(fake.CodigoAgora(-1), "estorno:j1", "estorno", null, CancellationToken.None);
+            var vMenos1 = await cli.ValidarTotpAsync(fake.CodigoAgora(-1), "estorno:j1", "estorno", null, "dono", CancellationToken.None);
             fake.UltimoContador = 0;
-            var vMais1 = await cli.ValidarTotpAsync(fake.CodigoAgora(+1), "estorno:j2", "estorno", null, CancellationToken.None);
+            var vMais1 = await cli.ValidarTotpAsync(fake.CodigoAgora(+1), "estorno:j2", "estorno", null, "dono", CancellationToken.None);
             fake.UltimoContador = 0;
-            var vMenos2 = await cli.ValidarTotpAsync(fake.CodigoAgora(-2), "estorno:j3", "estorno", null, CancellationToken.None);
-            var vMais2 = await cli.ValidarTotpAsync(fake.CodigoAgora(+2), "estorno:j4", "estorno", null, CancellationToken.None);
+            var vMenos2 = await cli.ValidarTotpAsync(fake.CodigoAgora(-2), "estorno:j3", "estorno", null, "dono", CancellationToken.None);
+            var vMais2 = await cli.ValidarTotpAsync(fake.CodigoAgora(+2), "estorno:j4", "estorno", null, "dono", CancellationToken.None);
             checar(vMenos1.Ok && vMais1.Ok && !vMenos2.Ok && !vMais2.Ok,
                 "AT-16 código do passo anterior ou do seguinte vale (relógio do celular atrasado 30 s); ±2 não");
             // E o replay por contador: aceitar T+1 e depois recusar T (que é menor)
             fake.UltimoContador = 0;
-            var vFrente = await cli.ValidarTotpAsync(fake.CodigoAgora(+1), "estorno:j5", "estorno", null, CancellationToken.None);
-            var vAtras = await cli.ValidarTotpAsync(fake.CodigoAgora(0), "estorno:j6", "estorno", null, CancellationToken.None);
+            var vFrente = await cli.ValidarTotpAsync(fake.CodigoAgora(+1), "estorno:j5", "estorno", null, "dono", CancellationToken.None);
+            var vAtras = await cli.ValidarTotpAsync(fake.CodigoAgora(0), "estorno:j6", "estorno", null, "dono", CancellationToken.None);
             checar(vFrente.Ok && !vAtras.Ok && fake.UltimoContador == Passo() + 1,
                 "AT-17 depois de aceitar o código de T+1, o de T não vale mais (contador só anda para a frente)");
             fake.ZerarBaldes();

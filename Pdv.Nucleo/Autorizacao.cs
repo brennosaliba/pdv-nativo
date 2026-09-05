@@ -74,18 +74,31 @@ public sealed record PedidoAutorizacao(
     string? Forma = null, string? Nsu = null, string? Bandeira = null)
 {
     /// <summary>
-    /// "estorno" (dinheiro de volta no cartão) ou "cancelamento" (venda/nota,
-    /// sem devolução pelo PDV). Vai para o log da nuvem e muda o texto da recusa.
+    /// "estorno" (dinheiro de volta no cartão), "cancelamento" (venda/nota,
+    /// sem devolução pelo PDV) ou "promocao" (promoção com 2FA no caixa, 05/09).
+    /// Vai para o log da nuvem e muda o texto da recusa.
     /// </summary>
     public string Tipo { get; init; } = "estorno";
+
+    /// <summary>
+    /// Quem pode aprovar: "dono" (só autenticador de owner) ou "gerente" (manager OU
+    /// owner). Estorno e cancelamento NÃO mexem nisto: ficam no padrão, dono. Só a
+    /// promoção com config.autorizacao='gerente' desce para o gerente.
+    /// </summary>
+    public string Nivel { get; init; } = Autorizacao.NivelDono;
+
+    /// <summary>Tipo "promocao": a promoção que pediu o código (vai no detalhe do log).</summary>
+    public string? PromocaoId { get; init; }
+    public string? PromocaoNome { get; init; }
 }
 
 /// <summary>A nuvem. Implementação real: <see cref="ClienteAutorizacao"/>.</summary>
 public interface IAutorizacaoRemota
 {
     /// <param name="detalhe">O que vai para o log da nuvem (venda, valor, operador); nunca o código.</param>
+    /// <param name="nivel">"dono" ou "gerente": de quem a nuvem aceita o código (parâmetro _nivel da RPC).</param>
     Task<RespostaTotp> ValidarTotpAsync(string codigo, string referencia, string tipo,
-        IReadOnlyDictionary<string, object?>? detalhe, CancellationToken ct);
+        IReadOnlyDictionary<string, object?>? detalhe, string nivel, CancellationToken ct);
 }
 
 /// <summary>
@@ -96,8 +109,11 @@ public interface ITelaAutorizacao
 {
     /// <summary>Aviso de espera ("Conferindo o código…"). O Dispose fecha.</summary>
     IDisposable Aguardando(string mensagem);
-    /// <summary>Pede o código de 6 dígitos do autenticador do dono. null = o operador cancelou.</summary>
-    Task<string?> PedirCodigoAsync(string? aviso);
+    /// <summary>
+    /// Pede o código de 6 dígitos do autenticador. null = o operador cancelou.
+    /// <paramref name="nivel"/> só muda o rótulo ("do gerente" / "do dono"): quem confere é a nuvem.
+    /// </summary>
+    Task<string?> PedirCodigoAsync(string? aviso, string nivel);
 }
 
 /// <summary>
@@ -107,6 +123,9 @@ public interface ITelaAutorizacao
 public sealed record DesfechoAutorizacao(ViaAutorizacao Via, string? AprovadoPor, string? TokenId, string Motivo)
 {
     public bool Autorizado => Via != ViaAutorizacao.Recusada;
+
+    /// <summary>Nível pedido à nuvem ("dono" ou "gerente"); só informa a trilha.</summary>
+    public string Nivel { get; init; } = Autorizacao.NivelDono;
 
     /// <summary>
     /// A tela já explicou ao operador por que não seguiu (ele cancelou). Sem isto
@@ -142,6 +161,13 @@ public static class Autorizacao
     /// <summary>O motivo que a RPC devolve para código errado (e para replay).</summary>
     public const string MotivoCodigoInvalido = "codigo invalido";
 
+    /// <summary>Os dois níveis que a RPC conhece (parâmetro _nivel, default 'dono').</summary>
+    public const string NivelDono = "dono";
+    public const string NivelGerente = "gerente";
+
+    /// <summary>"gerente" ou "dono", para rótulo e trilha.</summary>
+    public static string Papel(string? nivel) => nivel == NivelGerente ? "gerente" : "dono";
+
     /// <summary>
     /// AMARRA O REGISTRO ÀQUELE ESTORNO. Se o operador desistir e estornar OUTRA
     /// venda, o log da nuvem precisa dizer qual foi: entram os quatro dados que
@@ -163,6 +189,18 @@ public static class Autorizacao
         static string Limpo(string? s, int max)
             => new((s ?? "").Where(char.IsLetterOrDigit).Take(max).ToArray());
         return $"cancelamento:{Limpo(vendaId, 48)}:v{numeroVenda}:c{valorCent}";
+    }
+
+    /// <summary>
+    /// AMARRA O REGISTRO À PROMOÇÃO NESTA COMANDA (05/09). A comanda ainda não é venda
+    /// (não tem número): o id é o da comanda em andamento, que nasce com ela e morre
+    /// com ela; a mesma promoção em outra comanda é outro registro.
+    /// </summary>
+    public static string ReferenciaPromocao(string comandaId, string promoId)
+    {
+        static string Limpo(string? s, int max)
+            => new((s ?? "").Where(char.IsLetterOrDigit).Take(max).ToArray());
+        return $"promocao:{Limpo(comandaId, 48)}:{Limpo(promoId, 48)}";
     }
 
     /// <summary>Nome com que este caixa se apresenta à nuvem (cadastro `pdv_terminais.nome`).</summary>
@@ -191,12 +229,15 @@ public static class Autorizacao
             ["forma"] = p.Forma,
             ["nsu"] = p.Nsu,
             ["bandeira"] = p.Bandeira,
+            ["nivel"] = p.Nivel,
+            ["promocao_id"] = p.PromocaoId,
+            ["promocao"] = p.PromocaoNome,
         };
 
     /// <summary>Sufixo da linha de auditoria do estorno: quem aprovou.</summary>
     public static string Trilha(DesfechoAutorizacao d) => d.Via switch
     {
-        ViaAutorizacao.Totp => $" · autorizado pelo autenticador do dono ({d.AprovadoPor}, registro {Curto(d.TokenId)})",
+        ViaAutorizacao.Totp => $" · autorizado pelo autenticador do {Papel(d.Nivel)} ({d.AprovadoPor}, registro {Curto(d.TokenId)})",
         ViaAutorizacao.Homologacao => " · SEM APROVAÇÃO REMOTA (modo homologação)",
         _ => "",
     };
@@ -221,16 +262,22 @@ public static class Autorizacao
         CancellationToken ct = default)
     {
         // O texto da recusa é o que a tela mostra, em UMA linha: "<motivo> <Ato> não autorizado."
-        var ato = pedido.Tipo == "cancelamento" ? "Cancelamento" : "Estorno";
+        var (ato, naoAutorizado) = pedido.Tipo switch
+        {
+            "cancelamento" => ("Cancelamento", "não autorizado."),
+            "promocao" => ("Promoção", "não autorizada."),
+            _ => ("Estorno", "não autorizado."),
+        };
+        var papel = Papel(pedido.Nivel);
         DesfechoAutorizacao Nao(string motivo) =>
-            new(ViaAutorizacao.Recusada, null, null, $"{motivo} {ato} não autorizado.");
+            new(ViaAutorizacao.Recusada, null, null, $"{motivo} {ato} {naoAutorizado}") { Nivel = pedido.Nivel };
 
         if (remota is null) return Nao("Este caixa não tem nuvem configurada.");
 
         string? aviso = null;
         for (var tentativa = 1; tentativa <= MaxTentativas; tentativa++)
         {
-            var codigo = await tela.PedirCodigoAsync(aviso);
+            var codigo = await tela.PedirCodigoAsync(aviso, pedido.Nivel);
             if (codigo is null)
                 return new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null,
                     "o operador desistiu da autorização") { Avisado = true };
@@ -239,11 +286,11 @@ public static class Autorizacao
             // await de verdade (não .Result): a tela continua desenhando enquanto a
             // nuvem confere. Sem ConfigureAwait: o Dispose deste `using` fecha a janela.
             using (tela.Aguardando("Conferindo o código…"))
-                v = await remota.ValidarTotpAsync(codigo, pedido.Referencia, pedido.Tipo, Detalhe(pedido), ct);
+                v = await remota.ValidarTotpAsync(codigo, pedido.Referencia, pedido.Tipo, Detalhe(pedido), pedido.Nivel, ct);
 
             if (v.Ok)
                 return new DesfechoAutorizacao(ViaAutorizacao.Totp, v.Autorizador, v.Id,
-                    "aprovado pelo autenticador do dono (" + (v.Autorizador ?? "dono") + ")");
+                    $"aprovado pelo autenticador do {papel} (" + (v.Autorizador ?? papel) + ")") { Nivel = pedido.Nivel };
 
             // Rede caída ou nuvem muda: não é veredito, mas também não é autorização.
             if (!v.Definitiva) return Nao("Sem internet.");
@@ -256,16 +303,16 @@ public static class Autorizacao
 
             // Recusa que não depende do código (rate limit, autenticador não
             // configurado, sessão): insistir não muda nada, então nem pede outro.
-            return Nao(TextoDoMotivo(v.Motivo));
+            return Nao(TextoDoMotivo(v.Motivo, papel));
         }
 
         return Nao($"Código inválido {MaxTentativas} vezes.");
     }
 
-    private static string TextoDoMotivo(string? motivo) => Normal(motivo) switch
+    private static string TextoDoMotivo(string? motivo, string papel) => Normal(motivo) switch
     {
         "muitas tentativas, aguarde" => "Muitas tentativas. Aguarde 10 minutos.",
-        "autenticador nao configurado" => "Autenticador do dono não configurado.",
+        "autenticador nao configurado" => $"Autenticador do {papel} não configurado.",
         ClienteAutorizacao.MotivoSemSessao => "Este caixa está sem sessão na nuvem.",
         "" => "A nuvem recusou.",
         var m => $"A nuvem recusou ({m}).",
@@ -328,7 +375,7 @@ public sealed class ClienteAutorizacao : IAutorizacaoRemota
     }
 
     public async Task<RespostaTotp> ValidarTotpAsync(string codigo, string referencia, string tipo,
-        IReadOnlyDictionary<string, object?>? detalhe, CancellationToken ct)
+        IReadOnlyDictionary<string, object?>? detalhe, string nivel, CancellationToken ct)
     {
         var mascara = Autorizacao.Mascarar(codigo);
         string? token;
@@ -352,6 +399,14 @@ public sealed class ClienteAutorizacao : IAutorizacaoRemota
             ["_detalhe"] = detalhe,
             ["_terminal_uuid"] = _terminalUuid?.Invoke(),
         };
+        // 05/09: 'dono' (só owner) ou 'gerente' (manager ou owner). A chave `_nivel`
+        // SÓ vai no corpo quando é 'gerente': o PostgREST casa a RPC pelo conjunto de
+        // NOMES dos parâmetros, e a pdv_autorizacao_totp de produção anterior à
+        // migration 20260905120000 não tem `_nivel` (com a chave, 404 PGRST202 e o
+        // estorno morreria). Estorno, cancelamento e promoção do dono mandam o corpo
+        // de sempre e caem no default 'dono' nas duas versões da RPC; o nível gerente
+        // só existe a partir da migration (antes dela a promoção fica excluída).
+        if (nivel is Autorizacao.NivelGerente) corpo["_nivel"] = Autorizacao.NivelGerente;
         var (status, texto) = await EnviarAsync(corpo, token, ct).ConfigureAwait(false);
 
         if (status == 0)

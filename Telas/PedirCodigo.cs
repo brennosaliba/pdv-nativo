@@ -78,17 +78,23 @@ public sealed class Espera : IDisposable
 /// </summary>
 public static class PedirCodigo
 {
-    /// <summary>Devolve o código de 6 dígitos, ou null se o operador cancelou.</summary>
-    public static string? Mostrar(Window dono, string? aviso)
+    /// <summary>
+    /// Devolve o código de 6 dígitos, ou null se o operador cancelou.
+    /// <paramref name="nivel"/> (05/09): "gerente" troca o rótulo para o autenticador do
+    /// gerente (promoção com 2FA de gerente); o resto da tela é o mesmo, e quem confere
+    /// de quem é o código continua sendo a nuvem.
+    /// </summary>
+    public static string? Mostrar(Window dono, string? aviso, string nivel = Autorizacao.NivelDono)
     {
         string? resposta = null;
+        var gerente = nivel == Autorizacao.NivelGerente;
         var janela = Dialogo.Base(dono, 460);
         var painel = new StackPanel();
-        painel.Children.Add(PedirValor.Cabecalho(janela, "Autorização do dono"));
+        painel.Children.Add(PedirValor.Cabecalho(janela, gerente ? "Autorização do gerente" : "Autorização do dono"));
 
         painel.Children.Add(new TextBlock
         {
-            Text = "Código do autenticador do dono",
+            Text = gerente ? "Código do autenticador do gerente" : "Código do autenticador do dono",
             FontSize = 15, TextWrapping = TextWrapping.Wrap,
             Foreground = (Brush)Application.Current.Resources["TextoFraco"],
             Margin = new Thickness(0, 0, 0, 10),

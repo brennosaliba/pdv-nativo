@@ -9,8 +9,9 @@ namespace Pdv.Telas;
 /// janela. Fica separado para a decisão continuar testável sem abrir tela.
 ///
 /// Só duas coisas precisam de janela: o aviso de espera enquanto a nuvem
-/// confere, e a tela do código do autenticador do dono. Não há PIN, não há
-/// senha, não há escolha depois da falha: o operador digita o código que o dono
+/// confere, e a tela do código do autenticador (do dono; ou do gerente, na
+/// promoção com 2FA de gerente, 05/09). Não há PIN, não há senha, não há
+/// escolha depois da falha: o operador digita o código que o dono ou o gerente
 /// passar, ou cancela.
 /// </summary>
 public sealed class TelaAutorizacao : ITelaAutorizacao
@@ -21,6 +22,6 @@ public sealed class TelaAutorizacao : ITelaAutorizacao
 
     public IDisposable Aguardando(string mensagem) => new Espera(_dono, mensagem);
 
-    public Task<string?> PedirCodigoAsync(string? aviso)
-        => Task.FromResult(PedirCodigo.Mostrar(_dono, aviso));
+    public Task<string?> PedirCodigoAsync(string? aviso, string nivel)
+        => Task.FromResult(PedirCodigo.Mostrar(_dono, aviso, nivel));
 }

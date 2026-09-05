@@ -529,5 +529,15 @@
                 </StackPanel>
             </StackPanel>
         </Border>
+
+        <!-- Aviso leve de uma linha (ex.: promocao nao aplicada depois de cancelar o
+             codigo). Mesmo lugar dos outros toasts, sem toque: so informa e some em 8 s. -->
+        <Border x:Name="ToastAviso" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,64,14,0"
+                Background="{DynamicResource PainelDegrade}" BorderBrush="{DynamicResource Erro}"
+                BorderThickness="2" CornerRadius="14" Panel.ZIndex="99" IsHitTestVisible="False">
+            <TextBlock x:Name="TxtToastAviso" Foreground="{DynamicResource Texto}"
+                       FontSize="15" FontWeight="Bold" Margin="16,12,18,12"/>
+        </Border>
     </Grid>
 </UserControl>

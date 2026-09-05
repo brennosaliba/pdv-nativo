@@ -10,10 +10,12 @@ namespace Pdv.Testes;
 /// FOTOGRAFA a tela do código do autenticador do dono (Telas/PedirCodigo.cs) por
 /// cima da tela de venda, numa resolução dada, sem monitor daquele tamanho.
 ///
-/// Uso: Pdv.Testes.exe --foto-codigo saida.png largura altura [claro|escuro] [aviso]
+/// Uso: Pdv.Testes.exe --foto-codigo saida.png largura altura [claro|escuro] [aviso] [gerente]
 ///
 /// O `aviso` é o texto vermelho de "Código inválido. Tente de novo." (a segunda
-/// tentativa). Sem ele, é a tela da primeira tentativa.
+/// tentativa). Sem ele, é a tela da primeira tentativa. `-` = sem aviso.
+/// `gerente` (05/09, qualquer posição) fotografa a tela com o rótulo do autenticador
+/// do gerente (promoção com 2FA de gerente).
 ///
 /// Mesma segurança do --foto-venda: cópia do banco do caixa, nuvem apontada para
 /// endereço morto, nada é gravado no banco de verdade. O diálogo é modal: a foto
@@ -24,11 +26,14 @@ public static class FotoCodigo
 {
     public static int Rodar(string[] args)
     {
+        var gerente = args.Any(a => a.Equals("gerente", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("gerente", StringComparison.OrdinalIgnoreCase)).ToArray();
         var saida = Path.GetFullPath(args[1]);
         var w = int.Parse(args[2]);
         var h = int.Parse(args[3]);
         var tema = args.Length > 4 ? args[4] : "claro";
-        var aviso = args.Length > 5 ? args[5] : null;
+        var aviso = args.Length > 5 && args[5] != "-" ? args[5] : null;
+        var nivel = gerente ? Autorizacao.NivelGerente : Autorizacao.NivelDono;
 
         var origem = Banco.Arquivo;
         if (!File.Exists(origem))
@@ -54,7 +59,7 @@ public static class FotoCodigo
         var codigo = 1;
         var t = new Thread(() =>
         {
-            try { codigo = Fotografar(saida, w, h, tema, aviso, operador, sessao); }
+            try { codigo = Fotografar(saida, w, h, tema, aviso, nivel, operador, sessao); }
             catch (Exception ex)
             {
                 Console.Error.WriteLine("foto-codigo: " + ex);
@@ -68,7 +73,7 @@ public static class FotoCodigo
         return codigo;
     }
 
-    private static int Fotografar(string saida, int w, int h, string tema, string? aviso,
+    private static int Fotografar(string saida, int w, int h, string tema, string? aviso, string nivel,
                                   Operador operador, Sessao sessao)
     {
         static ResourceDictionary Dic(string caminho) => new()
@@ -112,12 +117,12 @@ public static class FotoCodigo
                     if (dialogo is null) erros.Add("a tela do código não abriu");
                     FotoVenda.Salvar(saida, w, h, janela, dialogo);
                     salvo = true;
-                    Console.WriteLine($"foto-codigo: {saida} ({w}x{h}, tema {tema}, aviso {(aviso is null ? "nenhum" : "'" + aviso + "'")})");
+                    Console.WriteLine($"foto-codigo: {saida} ({w}x{h}, tema {tema}, nivel {nivel}, aviso {(aviso is null ? "nenhum" : "'" + aviso + "'")})");
                     dialogo?.Close();
                 };
                 foto.Start();
                 // Bloqueia no ShowDialog até o timer acima fechar o diálogo.
-                var digitado = Pdv.Telas.PedirCodigo.Mostrar(janela, aviso);
+                var digitado = Pdv.Telas.PedirCodigo.Mostrar(janela, aviso, nivel);
                 if (digitado is not null) erros.Add("o diálogo devolveu um código sem ninguém digitar");
                 foreach (var e in erros.Distinct()) Console.WriteLine("  aviso: " + e);
                 codigo = salvo ? 0 : 1;

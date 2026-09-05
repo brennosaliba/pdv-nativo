@@ -24,7 +24,10 @@ namespace Pdv.Testes;
 ///    e depois "muitas tentativas, aguarde" SEM testar o código;
 ///  · sem segredo configurado: "autenticador nao configurado";
 ///  · código errado: "codigo invalido", e nada mais (nem qual dono, nem resto);
-///  · o segredo nunca volta no corpo, e cada tentativa vai para o log.
+///  · o segredo nunca volta no corpo, e cada tentativa vai para o log;
+///  · `_nivel` (05/09, migration 20260905120000): ausente ou 'dono' = só os
+///    segredos de OWNER valem; 'gerente' = segredos de MANAGER e de OWNER. Outro
+///    valor é recusado sem testar o código. O log grava o nível.
 /// </summary>
 public sealed class FakeTotp : IDisposable
 {
@@ -52,7 +55,27 @@ public sealed class FakeTotp : IDisposable
     /// <summary>false = nenhum owner com segredo.</summary>
     public bool Configurado { get; set; } = true;
 
+    /// <summary>Segredo do GERENTE (manager): só vale com _nivel='gerente'. 20 bytes, como o da RFC.</summary>
+    public byte[] SegredoGerente { get; set; } = Encoding.ASCII.GetBytes("gerente-savassi-2026");
+
+    /// <summary>Nome do gerente que a RPC devolve como `autorizador` quando o código é dele.</summary>
+    public string AutorizadorGerente { get; set; } = "Marcos";
+
+    /// <summary>false = nenhum manager com segredo.</summary>
+    public bool ConfiguradoGerente { get; set; } = true;
+
+    /// <summary>Contador (T) do último código do GERENTE aceito (replay é por segredo).</summary>
+    public long UltimoContadorGerente { get; set; }
+
     public int MaxFalhas { get; set; } = 5;
+
+    /// <summary>
+    /// true = a RPC de PRODUÇÃO antes da migration 20260905120000 (6 parâmetros, sem
+    /// `_nivel`). O PostgREST casa a RPC pelo conjunto de NOMES do corpo: com a chave
+    /// `_nivel` presente ele não acha função e devolve 404 PGRST202, que o cliente
+    /// trata como veredito definitivo. Sem a chave, a validação de sempre (dono).
+    /// </summary>
+    public bool RpcAntiga { get; set; }
 
     /// <summary>Contador (T) do último código aceito: replay é T &lt;= isto.</summary>
     public long UltimoContador { get; set; }
@@ -72,7 +95,7 @@ public sealed class FakeTotp : IDisposable
     public ConcurrentQueue<Chamada> Chamadas { get; } = new();
 
     public sealed record Tentativa(bool Ok, string? Motivo, string? Referencia, string? Tipo,
-        string? TerminalUuid, bool TestouOCodigo, string? Id);
+        string? TerminalUuid, bool TestouOCodigo, string? Id, string? Nivel = null, string? Autorizador = null);
 
     /// <summary>O `pdv_autorizacao_totp_log`: toda tentativa, ok ou não.</summary>
     public ConcurrentQueue<Tentativa> Log { get; } = new();
@@ -103,6 +126,9 @@ public sealed class FakeTotp : IDisposable
 
     /// <summary>O código que está no celular do dono agora (deslocado em N passos de 30 s).</summary>
     public string CodigoAgora(int passos = 0) => Codigo(Segredo, Agora.ToUnixTimeSeconds() + passos * 30L);
+
+    /// <summary>O código que está no celular do GERENTE agora.</summary>
+    public string CodigoAgoraGerente(int passos = 0) => Codigo(SegredoGerente, Agora.ToUnixTimeSeconds() + passos * 30L);
 
     /// <summary>Esvazia os baldes do rate limit (cada cenário da suíte começa limpo).</summary>
     public void ZerarBaldes() { lock (_trava) _falhas.Clear(); }
@@ -157,23 +183,35 @@ public sealed class FakeTotp : IDisposable
                 return;
             }
 
-            string? codigo = null, referencia = null, tipo = null, terminal = null;
+            string? codigo = null, referencia = null, tipo = null, terminal = null, nivel = null;
             try
             {
                 var j = JsonDocument.Parse(corpo).RootElement;
+                if (RpcAntiga && j.ValueKind == JsonValueKind.Object && j.TryGetProperty("_nivel", out _))
+                {
+                    await Responder(ctx, 404, new
+                    {
+                        code = "PGRST202",
+                        message = "Could not find the function public.pdv_autorizacao_totp(_agora, _codigo, _detalhe, _nivel, _referencia, _terminal_uuid, _tipo) in the schema cache",
+                        details = (string?)null,
+                        hint = "Perhaps you meant to call the function public.pdv_autorizacao_totp(_agora, _codigo, _detalhe, _referencia, _terminal_uuid, _tipo)",
+                    });
+                    return;
+                }
                 codigo = Txt(j, "_codigo");
                 referencia = Txt(j, "_referencia");
                 tipo = Txt(j, "_tipo");
                 terminal = Txt(j, "_terminal_uuid");
+                nivel = Txt(j, "_nivel");
             }
             catch { /* corpo torto vira código inválido */ }
 
-            await Responder(ctx, 200, Decidir(codigo ?? "", referencia, tipo, terminal));
+            await Responder(ctx, 200, Decidir(codigo ?? "", referencia, tipo, terminal, nivel));
         }
         catch { try { ctx.Response.Abort(); } catch { } }
     }
 
-    private object Decidir(string codigo, string? referencia, string? tipo, string? terminal)
+    private object Decidir(string codigo, string? referencia, string? tipo, string? terminal, string? nivelBruto)
     {
         lock (_trava)
         {
@@ -181,29 +219,40 @@ public sealed class FakeTotp : IDisposable
             var balde = terminal ?? "sessao";
             if (!_falhas.TryGetValue(balde, out var falhas)) _falhas[balde] = falhas = new List<DateTimeOffset>();
             falhas.RemoveAll(f => f < agora.AddMinutes(-10));
+            // _nivel default 'dono' (assinatura antiga continua valendo = dono)
+            var nivel = string.IsNullOrWhiteSpace(nivelBruto) ? "dono" : nivelBruto.Trim().ToLowerInvariant();
 
             object Nao(string motivo, bool testou)
             {
-                Log.Enqueue(new Tentativa(false, motivo, referencia, tipo, terminal, testou, null));
+                Log.Enqueue(new Tentativa(false, motivo, referencia, tipo, terminal, testou, null, nivel));
                 return new { ok = false, motivo };
             }
+
+            if (nivel is not ("dono" or "gerente")) return Nao("nivel invalido", false);
 
             // RATE LIMIT vem ANTES de tocar no código: quem estourou o balde não
             // ganha nem a informação de que o chute foi perto.
             if (falhas.Count >= MaxFalhas) return Nao("muitas tentativas, aguarde", false);
-            if (!Configurado) return Nao("autenticador nao configurado", false);
+
+            // candidatos: owners sempre; managers só no nível gerente
+            var candidatos = new List<(byte[] segredo, string nome, Func<long> ultimo, Action<long> gravar)>();
+            if (Configurado) candidatos.Add((Segredo, Autorizador, () => UltimoContador, c => UltimoContador = c));
+            if (nivel == "gerente" && ConfiguradoGerente)
+                candidatos.Add((SegredoGerente, AutorizadorGerente, () => UltimoContadorGerente, c => UltimoContadorGerente = c));
+            if (candidatos.Count == 0) return Nao("autenticador nao configurado", false);
 
             var t = agora.ToUnixTimeSeconds() / 30;
-            for (var d = -1; d <= 1; d++)
-            {
-                var candidato = t + d;
-                if (Codigo(Segredo, candidato * 30) != codigo) continue;
-                if (candidato <= UltimoContador) break;          // replay: contador já gasto
-                UltimoContador = candidato;
-                var id = Guid.NewGuid().ToString();
-                Log.Enqueue(new Tentativa(true, null, referencia, tipo, terminal, true, id));
-                return new { ok = true, id, autorizador = Autorizador };
-            }
+            foreach (var cand in candidatos)
+                for (var d = -1; d <= 1; d++)
+                {
+                    var candidato = t + d;
+                    if (Codigo(cand.segredo, candidato * 30) != codigo) continue;
+                    if (candidato <= cand.ultimo()) break;          // replay: contador já gasto
+                    cand.gravar(candidato);
+                    var id = Guid.NewGuid().ToString();
+                    Log.Enqueue(new Tentativa(true, null, referencia, tipo, terminal, true, id, nivel, cand.nome));
+                    return new { ok = true, id, autorizador = cand.nome };
+                }
             falhas.Add(agora);
             return Nao("codigo invalido", true);
         }

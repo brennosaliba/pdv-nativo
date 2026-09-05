@@ -1390,6 +1390,15 @@ Console.WriteLine();
 Console.WriteLine("--- Autorizacao de estorno (autenticador do dono) ---");
 await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome, cond));
 
+// -- 05/09/2026: PROMOCAO COM 2FA DO GERENTE OU DO DONO ------------------------
+// "Crio desconto funcionario para nao ter abuso e quero que essa promocao tenha
+// 2FA do gerente." O motor recebe da venda o que ja foi decidido (Autorizadas /
+// Excluidas) e devolve as pendentes; o portao pergunta uma vez por promocao por
+// venda contra a RPC com _nivel ('gerente' aceita manager e owner; 'dono' so owner).
+Console.WriteLine();
+Console.WriteLine("--- Promocao com 2FA (motor com contexto, portao contra o FakeTotp com nivel, payload, fonte) ---");
+await TestesPromoAutorizacao.RodarAsync((cond, nome) => Check("promo-2fa: " + nome, cond));
+
 // -- ATUALIZAR O CAIXA: o botao que baixa e entrega ao instalador -------------
 // O campo "url" vem da REDE e vira um exe rodando como ADMINISTRADOR na maquina da
 // loja. Aqui moram as peneiras: https, mesmo dominio do manifesto, versao semantica

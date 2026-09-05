@@ -39,7 +39,80 @@ public static class Promocoes
         DateOnly? Inicio, DateOnly? Fim,
         int? Leve = null, int? Pague = null, ComboDef? Combo = null,
         HashSet<string>? Ganha = null, GanhaRegra GanhaRegra = GanhaRegra.Lista,
-        long? TetoCent = null, int LimitePorVenda = 0, string? Aviso = null);
+        long? TetoCent = null, int LimitePorVenda = 0, string? Aviso = null,
+        string? Autorizacao = null)
+    {
+        /// <summary>Precisa do codigo do autenticador (gerente ou dono) antes de valer no caixa.</summary>
+        public bool ExigeAutorizacao => Autorizacao is not null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  PROMOCAO COM 2FA (05/09/2026, pedido do dono): "crio desconto funcionario
+    //  para nao ter abuso e quero que essa promocao tenha 2FA do gerente".
+    //
+    //  config.autorizacao = 'gerente' | 'dono' | ausente. O motor NAO decide
+    //  sozinho: recebe da VENDA um ContextoAutorizacao com dois conjuntos de ids.
+    //   . em Autorizadas: a promocao concorre como qualquer outra;
+    //   . em Excluidas: nunca aplica (o operador desistiu, errou 3x, sem rede);
+    //   . em nenhum dos dois: NAO aplica e volta em Pendentes, para a tela pedir
+    //     o codigo UMA vez por promocao por venda. So pede quando a promocao
+    //     VENCERIA agora (desconto maior que o da vencedora livre): pedir codigo
+    //     para uma promocao que perderia de qualquer jeito e so atrapalhar.
+    //  Nova venda zera os dois conjuntos (rascunho restaurado tambem: pede de novo).
+    //  Valor desconhecido em config.autorizacao vale 'dono' (fecha, nao abre).
+    // ═══════════════════════════════════════════════════════════════════════
+    public const string NivelGerente = "gerente";
+    public const string NivelDono = "dono";
+
+    /// <summary>Quem aprovou uma promocao nesta venda: id do registro na nuvem e o nome.</summary>
+    public sealed record AutorizacaoPromo(string LogId, string Autorizador);
+
+    /// <summary>Promocao que pediu autorizacao e ainda nao teve resposta nesta venda.</summary>
+    public sealed record PromoPendente(string PromoId, string Nome, string Nivel, long DescontoCent);
+
+    /// <summary>
+    /// O que a VENDA ja decidiu sobre promocoes com 2FA. Um por comanda; zera com ela.
+    /// Uma promocao esta em no maximo um dos dois conjuntos.
+    /// </summary>
+    public sealed class ContextoAutorizacao
+    {
+        private readonly Dictionary<string, AutorizacaoPromo> _autorizadas = new();
+        private readonly HashSet<string> _excluidas = new();
+
+        public IReadOnlyDictionary<string, AutorizacaoPromo> Autorizadas => _autorizadas;
+        public IReadOnlySet<string> Excluidas => _excluidas;
+
+        public bool Autorizada(string promoId) => _autorizadas.ContainsKey(promoId);
+        public bool Excluida(string promoId) => _excluidas.Contains(promoId);
+        public bool Pendente(string promoId) => !Autorizada(promoId) && !Excluida(promoId);
+
+        public void Autorizar(string promoId, string logId, string autorizador)
+        {
+            _excluidas.Remove(promoId);
+            _autorizadas[promoId] = new AutorizacaoPromo(logId, autorizador);
+        }
+
+        public void Excluir(string promoId)
+        {
+            _autorizadas.Remove(promoId);
+            _excluidas.Add(promoId);
+        }
+
+        /// <summary>Nova venda (ou rascunho restaurado): tudo volta a ser perguntado.</summary>
+        public void Zerar() { _autorizadas.Clear(); _excluidas.Clear(); }
+    }
+
+    /// <summary>
+    /// Le config.autorizacao. Ausente/vazio = sem portao; 'gerente' e 'dono' como
+    /// estao; qualquer outro texto FECHA no nivel mais alto (dono) em vez de abrir.
+    /// </summary>
+    public static string? NivelAutorizacao(string? bruto) => (bruto ?? "").Trim().ToLowerInvariant() switch
+    {
+        "" => null,
+        NivelGerente => NivelGerente,
+        NivelDono => NivelDono,
+        _ => NivelDono,
+    };
 
     // ── carga ───────────────────────────────────────────────────────────────
     public static List<Promo> Carregar(SqliteConnection cx)
@@ -117,9 +190,10 @@ public static class Promocoes
                 if (itensCombo.Count > 0) combo = new ComboDef(itensCombo, precoCombo, modo, pct);
             }
             HashSet<string>? ganha = null; var regraGanha = GanhaRegra.Lista;
-            long? teto = null; var limite = 0; string? aviso = null;
+            long? teto = null; var limite = 0; string? aviso = null; string? autorizacao = null;
             if (temCfg)
             {
+                autorizacao = NivelAutorizacao(Str(cfgC, "autorizacao"));
                 var g = Strs(cfgC, "ganha");
                 if (g.Count > 0) ganha = g;
                 var gr = Str(cfgC, "ganha_regra");
@@ -157,7 +231,7 @@ public static class Promocoes
                     ? Ints(e, "dias_semana").Select(dd => dd == 0 ? 7 : dd).ToArray() : null,
                 janelas, regras,
                 Data(e, "inicio"), Data(e, "fim"),
-                leve, pague, combo, ganha, regraGanha, teto, limite, aviso);
+                leve, pague, combo, ganha, regraGanha, teto, limite, aviso, autorizacao);
         }
         catch { return null; }
     }
@@ -172,17 +246,39 @@ public static class Promocoes
     /// MELHOR PRO CLIENTE (menor preço). Devolve o preço base intacto quando
     /// nada se aplica. É o preço do CARD; a comanda usa AvaliarCarrinho.
     /// </summary>
-    public static (long Cent, string? Promo) PrecoEfetivoCent(
-        IEnumerable<Promo> promos, string produtoId, string categoria, long baseCent, DateTime agora)
+    /// <remarks>
+    /// <paramref name="contexto"/> e OBRIGATORIO: promocao com 2FA so entra se estiver
+    /// em Autorizadas; pendente (nem autorizada nem excluida) que BATERIA o preco
+    /// aplicado volta em Pendentes e o preco fica o de tabela/da promocao livre.
+    /// </remarks>
+    public static PrecoEfetivo PrecoEfetivoCent(
+        IEnumerable<Promo> promos, string produtoId, string categoria, long baseCent, DateTime agora,
+        ContextoAutorizacao contexto)
     {
+        var lista = promos as IReadOnlyCollection<Promo> ?? promos.ToList();
         var melhor = baseCent;
         string? nome = null;
-        foreach (var p in promos)
+        foreach (var p in lista)
         {
+            if (p.ExigeAutorizacao && !contexto.Autorizada(p.Id)) continue;
             var cand = PrecoComPromo(p, produtoId, categoria, baseCent, agora);
             if (cand is not null && cand < melhor) { melhor = cand.Value; nome = p.Nome; }
         }
-        return (melhor, nome);
+        var pendentes = new List<PromoPendente>();
+        foreach (var p in lista)
+        {
+            if (!p.ExigeAutorizacao || !contexto.Pendente(p.Id)) continue;
+            var cand = PrecoComPromo(p, produtoId, categoria, baseCent, agora);
+            if (cand is not null && cand < melhor)
+                pendentes.Add(new PromoPendente(p.Id, p.Nome, p.Autorizacao!, baseCent - cand.Value));
+        }
+        return new PrecoEfetivo(melhor, nome, pendentes);
+    }
+
+    /// <summary>Preco do card: os dois primeiros desconstroem como antes; Pendentes e o que a tela pergunta.</summary>
+    public sealed record PrecoEfetivo(long Cent, string? Promo, IReadOnlyList<PromoPendente> Pendentes)
+    {
+        public void Deconstruct(out long cent, out string? promo) { cent = Cent; promo = Promo; }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -211,6 +307,9 @@ public static class Promocoes
         IReadOnlyList<Candidata> Perdedoras, string? Dica)
     {
         public long TotalCent => DescontoCent.Sum();
+
+        /// <summary>Promocoes com 2FA que venceriam e ainda nao foram perguntadas nesta venda.</summary>
+        public IReadOnlyList<PromoPendente> Pendentes { get; init; } = Array.Empty<PromoPendente>();
     }
 
     /// <summary>Vigência de calendário e horário (dias ficam por tipo: ver DiaBate).</summary>
@@ -270,35 +369,40 @@ public static class Promocoes
     /// promocao de combo nem como brinde de compre-e-ganhe: essas sao ignoradas.
     /// Nulo = nenhum produto e combo (chamadas antigas).
     /// </param>
+    /// <param name="contexto">
+    /// OBRIGATORIO (05/09): o que a venda ja decidiu sobre promocoes com 2FA. Ver o
+    /// bloco "PROMOCAO COM 2FA" no topo. Autorizada concorre; excluida nunca; pendente
+    /// nao aplica e volta em Avaliacao.Pendentes quando venceria.
+    /// </param>
     public static Avaliacao AvaliarCarrinho(IEnumerable<Promo> promos, IReadOnlyList<ItemCarrinho> itens, DateTime agora,
-        ISet<string>? combos = null)
+        ContextoAutorizacao contexto, ISet<string>? combos = null)
     {
         var n = itens.Count;
         var vazio = new Avaliacao(null, null, null, new long[n], new int[n], Array.Empty<Candidata>(), null);
         if (n == 0) return vazio;
-        Promo? vencedora = null;
-        long[]? melhorD = null; int[]? melhorG = null; long melhorTotal = 0; string? melhorDica = null;
-        var candidatas = new List<(Promo p, long total)>();
-        foreach (var p in promos)
+        var lista = promos as IReadOnlyCollection<Promo> ?? promos.ToList();
+
+        // desconto por linha de UMA promocao (null = nao vigente/nao alcanca)
+        (long[] d, int[] g, string? dica)? Calcular(Promo p)
         {
-            if (!Vigente(p, agora)) continue;
+            if (!Vigente(p, agora)) return null;
             var d = new long[n]; var g = new int[n]; string? dica = null;
             switch (p.Tipo)
             {
                 case "leve_x_pague_y":
-                    if (!DiaBate(p, agora)) continue;
+                    if (!DiaBate(p, agora)) return null;
                     LeveXPagueY(p, itens, d, g);
                     break;
                 case "combo":
-                    if (!DiaBate(p, agora)) continue;
+                    if (!DiaBate(p, agora)) return null;
                     // produto-combo dentro de promocao de combo: fora desta onda
                     if (combos is not null && p.Combo is not null
-                        && p.Combo.Itens.Any(ci => combos.Contains(ci.ProdutoId))) continue;
+                        && p.Combo.Itens.Any(ci => combos.Contains(ci.ProdutoId))) return null;
                     Combo(p, itens, d);
                     break;
                 case "compre_ganhe":
-                    if (!DiaBate(p, agora)) continue;
-                    if (p.GanhaRegra == GanhaRegra.Desconhecida) continue;
+                    if (!DiaBate(p, agora)) return null;
+                    if (p.GanhaRegra == GanhaRegra.Desconhecida) return null;
                     dica = Parear(p, itens, d, g, combos);
                     break;
                 default:
@@ -316,6 +420,20 @@ public static class Promocoes
                 var bruto = new Dinheiro(itens[i].PrecoCent).VezesQtd(itens[i].QtdMilesimos).Centavos;
                 d[i] = Math.Clamp(d[i], 0, bruto);
             }
+            return (d, g, dica);
+        }
+
+        Promo? vencedora = null;
+        long[]? melhorD = null; int[]? melhorG = null; long melhorTotal = 0; string? melhorDica = null;
+        var candidatas = new List<(Promo p, long total)>();
+        bool Ganha(Promo p, long total) => vencedora is null || total > melhorTotal
+            || (total == melhorTotal && string.CompareOrdinal(p.Id, vencedora.Id) < 0);
+
+        // 1) as livres e as ja autorizadas concorrem
+        foreach (var p in lista)
+        {
+            if (p.ExigeAutorizacao && !contexto.Autorizada(p.Id)) continue;
+            if (Calcular(p) is not var (d, g, dica)) continue;
             var total = d.Sum();
             if (total <= 0)
             {
@@ -323,18 +441,29 @@ public static class Promocoes
                 continue;
             }
             candidatas.Add((p, total));
-            var ganha = vencedora is null || total > melhorTotal
-                || (total == melhorTotal && string.CompareOrdinal(p.Id, vencedora.Id) < 0);
-            if (ganha) { vencedora = p; melhorD = d; melhorG = g; melhorTotal = total; }
+            if (Ganha(p, total)) { vencedora = p; melhorD = d; melhorG = g; melhorTotal = total; }
         }
-        if (vencedora is null) return vazio with { Dica = melhorDica };
+
+        // 2) as que pedem 2FA e ainda nao foram respondidas: NAO aplicam; se venceriam,
+        //    entram em Pendentes para a tela perguntar (excluida nunca entra)
+        var pendentes = new List<PromoPendente>();
+        foreach (var p in lista)
+        {
+            if (!p.ExigeAutorizacao || !contexto.Pendente(p.Id)) continue;
+            if (Calcular(p) is not var (d, _, _)) continue;
+            var total = d.Sum();
+            if (total > 0 && Ganha(p, total))
+                pendentes.Add(new PromoPendente(p.Id, p.Nome, p.Autorizacao!, total));
+        }
+
+        if (vencedora is null) return vazio with { Dica = melhorDica, Pendentes = pendentes };
         var venc = vencedora;
         var perdedoras = candidatas
             .Where(c => c.p.Id != venc.Id)
             .OrderByDescending(c => c.total)
             .Select(c => new Candidata(c.p.Id, c.p.Nome, c.p.Tipo, c.total))
             .ToList();
-        return new Avaliacao(venc.Id, venc.Nome, venc.Tipo, melhorD!, melhorG!, perdedoras, null);
+        return new Avaliacao(venc.Id, venc.Nome, venc.Tipo, melhorD!, melhorG!, perdedoras, null) { Pendentes = pendentes };
     }
 
     private sealed record Unidade(int Linha, string ProdutoId, string Categoria, long PrecoCent);
@@ -491,6 +620,9 @@ public static class Promocoes
     /// para o card cinza explicar por que não vende agora.
     /// (Alvo por categoria/todos fica de fora da listagem: enumeraria o cardápio
     /// inteiro e a vitrine viraria ruído.)
+    /// Promoção com config.autorizacao (código do gerente/dono, ex. desconto
+    /// funcionário) NUNCA entra: a vitrine é do cliente e não conhece o contexto
+    /// da venda; liberada, o preço cai no card da categoria normal (PrecoEfetivoCent).
     /// </summary>
     public static Dictionary<string, ProdutoPromo> ProdutosEmPromocao(
         IEnumerable<Promo> promos, DateTime agora)
@@ -502,6 +634,7 @@ public static class Promocoes
 
         foreach (var p in promos)
         {
+            if (p.ExigeAutorizacao) continue;
             if (p.Inicio is not null && hoje < p.Inicio) continue;
             if (p.Fim is not null && hoje > p.Fim) continue;
 

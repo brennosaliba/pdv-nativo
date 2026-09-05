@@ -63,6 +63,16 @@ public partial class Venda : UserControl
     private string _categoriaAtual = "";
     private string _loja = "";
     private string? _lojaId;
+
+    // ── PROMOÇÃO COM 2FA (05/09/2026) ────────────────────────────────────────
+    // O que ESTA comanda já decidiu sobre promoções que exigem código (gerente ou
+    // dono). É o único contexto que o motor recebe (PrecoDe e AvaliarComanda), e
+    // ele zera junto com a comanda em EsvaziarComanda: nova venda pergunta de novo,
+    // rascunho restaurado também. A pergunta em si mora em Pdv.Nucleo/PortaoPromocao.
+    private readonly Nucleo.Promocoes.ContextoAutorizacao _autorizacao = new();
+    /// <summary>Id da comanda em andamento: amarra o registro da nuvem a ESTA comanda.</summary>
+    private string _comandaId = Guid.NewGuid().ToString("N");
+    private bool _perguntandoPromo;
     private bool _modoLista;
     private double _larguraGrade;
     private DispatcherTimer? _relogio;
@@ -280,6 +290,24 @@ public partial class Venda : UserControl
     {
         ToastChat.Visibility = Visibility.Collapsed;
         PediuChat?.Invoke();
+    }
+
+    // ── aviso leve (uma linha, sem modal) ────────────────────────────────────
+    private DispatcherTimer? _toastAvisoSome;
+
+    /// <summary>
+    /// Aviso de uma linha no mesmo lugar do toast do delivery e do chat: aparece
+    /// sem bloquear nada e some sozinho em 8 s. Para o que o operador precisa
+    /// saber mas não precisa confirmar (ex.: promoção não aplicada).
+    /// </summary>
+    private void AvisoLeve(string texto)
+    {
+        TxtToastAviso.Text = texto;
+        ToastAviso.Visibility = Visibility.Visible;
+        _toastAvisoSome?.Stop();
+        _toastAvisoSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+        _toastAvisoSome.Tick += (_, _) => { ToastAviso.Visibility = Visibility.Collapsed; _toastAvisoSome?.Stop(); };
+        _toastAvisoSome.Start();
     }
 
     private void AlternarTema(object sender, RoutedEventArgs e)
@@ -893,8 +921,10 @@ public partial class Venda : UserControl
     /// nada se aplica; entre promoções vale a melhor pro cliente.</summary>
     private (Dinheiro Preco, string? Promo) PrecoDe(Produto p)
     {
+        // Promoção com 2FA ainda não respondida NÃO entra no card: o preço é o de
+        // tabela (ou o da promoção livre) até o gerente/dono liberar na comanda.
         var (cent, nome) = Nucleo.Promocoes.PrecoEfetivoCent(
-            _promos, p.Id, p.Categoria, p.Preco.Centavos, DateTime.Now);
+            _promos, p.Id, p.Categoria, p.Preco.Centavos, DateTime.Now, _autorizacao);
         return (new Dinheiro(cent), nome);
     }
 
@@ -1500,7 +1530,7 @@ public partial class Venda : UserControl
         var carrinho = _comanda.Select(i => new Nucleo.Promocoes.ItemCarrinho(
             i.Produto.Id, i.Produto.Categoria, i.Produto.Preco.Centavos,
             Math.Max(0, i.Qtd.Milesimos - CoberturaDe(i) * 1000L))).ToList();
-        var av = Nucleo.Promocoes.AvaliarCarrinho(_promos, carrinho, agora, _combos.Keys.ToHashSet());
+        var av = Nucleo.Promocoes.AvaliarCarrinho(_promos, carrinho, agora, _autorizacao, _combos.Keys.ToHashSet());
         for (var k = 0; k < _comanda.Count; k++)
         {
             _comanda[k].DescontoCent = av.DescontoCent[k];
@@ -1512,8 +1542,20 @@ public partial class Venda : UserControl
 
     private void PintarComanda()
     {
+        // Comanda VAZIA por qualquer caminho ('−' até zero, lixeira, limpar, venda):
+        // o que ela decidiu sobre promoção com 2FA morre com ela e o id troca. Único
+        // ponto: toda mudança da comanda repinta. Sem isto, tirando os itens um a um
+        // a liberação do gerente valia para o próximo cliente.
+        if (PortaoPromocao.ComandaMudou(_autorizacao, _comanda.Count)) _comandaId = Guid.NewGuid().ToString("N");
         // motor de promoções ANTES de pintar: cada linha ganha o seu desconto
         _avaliacao = AvaliarComanda(DateTime.Now);
+        // Promoção com 2FA que venceria e ainda não foi perguntada NESTA comanda: a
+        // pergunta sai DEPOIS desta pintura (BeginInvoke), uma por promoção por venda.
+        if (_avaliacao.Pendentes.Count > 0 && !_perguntandoPromo)
+        {
+            _perguntandoPromo = true;
+            Dispatcher.BeginInvoke(new Action(() => _ = PerguntarPromocoesAsync()));
+        }
         ListaComanda.Items.Clear();
         foreach (var item in _comanda) ListaComanda.Items.Add(LinhaComanda(item));
 
@@ -1546,6 +1588,75 @@ public partial class Venda : UserControl
         BtnCortesia.IsEnabled = _comanda.Count > 0 && _cortesiaCodigo is null;
         BtnCortesia.Visibility = _cortesiaCodigo is null ? Visibility.Visible : Visibility.Collapsed;
         SalvarRascunho();
+    }
+
+    /// <summary>
+    /// A comanda acabou (vendida, limpa, descartada) ou vai ser trocada pela do
+    /// rascunho: esvazia E zera o que ela tinha decidido sobre promoções com 2FA.
+    /// É o ÚNICO lugar que esvazia `_comanda` (a suíte vigia por fonte): sem isto
+    /// uma promoção liberada pelo gerente numa venda valeria de graça na seguinte.
+    /// (Zera aqui e não só na pintura porque o rascunho enche a comanda de novo
+    /// antes de repintar.) Esvaziada item a item, quem zera é PintarComanda.
+    /// </summary>
+    private void EsvaziarComanda()
+    {
+        _comanda.Clear();
+        _autorizacao.Zerar();
+        _comandaId = Guid.NewGuid().ToString("N");
+    }
+
+    /// <summary>
+    /// Pergunta o código do autenticador (gerente ou dono) para cada promoção que o
+    /// motor devolveu em Pendentes. A decisão mora em PortaoPromocao (núcleo,
+    /// testado contra o FakeTotp); aqui só auditoria, aviso de uma linha e repintura.
+    /// Nunca lança: é chamado de um BeginInvoke sem ninguém para pegar exceção.
+    /// </summary>
+    private async Task PerguntarPromocoesAsync()
+    {
+        // só repinta se alguma promoção foi respondida: sem janela (tela ainda não
+        // ancorada) nada é perguntado, e repintar aqui viraria laço pelo BeginInvoke
+        var respondidas = 0;
+        try
+        {
+            var dono = Window.GetWindow(this);
+            var pendentes = _avaliacao?.Pendentes ?? Array.Empty<Nucleo.Promocoes.PromoPendente>();
+            if (dono is null || pendentes.Count == 0) return;
+            PortaoPromocao.Comanda comanda;
+            using (var cxa = Banco.Abrir())
+                comanda = new PortaoPromocao.Comanda(_comandaId, Autorizacao.NomeDoTerminal(cxa),
+                    cxa.ExecuteScalar<string?>("SELECT loja_nome FROM terminal LIMIT 1"), _operador.Nome);
+            IAutorizacaoRemota? remota;
+            try { remota = Servicos.Autorizador(); } catch { remota = null; }
+            var resultados = await PortaoPromocao.ResolverAsync(pendentes, _autorizacao, comanda, remota, new TelaAutorizacao(dono));
+            respondidas = resultados.Count;
+            var recusadas = new List<string>();
+            foreach (var r in resultados)
+            {
+                try
+                {
+                    using var cx = Banco.Abrir();
+                    Caixa.Auditar(cx, null, r.Autorizada ? "promo_autorizada" : "promo_nao_autorizada",
+                        _operador.Id, r.Desfecho.Autorizador, PortaoPromocao.LinhaAuditoria(r));
+                }
+                catch { /* auditoria não pode derrubar o caixa */ }
+                if (!r.Autorizada) recusadas.Add(Capitalizar(r.Promo.Nome));
+            }
+            // O operador acabou de fechar a janela do código: NÃO abre outra. O
+            // "não aplicada" é aviso leve de uma linha, que some sozinho.
+            if (recusadas.Count > 0) AvisoLeve(PortaoPromocao.AvisoNaoAplicada(recusadas));
+        }
+        catch { /* sem código não há desconto; a venda segue */ }
+        finally
+        {
+            _perguntandoPromo = false;
+            // reavalia com o que foi decidido: aplica a liberada, segue sem a recusada;
+            // se sobrou outra pendente que agora venceria, a pintura pergunta de novo
+            if (respondidas > 0)
+            {
+                PintarComanda();
+                PintarProdutos();
+            }
+        }
     }
 
     // ── RASCUNHO DA COMANDA (sobreviver à queda de energia) ──────────────────
@@ -1651,7 +1762,7 @@ public partial class Venda : UserControl
             return;
         }
 
-        _comanda.Clear();
+        EsvaziarComanda();
         foreach (var i in r.Itens)
             _comanda.Add(new ItemComanda
             {
@@ -1850,7 +1961,7 @@ public partial class Venda : UserControl
         if (!Dialogo.Confirmar(Window.GetWindow(this)!, "Limpar comanda",
                 _comanda.Count == 1 ? "Tirar o item da comanda?" : $"Tirar os {_comanda.Count} itens da comanda?",
                 "Limpar comanda", "Voltar", perigo: true)) return;
-        _comanda.Clear();
+        EsvaziarComanda();
         PintarComanda();
     }
 
@@ -1955,6 +2066,13 @@ public partial class Venda : UserControl
         // reavalia AGORA e, se o total mudou, mostra e não cobra o valor velho
         var antes = _avaliacao?.TotalCent ?? 0;
         var agora = AvaliarComanda(DateTime.Now);
+        // Promoção com 2FA que passou a valer agora (janela abriu) e ainda não foi
+        // perguntada: pergunta primeiro (PintarComanda dispara), cobra depois.
+        if (agora.Pendentes.Count > 0)
+        {
+            PintarComanda();
+            return;
+        }
         if (agora.TotalCent != antes || agora.PromoId != _avaliacao?.PromoId)
         {
             PintarComanda();
@@ -1981,6 +2099,8 @@ public partial class Venda : UserControl
             }
             i.Escolhas = Nucleo.Combos.Realocar(defCombo, i.Escolhas, catalogoLocal);
         }
+        // quem liberou a promoção desta venda (só existe para promoção com 2FA)
+        var autorizacaoPromo = agora.PromoId is not null && _autorizacao.Autorizadas.TryGetValue(agora.PromoId, out var ap) ? ap : null;
         var itens = new List<LinhaVenda>();
         foreach (var i in _comanda)
         {
@@ -1997,7 +2117,8 @@ public partial class Venda : UserControl
                 i.Produto.Ncm, i.Produto.Cest, i.Produto.Csosn, null, i.Produto.Origem,
                 desconto, desconto.Centavos > 0 ? agora.PromoId : null,
                 desconto.Centavos > 0 ? agora.PromoNome : null, i.UnidadesGratis * 1000L,
-                i.Escolhas is { Count: > 0 } ? i.Escolhas : null));
+                i.Escolhas is { Count: > 0 } ? i.Escolhas : null,
+                desconto.Centavos > 0 ? autorizacaoPromo : null));
         }
 
         // Cortesia cobrindo a comanda INTEIRA: não há venda a cobrar nem nota a
@@ -2045,7 +2166,7 @@ public partial class Venda : UserControl
                 // grava o rascunho. Na ordem inversa a comanda já vendida era regravada
                 // por um instante — e uma queda ali deixaria um rascunho órfão de venda
                 // PAGA, que o operador restauraria e cobraria de novo.
-                _comanda.Clear();
+                EsvaziarComanda();
                 RemoverCortesia(this, new RoutedEventArgs());
             }
         };
@@ -2093,7 +2214,7 @@ public partial class Venda : UserControl
         }
         Caixa.Auditar(Banco.Abrir(), null, "cortesia_entregue", _operador.Id, null,
             $"cupom={_cortesiaCodigo} (comanda inteira em cortesia)");
-        _comanda.Clear();                                   // esvazia antes de repintar (ver Finalizar)
+        EsvaziarComanda();                                   // esvazia antes de repintar (ver Finalizar)
         RemoverCortesia(this, new RoutedEventArgs());
         Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");
     }
@@ -3228,7 +3349,7 @@ public partial class Venda : UserControl
             return;
         // Descartar é descartar: o rascunho não pode voltar oferecendo esta comanda
         // no próximo login do turno, quando o cliente já foi embora.
-        _comanda.Clear();
+        EsvaziarComanda();
         PintarComanda();
         Deslogou?.Invoke();
     }

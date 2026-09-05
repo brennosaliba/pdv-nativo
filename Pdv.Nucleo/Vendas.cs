@@ -14,13 +14,18 @@ namespace Pdv.Nucleo;
 /// COMBO, por unidade da linha. Nulo em item simples. Nao vira linha fiscal nem
 /// linha de p_itens: vai em venda_item.escolhas_json, na chave `escolhas` do item
 /// e em p_escolhas da RPC composta. A nota continua com UM det por linha.
+///
+/// <paramref name="Autorizacao"/> (05/09/2026): quem liberou a promoção com 2FA
+/// desta linha (id do registro na nuvem e o nome do gerente/dono). Só existe junto
+/// de PromoId; vai na chave `autorizacao` do item (o servidor ignora por ora) e na
+/// auditoria local. Cupom de cortesia não passa por aqui.
 /// </summary>
 public sealed record LinhaVenda(
     string? ProdutoId, string? Codigo, string Descricao,
     Quantidade Qtd, Dinheiro Preco, Dinheiro Total,
     string Unidade, string? Ncm, string? Cest, string? Csosn, string? Cfop, int Origem,
     Dinheiro Desconto = default, string? PromoId = null, string? PromoNome = null, long GratisMilesimos = 0,
-    IReadOnlyList<Escolha>? Escolhas = null)
+    IReadOnlyList<Escolha>? Escolhas = null, Promocoes.AutorizacaoPromo? Autorizacao = null)
 {
     public Dinheiro Bruto => Preco.VezesQtd(Qtd.Milesimos);
 
@@ -183,11 +188,14 @@ public static class Vendas
         Caixa.Auditar(cx, tx, "venda_finalizada", operador.Id, null,
             $"venda={numero} total={total.Formatado()} formas={string.Join('+', pagamentos.Select(p => p.Forma))}"
             + (desconto.Centavos > 0 ? $" desconto={desconto.Formatado()} promo={promoNome}" : ""));
+        var autorizacaoPromo = itens.Select(i => i.Autorizacao).FirstOrDefault(a => a is not null);
         if (desconto.Centavos > 0)
-            Caixa.Auditar(cx, tx, "promo_aplicada", operador.Id, null,
+            Caixa.Auditar(cx, tx, "promo_aplicada", operador.Id,
+                autorizacaoPromo is null ? null : "totp:" + autorizacaoPromo.LogId[..Math.Min(8, autorizacaoPromo.LogId.Length)],
                 $"venda={numero} promo={promoId} ({promoNome}) desconto={desconto.Formatado()} " +
                 string.Join(" ", itens.Where(i => i.Desconto.Centavos > 0)
-                    .Select(i => $"[{i.Descricao}: -{i.Desconto.Formatado()}{(i.GratisMilesimos > 0 ? $" {i.GratisMilesimos / 1000} grátis" : "")}]")));
+                    .Select(i => $"[{i.Descricao}: -{i.Desconto.Formatado()}{(i.GratisMilesimos > 0 ? $" {i.GratisMilesimos / 1000} grátis" : "")}]"))
+                + (autorizacaoPromo is null ? "" : $" · liberada por {autorizacaoPromo.Autorizador} (registro {autorizacaoPromo.LogId[..Math.Min(8, autorizacaoPromo.LogId.Length)]})"));
 
         // VENDA DE TESTE NÃO ENTRA NA FILA. Não enfileirar é diferente de filtrar na
         // drenagem: o que está na fila sobe no primeiro reenvio em que o filtro falhar,
@@ -211,43 +219,7 @@ public static class Vendas
                 $"venda={numero} total={total.Formatado()} ficou SÓ no caixa (modo de homologação ligado)");
         else Caixa.Enfileirar(cx, tx, composta ? "venda_composta" : "venda", vendaId, clientKey, ComEscolhas(composta ? EscolhasAchatadas(itens) : null, new
         {
-            p_itens = itens.Select(i => i.TemEscolhas
-                ? (object)new
-                {
-                    pdv_product_id = i.ProdutoId,
-                    codigo = i.Codigo,
-                    descricao = i.Descricao,
-                    ncm = i.Ncm,
-                    csosn = i.Csosn,
-                    unidade = i.Unidade,
-                    qtd = i.Qtd.Milesimos / 1000m,
-                    valor_unitario = i.Preco.Reais,
-                    desconto = i.Desconto.Reais,
-                    promocao_id = i.PromoId,
-                    promocao_nome = i.PromoNome,
-                    // por UNIDADE da linha (o motor multiplica pela qtd do item)
-                    escolhas = i.Escolhas!.Select(e => new
-                    {
-                        produto_id = e.ProdutoId, plu = e.Plu, nome = e.Nome, qtd = e.Qtd,
-                        grupo_regra_id = e.GrupoId,
-                    }).ToArray(),
-                }
-                : new
-                {
-                    pdv_product_id = i.ProdutoId,
-                    codigo = i.Codigo,
-                    descricao = i.Descricao,
-                    ncm = i.Ncm,
-                    csosn = i.Csosn,
-                    unidade = i.Unidade,
-                    qtd = i.Qtd.Milesimos / 1000m,
-                    valor_unitario = i.Preco.Reais,
-                    // 03/09: desconto por item (reais) e a promoção que o deu. A RPC
-                    // pdv_registrar_venda lê `desconto` por item; quem não lê, ignora.
-                    desconto = i.Desconto.Reais,
-                    promocao_id = i.PromoId,
-                    promocao_nome = i.PromoNome,
-                }).ToArray(),
+            p_itens = itens.Select(ItemDaNuvem).ToArray(),
             // 04/09: `origem` diz se o cartão passou pela maquininha integrada ("tef") ou
             // numa avulsa ("pos"). A forma continua sendo a REAL (credito/debito/pix/
             // voucher): o servidor normaliza `metodo` e ignora o campo extra.
@@ -299,6 +271,42 @@ public static class Vendas
     /// sai byte a byte como sempre saiu: nem `p_escolhas: null`, porque o PostgREST
     /// casa a RPC pelos NOMES dos parametros e pdv_registrar_venda nao tem esse.
     /// </summary>
+    /// <summary>
+    /// UM item de p_itens, na ORDEM de sempre (os testes e a RPC casam pelos nomes).
+    /// Chaves que só existem quando há o que dizer: `escolhas` (combo) e `autorizacao`
+    /// (promoção com 2FA). Item comum sai byte a byte como saía.
+    /// </summary>
+    private static Dictionary<string, object?> ItemDaNuvem(LinhaVenda i)
+    {
+        var item = new Dictionary<string, object?>
+        {
+            ["pdv_product_id"] = i.ProdutoId,
+            ["codigo"] = i.Codigo,
+            ["descricao"] = i.Descricao,
+            ["ncm"] = i.Ncm,
+            ["csosn"] = i.Csosn,
+            ["unidade"] = i.Unidade,
+            ["qtd"] = i.Qtd.Milesimos / 1000m,
+            ["valor_unitario"] = i.Preco.Reais,
+            // 03/09: desconto por item (reais) e a promoção que o deu. A RPC
+            // pdv_registrar_venda lê `desconto` por item; quem não lê, ignora.
+            ["desconto"] = i.Desconto.Reais,
+            ["promocao_id"] = i.PromoId,
+            ["promocao_nome"] = i.PromoNome,
+        };
+        if (i.TemEscolhas)
+            // por UNIDADE da linha (o motor multiplica pela qtd do item)
+            item["escolhas"] = i.Escolhas!.Select(e => new
+            {
+                produto_id = e.ProdutoId, plu = e.Plu, nome = e.Nome, qtd = e.Qtd,
+                grupo_regra_id = e.GrupoId,
+            }).ToArray();
+        // 05/09: quem liberou a promoção com 2FA (o servidor ignora por ora)
+        if (i.Autorizacao is not null)
+            item["autorizacao"] = new { log_id = i.Autorizacao.LogId, autorizador = i.Autorizacao.Autorizador };
+        return item;
+    }
+
     internal static object ComEscolhas(object[]? escolhas, object corpo)
     {
         if (escolhas is null) return corpo;
