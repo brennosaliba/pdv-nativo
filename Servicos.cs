@@ -202,19 +202,30 @@ public static class Servicos
 
     /// <summary>
     /// TEF; null quando o caixa ainda não tem maquininha ligada.
-    /// `config['tef_provedor']`: `paygo` = PayGo Windows por troca de arquivos (local, offline);
-    /// qualquer outra coisa = Smart TEF pela nuvem (o caminho antigo).
+    /// `config['tef_provedor']` (regra em <see cref="SelecaoTef.Escolher"/>): `paygo` = PayGo Windows
+    /// por troca de arquivos; `controlpay` = WebService da PayGo; `pgweblib` = PayGo Windows pela
+    /// biblioteca PGWebLib (DLL); qualquer outra coisa = Smart TEF pela nuvem (o caminho antigo).
     /// </summary>
     public static IProvedorTef? Tef()
     {
+        // Troca adiada (RecarregarTef com comando em voo): a instância velha sai daqui e é
+        // descartada FORA do lock, como no caminho direto.
+        IDisposable? vencida = null;
+        try { return TefSobTrava(ref vencida); }
+        finally { Descartar(vencida); }
+    }
+
+    private static IProvedorTef? TefSobTrava(ref IDisposable? vencida)
+    {
         lock (Trava)
         {
-            if (_tefVencido && _tef is IProvedorTefOperavel { Ocupado: false }) { _tef = null; _tefVencido = false; }
+            if (_tefVencido && _tef is IProvedorTefOperavel { Ocupado: false }) { vencida = _tef as IDisposable; _tef = null; _tefVencido = false; }
             if (_tef is not null) return _tef;
             using var cx = Banco.Abrir();
-            if (Vendas.Config(cx, "tef_habilitado") != "1") return null;
+            var selecao = SelecaoTef.Escolher(Vendas.Config(cx, "tef_habilitado"), Vendas.Config(cx, "tef_provedor"));
+            if (selecao == ProvedorTef.Nenhum) return null;
 
-            if (Vendas.Config(cx, "tef_provedor") == "controlpay")
+            if (selecao == ProvedorTef.ControlPay)
             {
                 // ControlPay (WebService da PayGo): o PayGo Windows desta máquina é o terminal;
                 // chave de integração e senha técnica vivem no cofre DPAPI, nunca na tabela config.
@@ -266,7 +277,58 @@ public static class Servicos
                 return _tef;
             }
 
-            if (Vendas.Config(cx, "tef_provedor") == "paygo")
+            if (selecao == ProvedorTef.PGWebLib)
+            {
+                // PayGo Windows pela BIBLIOTECA (PGWebLib.dll, DllImport). A instância nativa só
+                // existe aqui: a bateria roda o mesmo provedor contra uma DLL de mentira.
+                // Reaproveita tef_paygo_empresa/rede/rede_pix (a loja tem uma rede só) e lê
+                // tef_pgweb_dir / tef_pgweb_porta_pinpad / tef_pgweb_capacidades.
+                var versao = typeof(Servicos).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+                string? Cfg(string chave) => Vendas.Config(cx, chave);
+                PGWebLibNativa.UsarPasta(ConfigPGWebLib.PastaDll(Cfg));   // tef_pgweb_dll: de onde carregar a PGWebLib.dll
+                var pg = new ProvedorPGWebLib(new PGWebLibNativa(), ConfigPGWebLib.Diretorio(Cfg), ConfigPGWebLib.Opcoes(Cfg, versao))
+                {
+                    Guardar = t => GuardarTef(t, "pgweblib"),
+                    CnpjDaRede = rede =>
+                    {
+                        using var c2 = Banco.Abrir();
+                        return Vendas.Config(c2, "tef_cnpj_rede_" + rede.Trim().ToLowerInvariant());
+                    },
+                    // Pendência que a biblioteca descreve no boot (PWINFO_PND*): confirma só o que
+                    // ESTE caixa já deu como pago; o resto é desfeito (REV_PWR_AUT). O REQNUM
+                    // mora em cod_controle, o mesmo lugar do 027 do PayGo por arquivos.
+                    ConhecidaConfirmada = reqNum =>
+                    {
+                        using var c3 = Banco.Abrir();
+                        return c3.ExecuteScalar<int>("""
+                            SELECT COUNT(*) FROM tef_transacao
+                             WHERE provedor = 'pgweblib' AND cod_controle = @C
+                               AND (situacao IN ('pago','cnf_sem_ack') OR payment_status = 'cnf_sem_ack')
+                            """, new { C = reqNum }) > 0;
+                    },
+                    // Comprovante ANTES do PW_iConfirmation: a impressão decide o CNF (spec).
+                    ImprimirComprovante = ImprimirComprovantePayGoAsync,
+                    // Menu de redes sem rede gravada, parcelas, senha do lojista: a biblioteca
+                    // pergunta e a tela responde com os diálogos da casa.
+                    Perguntar = PerguntarNaTelaAsync,
+                    Auditar = detalhe =>
+                    {
+                        try
+                        {
+                            using var c4 = Banco.Abrir();
+                            Caixa.Auditar(c4, null, "tef_pgweblib", null, null, detalhe);
+                        }
+                        catch { /* auditoria não derruba cobrança */ }
+                    },
+                };
+                // PW_iIdleProc no horário que a biblioteca pedir (PWINFO_IDLEPROCTIME); barato,
+                // só roda com nada em voo.
+                pg.IniciarIdle(60_000);
+                _tef = pg;
+                return _tef;
+            }
+
+            if (selecao == ProvedorTef.PayGo)
             {
                 var versao = typeof(Servicos).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
                 var caps = int.TryParse(Vendas.Config(cx, "tef_paygo_capacidades"), out var c)
@@ -352,6 +414,7 @@ public static class Servicos
     /// </summary>
     public static void RecarregarTef()
     {
+        IDisposable? antiga;
         lock (Trava)
         {
             // Comando em voo (ADM/ATV disparado pela própria Configuração, reenvio do boot):
@@ -359,9 +422,22 @@ public static class Servicos
             // apagaria o .001 que a outra espera. Marca como vencida e troca no próximo Tef()
             // assim que a atual desocupar.
             if (_tef is IProvedorTefOperavel { Ocupado: true }) { _tefVencido = true; return; }
+            antiga = _tef as IDisposable;
             _tef = null;
             _tefVencido = false;
         }
+        // A instância velha tem recursos vivos (timer do PW_iIdleProc na PGWebLib, HttpClient no
+        // ControlPay): sem Dispose, o idle da velha continuaria rodando por cima da nova.
+        // Fora do lock: descartar não precisa da trava e não pode segurar quem chama Tef().
+        Descartar(antiga);
+    }
+
+    /// <summary>Dispose que nunca derruba quem trocou o provedor (o velho já saiu do cache).</summary>
+    private static void Descartar(IDisposable? provedor)
+    {
+        if (provedor is null) return;
+        try { provedor.Dispose(); }
+        catch { /* provedor velho: o pior caso é o timer morrer com o processo */ }
     }
 
     /// <summary>Config mudou com o provedor ocupado: o próximo Tef() com a instância livre reconstrói.</summary>
@@ -369,6 +445,50 @@ public static class Servicos
 
     /// <summary>O provedor atual, se for o PayGo por arquivos.</summary>
     public static ClientePayGo? PayGo() => Tef() as ClientePayGo;
+
+    /// <summary>O provedor atual, se for o PayGo pela biblioteca (PGWebLib): Instalar/ADM da Configuração.</summary>
+    public static ProvedorPGWebLib? PGWebLib() => Tef() as ProvedorPGWebLib;
+
+    /// <summary>
+    /// Um dado que a PGWebLib pede no meio da operação (PWRET_MOREDATA) e a automação não
+    /// sabe: menu de redes sem rede gravada, parcelas, senha do lojista, dado livre. Vai para
+    /// os diálogos da casa na thread de UI; título, validação e valor devolvido são de
+    /// <see cref="RespostaDaTela"/> (puro, testado). Null = o operador cancelou (o provedor
+    /// cancela a captura). Roda dentro do provedor, fora da UI.
+    /// </summary>
+    private static Task<string?> PerguntarNaTelaAsync(PwGetData d, CancellationToken ct)
+        => NaUiAsync<string?>(() =>
+        {
+            if (ct.IsCancellationRequested) return null;
+            var dono = JanelaAtiva();
+            if (d.EhMenu)
+            {
+                var textos = RespostaDaTela.Textos(d).ToArray();
+                // Até 4 opções cabem lado a lado (o diálogo do POS); mais que isso vai para a
+                // lista rolável do menu da venda, uma opção por linha.
+                var idx = textos.Length <= 4
+                    ? Dialogo.Escolher(dono, RespostaDaTela.Titulo(d), RespostaDaTela.Rotulo(d), textos)
+                    : Venda.EscolherOpcao(dono, RespostaDaTela.Titulo(d), RespostaDaTela.Rotulo(d), textos);
+                return RespostaDaTela.Menu(d, idx);
+            }
+            while (true)
+            {
+                var texto = RespostaDaTela.Ocultar(d)
+                    ? PedirSenha.Mostrar(dono, RespostaDaTela.Titulo(d), RespostaDaTela.Rotulo(d))
+                    : PedirTexto.Mostrar(dono, RespostaDaTela.Titulo(d), RespostaDaTela.Rotulo(d), RespostaDaTela.Sugestao(d));
+                var (valor, erro) = RespostaDaTela.Digitado(d, texto);
+                if (erro is null) return valor;
+                // Errou: avisa e pergunta de novo. Nunca chuta (parcela adivinhada é cobrança errada).
+                Dialogo.Avisar(dono, RespostaDaTela.Titulo(d), erro, "erro");
+            }
+        });
+
+    /// <summary>A janela que está na frente (Configuração ou venda), para os diálogos do TEF nascerem em cima dela.</summary>
+    private static System.Windows.Window JanelaAtiva()
+    {
+        var app = System.Windows.Application.Current;
+        return app.Windows.OfType<System.Windows.Window>().FirstOrDefault(w => w.IsActive) ?? app.MainWindow;
+    }
 
     /// <summary>O provedor atual, se souber estornar/ADM/ativo (PayGo ou ControlPay) — é o que o botão TEF da venda e a Configuração usam.</summary>
     public static IProvedorTefOperavel? Operavel() => Tef() as IProvedorTefOperavel;
@@ -437,7 +557,7 @@ public static class Servicos
             cx.Execute("""
                 UPDATE tef_transacao SET situacao = 'estornada', payment_status = 'estornada',
                        motivo = COALESCE(motivo, @M), atualizado_em = @Em
-                 WHERE id = @Id AND provedor IN ('paygo','controlpay') AND situacao = 'pago'
+                 WHERE id = @Id AND provedor IN ('paygo','controlpay','pgweblib') AND situacao = 'pago'
                 """, new { Id = tefId, M = motivo, Em = DateTime.Now.ToString("o") });
         }
         catch { /* a auditoria do estorno já registrou; não derrubar a tela */ }
@@ -797,22 +917,30 @@ public static class Servicos
     /// <summary>
     /// Religamento do PayGo: transações aprovadas que ficaram sem CNF/NCN, e resposta órfã na
     /// pasta. Venda gravada (`venda_id`) → CNF; sem venda → NCN; CNF sem ack → reenvia.
-    /// Devolve quantas resolveu; 0 quando o provedor não é PayGo.
+    /// Devolve quantas resolveu; 0 quando o provedor não é PayGo. O PayGo pela biblioteca
+    /// (PGWebLib) segue a MESMA varredura: mesmas situações, mesmo two-phase, só muda o
+    /// provedor da linha e o prefixo do charge_id (pgweb-).
     /// </summary>
     public static async Task<int> ResolverPendenciasTefAsync()
     {
         if (Tef() is ClienteControlPay cpay) return await ReconciliarControlPayAsync(cpay);
+        if (Tef() is ProvedorPGWebLib pg) return await ResolverPendenciasDuasFasesAsync("pgweblib", "pgweb-%", pg.ResolverPendenciasAsync);
         if (Tef() is not ClientePayGo cli) return 0;
+        return await ResolverPendenciasDuasFasesAsync("paygo", "paygo-%", cli.ResolverPendenciasAsync);
+    }
 
+    private static async Task<int> ResolverPendenciasDuasFasesAsync(string provedor, string prefixoLike,
+        Func<IReadOnlyList<(TransacaoPayGo Tx, bool VendaConcluida)>, Task<int>> resolver)
+    {
         var pendentes = new List<(TransacaoPayGo, bool)>();
         using (var cx = Banco.Abrir())
         {
             var linhas = cx.Query("""
                 SELECT id, identificacao, tipo, valor_cent, parcelas, situacao, payment_status, venda_id, resposta_txt
                   FROM tef_transacao
-                 WHERE provedor = 'paygo'
+                 WHERE provedor = @Prov
                    AND (situacao IN ('aprovada','cnf_sem_ack','ncn_sem_ack') OR payment_status IN ('cnf_sem_ack','ncn_sem_ack'))
-                """).ToList();
+                """, new { Prov = provedor }).ToList();
             foreach (var l in linhas)
             {
                 var tipo = TipoTefExtensoes.Analisar((string?)l.tipo) ?? TipoTef.Credito;
@@ -826,7 +954,7 @@ public static class Servicos
                 pendentes.Add((tx, l.venda_id is string v && v.Length > 0));
             }
         }
-        var n = await cli.ResolverPendenciasAsync(pendentes);
+        var n = await resolver(pendentes);
 
         // Cobrança que morreu ANTES da resposta (roteiro P24/25): a linha ficou 'criando'/
         // 'aguardando' e nunca mais muda sozinha. No boot ninguém está cobrando: vira órfã
@@ -839,8 +967,8 @@ public static class Servicos
             cx.Execute("""
                 UPDATE tef_transacao
                    SET situacao = 'orfa', motivo = 'PDV reiniciou durante a cobrança; confira no PayGo', atualizado_em = @Em
-                 WHERE charge_id LIKE 'paygo-%' AND situacao IN ('criando','aguardando') AND criado_em < @Inicio
-                """, new { Em = DateTime.Now.ToString("o"), Inicio = inicio });
+                 WHERE charge_id LIKE @Prefixo AND situacao IN ('criando','aguardando') AND criado_em < @Inicio
+                """, new { Em = DateTime.Now.ToString("o"), Inicio = inicio, Prefixo = prefixoLike });
         }
         return n;
     }

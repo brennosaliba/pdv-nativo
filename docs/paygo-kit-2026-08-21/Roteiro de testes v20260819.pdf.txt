@@ -1,0 +1,762 @@
+Roteiro de testes para automações comerciais
+Versão: 20260819
+Introdução
+Este documento tem como objetivo definir uma sequência de testes a serem 
+realizados para assegurar o correto funcionamento do sistema de automação
+comercial integrado com a solução PayGo.
+Público
+Este documento destina-se a desenvolvedores responsáveis pela implementação 
+do TEF PayGo.
+Aviso
+As informações contidas neste documento estão sujeitas a alteração.
+Passo 01. Instalação
+Procedimentos
+Realize uma instalação com os dados enviados pela PayGo.
+Resultado esperado
+Instalação realizada com sucesso, recibo impresso.
+Se a instalação do PdC ou client já foi realizada, não é necessário realizar novamente.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● Para a integração via Web Service (ControlPay), além de realizar a instalação, faça o login. Resultado 
+esperado: Status 200 OK.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 02. Venda com valor máximo permitido pela automação
+Procedimentos
+Realizar uma venda com o valor máximo permitido pela automação.
+Ex. R$100.000,00.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 03. Venda à vista aprovada com pré-seleção de parâmetros
+Procedimentos
+Realizar uma venda de qualquer valor, pré-selecionado:
+● Autorizador: C6PAY;
+● Forma de pagamento: Cartão;
+● Tipo de cartão: Crédito;
+● Tipo de financiamento: A Vista.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 04. Teste para retorno de Venda Negada
+Procedimentos
+Realizar uma venda no valor de R$1000,01 no autorizador C6PAY.
+Resultado esperado
+Venda negada.
+Verificar
+● Transação não realizada para a automação comercial;
+● Mensagem de erro para a Automação NEGADA 01.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 05. Venda negada, rede desconhecida
+Procedimentos
+Realizar uma venda e no menu de seleção da rede, pressionar a tecla ‘Esc’ em uma solução Windows ou 
+‘Cancelar’ em uma solução Android.
+Resultado esperado
+Venda negada, rede não informada.
+Verificar
+● Transação não realizada para a automação comercial;
+● Mensagem de erro para a Automação: “OPERAÇÃO CANCELADA”.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 06. Venda aprovada, teste de tipo de cartão crédito
+Procedimentos
+Realizar uma venda de qualquer valor na modalidade crédito. Quando solicitado, inserir o cartão no PIN-
+Pad.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso, com cartão de crédito.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 07. Venda aprovada, teste de tipo de cartão débito
+Procedimentos
+Realizar uma venda de qualquer valor na modalidade débito. Quando solicitado, inserir o cartão no PIN-Pad.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso, com cartão de débito.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 08. Venda aprovada, teste de tipo de financiamento
+Procedimentos
+Realizar uma venda de crédito parcelada pelo estabelecimento em 99 parcelas.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso, modalidade ‘parcelada pela loja’, em 99 parcelas.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 09. Venda, teste de recibos diferenciados #1 (opcional)
+Procedimentos
+Realizar uma venda de qualquer valor utilizando C6PAY.
+Resultado esperado
+Venda aprovada e confirmada, vias impressas:
+● Reduzido para o portador do cartão;
+● Diferenciado para o lojista.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 10. Venda, teste de recibos diferenciados #2
+Procedimentos
+Realizar uma venda de qualquer valor utilizando C6PAY.
+Resultado esperado
+Venda aprovada e confirmada, vias impressas:
+● Diferenciado para o portador do cartão;
+● Diferenciado para o lojista.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 11. Venda por QRCode para PIX e Carteiras Digitais
+Procedimentos
+Realizar uma venda de qualquer valor, pré-selecionado:
+● Rede “PIX C6 BANK”;
+● Aguardando aprovação automática.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 12. Teste de comunicação bem-sucedido
+Procedimentos
+Realizar um teste de comunicação no menu administrativo.
+Resultado esperado
+Teste de comunicação bem-sucedido, mas sem recibo.
+Verificar
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android.
+Passo 13. Relatório sintético (Opcional)
+Procedimentos
+Realizar a emissão de um relatório sintético no menu administrativo.
+Resultado esperado
+Emissão de relatório bem-sucedido.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 14. Relatório detalhado (Opcional)
+Procedimentos
+Realizar a emissão de um relatório detalhado no menu administrativo.
+Resultado esperado
+Emissão de relatório bem-sucedido.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 15. Relatório resumido (Opcional)
+Procedimentos
+Realizar a emissão de um relatório resumido no menu administrativo.
+Resultado esperado
+Emissão de relatório bem-sucedido.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 16. Operação cancelada no menu administrativo
+Procedimentos
+Acessar o menu de seleção na função administrativa, pressionar a tecla ‘Esc’ em uma solução Windows ou 
+‘Cancelar’ em uma solução Android.
+Resultado esperado
+Operação mal sucedida, rede não informada.
+Verificar
+● Transação não realizada para a automação comercial;
+● Mensagem de erro para a automação: “OPERAÇÃO CANCELADA”.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android.
+Passo 17. Manutenção
+Procedimentos
+Realize uma manutenção no menu administrativo.
+Resultado esperado
+Manutenção realizada com sucesso, mas sem recibo.
+Verificar
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 18. Reinstalação/Instalação
+Procedimentos
+Realize uma instalação com os dados enviados pela PayGo.
+Resultado esperado
+Instalação realizada com sucesso, recibo impresso.
+Se a instalação do PdC ou client já foi realizada, não é necessário realizar novamente.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● Para a integração via Web Service (ControlPay), além de realizar a instalação, faça o login. Resultado 
+esperado: Status 200 OK.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 19. Venda bem-sucedida #1 (Opcional)
+Procedimentos
+Realizar uma venda de R$ 1,00, utilizar C6PAY.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● Esta venda será cancelada nos passos a seguir.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 20. Venda bem-sucedida #2 (Opcional)
+Procedimentos
+Realizar uma venda de R$ 2,00, utilizar C6PAY.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● Esta venda será cancelada nos passos a seguir.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 21. Venda bem-sucedida #3
+Procedimentos
+Realizar uma venda de R$ 12.345,67, utilizar C6PAY.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● Esta venda será cancelada nos passos a seguir.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 22. Cancelamento bem-sucedido #1 (Opcional)
+Procedimentos
+Realizar o cancelamento da venda realizada no PASSO 18.
+Resultado esperado
+Operação de cancelamento bem-sucedida, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 23. Cancelamento bem-sucedido #2
+Procedimentos
+Realizar o cancelamento da venda realizada no PASSO 19.
+Resultado esperado
+Operação de cancelamento bem-sucedida, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 24. Cancelamento bem-sucedido #3 (Opcional)
+Procedimentos
+Realizar o cancelamento da venda realizada no PASSO 17.
+Resultado esperado
+Operação de cancelamento bem-sucedida, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 25. Cancelamento bem sucedido #4 (Opcional)
+Procedimentos
+Realizar o cancelamento da transação realizada no PASSO 02 através do menu administrativo.
+Resultado esperado
+Operação de cancelamento bem-sucedida, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 26. Queda de energia durante uma venda
+Procedimentos
+Realizar uma venda. Desligar o checkout de maneira abrupta quando solicitada a inserção do cartão.
+Resultado esperado
+Venda não finalizada.
+Verificar
+● Transação não realizada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 27. Queda de energia durante uma operação administrativa
+Procedimentos
+Realizar o cancelamento da venda realizada no PASSO 06. Desligar o checkout de maneira abrupta quando  
+solicitada a inserção do cartão.
+Resultado esperado
+Venda não finalizada.
+Verificar
+● Transação não realizada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android.
+Passo 28. Solicitação de dado genérico digitado 1#
+Procedimentos
+Realizar uma venda no valor R$1001,00 no autorizador C6PAY.
+Resultado esperado
+Será solicitada a captura de um dado digitado na tag 0x2F.
+Verificar
+● Verificar se há a solicitação para o operador capturar um dado digitado.
+Observações
+● Caso a automação comece enviando essa tag, o teste dará erro: DemoErroTeste3;
+● O teste será continuado no passo seguinte, PASSO 27.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 29. Solicitação de dado genérico digitado 2#
+Procedimentos
+Digitar o seguinte valor para o dado digitado: ABC123.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 30. Solicitação de menu genérico 1#
+Procedimentos
+Realizar uma venda no valor R$1002,00 no autorizador C6PAY.
+Resultado esperado
+Será solicitada a captura de um menu que preenche a tag 0x2F.
+Verificar
+● Verificar se é retornado um menu com duas opções: “123456” e “ABCDEF”;
+● Verificar no menu se há o prompt “SELECIONAR:”.
+Observações
+● Caso a automação já comece enviando essa tag, o teste retornará erro: DemoErroTeste4;
+● O teste será continuado no passo seguinte, PASSO 29.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 31. Solicitação de menu genérico 2#
+Procedimentos
+Selecionar o item “ABCDEF”.
+Resultado esperado
+Será solicitada a captura de um menu que preenche a tag 0x2F.
+Verificar
+● Verificar se é retornado um menu com duas opções : “123456” e “ABCDEF”;
+● Verificar no menu se há o prompt “SELECIONAR:”.
+Observações
+● Caso a automação já comece enviando essa tag, o teste retornará erro: DemoErroTeste4.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 32. Venda com mensagem resultado no tamanho máximo
+Procedimentos
+Realizar uma venda de R$1003,00 no autorizador C6PAY.
+Resultado esperado
+Venda aprovada com a mensagem de tamanho máximo (80 caracteres).
+Verificar
+● Mensagem para o operador, ou parte da mensagem: “TRANSAÇÃO DE TESTE APROVADA. CÓDIGO  
+AUTORIZAÇAO 13456789 TRANSACAO NAO PRODUTIVA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 33. Transação pendente #1
+Procedimentos
+Realizar uma venda de R$1005,50 no autorizador C6PAY.
+Resultado esperado
+Venda aprovada.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● O teste será continuado no passo seguinte, PASSO 32.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL).
+Passo 34. Transação pendente #2
+Procedimentos
+Após enviar a confirmação, o autorizador C6PAY alterará a situação para pendente. Realizar uma  nova 
+venda no valor R$1005,51.
+Resultado esperado
+A transação será negada e irá retornar os dados da transação pendente.
+Verificar
+● A automação deve enviar uma confirmação com os dados recebidos;
+● Não pode ser impresso nenhum recibo ou comprovante;
+● Para a automação comercial, a transação não pode estar realizada com sucesso.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL).
+Passo 35. Transação pendente não encontrada #1
+Procedimentos
+Realizar uma venda de R$1005,60 no autorizador C6PAY.
+Resultado esperado
+Venda aprovada.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● O teste será continuado no passo seguinte, PASSO 34.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android.
+Passo 36. Transação pendente não encontrada #2
+Procedimentos
+Após enviar a confirmação, o autorizador C6PAY irá criar uma nova transação com alguns dados que a  
+automação não conhece. Realizar uma nova venda no valor R$1005,61.
+Resultado esperado
+A transação será negada e irá retornar os dados da transação pendente.
+Verificar
+● A automação deve enviar um desfazimento com os dados recebidos;
+● Não pode ser impresso nenhum recibo ou comprovante;
+● Para a automação comercial, a transação não pode estar realizada com sucesso.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android.
+Passo 37. Confirmação #1
+Procedimentos
+Realizar uma venda de R$1012,00 no autorizador C6PAY e realizar uma confirmação manual dessa venda.
+Resultado esperado
+Venda aprovada e confirmada.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL);
+● Android.
+Passo 38. Confirmação #2 (Opcional)
+Procedimentos
+Realizar uma venda de R$10,00 no autorizador REDE e realizar uma confirmação manual dessa venda.
+Resultado esperado
+Venda aprovada e confirmada.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL);
+● Android.
+Passo 39. Desfazimento manual #1
+Procedimentos
+Realizar uma venda de R$1011,00 no autorizador C6PAY e realizar um desfazimento manual dessa 
+transação.
+Resultado esperado
+Transação será considerada desfeita.
+Observações
+● Este teste se aplica a automações que tenham a opção de desfazer uma transação manualmente.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL);
+● Android.
+Passo 40. Desfazimento manual #2 (Opcional)
+Procedimentos
+Realizar uma venda de R$333,00 no autorizador REDE e realizar um desfazimento manual dessa transação.
+Resultado esperado
+Transação será considerada desfeita.
+Observações
+● Este teste se aplica a automações que tenham a opção de desfazer uma transação manualmente.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL);
+● Android.
+Passo 41. Desfazimento por falha na liberação da mercadoria #1
+Procedimentos
+Verificar se não possui a mercadoria no estoque ou alguma outra forma parecida. Realizar uma venda no 
+valor R$1013,00.
+Resultado esperado
+Venda aprovada.
+Observações
+● Teste aplica-se somente para automação de autoatendimento;
+● O teste será continuado no passo seguinte, PASSO 40.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL);
+● Android.
+Passo 42. Desfazimento por falha na liberação da mercadoria #2
+Procedimentos
+A automação deve enviar o desfazimento por falha na liberação da mercadoria.
+Resultado esperado
+Transação será considerada desfeita.
+Observações
+● Teste aplica-se somente para automação de autoatendimento;
+● Para a automação, a transação deverá ser considerada não realizada.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL);
+● Android.
+Passo 43. Cancelamento aprovado solicitando “Referência Local” #1
+Procedimentos
+Realizar uma venda de R$1017,00 no autorizador C6PAY.
+Resultado esperado
+Venda aprovada.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● O teste será continuado no passo seguinte, PASSO 42.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 44. Cancelamento aprovado solicitando “Referência Local” #2
+Procedimentos
+Realizar o cancelamento do passo anterior.
+Resultado esperado
+Cancelamento aprovado.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 45. Cancelamento aprovado solicitando “Referência Externa” #1
+Procedimentos
+Realizar uma venda de R$1018,00 no autorizador REDE.
+Resultado esperado
+Venda aprovada.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Observações
+● O teste será continuado no passo seguinte, PASSO 44.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 46. Cancelamento aprovado solicitando “Referência Externa” #2
+Procedimentos
+Realizar o cancelamento do passo anterior.
+Resultado esperado
+Cancelamento aprovado.
+Verificar
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Biblioteca Windows (DLL).
+Passo 47. Venda contactless aprovada
+Procedimentos
+Realizar uma venda de R$1020,00 no autorizador C6PAY. Quando solicitado, aproximar um cartão sem 
+contato.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Ao solicitar o cartão, deve exibir no PIN-Pad a mensagem “APROXIME, INSIRA OU PASSE O CARTÃO” 
+e para  o operador deve exibir: “AGUARDE OU DIGITE O NÚMERO DO CARTÃO” ou mensagens 
+similares;
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 48. Venda contactless aprovada sem senha
+Procedimentos
+Realizar uma venda de R$999,00 no autorizador C6PAY. Quando solicitado, aproximar um cartão sem 
+contato.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Verifique se não foi solicitado a senha;
+● Mensagem para o operador: “TRANSAÇÃO APROVADA”;
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 49. Consulta de terminais
+Procedimentos
+Realize uma consulta dos terminais disponíveis, utilizar a API para consulta.
+Resultado esperado
+Status 200 OK.
+Teste válido para as integrações do tipo:
+● Pagamento via Web Service (ControlPay).
+Passo 50. Consultar status de uma transação #1
+Procedimentos
+Realize uma consulta da transação realizada no PASSO 2.
+Resultado esperado
+Status 200 OK.
+Teste válido para as integrações do tipo:
+● Pagamento via Web Service (ControlPay).
+Passo 51. Consultar status de uma transação #2
+Procedimentos
+Realize uma consulta da transação realizada no PASSO 6.
+Resultado esperado
+Status 200 OK.
+Teste válido para as integrações do tipo:
+● Pagamento via Web Service (ControlPay).
+Passo 52. Cadastro de URL de Callback
+Procedimentos
+1. Realizar o cadastro de uma URL de callback para o callbackTipo 1 (URLRetorno), utilizando a API 
+Callback/Insert
+2. Consultar o cadastro da URL de callback utilizando a API Callback/GetRegistered
+Resultado esperado
+Cadastro da URL de callback realizado com sucesso.
+Verificar
+● callbackTipo.id retornado como 1
+● callbackTipo.nome retornado como UrlRetorno
+● urlCallback retornada conforme a URL informada no cadastro
+Observações
+● A requisição deve retornar Status 200
+● A URL e o tipo de callback retornados na resposta devem corresponder exatamente aos dados 
+informados no cadastro
+Teste válido para as integrações do tipo:
+● Pagamento via Web Service (ControlPay).
+Passo 53. Callback de venda
+Procedimentos
+Realize o callback da venda realizada no PASSO 6.
+Resultado esperado
+Status 200 OK.
+Teste válido para as integrações do tipo:
+● Pagamento via Web Service (ControlPay).
+Passo 54. Queda de energia após a aprovação
+Procedimentos
+Realizar uma venda. Ao receber o resultado da transação, antes de enviar a confirmação, desligar o 
+checkout de maneira abrupta. Reiniciar os sistemas envolvidos e desfazer a transação que nesse momento 
+estará pendente.
+Resultado esperado
+Transação não realizada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL).
+Passo 55. Operação cancelada durante venda PIX
+Procedimentos
+Realizar uma venda e na tela de exibição do QRCode , pressionar a tecla ‘Esc’ em uma solução Windows ou 
+‘Cancelar’ em uma solução Android.
+Resultado esperado
+Venda negada.
+Verificar
+● Transação não realizada para a automação comercial;
+● Mensagem  de erro para a Automação: “OPERAÇÃO  CANCELADA”.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL) ;
+● Android;
+● Pagamento  via Web Service  (ControlPay).
+Passo 56. Venda por QRCode para PIX e Carteiras Digitais
+Procedimentos
+Realizar uma venda no valor de R$500,00, no autorizador “PIX C6 BANK”, aguardando aprovação 
+automática.
+Resultado esperado
+Venda aprovada e confirmada, recibo impresso.
+Verificar
+● Recibo impresso corretamente;
+● Transação confirmada para a automação comercial.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 57. Cancelamento PIX
+Procedimentos
+Realizar o cancelamento da venda realizada no PASSO 53.
+Resultado esperado
+Cancelamento negado.
+Verificar
+● Transação não realizada para a automação comercial;
+● Mensagem de erro para a Automação “TRANSAÇÃO NEGADA PELO HOST”.
+Teste válido para as integrações do tipo:
+● Troca de arquivos TXT;
+● Biblioteca Windows (DLL);
+● Android;
+● Pagamento via Web Service (ControlPay).
+Passo 58. Venda, teste de impressão do comprovante gráfico
+Procedimentos
+Realizar uma venda de R$ 77,00, utilizar C6PAY.
+Resultado esperado
+Venda aprovada e confirmada, comprovante gráfico impresso.
+Verificar
+● Impressão do comprovante gráfico;
+● Transação confirmada para a automação comercial.
+Observações
+● Enviar foto do comprovante gráfico impresso.
+Teste válido para as integrações do tipo:
+● C6Pay Android.
+Atenção!
+Após a execução do roteiro de testes, anexe a planilha de testes preenchida + logs no chamado 
+aberto no Jira.
+Observações
+Após realizarenvio dos logs com os testes realizados, aguarde o prazo de até cinco dias úteis
+para que a análise do time sejarealizada.

@@ -1314,6 +1314,16 @@ TestesControlPay.Rodar((cond, nome) => Check("controlpay: " + nome, cond));
 // homologacao que ficou em producao, onde o Pix e ITAU). A lista e fechada por isso.
 Console.WriteLine("--- Credenciadoras do PayGo (lista fechada) ---");
 TestesRedesPayGo.Rodar((cond, nome) => Check("redes: " + nome, cond));
+// -- TEF PayGo pela PGWebLib (biblioteca), contra uma DLL de mentira ---------
+// Mesmo two-phase: Guardar antes de PW_iConfirmation, REV em toda desistencia
+// depois da aprovacao, pendencia (PWINFO_PND*) resolvida no boot sem perguntar
+// ao operador, lacos com teto, e PWINFO_CARDFULLPAN nunca lido.
+Console.WriteLine("--- TEF PayGo PGWebLib (biblioteca simulada) ---");
+TestesPGWebLib.Rodar((cond, nome) => Check("pgweblib: " + nome, cond));
+// -- e a LIGACAO dele na casa: selecao pela config, opcoes das chaves tef_pgweb_*,
+// callback de menu/dado respondido como a tela responde, filtros por provedor.
+Console.WriteLine("--- TEF PayGo PGWebLib na casa (config, callback, filtros) ---");
+TestesCasaPGWebLib.Rodar((cond, nome) => Check("pgweb-casa: " + nome, cond));
 
 // -- FILA: o que a nuvem RECUSA para sempre ----------------------------------
 // Dead-letter carimbava enviado_em: R$ 102.626,50 sumiram do contador com tudo verde.

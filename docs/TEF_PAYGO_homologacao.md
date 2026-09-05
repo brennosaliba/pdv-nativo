@@ -122,3 +122,58 @@ fechamento acusa divergência até alguém cancelar a venda.
 | R$ 1.017,00 (C6PAY) / 1.018,00 (REDE) | cancelamento ref. local / externa |
 | R$ 1.020,00 / 999,00 | contactless com / sem senha |
 | REDE | só valores inteiros (centavos = negada) |
+
+## Roteiro v20260819 (58 passos) e o caminho pela biblioteca (PGWebLib.dll)
+
+Fonte: `docs/paygo-kit-2026-08-21/Roteiro de testes v20260819.pdf` + `Planilha de testes v20260819.xlsx`
+(kit `20260821-Integracao-SetupPayGo_v5.1.50.24.zip`, baixado em 05/09/2026). O roteiro de agosto tem
+58 passos: entram **17 Manutenção** e **18 Reinstalação/Instalação**, e o bloco ControlPay ganha
+**52 Cadastro de URL de Callback**; tudo a partir do 17 antigo desloca (17 antigo = 19 novo, 47 antigo = 49 novo,
+51 antigo = 54 novo, 55 antigo = 58 novo). A tabela acima continua valendo para o TXT com a renumeração.
+
+Provedor da biblioteca: `Pdv.Nucleo/ProvedorPGWebLib.cs` sobre `IPGWebLib`; binding real em
+`PGWebLibNativa.cs` (assinaturas copiadas do exemplo oficial `PGPagamentos/pdvWindowsPayGoLibC_CSharp`);
+seleção `tef_provedor = pgweblib` (índice 4 na Configuração); chaves `tef_pgweb_dir` (pasta de trabalho do
+PW_iInit, padrão `C:\ProgramData\PdvNativo\pgweb`), `tef_pgweb_dll` (pasta da PGWebLib.dll do PayGo Windows,
+em branco o Windows procura), `tef_pgweb_porta_pinpad`, `tef_pgweb_capacidades` (AUTCAP, padrão 28 =
+valor fixo + vias diferenciadas + via reduzida). Rede pré-selecionada reaproveita `tef_paygo_rede` /
+`tef_paygo_rede_pix` (AUTHSYST) e `tef_paygo_empresa` (AUTDEV).
+
+Legenda: ✅ no provedor · 🔧 falta no PDV · 🟡 é do PayGo/pinpad · ⛔ não se aplica à DLL.
+
+| # (ago) | Obrig. | Passo | Como a DLL faz | PDV |
+|---|---|---|---|---|
+| 1, 18 | SIM | Instalação / reinstalação | `PWOPER_INSTALL` (`InstalarAsync`) ou pelo menu administrativo | ✅ |
+| 2 | SIM | Venda R$ 100.000,00 | `PWOPER_SALE` + `PWINFO_TOTAMNT = 10000000` | ✅ |
+| 3 | SIM | Venda pré-selecionada C6PAY cartão crédito à vista | `AUTHSYST` (rede da config) + `PAYMNTTYPE = 1` + `CARDTYPE = 1` + `FINTYPE = 1` | ✅ |
+| 4 | SIM | Negada R$ 1.000,01 | `PW_iExecTransac` diferente de `PWRET_OK`; mostrar `PWINFO_RESULTMSG`; nada gravado | ✅ |
+| 5 | SIM | Menu adquirente + Esc | sem `AUTHSYST` a DLL pede `PWDAT_MENU` (tela `Perguntar`); Esc devolve nulo, `PWRET_CANCEL` | ✅ |
+| 6, 7 | SIM | Crédito / débito | `CARDTYPE = 1` / `2` | ✅ |
+| 8 | SIM | Parcelado pela loja 99x | `FINTYPE = 3` + `INSTALLMENTS = 99`; ou omitir e a DLL pergunta (`PWDAT_TYPED`) | 🔧 tela de Pagamento manda parcelas = 1 |
+| 9, 10 | opc/SIM | Recibos diferenciados | AUTCAP bits 8 e 16; `RCPTCHOLDER` + `RCPTMERCH` (fallback `RCPTFULL`) | ✅ leitura · 🔧 impressão das vias |
+| 11, 56 | SIM | Pix QR Code ("PIX C6 BANK") | `PAYMNTTYPE = 8` + `AUTHSYST` da config Pix. Se a DLL pedir `PWDAT_DSPQRCODE` (QR na tela do caixa) o provedor ainda não desenha | 🔧 QR na tela · 🟡 se o pinpad mostra |
+| 12 a 16, 17 | SIM/opc | Menu administrativo: teste de comunicação, relatórios, Esc, manutenção | `PWOPER_ADMIN` (`AdministrativaAsync`); a DLL mostra o menu por `PWDAT_MENU`; Esc = `PWRET_CANCEL` | ✅ |
+| 19 a 21 | opc/SIM | Vendas R$ 1,00 / 2,00 / 12.345,67 | `PWOPER_SALE` | ✅ |
+| 22 a 25 | opc/SIM | Cancelamentos | `PWOPER_SALEVOID` (`CancelarAsync`) com `TRNORIGREQNUM` / `TRNORIGNSU` / `TRNORIGDATE` / `TRNORIGAMNT` da venda; o 25 pelo menu ADM | ✅ · 🔧 tela para escolher a venda |
+| 26, 27 | SIM | Queda de energia na venda / no ADM | ao religar `PW_iInit` + `PWINFO_PND*`; pendente desconhecida vira `PW_iConfirmation(PWCNF_REV_PWR_AUT)` (`ResolverPendenciasAsync`) | ✅ |
+| 28 a 31 | SIM | Dado genérico digitado / menu genérico (R$ 1.001,00 e 1.002,00) | `PWDAT_TYPED` e `PWDAT_MENU` respondidos pela tela (`RespostaDaTela`, `Perguntar`); é o motivo de existir a DLL: no TXT esses passos não são possíveis | ✅ |
+| 32 | SIM | Mensagem de 80 caracteres | `RESULTMSG` inteiro, sem truncar | ✅ |
+| 33 a 36 | SIM | Transação pendente conhecida / desconhecida | negada trazendo `PWINFO_PNDREQNUM`: conhecida e paga = `PWCNF_CNF_AUTO`, desconhecida = `PWCNF_REV_PWR_AUT`; nunca imprime | ✅ |
+| 37 a 40 | SIM/opc | Confirmação manual / desfazimento manual | aprovada com `CNFREQ = 1`: gravou = `PWCNF_CNF_AUTO`; operador desistiu = `PWCNF_REV_MANU_AUT` | ✅ |
+| 41, 42 | auto-atend. | Falha na liberação da mercadoria | | ⛔ não é autoatendimento |
+| 43 a 46 | SIM | Cancelamento por referência local / externa | `SALEVOID`; o que faltar a DLL pede por `PWDAT_TYPED` (`AUTLOCREF` / `AUTEXTREF` guardados da venda) | ✅ |
+| 47, 48 | SIM | Contactless com / sem senha | `PWDAT_PPGETCARD`, `PPENTRY`, `PPENCPIN`, `PPGOONCHIP`, `PPFINISHCHIP`, `PPCONF`, `PPDATAPOSCNF` (`PW_iPPPositiveConfirmation`), `PPREMCRD` no loop `PW_iPPEventLoop` | ✅ código · 🟡 pinpad |
+| 49 a 53 | ControlPay | terminais, status, callback | | ⛔ WebService |
+| 54 | SIM | Queda de energia após a aprovação, antes da confirmação | boot: pendência não paga = `PWCNF_REV_PWR_AUT`, sem venda | ✅ |
+| 55 | SIM | Esc na tela do QR | `PW_iPPAbort` → `PWRET_CANCEL` | ✅ |
+| 57 | SIM | Cancelamento do Pix (negado pelo host) | `SALEVOID` negado; mostrar `RESULTMSG` | ✅ |
+| 58 | C6Pay Android | comprovante gráfico | | ⛔ |
+
+### O que falta para rodar o roteiro inteiro pela DLL
+
+1. Impressão das vias na bobina (mesma pendência do TXT).
+2. Parcelas na tela de Pagamento (passo 8) e tela de cancelamento TEF para escolher a venda (22 a 25).
+3. `PWDAT_DSPCHECKOUT` (mensagem no caixa) e `PWDAT_DSPQRCODE` (QR do Pix no caixa): constantes já existem, o provedor ainda não trata.
+4. Ambiente: PayGo Windows 5.1.50.24 instalado na máquina de homologação (kit em `docs/paygo-kit-2026-08-21`),
+   PdC de sandbox + CNPJ + senha pedidos no Jira da PayGo (portal 16), `tef_pgweb_dll` apontando para a DLL de 64 bits.
+5. Logs: PGLogCollector (manual no kit) anexado ao chamado com a planilha v20260819 preenchida.

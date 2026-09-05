@@ -2453,7 +2453,7 @@ public partial class Venda : UserControl
     }
 
     /// <summary>Diálogo de opções (um botão por linha, rolável). Devolve o índice escolhido ou -1.</summary>
-    private static int EscolherOpcao(Window dono, string titulo, string pergunta, params string[] opcoes)
+    internal static int EscolherOpcao(Window dono, string titulo, string pergunta, params string[] opcoes)
     {
         var janela = new Window
         {
@@ -2529,7 +2529,7 @@ public partial class Venda : UserControl
                   JOIN venda_pagamento p ON p.venda_id = v.id AND p.tef_nsu IS NOT NULL
                   -- NSU (012) é contador curto e repete entre dias/redes: casar só no turno, pelo
                   -- mesmo valor e forma — senão o CNC pode sair para a transação ERRADA.
-                  JOIN tef_transacao t ON t.provedor IN ('paygo','controlpay') AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+                  JOIN tef_transacao t ON t.provedor IN ('paygo','controlpay','pgweblib') AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
                                       AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent AND t.tipo = p.forma
                  WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
                  ORDER BY v.finalizada_em DESC, t.criado_em DESC LIMIT 12
@@ -2737,7 +2737,7 @@ public partial class Venda : UserControl
         {
             var restantes = cx.ExecuteScalar<int>("""
                 SELECT COUNT(*) FROM venda_pagamento p
-                  JOIN tef_transacao t ON t.provedor IN ('paygo','controlpay') AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
+                  JOIN tef_transacao t ON t.provedor IN ('paygo','controlpay','pgweblib') AND t.situacao = 'pago' AND t.nsu = p.tef_nsu
                                       AND t.criado_em >= @Desde AND t.valor_cent = p.valor_cent AND t.tipo = p.forma
                  WHERE p.venda_id = @V AND t.id <> @TefId AND p.tef_nsu <> @Nsu
                 """, new { V = vendaId, TefId = (string)l.tef_id, Nsu = nsu, Desde = _sessao.AberturaEm.ToString("o") });
@@ -2783,7 +2783,7 @@ public partial class Venda : UserControl
         {
             txt = cx.ExecuteScalar<string?>("""
                 SELECT resposta_txt FROM tef_transacao
-                 WHERE provedor IN ('paygo','controlpay') AND situacao IN ('pago','estornado','cnf_sem_ack') AND resposta_txt IS NOT NULL
+                 WHERE provedor IN ('paygo','controlpay','pgweblib') AND situacao IN ('pago','estornado','cnf_sem_ack') AND resposta_txt IS NOT NULL
                  ORDER BY atualizado_em DESC LIMIT 1
                 """);
             impressora = Vendas.Config(cx, "impressora");

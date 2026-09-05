@@ -360,6 +360,18 @@ public static class TestesAssistente
         // exigir uma seria empurrar a loja para o erro que a lista fechada evita.
         checar(Bloq(Pronta() with { Tef = 2, PayGoPasta = @"C:\PAYGO", PayGoRedeCartao = "", PayGoRedePix = "" }) is null,
             "rede em branco não bloqueia: é assim que a PayGo escolhe o roteamento");
+
+        // PayGo pela biblioteca (PGWebLib): o diretório de trabalho tem padrão, então em
+        // branco NÃO bloqueia (o Servicos usa C:\ProgramData\PdvNativo\pgweb). A biblioteca
+        // é quem exige o PayGo Windows instalado e o ponto de captura ativado, e isso o
+        // botão "Instalar ponto de captura" resolve depois — não é campo do assistente.
+        checar(Bloq(Pronta() with { Tef = 4, PgwebDir = "" }) is null, "PayGo (biblioteca) sem diretório avança: o padrão vale");
+        checar(Bloq(Pronta() with { Tef = 4, PgwebDir = @"D:\pg", PayGoRedeCartao = "", PayGoRedePix = "" }) is null,
+            "PayGo (biblioteca) com diretório e sem rede também avança");
+        checar(Bloq(Pronta() with { Tef = 4, PgwebCapacidades = "abc" })?.Contains("apacidades") == true,
+            "capacidades (AUTCAP) que não é número bloqueia e a frase diz o campo");
+        checar(Bloq(Pronta() with { Tef = 4, PgwebCapacidades = "" }) is null && Bloq(Pronta() with { Tef = 4, PgwebCapacidades = "28" }) is null,
+            "capacidades em branco (padrão) ou número passa");
     }
 
     private static void PassoPareamento(Action<bool, string> checar)
@@ -457,6 +469,14 @@ public static class TestesAssistente
         checar(Chama(Pronta() with { Tef = 2, PayGoPasta = @"C:\PAYGO", PayGoRedePix = "PIX ITAU" }, "PIX ITAU")
                && Chama(Pronta() with { Tef = 2, PayGoPasta = @"C:\PAYGO" }, "a PayGo escolhe"),
             "a rede do PIX aparece, e em branco a revisão diz que quem escolhe é a PayGo");
+        checar(Chama(Pronta() with { Tef = 4, PgwebDir = @"D:\pg" }, "PayGo (biblioteca)") && Chama(Pronta() with { Tef = 4, PgwebDir = @"D:\pg" }, @"D:\pg"),
+            "PayGo (biblioteca) aparece na revisão com o diretório de trabalho");
+        checar(Chama(Pronta() with { Tef = 4, PgwebDir = "" }, @"C:\ProgramData\PdvNativo\pgweb"),
+            "diretório em branco: a revisão mostra o padrão que vai valer");
+        checar(Chama(Pronta() with { Tef = 4, PayGoRedePix = "PIX ITAU" }, "PIX ITAU") && Chama(Pronta() with { Tef = 4 }, "a PayGo escolhe"),
+            "as redes reaproveitadas do PayGo aparecem na revisão da biblioteca");
+        checar(AssistenteConfig.Resumo(Pronta() with { Tef = 4 }).Any(l => l.Titulo.Contains("Comprovante")),
+            "com a biblioteca as vias do cartão entram na revisão, como nas outras maquininhas de cabo");
 
         // O texto antigo do cartão dizia que "sem TEF" era "cartão registrado na mão",
         // o que está ERRADO: a forma cartão continua existindo no PDV; o que não existe

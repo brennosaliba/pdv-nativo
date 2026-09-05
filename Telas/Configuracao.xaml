@@ -297,7 +297,7 @@
                          "Venda no POS" e "ControlPay" são nomes de fornecedor e não dizem
                          nada sozinhos a quem instala o caixa. -->
                     <TextBlock Text="Escolha a maquininha deste caixa" Style="{StaticResource Rotulo}" Margin="0,0,0,2"/>
-                    <TextBlock Text="Na dúvida, é a primeira: a maquininha comum, que fica na mão e não tem cabo para o computador. As outras três só servem se o caixa mandar o valor para ela sozinho."
+                    <TextBlock Text="Na dúvida, é a primeira: a maquininha comum, que fica na mão e não tem cabo para o computador. As outras só servem se o caixa mandar o valor para ela sozinho."
                                FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"
                                Foreground="{DynamicResource TextoFraco}"/>
                     <UniformGrid Columns="2" Margin="0,0,-8,6">
@@ -333,6 +333,15 @@
                             <StackPanel>
                                 <TextBlock Text="ControlPay (pinpad no cabo)" FontWeight="Bold" FontSize="17"/>
                                 <TextBlock Text="Mesmo pinpad do PayGo, mas a cobrança passa pelo portal ControlPay."
+                                           FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
+                                           Foreground="{DynamicResource TextoFraco}"/>
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="OpTefPGWebLib" GroupName="tef" Style="{StaticResource BotaoOpcao}"
+                                     MinHeight="92" Checked="TefMudou">
+                            <StackPanel>
+                                <TextBlock Text="PayGo (biblioteca)" FontWeight="Bold" FontSize="17"/>
+                                <TextBlock Text="Mesmo PayGo Windows e mesmo pinpad no cabo, mas o caixa fala com ele pela biblioteca PGWebLib, sem pasta de troca."
                                            FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
                                            Foreground="{DynamicResource TextoFraco}"/>
                             </StackPanel>
@@ -433,6 +442,59 @@
                                   Content="Ambiente de TESTE (sandbox): nenhuma cobrança é de verdade"/>
                         <Button x:Name="BtnTestarCpay" Content="Testar conexão com a PayGo" Click="TestarControlPay"
                                 Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="BlocoPGWebLib" Visibility="Collapsed">
+                        <TextBlock Text="Precisa do PayGo Windows instalado nesta máquina e do ponto de captura ativado (CNPJ da loja e número do ponto). Se ainda não foi ativado, use o botão Instalar ponto de captura."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <TextBlock Text="Pasta de trabalho da biblioteca (em branco vale C:\ProgramData\PdvNativo\pgweb)" Style="{StaticResource Rotulo}"/>
+                        <TextBox x:Name="TxtPgwebDir" Margin="0,4,0,8" Tag="C:\ProgramData\PdvNativo\pgweb" TextChanged="CampoMudou"/>
+                        <TextBlock Text="Pasta da PGWebLib.dll (em branco o Windows procura sozinho)" Style="{StaticResource Rotulo}"/>
+                        <TextBox x:Name="TxtPgwebDll" Margin="0,4,0,8" Tag="em branco: o Windows procura" TextChanged="CampoMudou"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Razão social da automação" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtPgwebEmpresa" Margin="0,4,0,0" Tag="AMERICAN DAY"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Porta do pinpad" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtPgwebPorta" Margin="0,4,0,0" Tag="0 = automática" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Text="Capacidades (AUTCAP)" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtPgwebCapacidades" Margin="0,4,0,0" Tag="em branco: 28" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Rede do cartão" Style="{StaticResource Rotulo}"/>
+                                <ComboBox x:Name="CboPgwebRede" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Rede do PIX" Style="{StaticResource Rotulo}"/>
+                                <ComboBox x:Name="CboPgwebRedePix" Margin="0,4,0,0"/>
+                            </StackPanel>
+                        </Grid>
+                        <UniformGrid Columns="3" Margin="0,0,-8,4">
+                            <Button x:Name="BtnTestarPgweb" Content="Testar a maquininha" Click="TestarPGWebLib"
+                                    Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="15" Margin="0,0,8,0"/>
+                            <Button x:Name="BtnInstalarPgweb" Content="Instalar ponto de captura" Click="InstalarPGWebLib"
+                                    Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="15" Margin="0,0,8,0"/>
+                            <Button x:Name="BtnAdmPgweb" Content="ADM" Click="AdmPGWebLib"
+                                    Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="15" Margin="0,0,8,0"/>
+                        </UniformGrid>
                     </StackPanel>
 
                     <StackPanel x:Name="BlocoTefNuvem" Visibility="Collapsed">

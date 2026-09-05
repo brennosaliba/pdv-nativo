@@ -158,8 +158,7 @@ public partial class Configuracao : UserControl
 
         // TEF: também é preferência da MÁQUINA (qual maquininha/PayGo este caixa usa) —
         // carrega sempre e reabre preenchido.
-        TefModo = Vendas.Config(cx, "tef_habilitado") != "1" ? 0
-            : Vendas.Config(cx, "tef_provedor") switch { "paygo" => 2, "controlpay" => 3, _ => 1 };
+        TefModo = SelecaoTef.Modo(SelecaoTef.Escolher(Vendas.Config(cx, "tef_habilitado"), Vendas.Config(cx, "tef_provedor")));
         // Sandbox é escolha EXPLÍCITA: caixa novo (chave ausente) nasce em produção, que é
         // como a loja opera. Antes o combo vinha em sandbox por padrão, e um caixa salvo
         // sem reparar nisso cobraria em ambiente de teste — cobrança que não existe.
@@ -175,6 +174,13 @@ public partial class Configuracao : UserControl
         TxtPayGoPasta.Text = Vendas.Config(cx, "tef_paygo_pasta", "");
         TxtPayGoRegistro.Text = Vendas.Config(cx, "tef_paygo_registro", "");
         TxtPayGoEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
+        // PayGo pela biblioteca: chaves próprias + as reaproveitadas do PayGo por arquivos
+        // (empresa e redes são da LOJA, não do caminho até o PayGo).
+        TxtPgwebDir.Text = Vendas.Config(cx, "tef_pgweb_dir", "");
+        TxtPgwebDll.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveDll, "");
+        TxtPgwebPorta.Text = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
+        TxtPgwebCapacidades.Text = Vendas.Config(cx, "tef_pgweb_capacidades", "");
+        TxtPgwebEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
         ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
         ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "1") == "1";
         TxtTefSerial.Text = Vendas.Config(cx, "tef_serial_pos", "");
@@ -183,6 +189,8 @@ public partial class Configuracao : UserControl
         // recusada. O que está no banco continua aparecendo mesmo fora da lista.
         EncherRedes(CboPayGoRede, RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_paygo_rede")), Vendas.Config(cx, "tef_paygo_rede"));
         EncherRedes(CboPayGoRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_paygo_rede_pix")), Vendas.Config(cx, "tef_paygo_rede_pix"));
+        EncherRedes(CboPgwebRede, RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_paygo_rede")), Vendas.Config(cx, "tef_paygo_rede"));
+        EncherRedes(CboPgwebRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_paygo_rede_pix")), Vendas.Config(cx, "tef_paygo_rede_pix"));
         EncherRedes(CboCpayRede, RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_cpay_adquirente")), Vendas.Config(cx, "tef_cpay_adquirente"));
         EncherRedes(CboCpayRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_cpay_adquirente_pix")), Vendas.Config(cx, "tef_cpay_adquirente_pix"));
         PintarBlocosTef();
@@ -349,8 +357,12 @@ public partial class Configuracao : UserControl
         ComandaPapelMm = PapelComandaEscolhido(),
         Tef = TefModo,
         PayGoPasta = TxtPayGoPasta.Text,
-        PayGoRedeCartao = RedeEscolhida(CboPayGoRede),
-        PayGoRedePix = RedeEscolhida(CboPayGoRedePix),
+        // As redes são as mesmas chaves nos dois PayGo; quem vale é a caixa do modo escolhido.
+        PayGoRedeCartao = RedeEscolhida(TefModo == 4 ? CboPgwebRede : CboPayGoRede),
+        PayGoRedePix = RedeEscolhida(TefModo == 4 ? CboPgwebRedePix : CboPayGoRedePix),
+        PgwebDir = TxtPgwebDir.Text,
+        PgwebDll = TxtPgwebDll.Text,
+        PgwebCapacidades = TxtPgwebCapacidades.Text,
         CpayChave = PwdCpayChave.Password,
         CpayPessoa = TxtCpayPessoa.Text,
         CpayTerminal = TxtCpayTerminal.Text,
@@ -1378,6 +1390,7 @@ public partial class Configuracao : UserControl
         // As redes também: o Testar grava o que está na tela, e sair sem salvar tem que
         // devolver a rede que estava valendo — rede trocada é cobrança recusada.
         "tef_cpay_adquirente", "tef_cpay_adquirente_pix",
+        "tef_pgweb_dir", "tef_pgweb_porta_pinpad", "tef_pgweb_capacidades", ConfigPGWebLib.ChaveDll,
     };
     private readonly Dictionary<string, string?> _tefOriginal = new();
     private bool _tefGravadoPeloTeste;   // Testar/ADM gravaram sem Salvar
@@ -1405,6 +1418,9 @@ public partial class Configuracao : UserControl
     {
         BtnTestarPayGo.IsEnabled = !ocupado;
         BtnTestarCpay.IsEnabled = !ocupado;
+        BtnTestarPgweb.IsEnabled = !ocupado;
+        BtnInstalarPgweb.IsEnabled = !ocupado;
+        BtnAdmPgweb.IsEnabled = !ocupado;
         BtnSalvar.IsEnabled = !ocupado;
         BtnVoltar.IsEnabled = !ocupado && _passo != PassoConfig.Loja;
         BtnSair.IsEnabled = !ocupado;
@@ -1433,7 +1449,7 @@ public partial class Configuracao : UserControl
     {
         var modo = TefModo;
         Vendas.GravarConfig(cx, "tef_habilitado", modo <= 0 ? "0" : "1");
-        Vendas.GravarConfig(cx, "tef_provedor", modo switch { 2 => "paygo", 3 => "controlpay", _ => "nuvem" });
+        Vendas.GravarConfig(cx, "tef_provedor", SelecaoTef.Codigo(SelecaoTef.DeModo(modo)));
         void Chave(string chave, string valor)
         {
             valor = valor.Trim();
@@ -1461,9 +1477,16 @@ public partial class Configuracao : UserControl
         }
         Chave("tef_paygo_pasta", TxtPayGoPasta.Text);
         Chave("tef_paygo_registro", TxtPayGoRegistro.Text);
-        Chave("tef_paygo_empresa", TxtPayGoEmpresa.Text);
-        Chave("tef_paygo_rede", RedeEscolhida(CboPayGoRede));
-        Chave("tef_paygo_rede_pix", RedeEscolhida(CboPayGoRedePix));
+        // Empresa e redes são chaves compartilhadas pelos dois PayGo (arquivos e biblioteca):
+        // grava a caixa do modo escolhido, para o outro bloco (escondido) não sobrescrever.
+        var pgweb = modo == 4;
+        Chave("tef_paygo_empresa", pgweb ? TxtPgwebEmpresa.Text : TxtPayGoEmpresa.Text);
+        Chave("tef_paygo_rede", RedeEscolhida(pgweb ? CboPgwebRede : CboPayGoRede));
+        Chave("tef_paygo_rede_pix", RedeEscolhida(pgweb ? CboPgwebRedePix : CboPayGoRedePix));
+        Chave("tef_pgweb_dir", TxtPgwebDir.Text);
+        Chave(ConfigPGWebLib.ChaveDll, TxtPgwebDll.Text);   // em branco: o Windows procura a PGWebLib.dll sozinho
+        Chave("tef_pgweb_porta_pinpad", TxtPgwebPorta.Text);
+        Chave("tef_pgweb_capacidades", TxtPgwebCapacidades.Text);
         // `tef_paygo_imprimir_vias` NÃO é gravada aqui: quem manda nela agora são as duas
         // políticas de via do passo Impressora (Impressoes.Gravar a mantém em sincronia).
         // Ela continua em ChavesTef porque o Sair sem salvar tem que devolvê-la.
@@ -1475,16 +1498,18 @@ public partial class Configuracao : UserControl
 
     private void TefMudou(object sender, RoutedEventArgs e) { PintarBlocosTef(); Revalidar(); }
 
-    private RadioButton[] OpcoesTef => new[] { OpTefNenhum, OpTefNuvem, OpTefPayGo, OpTefControlPay };
+    private RadioButton[] OpcoesTef => new[] { OpTefNenhum, OpTefNuvem, OpTefPayGo, OpTefControlPay, OpTefPGWebLib };
 
     /// <summary>
     /// Qual TEF este caixa usa, no mesmo código que a config já gravava
-    /// (0 sem maquininha · 1 POS · 2 PayGo · 3 ControlPay). Virou cartão em vez de
-    /// dropdown a pedido do dono: no balcão, ver as opções vale mais que escondê-las.
+    /// (0 sem maquininha · 1 POS · 2 PayGo · 3 ControlPay · 4 PayGo biblioteca; ver
+    /// SelecaoTef.Modo). Virou cartão em vez de dropdown a pedido do dono: no balcão, ver
+    /// as opções vale mais que escondê-las.
     /// </summary>
     private int TefModo
     {
-        get => OpTefControlPay?.IsChecked == true ? 3
+        get => OpTefPGWebLib?.IsChecked == true ? 4
+             : OpTefControlPay?.IsChecked == true ? 3
              : OpTefPayGo?.IsChecked == true ? 2
              : OpTefNuvem?.IsChecked == true ? 1 : 0;
         set
@@ -1493,19 +1518,21 @@ public partial class Configuracao : UserControl
             OpTefNuvem.IsChecked = value == 1;
             OpTefPayGo.IsChecked = value == 2;
             OpTefControlPay.IsChecked = value == 3;
+            OpTefPGWebLib.IsChecked = value == 4;
         }
     }
 
     /// <summary>Revelação progressiva do bloco do provedor. Guard de null: os cartões disparam no InitializeComponent.</summary>
     private void PintarBlocosTef()
     {
-        if (BlocoPayGo is null || BlocoTefNuvem is null || BlocoControlPay is null
-            || BlocoTefOpcoes is null || OpTefControlPay is null) return;
+        if (BlocoPayGo is null || BlocoTefNuvem is null || BlocoControlPay is null || BlocoPGWebLib is null
+            || BlocoTefOpcoes is null || OpTefControlPay is null || OpTefPGWebLib is null) return;
         var modo = TefModo;
         BlocoPayGo.Visibility = Se(modo == 2);
         BlocoControlPay.Visibility = Se(modo == 3);
+        BlocoPGWebLib.Visibility = Se(modo == 4);
         BlocoTefNuvem.Visibility = Se(modo == 1);
-        BlocoTefOpcoes.Visibility = Se(modo is 2 or 3);
+        BlocoTefOpcoes.Visibility = Se(modo is 2 or 3 or 4);
     }
 
     /// <summary>
@@ -1621,6 +1648,61 @@ public partial class Configuracao : UserControl
                 ok ? "Ok" : "Erro");
         }
         catch (Exception ex) { StatusTef("✗ Não consegui testar o PayGo. Confira se o PayGo Windows está aberto e tente de novo. Detalhe: " + ex.Message, "Erro"); }
+        finally { TravarTef(false); }
+    }
+
+    private async void TestarPGWebLib(object sender, RoutedEventArgs e) => await OperarPGWebLibAsync("testar");
+    private async void InstalarPGWebLib(object sender, RoutedEventArgs e) => await OperarPGWebLibAsync("instalar");
+    private async void AdmPGWebLib(object sender, RoutedEventArgs e) => await OperarPGWebLibAsync("adm");
+
+    /// <summary>
+    /// Testar (PW_iInit), Instalar ponto de captura (PWOPER_INSTALL) e ADM (PWOPER_ADMIN) do
+    /// PayGo pela biblioteca, com o que está NA TELA (grava as chaves antes, como o Testar
+    /// do PayGo por arquivos; sair sem salvar restaura). Os três passam pelo mesmo laço do
+    /// provedor: o que a biblioteca perguntar (CNPJ, ponto de captura, menu) chega pelos
+    /// diálogos da casa, via Servicos.PerguntarNaTelaAsync.
+    /// </summary>
+    private async Task OperarPGWebLibAsync(string oQue)
+    {
+        TravarTef(true);
+        StatusTef(oQue switch
+        {
+            "instalar" => "Instalando o ponto de captura no PayGo. Responda o que a tela pedir.",
+            "adm" => "Abrindo o menu administrativo do PayGo.",
+            _ => "Chamando a biblioteca do PayGo.",
+        }, null);
+        try
+        {
+            if (TefModo != 4) { StatusTef("Escolha \"PayGo (biblioteca)\" aqui em cima para usar este botão.", "Erro"); return; }
+            using (var cx = Banco.Abrir()) GravarTef(cx);
+            _tefGravadoPeloTeste = true;
+            if (Servicos.PGWebLib() is not { } pg) { StatusTef("A biblioteca não está ligada nesta tela. Escolha o PayGo (biblioteca) aqui em cima e tente de novo.", "Erro"); return; }
+            switch (oQue)
+            {
+                case "testar":
+                    var ok = await pg.AtivoAsync(CancellationToken.None);
+                    StatusTef(ok
+                        ? $"✓ A biblioteca do PayGo respondeu (pasta de trabalho {pg.PastaTrabalho}). Salve para manter."
+                        : $"✗ {ProvedorPGWebLib.MsgTefNaoResponde}. Confira se o PayGo Windows está instalado nesta máquina.",
+                        ok ? "Ok" : "Erro");
+                    break;
+                case "instalar":
+                    var di = await pg.InstalarAsync(CancellationToken.None);
+                    StatusTef(di.Pago
+                        ? "✓ Ponto de captura instalado. Toque em Testar a maquininha e depois em Salvar."
+                        : "✗ Instalação não concluída: " + (di.Motivo ?? "sem detalhe"),
+                        di.Pago ? "Ok" : "Erro");
+                    break;
+                default:
+                    var da = await pg.AdministrativaAsync(CancellationToken.None);
+                    StatusTef(da.Pago
+                        ? "✓ Operação administrativa concluída." + (da.Motivo is { Length: > 0 } m ? " " + m : "")
+                        : "✗ Operação administrativa não concluída: " + (da.Motivo ?? "sem detalhe"),
+                        da.Pago ? "Ok" : "Erro");
+                    break;
+            }
+        }
+        catch (Exception ex) { StatusTef("✗ Não consegui falar com a biblioteca do PayGo. Detalhe: " + ex.Message, "Erro"); }
         finally { TravarTef(false); }
     }
 
@@ -1755,9 +1837,14 @@ public sealed record DadosAssistente
     /// <summary>Bobina da comanda. Só vale com <see cref="ComandaSeparada"/> ligada.</summary>
     public double ComandaPapelMm { get; init; } = 80;
 
-    // 4 · Maquininha (0 sem · 1 POS · 2 PayGo · 3 ControlPay)
+    // 4 · Maquininha (0 sem · 1 POS · 2 PayGo · 3 ControlPay · 4 PayGo biblioteca)
     public int Tef { get; init; }
     public string PayGoPasta { get; init; } = "";
+    /// <summary>PayGo pela biblioteca: pasta de trabalho (em branco vale ConfigPGWebLib.DirPadrao) e AUTCAP (em branco vale o padrão).</summary>
+    public string PgwebDir { get; init; } = "";
+    public string PgwebCapacidades { get; init; } = "";
+    /// <summary>Pasta da PGWebLib.dll (tef_pgweb_dll). Em branco o Windows procura (pasta do exe e PATH).</summary>
+    public string PgwebDll { get; init; } = "";
     public string PayGoRedeCartao { get; init; } = "";
     public string PayGoRedePix { get; init; } = "";
     public string CpayChave { get; init; } = "";
@@ -2072,6 +2159,10 @@ public static class AssistenteConfig
             "Falta o ID da pessoa do ControlPay: ele fica no portal, junto do seu login.",
         3 when d.CpayTerminal.Trim().Length == 0 =>
             "Falta o ID do terminal. O botão \"Testar conexão com a PayGo\" lista os desta conta.",
+        // Biblioteca: a pasta tem padrão e o PayGo instalado/ativado quem confere é o botão
+        // Testar. Só o AUTCAP pode vir torto (é número de bits, ninguém digita de cabeça).
+        4 when d.PgwebCapacidades.Trim().Length > 0 && !int.TryParse(d.PgwebCapacidades.Trim(), out _) =>
+            "Capacidades (AUTCAP) tem que ser um número, ex.: 28. Em branco vale o padrão.",
         _ => null,
     };
 
@@ -2148,7 +2239,7 @@ public static class AssistenteConfig
         // As vias do cartão só entram na revisão quando a maquininha é de cabo: na avulsa
         // o terminal imprime sozinho e não existe via nenhuma para este caixa decidir.
         // Linha sobre o que não acontece é linha que ensina errado.
-        if (d.Tef is 2 or 3)
+        if (d.Tef is 2 or 3 or 4)
             linhas.Insert(linhas.Count - 1, new LinhaResumo("Comprovante do cartão", ResumoVias(d),
                 d.PoliticaViaCliente != PoliticaImpressao.Automatico
                 || d.PoliticaViaEstabelecimento != PoliticaImpressao.Automatico));
@@ -2210,6 +2301,9 @@ public static class AssistenteConfig
             3 => $"ControlPay (pinpad no cabo) · terminal {d.CpayTerminal.Trim()} · "
                  + Rede(d.CpayRedeCartao, "cartão") + " · " + Rede(d.CpayRedePix, "PIX")
                  + (d.CpaySandbox ? " · AMBIENTE DE TESTE (sandbox): nenhuma cobrança é de verdade" : ""),
+            4 => $"PayGo (biblioteca) · pasta de trabalho {(d.PgwebDir.Trim().Length == 0 ? ConfigPGWebLib.DirPadrao : d.PgwebDir.Trim())} · "
+                 + (d.PgwebDll.Trim().Length > 0 ? $"DLL em {d.PgwebDll.Trim()} · " : "")
+                 + Rede(d.PayGoRedeCartao, "cartão") + " · " + Rede(d.PayGoRedePix, "PIX"),
             _ => "Maquininha avulsa: o cliente passa o cartão na maquininha da mão. O caixa "
                  + "registra que foi cartão e fecha a venda, mas não cobra nada por aqui.",
         };
