@@ -232,9 +232,11 @@ public static class TestesPoliticaImpressao
     // ── as duas vias do cartão, separadas de verdade ────────────────────────
     private static void ViasDoCartao(Action<bool, string> checar)
     {
-        static RespostaPayGo Resposta(int vias, bool cliente = true, bool estabelecimento = true, bool unica = false)
+        static RespostaPayGo Resposta(int vias, bool cliente = true, bool estabelecimento = true, bool unica = false,
+                                      bool reduzido = false)
         {
             var l = new List<string> { "000-000 = \"CRT\"", "009-000 = \"0\"", $"737-000 = \"{vias}\"" };
+            if (reduzido) { l.Add("710-000 = \"1\""); l.Add("711-001 = \"CUPOM REDUZIDO\""); }
             if (cliente) { l.Add("712-000 = \"1\""); l.Add("713-001 = \"VIA CLIENTE\""); }
             if (estabelecimento) { l.Add("714-000 = \"1\""); l.Add("715-001 = \"VIA ESTABELECIMENTO\""); }
             if (unica) { l.Add("028-000 = \"1\""); l.Add("029-001 = \"VIA UNICA\""); }
@@ -294,6 +296,37 @@ public static class TestesPoliticaImpressao
             "a via única obedece à política da via do CLIENTE (é o papel que o cliente leva)");
         checar(Servicos.ViasAutomaticas(unica, PoliticaImpressao.Nao, PoliticaImpressao.Automatico).Count == 0,
             "e com a via do cliente em 'não imprimir', a via única também não sai");
+
+        // ⭐ PASSO 09 DO ROTEIRO (venda no C6PAY): a rede manda o cupom REDUZIDO do portador
+        // (711) junto com o DIFERENCIADO do lojista (715), e não manda a via diferenciada do
+        // cliente (713). O reduzido é o papel do cliente, não um bloco sem dono: antes disto
+        // ele só era olhado quando a lista tinha ficado vazia, então a via do lojista o
+        // engolia e saía uma folha só, com o cliente de mão vazia no balcão.
+        var c6 = Resposta(3, cliente: false, estabelecimento: true, reduzido: true);
+        var rotC6 = Servicos.ViasRotuladas(c6);
+        checar(rotC6.Count == 2
+               && rotC6[0].Qual == Servicos.ViaTef.Cliente && rotC6[0].Linhas[0].Contains("CUPOM REDUZIDO")
+               && rotC6[1].Qual == Servicos.ViaTef.Estabelecimento,
+            "⭐ reduzido do portador + diferenciado do lojista: duas vias, e o reduzido é a do CLIENTE");
+        checar(Servicos.ViasAutomaticas(c6, PoliticaImpressao.Automatico, PoliticaImpressao.Automatico).Count == 2,
+            "⭐ com as duas em automático saem as duas folhas sozinhas, sem botão");
+        var c6SoLoja = Servicos.ViasAutomaticas(c6, PoliticaImpressao.Nao, PoliticaImpressao.Automatico);
+        checar(c6SoLoja.Count == 1 && c6SoLoja[0][0].Contains("VIA ESTABELECIMENTO"),
+            "o reduzido obedece à política da via do CLIENTE: em 'não imprimir' sobra só a do lojista");
+
+        // Regressão do passo 10 e da resposta do kit: quando a diferenciada do cliente (713)
+        // veio, o reduzido é a mesma compra em papel menor e NÃO pode virar uma terceira folha.
+        var comAsDuas = Resposta(3, reduzido: true);
+        var rotComAsDuas = Servicos.ViasRotuladas(comAsDuas);
+        checar(rotComAsDuas.Count == 2 && rotComAsDuas[0].Linhas[0].Contains("VIA CLIENTE"),
+            "com a diferenciada do cliente no papel, o reduzido não vira uma terceira via");
+
+        // Reduzido sozinho continua saindo, mesmo com o 737 pedindo uma via do lojista que
+        // não veio: o papel que sobra é o do cliente, e não pode ficar preso na resposta.
+        var soReduzido = Resposta(2, cliente: false, estabelecimento: false, reduzido: true);
+        checar(Servicos.ViasRotuladas(soReduzido).Count == 1
+               && Servicos.ViasAutomaticas(soReduzido, PoliticaImpressao.Automatico, PoliticaImpressao.Nao).Count == 1,
+            "só o reduzido na resposta: ele sai, pela política da via do cliente");
 
         // 737 manda em quem existe: 1 = só cliente, 2 = só estabelecimento.
         checar(Servicos.ViasRotuladas(Resposta(1)).Count == 1

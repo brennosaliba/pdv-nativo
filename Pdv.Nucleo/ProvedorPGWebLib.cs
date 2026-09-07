@@ -170,24 +170,6 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             Auditar?.Invoke($"pgweblib: pasta de trabalho inacessível ({_pasta}): {ex.Message}");
             return false;
         }
-        // O ambiente vem ANTES do PW_iInit. No kit avulso da biblioteca (sem o PayGo Windows) a
-        // mesma DLL atende produção e homologação, e sem esta chamada vale produção, porque
-        // ENVRMNT_PROD é o primeiro da enumeração. O cabeçalho oficial diz que ela tem que ser
-        // chamada antes de o ponto de captura estar instalado; num terminal já instalado a
-        // biblioteca pode recusar, e recusar aí NÃO é defeito, então isso só vira auditoria.
-        try
-        {
-            var amb = _lib.SetEnvironment(_op.Ambiente);
-            if (amb != PW.PWRET_OK)
-                Auditar?.Invoke($"pgweblib: PW_iSetEnvironment({ConfigPGWebLib.RotuloAmbiente(_op.Ambiente)}) devolveu {PW.Nome(amb)} (terminal já instalado responde assim)");
-        }
-        catch (Exception ex)
-        {
-            // Biblioteca antiga, anterior à 4.1.43.10, não exporta a função. Seguir em produção
-            // é o comportamento que ela já tinha, então não derruba o caixa.
-            Auditar?.Invoke("pgweblib: PW_iSetEnvironment indisponível (" + ex.GetType().Name + "), seguindo no ambiente padrão da biblioteca");
-        }
-
         short ret;
         try { ret = _lib.Init(_pasta); }
         catch (Exception ex)
@@ -200,6 +182,31 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         _iniciada = ret is PW.PWRET_OK or PW.PWRET_INVCALL;
         if (!_iniciada) { MotivoIndisponivel = MsgTefNaoResponde; Auditar?.Invoke("pgweblib: PW_iInit devolveu " + PW.Nome(ret)); return false; }
         MotivoIndisponivel = null;
+
+        // O AMBIENTE vem DEPOIS do PW_iInit, e isso foi medido, não deduzido.
+        //
+        // 07/09/2026 17h13, com a biblioteca avulsa e o terminal ainda sem instalação: chamada
+        // ANTES do PW_iInit, PW_iSetEnvironment devolveu PWRET_NOTINST e o ambiente NÃO foi
+        // aplicado, ou seja, o caixa continuaria falando com o host de produção sem ninguém
+        // perceber. Faz sentido: antes do PW_iInit a biblioteca ainda não sabe nem qual é a pasta
+        // de trabalho. O que o cabeçalho oficial exige é que ela venha antes de o PONTO DE CAPTURA
+        // estar instalado, e aqui ela vem.
+        //
+        // Recusa continua não derrubando o caixa: vira auditoria. Mas agora a auditoria diz que o
+        // ambiente pedido não valeu, em vez de dizer que o terminal já estava instalado.
+        try
+        {
+            var amb = _lib.SetEnvironment(_op.Ambiente);
+            if (amb != PW.PWRET_OK)
+                Auditar?.Invoke($"pgweblib: PW_iSetEnvironment({ConfigPGWebLib.RotuloAmbiente(_op.Ambiente)}) devolveu {PW.Nome(amb)}: o ambiente pedido NAO foi aplicado");
+        }
+        catch (Exception ex)
+        {
+            // Biblioteca anterior à 4.1.43.10 não exporta a função. Seguir no ambiente padrão dela
+            // é o comportamento que já existia, então não derruba o caixa.
+            Auditar?.Invoke("pgweblib: PW_iSetEnvironment indisponível (" + ex.GetType().Name + "), seguindo no ambiente padrão da biblioteca");
+        }
+
         // Spec: depois do PW_iInit (e de cada PW_iIdleProc) ler PWINFO_IDLEPROCTIME para saber
         // quando chamar o próximo PW_iIdleProc.
         AgendarIdle(Ler(PW.PWINFO_IDLEPROCTIME), "PW_iInit");
@@ -422,7 +429,10 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     Auditar?.Invoke($"pgweblib: {chargeId} paga sem confirmação (CNFREQ=0) com comprovante não impresso");
             }
 
-            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, null, false)
+            // A mensagem da REDE (PWINFO_RESULTMSG, "TRANSACAO APROVADA") sobe junto com a
+            // aprovação: é ela que o passo 29 do roteiro v20260819 manda o operador ler no caixa.
+            // A administrativa já fazia assim; a venda voltava muda e a tela não tinha o que mostrar.
+            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, r.Mensagem, false)
             { Codigo = CodigoTef.Pago, PaymentStatus = situacao };
         }
         finally
@@ -735,8 +745,18 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         public CancellationToken Ct { get; }
         /// <summary>Alguma tela de exibicao (QR, mensagem) foi aberta e precisa ser fechada no fim.</summary>
         public bool Exibiu { get; set; }
-        /// <summary>Tudo que já foi passado à biblioteca: é a resposta pronta se ela pedir de novo por MOREDATA.</summary>
+        /// <summary>
+        /// O que a AUTOMAÇÃO mandou (valor, moeda, parcelas, rede pré-selecionada…). Se a biblioteca
+        /// pedir de novo por MOREDATA, é a resposta pronta: o operador nem fica sabendo.
+        /// </summary>
         public Dictionary<ushort, string> Conhecidos { get; } = new();
+        /// <summary>
+        /// O que o OPERADOR respondeu. Fica FORA de <see cref="Conhecidos"/> de propósito: quando a
+        /// biblioteca pede o mesmo dado outra vez, ela quer uma escolha nova, não a anterior. O passo
+        /// 31 do roteiro v20260819 é isso: depois de escolher ABCDEF o mesmo menu (tag 0x2F) volta, e
+        /// tem que aparecer na tela de novo em vez de ser respondido sozinho.
+        /// </summary>
+        public Dictionary<ushort, string> Respondidos { get; } = new();
         public string? UltimoDisplay;
     }
 
@@ -897,17 +917,19 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 var valor = Predefinido(ctx, p);
                 if (valor is null)
                 {
+                    if (ctx.Respondidos.ContainsKey(p.Identificador))
+                        Auditar?.Invoke($"pgweblib: o TEF pediu de novo o dado {p.Identificador}; a tela pergunta outra vez");
                     var resposta = await PerguntarSeguroAsync(ctx, p).ConfigureAwait(false);
                     // A tela pode devolver o texto da opção ("RELATORIO") ou o valor em outra caixa
                     // ("cielo"): o que vai para a biblioteca é sempre o VALOR da opção.
                     valor = resposta is null ? null : (Casar(p, resposta) ?? resposta);
                 }
                 if (valor is null)
-                    return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, "operação cancelada pelo operador", desfeita: true, ler: true);
+                    return await DesistirAsync(ctx, p, fim).ConfigureAwait(false);
                 var ret = _lib.AddParam(p.Identificador, ArquivoIntpos.Ascii(valor));
                 if (ret != PW.PWRET_OK)
                     return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, $"TEF não aceitou o dado {p.Identificador}: {PW.Nome(ret)}", ler: true);
-                ctx.Conhecidos[p.Identificador] = valor;
+                ctx.Respondidos[p.Identificador] = valor;
                 continue;
             }
             if (p.EhPinpad)
@@ -925,6 +947,53 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, $"TEF pediu captura que o caixa não suporta (tipo {p.Tipo})", ler: true);
         }
         return null;
+    }
+
+    /// <summary>
+    /// Quantas vezes o caixa chama PW_iExecTransac depois de avisar que o operador desistiu, só para
+    /// deixar a biblioteca encerrar a transação e escrever o PWINFO_RESULTMSG dela. Teto baixo de
+    /// propósito: aqui não se espera host nenhum, e travar o caixa é pior do que ficar sem a frase.
+    /// </summary>
+    private const int ChamadasParaFecharDesistencia = 20;
+
+    /// <summary>
+    /// O operador apertou Esc num menu (ou numa caixa de texto) que a biblioteca pediu. É o passo 16
+    /// do roteiro v20260819, "Operação cancelada no menu administrativo", que cobra duas coisas:
+    /// nada realizado para a automação e a mensagem "OPERAÇÃO CANCELADA".
+    ///
+    /// Quem escreve essa frase é a biblioteca, em PWINFO_RESULTMSG, e para escrevê-la ela precisa
+    /// saber que o dado não vem: sem aviso a transação fica aberta esperando uma resposta que não
+    /// chega. O aviso é PW_iAddParam(PWINFO_OPERABORTED), e o caixa só o manda quando o próprio
+    /// PW_GetData veio com bNotificarCancelamento, porque o cabeçalho oficial declara o campo e o
+    /// parâmetro mas não descreve o fluxo. Sem a marca da biblioteca nada muda: o caixa encerra por
+    /// conta, como sempre fez.
+    ///
+    /// O desfecho é Cancelado nos dois caminhos, porque quem desistiu foi o operador. O que muda é
+    /// a mensagem: a da biblioteca quando ela falou, a frase da casa quando ela ficou calada.
+    /// </summary>
+    private async Task<Fim> DesistirAsync(Contexto ctx, PwGetData p, Fim fim)
+    {
+        if (!p.NotificarCancelamento)
+            Auditar?.Invoke($"pgweblib: {ctx.ChargeId} operador desistiu do dado {p.Identificador}; a biblioteca não pediu aviso (bNotificarCancelamento=0)");
+        else
+        {
+            var aviso = _lib.AddParam(PW.PWINFO_OPERABORTED, "1");
+            Auditar?.Invoke($"pgweblib: {ctx.ChargeId} operador desistiu do dado {p.Identificador}; PW_iAddParam(PWINFO_OPERABORTED) {PW.Nome(aviso)}");
+            if (aviso == PW.PWRET_OK)
+                for (var i = 0; i < ChamadasParaFecharDesistencia; i++)
+                {
+                    short ret;
+                    try { ret = _lib.ExecTransac(out _); }
+                    catch (Exception ex) { Auditar?.Invoke("pgweblib: PW_iExecTransac lançou ao fechar a desistência: " + ex.Message); break; }
+                    if (ret == PW.PWRET_NOTHING) { await Task.Delay(IntervaloPollMs).ConfigureAwait(false); continue; }
+                    // Encerrou (PWRET_CANCEL e afins) ou tornou a pedir o dado: em nenhum dos dois
+                    // casos o caixa pergunta de novo. O que interessa é o RESULTMSG que ficou.
+                    Auditar?.Invoke($"pgweblib: {ctx.ChargeId} desistência fechada com {PW.Nome(ret)}");
+                    break;
+                }
+        }
+        LerResultados(fim);
+        return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, Mensagem(fim, "operação cancelada pelo operador"), desfeita: true);
     }
 
     /// <summary>
@@ -1079,8 +1148,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         if (!ctx.Conhecidos.TryGetValue(p.Identificador, out var v) || string.IsNullOrWhiteSpace(v))
         {
-            // Menu com uma opção só não precisa de operador.
-            if (p.EhMenu && p.Opcoes is { Count: 1 }) return p.Opcoes[0].Valor;
+            // Menu com uma opção só não precisa de operador. MENOS o menu de redes: o passo 05 do
+            // roteiro manda o operador apertar Esc nele, e numa loja com uma credenciadora só o
+            // caixa respondia sozinho — o menu nunca aparecia e não havia onde apertar Esc. Rede
+            // gravada na Configuração continua sendo respondida sem perguntar, mas pela linha de
+            // cima (Conhecidos), que é onde essa decisão é do lojista e não nossa.
+            if (p.EhMenu && p.Opcoes is { Count: 1 } && p.Identificador != PW.PWINFO_AUTHSYST) return p.Opcoes[0].Valor;
             return null;
         }
         if (!p.EhMenu || p.Opcoes is null || p.Opcoes.Count == 0) return v;
@@ -1381,7 +1454,14 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         Vias(c, "710", "711", r.GetValueOrDefault(PW.PWINFO_RCPTCHSHORT));
         if (!c.ContainsKey("712-000") && !c.ContainsKey("714-000")) Vias(c, "028", "029", r.GetValueOrDefault(PW.PWINFO_RCPTFULL));
         if (!c.ContainsKey("737-000"))
-            c["737-000"] = c.ContainsKey("712-000") && c.ContainsKey("714-000") ? "3" : c.ContainsKey("712-000") ? "1" : c.ContainsKey("714-000") ? "2" : "0";
+        {
+            // O cupom reduzido (710/711) conta como via do CLIENTE. No C6PAY vem o reduzido do
+            // portador com o diferenciado do lojista: olhando só o 713/715 o 737 saía 2, "só a
+            // via da loja", e o papel do cliente ficava preso na resposta.
+            var temCliente = c.ContainsKey("712-000") || c.ContainsKey("710-000");
+            var temLojista = c.ContainsKey("714-000");
+            c["737-000"] = temCliente && temLojista ? "3" : temCliente ? "1" : temLojista ? "2" : "0";
+        }
         return RespostaPayGo.Analisar(ArquivoIntpos.Serializar(c));
     }
 

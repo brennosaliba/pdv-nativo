@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Globalization;
 using Pdv.Nucleo;
 
@@ -20,6 +20,14 @@ public sealed class FakePGWebLib : IPGWebLib
     /// <summary>Identificadores que a biblioteca de mentira usa nos menus/dados próprios.</summary>
     public const ushort IdSenhaLojista = 32700;
     public const ushort IdMenuAdm = 32701;
+    /// <summary>
+    /// Tag 0x2F, a do "dado genérico" dos passos 28 a 31 do roteiro v20260819. É a MESMA tag nos
+    /// dois formatos que o roteiro exercita: digitado (passos 28 e 29) e menu (passos 30 e 31).
+    /// Os dois nomes existem porque cada suíte fala do seu passo; o valor é um só.
+    /// </summary>
+    public const ushort IdMenuGenerico = 0x2F;
+    /// <inheritdoc cref="IdMenuGenerico"/>
+    public const ushort IdDadoGenerico = IdMenuGenerico;
 
     public sealed record Pendencia(string ReqNum, string LocRef, string ExtRef, string VirtMerch, string AuthSyst);
     public sealed record Transacao(byte Oper, Dictionary<ushort, string> Params);
@@ -38,6 +46,29 @@ public sealed class FakePGWebLib : IPGWebLib
     public HashSet<ushort> InfosRecusados { get; } = new();
     /// <summary>Pede o menu de redes mesmo com AUTHSYST já informado (prova o "responder do que já sabe").</summary>
     public bool SempreMenuRede { get; set; }
+    /// <summary>
+    /// Quantas vezes a biblioteca pede o MESMO menu genérico (tag 0x2F) na mesma venda. Passos 30 e
+    /// 31 do roteiro v20260819: o autorizador C6PAY pede a tag duas vezes, e a segunda tem que
+    /// chegar ao operador igual à primeira, com o prompt "SELECIONAR:".
+    /// </summary>
+    public int MenuGenericoVezes { get; set; }
+    /// <summary>
+    /// As credenciadoras que o menu de redes lista. UMA só é a loja de homologação com um
+    /// autorizador instalado: o passo 05 do roteiro pede o Esc nesse menu, então ele tem que
+    /// chegar ao operador mesmo com uma opção.
+    /// </summary>
+    public string[] RedesDoMenu { get; set; } = { "REDE", "CIELO", "PIX ITAU" };
+    /// <summary>
+    /// O menu administrativo vem com bNotificarCancelamento ligado: a biblioteca quer ser avisada
+    /// se o operador apertar Esc nele. É o menu do passo 16 do roteiro v20260819.
+    /// </summary>
+    public bool MenuAdmPedeAviso { get; set; } = true;
+    /// <summary>
+    /// Passos 28 e 29 do roteiro v20260819: quantas vezes a biblioteca pede um dado DIGITADO na tag
+    /// 0x2F (PWDAT_TYPED) no meio da venda. O roteiro faz uma venda de R$ 1001,00 no C6PAY, o
+    /// operador digita ABC123 e a venda tem que aprovar. Zero = não pede.
+    /// </summary>
+    public int DadoDigitadoVezes { get; set; }
     public bool ComSenha { get; set; } = true;
     public bool PedirRemocao { get; set; } = true;
     public bool Cnfreq { get; set; } = true;
@@ -91,6 +122,8 @@ public sealed class FakePGWebLib : IPGWebLib
     private int _etapa;
     private Desfecho _d;
     private bool _pediuRede, _cancelada, _abortada;
+    private int _menusGenericos;
+    private int _dadosDigitados;
     private readonly Dictionary<ushort, string> _res = new();
     private ushort? _ppEsperado;
     private Queue<(short Ret, string Display)> _eventos = new();
@@ -157,6 +190,8 @@ public sealed class FakePGWebLib : IPGWebLib
         _params = new Dictionary<ushort, string>();
         _etapa = 0;
         _pediuRede = _pediuQr = _cancelada = _abortada = false;
+        _menusGenericos = 0;
+        _dadosDigitados = 0;
         _res.Clear();
         _ppEsperado = null;
         _eventos.Clear();
@@ -185,6 +220,16 @@ public sealed class FakePGWebLib : IPGWebLib
         if (!_iniciada) return PW.PWRET_DLLNOTINIT;
         if (_ppEsperado is not null) return PW.PWRET_INVCALL;          // pediu captura e a automação não capturou
         if (_cancelada || _abortada) return PW.PWRET_CANCEL;
+        if (_params.ContainsKey(PW.PWINFO_OPERABORTED))
+        {
+            // A automação avisou que o operador desistiu do dado pedido (PWINFO_OPERABORTED): a
+            // biblioteca encerra a transação cancelada e escreve a mensagem que o roteiro
+            // v20260819 cobra no passo 16. O cabeçalho declara o parâmetro mas não descreve o
+            // fluxo, então isto é a leitura do roteiro, para conferir contra a DLL na homologação.
+            _cancelada = true;
+            _res[PW.PWINFO_RESULTMSG] = "OPERACAO CANCELADA";
+            return PW.PWRET_CANCEL;
+        }
         // Pendência de OUTRA transação (existia quando esta começou) bloqueia o ponto de captura.
         if (_pendenteAoComecar is not null && ReferenceEquals(_pendenteAoComecar, _pendente) && _oper is PW.PWOPER_SALE or PW.PWOPER_SALEVOID)
         {
@@ -219,6 +264,39 @@ public sealed class FakePGWebLib : IPGWebLib
                     return PW.PWRET_MOREDATA;
                 }
                 if (!_params.ContainsKey(PW.PWINFO_AUTHSYST)) { _res[PW.PWINFO_RESULTMSG] = "REDE NAO INFORMADA"; return PW.PWRET_NOMANDATORY; }
+                if (DadoDigitadoVezes > 0)
+                {
+                    // Passo 28: a automação não pode adiantar a tag 0x2F. O roteiro reprova com
+                    // DemoErroTeste3 quem manda o dado antes de a biblioteca pedir.
+                    if (_dadosDigitados == 0 && _params.ContainsKey(IdMenuGenerico))
+                    {
+                        _res[PW.PWINFO_RESULTMSG] = "DEMOERROTESTE3";
+                        return PW.PWRET_FROMHOST_FIM;
+                    }
+                    if (_dadosDigitados < DadoDigitadoVezes)
+                    {
+                        _dadosDigitados++;
+                        pedidos = new[] { DadoDigitado() };
+                        return PW.PWRET_MOREDATA;
+                    }
+                }
+                if (MenuGenericoVezes > 0)
+                {
+                    // Passos 30 e 31: a automação não pode adiantar a tag 0x2F, e o MESMO menu é
+                    // pedido de novo depois de respondido. O roteiro reprova com DemoErroTeste4
+                    // quem manda a tag antes de a biblioteca pedir.
+                    if (_menusGenericos == 0 && _params.ContainsKey(IdMenuGenerico))
+                    {
+                        _res[PW.PWINFO_RESULTMSG] = "DEMOERROTESTE4";
+                        return PW.PWRET_FROMHOST_FIM;
+                    }
+                    if (_menusGenericos < MenuGenericoVezes)
+                    {
+                        _menusGenericos++;
+                        pedidos = new[] { MenuGenerico() };
+                        return PW.PWRET_MOREDATA;
+                    }
+                }
                 _etapa = 1;
                 return PW.PWRET_NOTHING;                           // "chamar de novo"
             case 1:
@@ -289,10 +367,22 @@ public sealed class FakePGWebLib : IPGWebLib
         }
     }
 
-    private PwGetData MenuRede() => new(PW.PWDAT_MENU, PW.PWINFO_AUTHSYST, "REDE", new[]
+    /// <summary>
+    /// Passo 28: o dado DIGITADO da tag 0x2F. Tamanho de 1 a 6 caracteres, que é o que cabe no
+    /// ABC123 que o passo 29 manda digitar, e serve para provar que o caixa confere o tamanho
+    /// antes de mandar em vez de empurrar qualquer coisa para a biblioteca.
+    /// </summary>
+    private static PwGetData DadoDigitado()
+        => new(PW.PWDAT_TYPED, IdDadoGenerico, "DIGITE O DADO:", TamanhoMinimo: 1, TamanhoMaximo: 6);
+
+    /// <summary>O menu genérico dos passos 30 e 31: prompt "SELECIONAR:" com as opções 123456 e ABCDEF.</summary>
+    private static PwGetData MenuGenerico() => new(PW.PWDAT_MENU, IdMenuGenerico, "SELECIONAR:", new[]
     {
-        new PwOpcaoMenu("REDE", "REDE"), new PwOpcaoMenu("CIELO", "CIELO"), new PwOpcaoMenu("PIX ITAU", "PIX ITAU"),
+        new PwOpcaoMenu("123456", "123456"), new PwOpcaoMenu("ABCDEF", "ABCDEF"),
     });
+
+    private PwGetData MenuRede()
+        => new(PW.PWDAT_MENU, PW.PWINFO_AUTHSYST, "REDE", RedesDoMenu.Select(r => new PwOpcaoMenu(r, r)).ToList());
 
     private void Aprovar()
     {
@@ -363,7 +453,7 @@ public sealed class FakePGWebLib : IPGWebLib
                 pedidos = new[] { new PwGetData(PW.PWDAT_MENU, IdMenuAdm, "ADMINISTRATIVA", new[]
                 {
                     new PwOpcaoMenu("TESTE DE COMUNICACAO", "1"), new PwOpcaoMenu("REIMPRESSAO", "2"), new PwOpcaoMenu("RELATORIO", "3"),
-                }) };
+                }, NotificarCancelamento: MenuAdmPedeAviso) };
                 return PW.PWRET_MOREDATA;
             case 1:
                 if (!_params.TryGetValue(IdMenuAdm, out var op)) return PW.PWRET_NOMANDATORY;

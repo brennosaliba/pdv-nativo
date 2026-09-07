@@ -550,6 +550,9 @@ public partial class Pagamento : UserControl
         // (passo 55 do roteiro). Ela não conhece a tela de pagamento, então o caminho é este gancho.
         Servicos.CancelarTefEmVoo = () => { try { _cobranca?.Cancel(); } catch { } };
 
+        // A frase da rede é sempre da cobrança ATUAL: começou outra, a de antes sai da tela.
+        RecadoDoTef("");
+
         // Parcelas no TÍTULO (os reports de andamento reescrevem o detalhe): o operador precisa
         // conferir o "3x" enquanto o cliente ainda não passou o cartão.
         var vezes = parcelas > 1 ? $" em {parcelas}x" : "";
@@ -591,6 +594,10 @@ public partial class Pagamento : UserControl
 
         if (d.Situacao == SituacaoTef.Pago)
         {
+            // O que a REDE respondeu ("TRANSACAO APROVADA") fica à vista antes de a tela andar:
+            // daqui em diante ela lança a parte e volta para as formas, ou emite a nota, sem
+            // parar. O passo 29 do roteiro v20260819 cobra essa frase para o operador.
+            RecadoDoTef(d.MensagemParaTela);
             // Guarda o charge para o pop-up das vias em "Perguntar" depois da conclusão.
             if (d.ChargeId is { Length: > 0 } chg) _chargesTefPagos.Add(chg);
             // 03/09 (Savassi): PIX pelo TEF volta APROVADO com NSU mas sem "codigo de
@@ -725,6 +732,18 @@ public partial class Pagamento : UserControl
     }
 
     /// <summary>
+    /// A frase que a maquininha devolveu na cobrança aprovada, no topo da tela. Vazio apaga a
+    /// linha. O texto é da REDE, não da casa: é o que o roteiro de homologação manda o operador
+    /// ler ("TRANSACAO APROVADA"), e inventar uma frase nossa esconderia o que a rede respondeu.
+    /// </summary>
+    private void RecadoDoTef(string mensagem)
+    {
+        var texto = mensagem.Trim();
+        TxtRecadoTef.Text = texto.Length == 0 ? "" : "✓ " + texto;
+        TxtRecadoTef.Visibility = texto.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>
     /// Abandonar a venda com parte já paga não pode ser um toque distraído: cartão já
     /// passado precisa de estorno na maquininha, dinheiro já na gaveta precisa voltar.
     /// </summary>
@@ -771,7 +790,10 @@ public partial class Pagamento : UserControl
             using var cx = Banco.Abrir();
             _venda = Vendas.Finalizar(cx, _sessao, _operador, _itens, _partes,
                 _documento, _loja, _lojaId);
-            modoRecibo = Vendas.Config(cx, "modo_fiscal") == "recibo";
+            // Quem decide se sai nota é Pdv.Nucleo/Vendas.SemNota: loja em modo recibo OU
+            // caixa em modo de homologação (venda de teste). A regra mora lá, e não aqui,
+            // para não existirem duas cópias dela.
+            modoRecibo = Vendas.SemNota(cx);
         }
         catch (Exception ex)
         {
@@ -786,8 +808,9 @@ public partial class Pagamento : UserControl
             return;
         }
 
-        // Modo RECIBO (sem emissão fiscal): a venda está gravada e sobe pro painel
-        // normalmente — só não existe NFC-e. O papel sai como recibo simples.
+        // Sem emissão fiscal: a venda está gravada e segue o caminho de sempre — só não
+        // existe NFC-e. O papel sai como recibo simples. (Na loja em modo recibo ela sobe
+        // pro painel normalmente; a venda de teste do modo de homologação já não subia.)
         if (modoRecibo) { await ConcluirReciboAsync(); return; }
 
         await EmitirAsync();

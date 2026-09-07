@@ -455,6 +455,23 @@ public static class Vendas
     /// </summary>
     public static bool Homologacao(SqliteConnection cx) => Config(cx, "homologacao") == "1";
 
+    /// <summary>
+    /// Esta venda sai SEM NFC-e? Duas razões, uma regra só, escrita aqui para não virar
+    /// duas cópias que divergem (a tela de pagamento pergunta, ninguém decide sozinho):
+    ///
+    ///  · `modo_fiscal` = recibo — a loja não emite nota, e nunca emitiu;
+    ///  · MODO DE HOMOLOGAÇÃO — a venda é de TESTE. Ela já fica fora da nuvem, fora do
+    ///    fechamento do caixa e fora do contador de pendências; a nota era a última parte
+    ///    dela que ainda valia de verdade. O caixa que roda o roteiro da maquininha é um
+    ///    caixa comum, com o terminal em produção, o CNPJ e a série da loja: sem esta linha
+    ///    cada passo do roteiro (uma venda por passo, com a linha "Venda de teste") queima
+    ///    número da série e pode autorizar nota de um produto que não existe.
+    ///
+    /// O papel continua saindo nos dois casos, como recibo.
+    /// </summary>
+    public static bool SemNota(SqliteConnection cx)
+        => Config(cx, "modo_fiscal") == "recibo" || Homologacao(cx);
+
     public static string? Config(SqliteConnection cx, string chave, string? padrao = null)
         => cx.ExecuteScalar<string?>("SELECT valor FROM config WHERE chave = @C", new { C = chave }) ?? padrao;
 

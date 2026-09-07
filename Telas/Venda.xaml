@@ -406,6 +406,21 @@
                                        FontSize="12" HorizontalAlignment="Right" TextWrapping="Wrap"
                                        TextAlignment="Right" Margin="0,0,0,6"/>
 
+                            <!-- MODO DE HOMOLOGAÇÃO: o roteiro do TEF manda cobrar valores exatos
+                                 (R$ 12.345,67, R$ 1.000,01) que soma nenhuma do cardápio fecha —
+                                 os preços daqui andam de 25 em 25 centavos. Este botão põe o valor
+                                 na comanda e a venda segue pelo caminho de sempre (Finalizar →
+                                 Crédito → maquininha). Fica INVISÍVEL na loja: só aparece com
+                                 `homologacao` = 1, senão viraria preço livre no caixa. -->
+                            <Button x:Name="BtnValorLivre" Click="LancarValorDeTeste" Style="{StaticResource BotaoBase}"
+                                    AutomationProperties.Name="Valor do teste"
+                                    MinHeight="46" Margin="0,0,0,10" Visibility="Collapsed" HorizontalContentAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="🧪" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Valor do teste" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </Button>
+
                             <Button x:Name="BtnCortesia" Click="AplicarCortesia" Style="{StaticResource BotaoBase}"
                                     MinHeight="46" Margin="0,0,0,10" IsEnabled="False" HorizontalContentAlignment="Center">
                                 <StackPanel Orientation="Horizontal">

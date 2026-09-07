@@ -300,6 +300,20 @@ public static class Promocoes
 
     /// <summary>Uma linha da comanda como o motor a vê (quantidade já sem cortesia).</summary>
     public sealed record ItemCarrinho(string ProdutoId, string Categoria, long PrecoCent, long QtdMilesimos);
+
+    /// <summary>
+    /// Marca do id da LINHA DE VALOR DE TESTE, a que o operador digita no caixa de homologação
+    /// (Telas/Venda.xaml.cs, AdicionarValorDeTeste). Mora AQUI, e não na tela, porque quem
+    /// precisa reconhecê-la é o motor: a tela escreve o id com esta constante e o motor a lê
+    /// com a mesma. Duas cópias do mesmo prefixo divergiriam no primeiro dia, e o sintoma
+    /// seria uma venda do roteiro cobrada com desconto.
+    /// </summary>
+    public const string PrefixoLinhaDeTeste = "teste-";
+
+    /// <summary>Linha que o motor de promoções ignora: não é produto do cardápio, é valor digitado.</summary>
+    public static bool ForaDoMotor(string produtoId)
+        => produtoId.StartsWith(PrefixoLinhaDeTeste, StringComparison.Ordinal);
+
     public sealed record Candidata(string PromoId, string Nome, string Tipo, long DescontoCent);
     public sealed record Avaliacao(
         string? PromoId, string? PromoNome, string? PromoTipo,
@@ -380,6 +394,24 @@ public static class Promocoes
         var n = itens.Count;
         var vazio = new Avaliacao(null, null, null, new long[n], new int[n], Array.Empty<Candidata>(), null);
         if (n == 0) return vazio;
+
+        // LINHA DE VALOR DE TESTE (07/09/2026) NAO ENTRA NO MOTOR. Ela nasce no caixa de
+        // homologacao, com o preco que o operador digitou, para o roteiro do TEF poder cobrar
+        // os valores exatos que ele exige (R$ 1.001,00 no passo 28, R$ 1.002,00 no 30,
+        // R$ 12.345,67 no 21). Nao e produto do cardapio, e por isso nenhuma promocao pode
+        // encostar nela: promocao sem "alvo" no payload alcanca TUDO (ver AlvoBate), entao
+        // uma promocao boba de 10% transformava a venda de R$ 1.001,00 em R$ 900,90 e o
+        // autorizador simplesmente nao pedia o dado generico. A gravacao parava no passo, com
+        // tudo verde na tela.
+        //
+        // Zerar a QUANTIDADE e o corte mais completo que existe aqui: com zero unidades a
+        // linha nao ganha desconto (o clamp por bruto, no fim do Calcular), nao conta como
+        // compra nem como brinde no compre-e-ganhe, nao entra em combo e nao faz uma promocao
+        // com 2FA "vencer" e pedir o codigo do gerente no meio da gravacao. O preco fica
+        // intacto: quem cobra e a comanda, nao o motor.
+        if (itens.Any(i => ForaDoMotor(i.ProdutoId)))
+            itens = itens.Select(i => ForaDoMotor(i.ProdutoId) ? i with { QtdMilesimos = 0 } : i).ToList();
+
         var lista = promos as IReadOnlyCollection<Promo> ?? promos.ToList();
 
         // desconto por linha de UMA promocao (null = nao vigente/nao alcanca)

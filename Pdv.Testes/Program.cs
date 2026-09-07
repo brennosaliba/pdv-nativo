@@ -1325,6 +1325,14 @@ TestesPGWebLib.Rodar((cond, nome) => Check("pgweblib: " + nome, cond));
 Console.WriteLine("--- TEF PayGo PGWebLib na casa (config, callback, filtros) ---");
 TestesCasaPGWebLib.Rodar((cond, nome) => Check("pgweb-casa: " + nome, cond));
 TestesQrNaTela.Rodar((cond, nome) => Check("qr-na-tela: " + nome, cond));
+// -- passo 28: o VALOR de R$ 1.001,00 tem que chegar inteiro na maquininha ------
+// Promocao sem "alvo" alcanca tudo, inclusive a linha de valor de teste: a venda do
+// roteiro saia por R$ 900,90 e o C6PAY nao pedia dado generico nenhum.
+TestesPasso28.Rodar((cond, nome) => Check("passo28: " + nome, cond));
+// -- passos 28 e 29: dado generico digitado (ABC123) e a frase da rede na tela ---
+TestesPasso29.Rodar((cond, nome) => Check("passo29: " + nome, cond));
+// -- passo 05: o Esc no menu de selecao da rede nega a venda ------------------
+TestesEscNaRede.Rodar((cond, nome) => Check("esc-rede: " + nome, cond));
 
 // -- FILA: o que a nuvem RECUSA para sempre ----------------------------------
 // Dead-letter carimbava enviado_em: R$ 102.626,50 sumiram do contador com tudo verde.
@@ -1600,6 +1608,26 @@ TestesCeticoFechamento.Rodar((cond, nome) => Check("cetico-fech: " + nome, cond)
 Console.WriteLine();
 Console.WriteLine("--- Combo com sub-escolhas (dialogo, comanda, venda composta, fila, KDS) ---");
 await TestesCombos.RodarAsync((cond, nome) => Check("combo: " + nome, cond));
+
+// -- 07/09/2026: VALOR DE TESTE na comanda (passo 21 do roteiro do TEF) ---------
+// "Realizar uma venda de R$ 12.345,67, utilizar C6PAY." A comanda so montava por
+// cardapio (preco de tabela, quantidade de um em um) e os precos daqui andam de 25
+// em 25 centavos: o valor do passo nao saia de soma nenhuma, e a gravacao parava
+// ali. Agora o operador digita o valor no teclado da sangria e a venda segue pelo
+// caminho normal. So com `homologacao` = 1; na loja o botao nao e desenhado.
+Console.WriteLine();
+Console.WriteLine("--- Valor de teste na comanda (passo 21: R$ 12.345,67 no C6PAY) ---");
+TestesValorDeTeste.Rodar((cond, nome) => Check("valor-teste: " + nome, cond));
+
+// -- 07/09/2026: a venda de teste nao emite nota (passo 30 do roteiro do TEF) ---
+// "Realizar uma venda no valor R$1002,00 no autorizador C6PAY." O terminal deste
+// caixa esta em PRODUCAO, com o CNPJ e a serie 3 da Savassi, e modo_fiscal = nfce:
+// cada passo do roteiro ia bater na SEFAZ de verdade com a linha "Venda de teste".
+// O modo de homologacao ja tirava a venda da nuvem, do fechamento e das pendencias;
+// a nota era a ultima parte dela que ainda valia. Agora a regra e uma so.
+Console.WriteLine();
+Console.WriteLine("--- Venda de teste sem NFC-e (passo 30: R$ 1.002,00 no C6PAY) ---");
+TestesNotaNaHomologacao.Rodar((cond, nome) => Check("nota-homolog: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

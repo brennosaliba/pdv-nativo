@@ -377,7 +377,9 @@ public sealed class ClienteControlPay : IProvedorTefOperavel, IDisposable
                 Guardar(tx with { Situacao = "pago" });
                 _ = ImprimirSeguroAsync(tx);
                 Auditar?.Invoke($"controlpay: intenção {ident} APROVADA nsu={r.Nsu ?? "-"} aut={r.Autorizacao ?? "-"} rede={r.Rede ?? "-"}");
-                return new DesfechoTef(SituacaoTef.Pago, ident, chargeId, Cartao(r), null, false) { Codigo = CodigoTef.Pago, PaymentStatus = "pago" };
+                // A mensagem da adquirente (mensagemRespostaAdquirente, campo 030) sobe junto com a
+                // aprovação: é ela que a tela de pagamento mostra ao operador.
+                return new DesfechoTef(SituacaoTef.Pago, ident, chargeId, Cartao(r), r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = "pago" };
             }
 
             if (st == StatusIntencao.Recusado)

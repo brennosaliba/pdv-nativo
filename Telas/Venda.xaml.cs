@@ -107,13 +107,23 @@ public partial class Venda : UserControl
     // por linha. Gravado em config; lido antes de montar a grade.
     private string _categoriasPorLinha = "auto";
 
+    // config `homologacao` = 1: este caixa está rodando o roteiro do TEF, não vendendo.
+    // Lido uma vez na abertura da tela (a config não muda com a tela aberta).
+    private bool _homologacao;
+
     public Venda(Operador operador, Sessao sessao)
     {
         InitializeComponent();
         _operador = operador;
         _sessao = sessao;
         using (var cxCfg = Banco.Abrir())
+        {
             _categoriasPorLinha = Vendas.Config(cxCfg, "categorias_por_linha") ?? "auto";
+            _homologacao = Vendas.Homologacao(cxCfg);
+        }
+        // O botão do valor de teste só existe no caixa de homologação. Na loja ele
+        // some da tela inteira — preço livre no caixa é rombo, não recurso.
+        BtnValorLivre.Visibility = _homologacao ? Visibility.Visible : Visibility.Collapsed;
         PintarBotaoDensidade();
         TxtOperador.Text = operador.Nome;
         TxtInicial.Text = operador.Nome.Trim().Length > 0 ? operador.Nome.Trim()[..1].ToUpperInvariant() : "?";
@@ -1510,6 +1520,50 @@ public partial class Venda : UserControl
         PintarComanda();
     }
 
+    // ── VALOR DE TESTE (só no modo de homologação) ──────────────────────────
+    //
+    // O roteiro do TEF manda cobrar valores exatos: R$ 12.345,67 (passo 21),
+    // R$ 1.000,01 (passo 04), R$ 1.005,60 (passo 39). Os preços do cardápio desta
+    // máquina vão de R$ 0,25 a R$ 153,00 e quase todos andam de 25 em 25 centavos,
+    // então nenhuma soma de produtos fecha esses centavos por acaso: a conta mais
+    // curta para R$ 12.345,67 precisa de 87 itens, e morre no dia em que o ERP
+    // mudar um preço. Sem isto a gravação parava no passo 21.
+    //
+    // A linha entra na comanda como qualquer outra: o Finalizar, o pagamento, a
+    // maquininha, o recibo e a auditoria são os MESMOS da venda de verdade — é
+    // isso que faz a evidência valer. Cada toque cria uma linha própria (id novo),
+    // porque dois valores de teste seguidos são dois valores diferentes.
+    public const string CategoriaTeste = "Teste";
+
+    private void LancarValorDeTeste(object sender, RoutedEventArgs e)
+    {
+        if (!_homologacao) return;   // na loja o botão nem existe; aqui é o cinto
+        var dono = Window.GetWindow(this)!;
+        var valor = PedirValor.Mostrar(dono, "Valor do teste", "Quanto o roteiro pede nesta venda");
+        if (valor is not { } v || !v.Positivo) return;
+        AdicionarValorDeTeste(v);
+    }
+
+    private void AdicionarValorDeTeste(Dinheiro valor)
+    {
+        // O id nasce com a marca que o MOTOR DE PROMOÇÕES conhece
+        // (Nucleo.Promocoes.PrefixoLinhaDeTeste): é ela que mantém a linha fora das
+        // promoções. Sem isso, uma promoção sem "alvo" no payload (que alcança tudo)
+        // cobraria R$ 900,90 na venda de R$ 1.001,00 do passo 28, e o autorizador não
+        // pediria o dado genérico. A constante é UMA: aqui só se escreve com ela.
+        var produto = new Produto(Nucleo.Promocoes.PrefixoLinhaDeTeste + Guid.NewGuid().ToString("N"),
+            null, "Venda de teste", CategoriaTeste, valor, "UN", null, null, null, 0, null);
+        _comanda.Insert(0, new ItemComanda { Produto = produto });
+        PintarComanda();
+        try
+        {
+            using var cx = Banco.Abrir();
+            Caixa.Auditar(cx, null, "venda_teste_valor_lancado", _operador.Id, null,
+                $"valor de teste {valor.Formatado()} lançado na comanda (modo de homologação)");
+        }
+        catch { /* a auditoria não pode derrubar a comanda */ }
+    }
+
     /// <summary>Nome normalizado pra casar item do cupom com item da comanda (maiúsc., sem acento, espaço colapsado).</summary>
     private static string NormalizarNome(string s)
         => new string(s.Normalize(System.Text.NormalizationForm.FormD)
@@ -2501,6 +2555,10 @@ public partial class Venda : UserControl
         voltar.Click += (_, _) => { janela.DialogResult = false; };
         painel.Children.Add(voltar);
         janela.Content = new ScrollViewer { Content = painel, MaxHeight = 680, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        // Esc = Voltar, como em todo diálogo da casa. Faltava só aqui, e é por aqui que passa o
+        // menu de redes do TEF quando a maquininha lista 5 ou mais: o passo 05 do roteiro manda o
+        // operador cancelar a venda apertando Esc nesse menu, e antes disto só o botão saía.
+        janela.KeyDown += (_, e) => { if (e.Key == Key.Escape) janela.DialogResult = false; };
         return janela.ShowDialog() == true ? escolhido : -1;
     }
 

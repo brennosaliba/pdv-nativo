@@ -553,7 +553,9 @@ public sealed class ClientePayGo : IProvedorTefOperavel
                     Auditar?.Invoke($"paygo: {chargeId} paga (729=1) com comprovante não impresso, reimprimir pelas vias");
             }
 
-            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, null, false)
+            // A mensagem da REDE (campo 030) sobe junto com a aprovação, como já subia na
+            // administrativa: é ela que a tela de pagamento mostra ao operador.
+            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, r.Mensagem, false)
             { Codigo = CodigoTef.Pago, PaymentStatus = situacao };
         }
         finally { _um.Release(); }

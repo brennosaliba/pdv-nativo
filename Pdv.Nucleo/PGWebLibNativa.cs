@@ -108,7 +108,8 @@ public sealed class PGWebLibNativa : IPGWebLib
                 TamanhoMinimo: bTamanhoMinimo, TamanhoMaximo: bTamanhoMaximo,
                 Mascara: string.IsNullOrEmpty(szMascaraDeCaptura) ? null : szMascaraDeCaptura,
                 ValorInicial: string.IsNullOrEmpty(szValorInicial) ? null : szValorInicial,
-                Ocultar: bOcultarDadosDigitados != 0, AceitaNulo: bAceitaNulo != 0);
+                Ocultar: bOcultarDadosDigitados != 0, AceitaNulo: bAceitaNulo != 0,
+                NotificarCancelamento: bNotificarCancelamento != 0);
         }
     }
 

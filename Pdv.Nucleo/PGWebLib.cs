@@ -110,6 +110,16 @@ public static class PW
     public const ushort PWINFO_PNDAUTLOCREF = 32520;
     public const ushort PWINFO_PNDAUTEXTREF = 32521;
 
+    /// <summary>
+    /// PWINFO_OPERABORTED (0x76): a automação avisa a biblioteca de que o OPERADOR desistiu do dado
+    /// que ela pediu por PWRET_MOREDATA (Esc num PWDAT_MENU ou PWDAT_TYPED). É o que fecha a
+    /// transação com "OPERAÇÃO CANCELADA" em vez de deixá-la aberta esperando um dado que não vem;
+    /// o passo 16 do roteiro v20260819 é exatamente isso. Só é enviado quando o próprio PW_GetData
+    /// pediu o aviso (bNotificarCancelamento), porque o cabeçalho oficial declara o campo e o
+    /// parâmetro mas não documenta o uso: sem a marca da biblioteca o caixa encerra por conta.
+    /// </summary>
+    public const ushort PWINFO_OPERABORTED = 0x76;
+
     // ── informações (PWINFO_*): saída ────────────────────────────────────
     /// <summary>
     /// Conteúdo do QR que a automação tem que desenhar no checkout, lido com PW_iGetResult quando
@@ -240,9 +250,14 @@ public sealed record PwOpcaoMenu(string Texto, string Valor);
 /// </summary>
 /// <param name="Tipo">Uma das constantes PWDAT_*.</param>
 /// <param name="Identificador">PWINFO_* do dado pedido; é ele que vai em PW_iAddParam(id, valor).</param>
+/// <param name="NotificarCancelamento">
+/// bNotificarCancelamento do PW_GetData: a biblioteca quer ser avisada se o operador desistir
+/// deste dado, com PW_iAddParam(PWINFO_OPERABORTED). Falso = o caixa encerra por conta.
+/// </param>
 public sealed record PwGetData(ushort Tipo, ushort Identificador, string Prompt,
     IReadOnlyList<PwOpcaoMenu>? Opcoes = null, uint TamanhoMinimo = 0, uint TamanhoMaximo = 0,
-    string? Mascara = null, string? ValorInicial = null, bool Ocultar = false, bool AceitaNulo = false)
+    string? Mascara = null, string? ValorInicial = null, bool Ocultar = false, bool AceitaNulo = false,
+    bool NotificarCancelamento = false)
 {
     public bool EhMenu => Tipo == PW.PWDAT_MENU;
     public bool EhDigitado => Tipo is PW.PWDAT_TYPED or PW.PWDAT_BARCODE or PW.PWDAT_USERAUTH;

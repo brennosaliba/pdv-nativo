@@ -765,9 +765,9 @@ public static class Servicos
     }
 
     /// <summary>
-    /// De quem é a via que saiu da rede. <see cref="Unica"/> é o caso em que não veio nem
-    /// 713 nem 715 e sobrou um bloco só (cupom reduzido 711 ou via única 029): a rede não
-    /// diz de quem ele é, e o papel que sobra é o que vai para a MÃO DO CLIENTE.
+    /// De quem é a via que saiu da rede. <see cref="Unica"/> é o bloco que sobrou sem a rede
+    /// dizer de quem ele é (via única 029, ou o cupom reduzido num 737 que só pediu a via da
+    /// loja): o papel que sobra é o que vai para a MÃO DO CLIENTE.
     /// </summary>
     public enum ViaTef { Cliente, Estabelecimento, Unica }
 
@@ -781,7 +781,13 @@ public static class Servicos
         var vias = r.Vias ?? 3;
         var b = new List<(ViaTef, IReadOnlyList<string>)>();
         if (vias == 0) return b;   // 737 = 0: "não há comprovante" — nada sai, e o CNF não depende de papel
-        if (vias != 2 && r.ViaCliente.Count > 0) b.Add((ViaTef.Cliente, r.ViaCliente));
+        // O cupom REDUZIDO (711) é o papel do portador do cartão. Quando a rede manda a via
+        // diferenciada dele (713), o reduzido é a mesma compra em papel menor e não vira uma
+        // terceira folha. Quando não manda, o reduzido É a via do cliente: o C6PAY faz assim,
+        // reduzido para o portador e diferenciado para o lojista, e sem esta linha a via da
+        // loja preenchia a lista sozinha e o cliente saía do balcão de mão vazia.
+        var doCliente = r.ViaCliente.Count > 0 ? r.ViaCliente : r.CupomReduzido;
+        if (vias != 2 && doCliente.Count > 0) b.Add((ViaTef.Cliente, doCliente));
         if (vias != 1 && r.ViaEstabelecimento.Count > 0) b.Add((ViaTef.Estabelecimento, r.ViaEstabelecimento));
         if (b.Count == 0 && r.CupomReduzido.Count > 0) b.Add((ViaTef.Unica, r.CupomReduzido));
         if (b.Count == 0 && r.ViaUnica.Count > 0) b.Add((ViaTef.Unica, r.ViaUnica));

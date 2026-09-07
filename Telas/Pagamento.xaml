@@ -19,6 +19,13 @@
                     <TextBlock x:Name="TxtResumo" Foreground="{DynamicResource Texto}" FontSize="15" Margin="0,4,0,0"/>
                     <!-- 03/09: cada parte lançada vira um chip com ✕ (tirar lançamento por engano) -->
                     <WrapPanel x:Name="PainelPartes" Margin="0,6,0,0"/>
+                    <!-- 07/09: a resposta da REDE na cobrança aprovada ("TRANSACAO APROVADA").
+                         Fica no topo porque o topo é o único pedaço da tela que aparece em todas
+                         as fases: depois do cartão aprovado a venda anda sozinha (lança a parte e
+                         volta para as formas, ou emite a nota) e o operador nunca leria a resposta
+                         da maquininha. O passo 29 do roteiro v20260819 cobra essa frase. -->
+                    <TextBlock x:Name="TxtRecadoTef" Foreground="{DynamicResource Ok}" FontSize="14"
+                               FontWeight="Bold" Margin="0,6,0,0" Visibility="Collapsed"/>
                 </StackPanel>
                 <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center">
                     <TextBlock x:Name="TxtRotuloTotal" Text="TOTAL" Foreground="{DynamicResource TextoFraco}"

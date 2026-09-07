@@ -139,6 +139,30 @@ public static class TestesPGWebLib
             checar(!d5.Pago && d5.Situacao == SituacaoTef.Cancelado, "tela que não responde: TempoPerguntaMs encerra (nunca trava)");
         }
 
+        // ── o mesmo menu pedido duas vezes (passos 30 e 31 do roteiro) ────
+        {
+            var f = new FakePGWebLib { MenuGenericoVezes = 2 };
+            var perguntas = new List<PwGetData>();
+            var p = Provedor(f, perguntar: (g, _) => { perguntas.Add(g); return Task.FromResult<string?>("ABCDEF"); });
+            var d = Cobrar(p, TipoTef.Credito, 1002m);
+            var genericos = perguntas.Where(g => g.Identificador == FakePGWebLib.IdMenuGenerico).ToList();
+            checar(genericos.Count == 2, $"a biblioteca pede a tag 0x2F duas vezes e a tela recebe as duas (recebeu {genericos.Count})");
+            checar(genericos.Count == 2 && genericos[1].Prompt == "SELECIONAR:" && genericos[1].Opcoes!.Count == 2
+                && genericos[1].Opcoes![0].Texto == "123456" && genericos[1].Opcoes![1].Texto == "ABCDEF",
+                "o segundo menu chega igual ao primeiro: prompt SELECIONAR: e as opções 123456 e ABCDEF");
+            checar(d.Pago && P(f, FakePGWebLib.IdMenuGenerico) == "ABCDEF", "depois da segunda escolha a venda aprova, com ABCDEF na tag 0x2F");
+            checar(f.Chamadas.IndexOf($"AddParam({FakePGWebLib.IdMenuGenerico}=ABCDEF)") > f.Chamadas.IndexOf("ExecTransac") && d.Situacao != SituacaoTef.Recusado,
+                "a tag 0x2F só vai para a biblioteca depois de pedida (adiantar reprova o passo 30)");
+
+            // Desistir no segundo menu cancela a venda: a resposta do primeiro não responde pelo operador.
+            var f2 = new FakePGWebLib { MenuGenericoVezes = 2 };
+            var vezes = 0;
+            var p2 = Provedor(f2, perguntar: (_, _) => Task.FromResult(++vezes == 1 ? "123456" : null));
+            var d2 = Cobrar(p2, TipoTef.Credito, 1002m);
+            checar(!d2.Pago && d2.Situacao == SituacaoTef.Cancelado && vezes == 2 && f2.Confirmadas.Count == 0,
+                "desistir no segundo menu cancela a venda, e a tela foi perguntada as duas vezes");
+        }
+
         // ── débito, voucher e Pix ─────────────────────────────────────────
         {
             var f = new FakePGWebLib();
@@ -494,6 +518,52 @@ public static class TestesPGWebLib
             checar(!guardadas.Any(g => g.Situacao == "pago"), "administrativa/reimpressão nunca viram 'pago'");
         }
 
+        // ── passo 16: Esc no menu administrativo ─────────────────────────
+        // "Operação cancelada no menu administrativo": o operador abre o ADM pela Configuração,
+        // a lista da biblioteca vira diálogo da casa e ele aperta Esc sem escolher nada. O roteiro
+        // v20260819 cobra duas coisas: nada realizado para a automação, e a mensagem de erro
+        // "OPERAÇÃO CANCELADA" — que é da biblioteca, não nossa. Para ela poder escrevê-la, o caixa
+        // tem que avisar que o dado não vem (PW_iAddParam(PWINFO_OPERABORTED)); antes disto a
+        // transação era abandonada aberta e a tela mostrava um texto nosso no lugar da frase dela.
+        {
+            var f = new FakePGWebLib();
+            var guardadas = new List<TransacaoPayGo>();
+            var impressas = new List<TransacaoPayGo>();
+            var aud = new List<string>();
+            var perguntas = new List<PwGetData>();
+            var p = Provedor(f, t => { guardadas.Add(t); return true; }, imprimir: t => { impressas.Add(t); return Task.FromResult(true); },
+                perguntar: (g, _) => { perguntas.Add(g); return Task.FromResult<string?>(null); }, auditoria: aud);
+            var d = p.AdministrativaAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+            checar(perguntas.Count == 1 && perguntas[0].EhMenu && perguntas[0].NotificarCancelamento,
+                "o menu administrativo chega ao operador com bNotificarCancelamento ligado");
+            checar(P(f, PW.PWINFO_OPERABORTED) == "1",
+                "Esc no menu: o caixa avisa a biblioteca com PW_iAddParam(PWINFO_OPERABORTED)");
+            checar(d.Motivo == "OPERACAO CANCELADA",
+                "e a mensagem que sobe para a tela é a da biblioteca (PWINFO_RESULTMSG), não uma frase nossa: " + d.Motivo);
+            checar(!d.Pago && d.Situacao == SituacaoTef.Cancelado && d.Codigo == CodigoTef.Cancelado,
+                "desfecho cancelado, nunca recusa nem erro de plataforma");
+            checar(guardadas.Count == 0 && f.Confirmadas.Count == 0 && impressas.Count == 0,
+                "transação não realizada: nada em tef_transacao, nada confirmado, nada impresso");
+            checar(P(f, FakePGWebLib.IdMenuAdm) is null, "e nenhuma opção do menu foi respondida no lugar do operador");
+            checar(aud.Any(a => a.Contains("PWINFO_OPERABORTED")), "a auditoria registra o aviso, que é a prova do passo 16");
+
+            // A frase da tela da Configuração é montada com esse Motivo: é ela a evidência do passo.
+            checar(("✗ Operação administrativa não concluída: " + (d.Motivo ?? "sem detalhe")).Contains("OPERACAO CANCELADA"),
+                "a linha da Configuração mostra a frase da biblioteca");
+
+            // Biblioteca que NÃO pede aviso (bNotificarCancelamento=0): o caixa não inventa o
+            // parâmetro, encerra por conta e mostra a frase da casa. É o comportamento de sempre.
+            var f2 = new FakePGWebLib { MenuAdmPedeAviso = false };
+            var guardadas2 = new List<TransacaoPayGo>();
+            var p2 = Provedor(f2, t => { guardadas2.Add(t); return true; }, perguntar: (_, _) => Task.FromResult<string?>(null));
+            var d2 = p2.AdministrativaAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(P(f2, PW.PWINFO_OPERABORTED) is null, "sem a marca da biblioteca o caixa não manda PWINFO_OPERABORTED");
+            checar(!d2.Pago && d2.Situacao == SituacaoTef.Cancelado && d2.Motivo == "operação cancelada pelo operador" && guardadas2.Count == 0,
+                "e mesmo assim: cancelado, nada gravado, frase da casa intacta (" + d2.Motivo + ")");
+            checar(d2.Motivo is not null && !d2.Motivo.Contains('—'), "sem travessão no texto que vai para a tela");
+        }
+
         // ── ambiente: produção x homologação (PW_iSetEnvironment) ────────
         {
             // O kit avulso da biblioteca, sem o PayGo Windows, atende os dois ambientes com a
@@ -504,10 +574,14 @@ public static class TestesPGWebLib
             p.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
             checar(f.AmbientesPedidos.Count == 1 && f.AmbientesPedidos[0] == PW.ENVRMNT_TEST,
                 "config em homologação: PW_iSetEnvironment(ENVRMNT_TEST) uma vez");
+            // Medido em 07/09/2026 com a biblioteca de verdade: chamada ANTES do PW_iInit, ela
+            // devolve PWRET_NOTINST e o ambiente NAO e aplicado, ou seja, o caixa continuaria no
+            // host de producao calado. Depois do Init funciona. O cabecalho oficial exige que ela
+            // venha antes de o PONTO DE CAPTURA estar instalado, e vem.
             var ordem = f.Chamadas.FindIndex(c => c.StartsWith("SetEnvironment"));
             var ordemInit = f.Chamadas.IndexOf("Init");
-            checar(ordem >= 0 && ordemInit >= 0 && ordem < ordemInit,
-                "e ela vem ANTES do PW_iInit, como o cabeçalho oficial exige");
+            checar(ordem >= 0 && ordemInit >= 0 && ordem > ordemInit,
+                "e ela vem DEPOIS do PW_iInit (antes, a biblioteca de verdade recusa com NOTINST)");
 
             var f2 = new FakePGWebLib();
             var p2 = Provedor(f2);
@@ -742,6 +816,23 @@ public static class TestesPGWebLib
             checar(!r.RequerConfirmacao && r.Rede == "CIELO" && r.Nsu == "99" && r.ValorCent == 1500, "CNFREQ=0 -> 729=1; rede/NSU/valor");
             checar(r.ViaUnica.Count == 3 && r.ViaCliente.Count == 0 && r.Vias == 1, "RCPTFULL só vira 029 quando não há 713/715; tolera CR, LF e CRLF");
             checar(r.NomeCartao == "MASTERCARD DEBITO" && ClientePayGo.TBand(r.NomeCartao) == "02", "sem CARDNAMESTD, 040 recebe CARDNAME");
+            // ⭐ PASSO 09: reduzido do portador (RCPTCHSHORT) + diferenciado do lojista
+            // (RCPTMERCH), e a biblioteca não disse quantas vias (sem RCPTPRN). O reduzido
+            // conta como via do CLIENTE na hora de deduzir o 737: contando só o 713/715 o
+            // 737 saía 2 (só o lojista) e o papel do cliente ficava preso na resposta.
+            var c6 = ProvedorPGWebLib.RespostaDaLib("CRT", "9", 500, TipoTef.Credito, 1, true, new Dictionary<ushort, string>
+            {
+                [PW.PWINFO_RCPTCHSHORT] = "REDUZIDO L1\rREDUZIDO L2", [PW.PWINFO_RCPTMERCH] = "LOJISTA L1",
+            });
+            checar(c6.Vias == 3 && c6.CupomReduzido.Count == 2 && c6.ViaEstabelecimento.Count == 1 && c6.ViaCliente.Count == 0,
+                $"⭐ sem RCPTPRN, reduzido + lojista deduz 737=3 (deu {c6.Vias})");
+            var rotC6 = Servicos.ViasRotuladas(c6);
+            checar(rotC6.Count == 2 && rotC6[0].Qual == Servicos.ViaTef.Cliente && rotC6[1].Qual == Servicos.ViaTef.Estabelecimento,
+                "⭐ e as duas folhas do passo 09 chegam rotuladas à impressão automática");
+            var soReduzido = ProvedorPGWebLib.RespostaDaLib("CRT", "9", 500, TipoTef.Credito, 1, true,
+                new Dictionary<ushort, string> { [PW.PWINFO_RCPTCHSHORT] = "REDUZIDO L1" });
+            checar(soReduzido.Vias == 1 && Servicos.ViasRotuladas(soReduzido).Count == 1,
+                $"só o reduzido e sem RCPTPRN: 737=1 e a via do cliente sai (deu {soReduzido.Vias})");
             var neg = ProvedorPGWebLib.RespostaDaLib("CRT", "1", 100, TipoTef.Debito, 1, false, new Dictionary<ushort, string> { [PW.PWINFO_RESULTMSG] = "SALDO\rINSUFICIENTE" });
             checar(!neg.Aprovada && neg.Mensagem == "SALDO INSUFICIENTE" && neg.TipoCartao == 2, "negada: 009=1, 030 sem 0Dh, 731 pelo tipo");
         }

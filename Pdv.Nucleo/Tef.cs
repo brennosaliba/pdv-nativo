@@ -176,12 +176,14 @@ public sealed record DesfechoTef(SituacaoTef Situacao, string? PaymentIdentifier
     /// Mensagem pronta para a tela, já com o aviso da maquininha quando não deu para liberar.
     /// O sufixo NÃO entra em `Motivo` de propósito: `Motivo` é o que vai para o banco/auditoria.
     ///
-    /// Em venda PAGA devolve vazio: o caminho de sucesso não preenche `Motivo`, e sem o teste de
-    /// `Pago` qualquer binding genérico da tela mostraria "não foi possível concluir o pagamento"
-    /// numa venda aprovada — exatamente a frase que faz o operador cobrar de novo.
+    /// Em venda PAGA sai a mensagem da REDE, e só ela: "TRANSACAO APROVADA" é o que o passo 29 do
+    /// roteiro v20260819 manda o operador ler na tela do caixa. O que nunca pode aparecer numa venda
+    /// aprovada é o texto padrão de falha — sem o teste de `Pago` qualquer binding genérico da tela
+    /// mostraria "não foi possível concluir o pagamento" numa venda aprovada, exatamente a frase que
+    /// faz o operador cobrar de novo. Provedor que não mandou mensagem devolve vazio, nunca o padrão.
     /// </summary>
     public string MensagemParaTela => Pago
-        ? ""
+        ? Motivo ?? ""
         : (Motivo ?? "não foi possível concluir o pagamento") + (PosPodeTerFicadoOcupado ? ClienteTef.SufixoPosOcupado : "");
 }
 
