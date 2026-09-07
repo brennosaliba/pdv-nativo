@@ -1674,7 +1674,8 @@ public partial class Configuracao : UserControl
         try
         {
             if (TefModo != 4) { StatusTef("Escolha \"PayGo (biblioteca)\" aqui em cima para usar este botão.", "Erro"); return; }
-            // A DLL só carrega da pasta onde o PayGo Windows a instalou: pasta apontada sem ela não adianta tentar.
+            // Pasta apontada sem a DLL não adianta tentar. (Com o kit avulso, sem Warsaw, a
+            // biblioteca carrega de qualquer pasta: medido em 07/09/2026 rodando de C:\PGWebLibd.)
             if (ConfigPGWebLib.AvisoPastaDll(TxtPgwebDll.Text) is { } avisoDll) { StatusTef("✗ " + avisoDll, "Erro"); return; }
             using (var cx = Banco.Abrir()) GravarTef(cx);
             _tefGravadoPeloTeste = true;
@@ -1685,7 +1686,7 @@ public partial class Configuracao : UserControl
                     var ok = await pg.AtivoAsync(CancellationToken.None);
                     StatusTef(ok
                         ? $"✓ A biblioteca do PayGo respondeu (pasta de trabalho {pg.PastaTrabalho}). Salve para manter."
-                        : $"✗ {pg.MotivoIndisponivel ?? ProvedorPGWebLib.MsgTefNaoResponde}. Confira se o PayGo Windows está instalado nesta máquina.",
+                        : $"✗ {pg.MotivoIndisponivel ?? ProvedorPGWebLib.MsgTefNaoResponde}.",
                         ok ? "Ok" : "Erro");
                     break;
                 case "instalar":
@@ -2164,7 +2165,8 @@ public static class AssistenteConfig
         // Biblioteca: a pasta de trabalho tem padrão e o PayGo instalado/ativado quem confere é
         // o botão Testar. O AUTCAP pode vir torto (é número de bits, ninguém digita de cabeça), e
         // a pasta da DLL, se preenchida, tem que ter a PGWebLib.dll: a DLL só carrega da pasta
-        // onde o PayGo Windows a instalou (cópia em outra pasta devolve -2414 no PW_iInit).
+        // onde a biblioteca foi copiada. (O -2414 da copia era do kit COM Warsaw; o kit avulso
+        // carrega de qualquer pasta, medido em 07/09/2026.)
         4 when d.PgwebCapacidades.Trim().Length > 0 && !int.TryParse(d.PgwebCapacidades.Trim(), out _) =>
             "Capacidades (AUTCAP) tem que ser um número, ex.: 28. Em branco vale o padrão.",
         4 when ConfigPGWebLib.AvisoPastaDll(d.PgwebDll) is { } avisoDll => avisoDll,

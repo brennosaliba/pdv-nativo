@@ -60,7 +60,10 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// <summary>Diretório de trabalho em branco: o da casa (ConfigPGWebLib.DirPadrao), fora de C:\PAYGO de propósito.</summary>
     public const string PastaPadrao = ConfigPGWebLib.DirPadrao;
 
-    public const string MsgTefNaoResponde = "TEF não responde: a PGWebLib não iniciou. Confira o PayGo Windows";
+    // 07/09/2026: a biblioteca passou a ser autonoma (kit avulso, sem o PayGo Windows e sem
+    // Warsaw), entao mandar "confira o PayGo Windows" viraria conselho para um programa que nao
+    // esta mais instalado. O que resolve hoje e conferir a pasta da biblioteca.
+    public const string MsgTefNaoResponde = "TEF não responde: a biblioteca do PayGo não iniciou. Confira a pasta configurada";
     /// <summary>O diretório de trabalho (tef_pgweb_dir) não pôde ser criado: sem ele a DLL devolve PWRET_WRITERR (medido em 07/09/2026).</summary>
     public const string MsgPastaInacessivel = "TEF não responde: a PGWebLib não iniciou, pasta de trabalho inacessível";
     public const string MsgNaoInstalado = "PayGo não instalado neste terminal: faça a instalação pelo menu do TEF";
