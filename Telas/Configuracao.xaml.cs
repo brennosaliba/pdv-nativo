@@ -180,6 +180,7 @@ public partial class Configuracao : UserControl
         TxtPgwebDll.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveDll, "");
         TxtPgwebPorta.Text = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
         TxtPgwebCapacidades.Text = Vendas.Config(cx, "tef_pgweb_capacidades", "");
+        TxtPgwebRedes.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveRedes, "");
         TxtPgwebEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
         ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
         ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "1") == "1";
@@ -362,6 +363,7 @@ public partial class Configuracao : UserControl
         PayGoRedePix = RedeEscolhida(TefModo == 4 ? CboPgwebRedePix : CboPayGoRedePix),
         PgwebDir = TxtPgwebDir.Text,
         PgwebDll = TxtPgwebDll.Text,
+        PgwebRedes = TxtPgwebRedes.Text,
         PgwebCapacidades = TxtPgwebCapacidades.Text,
         CpayChave = PwdCpayChave.Password,
         CpayPessoa = TxtCpayPessoa.Text,
@@ -1390,7 +1392,7 @@ public partial class Configuracao : UserControl
         // As redes também: o Testar grava o que está na tela, e sair sem salvar tem que
         // devolver a rede que estava valendo — rede trocada é cobrança recusada.
         "tef_cpay_adquirente", "tef_cpay_adquirente_pix",
-        "tef_pgweb_dir", "tef_pgweb_porta_pinpad", "tef_pgweb_capacidades", ConfigPGWebLib.ChaveDll,
+        "tef_pgweb_dir", "tef_pgweb_porta_pinpad", "tef_pgweb_capacidades", ConfigPGWebLib.ChaveDll, ConfigPGWebLib.ChaveRedes,
     };
     private readonly Dictionary<string, string?> _tefOriginal = new();
     private bool _tefGravadoPeloTeste;   // Testar/ADM gravaram sem Salvar
@@ -1487,6 +1489,9 @@ public partial class Configuracao : UserControl
         Chave(ConfigPGWebLib.ChaveDll, TxtPgwebDll.Text);   // em branco: o Windows procura a PGWebLib.dll sozinho
         Chave("tef_pgweb_porta_pinpad", TxtPgwebPorta.Text);
         Chave("tef_pgweb_capacidades", TxtPgwebCapacidades.Text);
+        // Em branco APAGA a chave, e chave apagada é o menu inteiro: a loja volta a ver todas as
+        // redes do terminal, que é o padrão.
+        Chave(ConfigPGWebLib.ChaveRedes, FiltroRedes.Texto(new[] { TxtPgwebRedes.Text }));
         // `tef_paygo_imprimir_vias` NÃO é gravada aqui: quem manda nela agora são as duas
         // políticas de via do passo Impressora (Impressoes.Gravar a mantém em sincronia).
         // Ela continua em ChavesTef porque o Sair sem salvar tem que devolvê-la.
@@ -1691,8 +1696,12 @@ public partial class Configuracao : UserControl
                     break;
                 case "instalar":
                     var di = await pg.InstalarAsync(CancellationToken.None);
+                    // A frase da REDE entra junto ("TRANSACAO APROVADA"): é o que os passos 01 e 18
+                    // do roteiro mandam o operador ler na instalação. O ramo administrativo, logo
+                    // abaixo, já fazia isso; aqui a resposta da rede estava sendo jogada fora.
                     StatusTef(di.Pago
-                        ? "✓ Ponto de captura instalado. Toque em Testar a maquininha e depois em Salvar."
+                        ? "✓ Ponto de captura instalado." + (di.Motivo is { Length: > 0 } mi ? " " + mi + "." : "")
+                          + " Toque em Testar a maquininha e depois em Salvar."
                         : "✗ Instalação não concluída: " + (di.Motivo ?? "sem detalhe"),
                         di.Pago ? "Ok" : "Erro");
                     break;
@@ -1848,6 +1857,8 @@ public sealed record DadosAssistente
     public string PgwebCapacidades { get; init; } = "";
     /// <summary>Pasta da PGWebLib.dll (tef_pgweb_dll). Em branco o Windows procura (pasta do exe e PATH).</summary>
     public string PgwebDll { get; init; } = "";
+    /// <summary>Redes que o caixa pode escolher no menu (tef_pgweb_redes), separadas por vírgula. Em branco: todas.</summary>
+    public string PgwebRedes { get; init; } = "";
     public string PayGoRedeCartao { get; init; } = "";
     public string PayGoRedePix { get; init; } = "";
     public string CpayChave { get; init; } = "";
@@ -2310,7 +2321,11 @@ public static class AssistenteConfig
                  + (d.CpaySandbox ? " · AMBIENTE DE TESTE (sandbox): nenhuma cobrança é de verdade" : ""),
             4 => $"PayGo (biblioteca) · pasta de trabalho {(d.PgwebDir.Trim().Length == 0 ? ConfigPGWebLib.DirPadrao : d.PgwebDir.Trim())} · "
                  + (d.PgwebDll.Trim().Length > 0 ? $"DLL em {d.PgwebDll.Trim()} · " : "")
-                 + Rede(d.PayGoRedeCartao, "cartão") + " · " + Rede(d.PayGoRedePix, "PIX"),
+                 + Rede(d.PayGoRedeCartao, "cartão") + " · " + Rede(d.PayGoRedePix, "PIX")
+                 // Lista encurtada é escolha que o caixa VÊ na hora da venda: some do menu a rede
+                 // que ficou de fora, e ninguém procura o motivo numa tela de configuração.
+                 + (FiltroRedes.Ler(d.PgwebRedes) is { Count: > 0 } redes
+                    ? $" · o caixa só escolhe entre {string.Join(", ", redes)}" : ""),
             _ => "Maquininha avulsa: o cliente passa o cartão na maquininha da mão. O caixa "
                  + "registra que foi cartão e fecha a venda, mas não cobra nada por aqui.",
         };

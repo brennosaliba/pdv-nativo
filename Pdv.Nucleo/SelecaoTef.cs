@@ -5,7 +5,9 @@
 //     arquivos (tef_paygo_rede/rede_pix/empresa) viram OpcoesPGWebLib;
 //   · RespostaDaTela: o tradutor entre o PwGetData que a biblioteca pede (menu, dado digitado,
 //     senha) e os diálogos da casa (Dialogo.Escolher, PedirTexto, PedirSenha). A tela só
-//     chama o diálogo; quem decide título, validação e valor devolvido é este arquivo.
+//     chama o diálogo; quem decide título, validação e valor devolvido é este arquivo;
+//   · FiltroRedes: a lista de redes que a loja deixa aparecer no menu de seleção da rede
+//     (tef_pgweb_redes) e como ela encurta esse menu sem nunca esvaziá-lo.
 namespace Pdv.Nucleo;
 
 /// <summary>Os provedores que `tef_provedor` pode nomear. <see cref="Nenhum"/> = tef_habilitado != 1.</summary>
@@ -95,6 +97,18 @@ public static class ConfigPGWebLib
     /// </summary>
     public const string ChaveQrNaTela = "tef_pgweb_qr_na_tela";
 
+    /// <summary>
+    /// As redes que a loja deixa aparecer no menu de seleção da rede, separadas por vírgula.
+    /// Em branco (o padrão) o menu mostra tudo que a biblioteca listar, que é o certo numa loja
+    /// de verdade: quem sabe o que está credenciado no terminal é o PayGo, não o caixa.
+    ///
+    /// NÃO é a mesma coisa que `tef_paygo_rede`. Aquela FIXA a rede e o menu deixa de aparecer;
+    /// esta só encurta a lista, e o menu continua aparecendo mesmo com uma opção só. A diferença
+    /// é o passo 05 do roteiro: ele manda apertar Esc no menu de seleção da rede, e sem menu não
+    /// há onde apertar.
+    /// </summary>
+    public const string ChaveRedes = "tef_pgweb_redes";
+
     /// <summary>Diretório de trabalho da biblioteca (PW_iInit). Fora de C:\PAYGO de propósito: é nosso, não do PayGo Windows.</summary>
     public const string DirPadrao = @"C:\ProgramData\PdvNativo\pgweb";
 
@@ -122,6 +136,9 @@ public static class ConfigPGWebLib
     /// <summary>A loja pediu para desenhar o QR do Pix na tela do caixa?</summary>
     public static bool QrNaTela(Func<string, string?> config)
         => (config(ChaveQrNaTela)?.Trim() ?? "") == "1";
+
+    /// <summary>As redes de <see cref="ChaveRedes"/> já quebradas. Vazia = o menu mostra todas.</summary>
+    public static IReadOnlyList<string> Redes(Func<string, string?> config) => FiltroRedes.Ler(config(ChaveRedes));
 
     /// <summary>
     /// As capacidades que a automação declara. CAP_QR e CAP_MSG_CHECKOUT entram JUNTAS e só quando
@@ -185,7 +202,8 @@ public static class ConfigPGWebLib
             RedeCartao: Limpo(config("tef_paygo_rede")),
             RedePix: Limpo(config("tef_paygo_rede_pix")),
             PortaPinpad: Limpo(config(ChavePortaPinpad)) ?? "0",
-            Ambiente: Ambiente(config));
+            Ambiente: Ambiente(config),
+            RedesPermitidas: Redes(config));
     }
 }
 
@@ -256,4 +274,88 @@ public static class RespostaDaTela
             return (null, max > 0 ? $"Digite entre {min} e {max} caracteres." : $"Digite pelo menos {min} caracteres.");
         return (v, null);
     }
+}
+
+/// <summary>
+/// A lista de redes que a loja deixa o caixa ver (<see cref="ConfigPGWebLib.ChaveRedes"/>) e como
+/// ela encurta o menu de seleção da rede (PWDAT_MENU com PWINFO_AUTHSYST) que a biblioteca manda.
+///
+/// Por que existe: o terminal lista TUDO que está instalado nele, e quem opera precisa escolher
+/// entre nomes parecidos com o cliente esperando. Na homologação isso é pior ainda: o roteiro usa
+/// três autorizadores e só três (C6PAY na maioria das vendas, REDE no passo 38, PIX C6 BANK nos
+/// passos 11, 55 e 56), e tocar no vizinho errado queima a venda e o passo.
+///
+/// Quatro coisas aqui são inegociáveis:
+///
+///   1. lista VAZIA mostra tudo, e é o padrão. Numa loja de verdade quem sabe o que está
+///      credenciado no terminal é o PayGo, não a nossa config;
+///   2. o menu continua APARECENDO, nem que sobre uma opção. Quem mata o menu é a rede fixa
+///      (`tef_paygo_rede`), e com ela morre o passo 05, que manda apertar Esc nesse menu;
+///   3. filtro que não casa com NADA é filtro ignorado: mostra a lista inteira e deixa a linha na
+///      auditoria. Menu vazio no meio de uma venda é pior do que filtro que não pegou;
+///   4. o que volta para a biblioteca é sempre o VALOR da opção dela. Aqui só se escondem linhas:
+///      as opções que sobram são os mesmos objetos que a biblioteca mandou, nunca o texto que
+///      alguém digitou na Configuração.
+///
+/// Vale SÓ para o menu de rede. Menu de outra coisa (o administrativo, o genérico dos passos 30 e
+/// 31) passa inteiro: a lista da loja fala de credenciadora, e nada mais.
+/// </summary>
+public static class FiltroRedes
+{
+    /// <summary>Os separadores aceitos. A tela pede vírgula; ponto e vírgula e quebra de linha entram porque é o que sai de um texto colado.</summary>
+    private static readonly char[] Separadores = { ',', ';', '\n', '\r' };
+
+    /// <summary>
+    /// Quebra o texto da config em nomes de rede. Vazio, só espaços ou só separadores devolvem
+    /// lista vazia, que é o "mostra tudo".
+    /// </summary>
+    public static IReadOnlyList<string> Ler(string? config)
+    {
+        if (string.IsNullOrWhiteSpace(config)) return Array.Empty<string>();
+        var redes = new List<string>();
+        foreach (var parte in config.Split(Separadores, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var nome = parte.Trim();
+            if (nome.Length > 0) redes.Add(nome);
+        }
+        return redes;
+    }
+
+    /// <summary>O texto para gravar de volta na config a partir de uma lista.</summary>
+    public static string Texto(IEnumerable<string>? redes)
+        => redes is null ? "" : string.Join(", ", Ler(string.Join(",", redes)));
+
+    /// <summary>
+    /// O pedido que vai para a tela. Devolve o MESMO objeto quando não há o que encurtar (não é
+    /// menu de rede, lista vazia, nada casou, ou casou tudo); senão um pedido igual com menos
+    /// opções, na ordem em que a biblioteca mandou.
+    /// </summary>
+    public static PwGetData Aplicar(PwGetData pedido, IReadOnlyList<string>? permitidas, Action<string>? auditar = null)
+    {
+        // Só o menu de rede: o administrativo e os menus genéricos passam inteiros.
+        if (!pedido.EhMenu || pedido.Identificador != PW.PWINFO_AUTHSYST) return pedido;
+        if (permitidas is null || permitidas.Count == 0) return pedido;
+        if (pedido.Opcoes is null || pedido.Opcoes.Count == 0) return pedido;
+
+        // Casa pelo VALOR ou pelo TEXTO da opção: as duas colunas vêm da biblioteca e nem sempre
+        // são iguais. A comparação é a mesma da lista fechada de credenciadoras (RedesPayGo):
+        // dobra acento, maiúscula e espaço nas pontas, e não mexe no espaço interno.
+        var casadas = pedido.Opcoes
+            .Where(o => permitidas.Any(r => RedesPayGo.Mesma(r, o.Valor) || RedesPayGo.Mesma(r, o.Texto)))
+            .ToList();
+
+        if (casadas.Count == 0)
+        {
+            // Ignorar o filtro é a saída menos ruim: com o menu vazio o operador não teria como
+            // escolher nem como sair, e a venda morreria sem ninguém entender por quê.
+            auditar?.Invoke($"pgweblib: as redes da loja ({Lista(permitidas)}) não casaram com nenhuma opção do menu ({Lista(pedido.Opcoes.Select(o => o.Texto))}); mostrando todas");
+            return pedido;
+        }
+        if (casadas.Count == pedido.Opcoes.Count) return pedido;
+
+        auditar?.Invoke($"pgweblib: menu de redes encurtado pela lista da loja: {casadas.Count} de {pedido.Opcoes.Count} ({Lista(casadas.Select(o => o.Texto))})");
+        return pedido with { Opcoes = casadas };
+    }
+
+    private static string Lista(IEnumerable<string> nomes) => string.Join("|", nomes);
 }

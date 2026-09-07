@@ -28,9 +28,16 @@ namespace Pdv.Nucleo;
 /// <param name="RedeCartao">Valor para o menu PWINFO_AUTHSYST em cartão (ex.: `REDE`). Null = a biblioteca mostra o menu.</param>
 /// <param name="RedePix">Idem para Pix. Null = menu.</param>
 /// <param name="PortaPinpad">PWINFO_PPCOMMPORT; "0" = automática.</param>
+/// <param name="RedesPermitidas">
+/// As redes que o menu de seleção da rede pode mostrar ao operador (`tef_pgweb_redes`). Vazia ou
+/// null = mostra o que a biblioteca listar, que é o padrão. Encurtar NÃO é o mesmo que fixar:
+/// o menu continua aparecendo, e é nele que o passo 05 do roteiro manda apertar Esc. Ver
+/// <see cref="FiltroRedes"/>.
+/// </param>
 public sealed record OpcoesPGWebLib(string NomeAutomacao, string VersaoAutomacao, string Desenvolvedor,
     int Capacidades = ProvedorPGWebLib.CapacidadesPadrao, string? RedeCartao = null, string? RedePix = null,
-    string PortaPinpad = "0", string Moeda = "986", short Ambiente = PW.ENVRMNT_PROD);
+    string PortaPinpad = "0", string Moeda = "986", short Ambiente = PW.ENVRMNT_PROD,
+    IReadOnlyList<string>? RedesPermitidas = null);
 
 /// <summary>
 /// O que a biblioteca mandou o caixa mostrar na tela enquanto a transação corre.
@@ -522,7 +529,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 await ImprimirSeguroAsync(tx).ConfigureAwait(false);
             }
             Guardar(original with { Situacao = "estornada", Motivo = "estornada por " + chargeId });
-            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, Cartao(r), null, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit };
+            // A frase da REDE sobe com o cancelamento aprovado, como já sobe com a venda: os passos
+            // 44 e 46 do roteiro v20260819 pedem "TRANSAÇÃO APROVADA" para o operador DEPOIS do
+            // cancelamento, não só depois da venda. Antes o desfecho vinha mudo e a tela do estorno
+            // não tinha o que mostrar. Biblioteca calada continua devolvendo vazio, nunca uma frase
+            // nossa disfarçada de resposta da rede.
+            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, Cartao(r), r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit };
         }
         finally { _um.Release(); }
     }
@@ -883,8 +895,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 case PW.PWRET_CANCEL:
                     // Depois de PW_iPPAbort a biblioteca encerra o fluxo com PWRET_CANCEL: foi o
                     // operador. Sem abort, foi cancelado no pinpad ou pela própria biblioteca.
+                    //
+                    // Nos DOIS casos vale a frase que a biblioteca deixou em PWINFO_RESULTMSG, e a
+                    // da casa é só o padrão de quem ficou calado. Antes, quando quem cancelou era o
+                    // operador, a frase da rede era descartada de propósito — e é justamente esse o
+                    // passo 55 do roteiro v20260819 (Esc na tela do QR do Pix), que cobra "OPERAÇÃO
+                    // CANCELADA" para a automação. O passo 05, o mesmo desfecho pelo menu de redes,
+                    // já respeitava a frase da biblioteca; este caminho não.
                     LerResultados(fim);
-                    return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, abortado ? "cobrança cancelada pelo operador" : Mensagem(fim, "operação cancelada"));
+                    return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado,
+                        Mensagem(fim, abortado ? "cobrança cancelada pelo operador" : "operação cancelada"));
                 case PW.PWRET_TIMEOUT:
                     LerResultados(fim);
                     return Encerrar(fim, SituacaoTef.Timeout, CodigoTef.Timeout, Mensagem(fim, "tempo esgotado no pinpad"));
@@ -919,7 +939,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 {
                     if (ctx.Respondidos.ContainsKey(p.Identificador))
                         Auditar?.Invoke($"pgweblib: o TEF pediu de novo o dado {p.Identificador}; a tela pergunta outra vez");
-                    var resposta = await PerguntarSeguroAsync(ctx, p).ConfigureAwait(false);
+                    // A loja pode encurtar o menu de redes (tef_pgweb_redes): o que vai para a
+                    // tela é a lista já encurtada, e é por isso que o filtro mora aqui e não na
+                    // tela — assim os botões e o valor devolvido saem da MESMA lista, e não tem
+                    // como o operador tocar em C6PAY e a biblioteca receber CIELO. O menu nunca
+                    // fica vazio: ver FiltroRedes.
+                    var resposta = await PerguntarSeguroAsync(ctx, FiltroRedes.Aplicar(p, _op.RedesPermitidas, Auditar)).ConfigureAwait(false);
                     // A tela pode devolver o texto da opção ("RELATORIO") ou o valor em outra caixa
                     // ("cielo"): o que vai para a biblioteca é sempre o VALOR da opção.
                     valor = resposta is null ? null : (Casar(p, resposta) ?? resposta);

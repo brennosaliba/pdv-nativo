@@ -42,7 +42,10 @@ INSERT INTO config (chave, valor, atualizado) VALUES
   ('tef_pgweb_ambiente',     'homologacao',                     strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime')),
   -- 1 desenha o QR do Pix na TELA DO CAIXA (o roteiro pede isso no passo 55: Esc na tela do QR
   -- cancela a venda). Sem esta chave o cliente le o QR no pinpad, que e o que as lojas fazem hoje.
-  ('tef_pgweb_qr_na_tela',   '1',                               strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime'))
+  ('tef_pgweb_qr_na_tela',   '1',                               strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime')),
+  -- As unicas redes que o roteiro usa. O menu CONTINUA aparecendo (o passo 05 manda apertar Esc
+  -- nele), so mostra menos linhas. Em branco volta a mostrar todas, que e o certo na loja.
+  ('tef_pgweb_redes',        'C6PAY, REDE, PIX C6 BANK',        strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime'))
 ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor, atualizado = excluded.atualizado;
 COMMIT;
 

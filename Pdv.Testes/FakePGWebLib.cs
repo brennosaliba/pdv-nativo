@@ -72,6 +72,27 @@ public sealed class FakePGWebLib : IPGWebLib
     public bool ComSenha { get; set; } = true;
     public bool PedirRemocao { get; set; } = true;
     public bool Cnfreq { get; set; } = true;
+    /// <summary>
+    /// A biblioteca responde SEM escrever PWINFO_RESULTMSG. Existe porque quase metade do roteiro
+    /// v20260819 cobra uma frase da rede na tela ("TRANSAÇÃO APROVADA", "OPERAÇÃO CANCELADA") e o
+    /// caixa passou a mostrar a frase DELA: é preciso provar também o contrário, que biblioteca
+    /// calada não deixa o operador sem recado nem faz o caixa inventar uma frase.
+    /// </summary>
+    public bool SemResultMsg { get; set; }
+
+    /// <summary>
+    /// O que a biblioteca deixa em PWINFO_RESULTMSG quando a transação encerra por PW_iPPAbort (o
+    /// Esc do operador). Vazio = ela encerra calada, que é como esta fake sempre se comportou.
+    ///
+    /// ⚠️ NÃO é fato medido: o cabeçalho não descreve o RESULTMSG do aborto, e a DLL de verdade só
+    /// vai dizer na homologação. Serve para provar o que é responsabilidade NOSSA — que a frase da
+    /// biblioteca, quando existe, chega à automação em vez de ser descartada porque quem cancelou
+    /// foi o operador. É o que o passo 55 do roteiro cobra ("OPERAÇÃO CANCELADA"). Com a fake
+    /// calada (o padrão) o caixa continua mostrando a frase da casa, e essa é a outra metade da
+    /// prova.
+    /// </summary>
+    public string MensagemAoAbortar { get; set; } = "";
+
     /// <summary>PW_iConfirmation devolve PWRET_WRITERR uma vez (e a pendência fica).</summary>
     public bool FalharConfirmacao { get; set; }
     /// <summary>PW_iConfirmation lança (o processo caiu no meio).</summary>
@@ -219,7 +240,14 @@ public sealed class FakePGWebLib : IPGWebLib
         pedidos = Array.Empty<PwGetData>();
         if (!_iniciada) return PW.PWRET_DLLNOTINIT;
         if (_ppEsperado is not null) return PW.PWRET_INVCALL;          // pediu captura e a automação não capturou
-        if (_cancelada || _abortada) return PW.PWRET_CANCEL;
+        if (_cancelada || _abortada)
+        {
+            // Encerrar por PW_iPPAbort é o passo 55 do roteiro (Esc na tela do QR). Se a biblioteca
+            // escreve alguma coisa em PWINFO_RESULTMSG ao encerrar assim, ela é da REDE e tem que
+            // chegar à automação — ver MensagemAoAbortar.
+            if (MensagemAoAbortar.Length > 0 && !SemResultMsg) _res[PW.PWINFO_RESULTMSG] = MensagemAoAbortar;
+            return PW.PWRET_CANCEL;
+        }
         if (_params.ContainsKey(PW.PWINFO_OPERABORTED))
         {
             // A automação avisou que o operador desistiu do dado pedido (PWINFO_OPERABORTED): a
@@ -236,7 +264,7 @@ public sealed class FakePGWebLib : IPGWebLib
             _res[PW.PWINFO_RESULTMSG] = "TRANSACAO PENDENTE NAO RESOLVIDA";
             return PW.PWRET_INVCALL;
         }
-        return _oper switch
+        var ret = _oper switch
         {
             PW.PWOPER_SALE => Venda(out pedidos),
             PW.PWOPER_SALEVOID => Cancelamento(out pedidos),
@@ -246,6 +274,8 @@ public sealed class FakePGWebLib : IPGWebLib
             PW.PWOPER_VERSION => Versao(),
             _ => PW.PWRET_INVCALL,
         };
+        if (SemResultMsg) _res.Remove(PW.PWINFO_RESULTMSG);
+        return ret;
     }
 
     private short Venda(out IReadOnlyList<PwGetData> pedidos)

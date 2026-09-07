@@ -2826,7 +2826,12 @@ public partial class Venda : UserControl
                 return;
             }
             Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, aut.Autorizador, detalhe);
+            // A resposta da MAQUININHA vem primeiro ("TRANSACAO APROVADA"): é o que os passos 44 e
+            // 46 do roteiro mandam o operador ler no cancelamento. Depois dela, em português, o que
+            // isso significou para o caixa. Maquininha calada não deixa buraco na frase.
+            var daRede = d.MensagemParaTela.Trim();
             Dialogo.Avisar(dono, "Estorno feito",
+                (daRede.Length > 0 ? daRede + ".\n\n" : "") +
                 $"{valor.Formatado()} voltou para o cliente (NSU {nsu}) e a venda #{numero} foi cancelada." +
                 (dinheiro > 0 ? $" Essa venda também tinha {new Dinheiro(dinheiro).Formatado()} em dinheiro: devolva na mão." : ""),
                 "ok");

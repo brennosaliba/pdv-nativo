@@ -101,6 +101,21 @@ public static class RedesPayGo
     public static string? CanonicoPix(string? valor) => Achar(Pix, valor);
 
     /// <summary>
+    /// Os dois nomes falam da MESMA credenciadora? Compara pela <see cref="Chave"/>: sem acento,
+    /// sem diferença de maiúscula e minúscula, sem espaço nas pontas. Vazio não casa com nada.
+    ///
+    /// Vale para nome que NÃO está na lista oficial: é isso que a lista de redes do menu
+    /// (`tef_pgweb_redes`) precisa, porque quem nomeia as opções do menu é a biblioteca, e o
+    /// terminal pode listar credenciadora que a lista daqui ainda não conhece. O espaço INTERNO
+    /// continua contando: `C6 PAY` e `C6PAY` são redes diferentes para o PayGo (nota do topo).
+    /// </summary>
+    public static bool Mesma(string? a, string? b)
+    {
+        var chave = Chave(a);
+        return chave.Length > 0 && chave == Chave(b);
+    }
+
+    /// <summary>
     /// Valor que vai para o TEF (`010-000` / `adquirente`) no cartão. Vazio vira null — é assim
     /// que PayGo e ControlPay entendem "sem pré-seleção".
     /// </summary>

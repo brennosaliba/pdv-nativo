@@ -79,6 +79,29 @@ public static class TestesEscNaRede
             checar(f.Confirmadas.Count == 0, "e nenhum CNF foi mandado à biblioteca");
         }
 
+        // ── 1b. e o Esc na VENDA fala a frase que o roteiro cobra ────────────────
+        // O passo 05 e o passo 16 pedem a MESMA coisa em lugares diferentes: Esc num menu, e
+        // "OPERAÇÃO CANCELADA" para a automação. Quem escreve essa frase é a biblioteca, e para
+        // escrevê-la ela precisa do aviso PW_iAddParam(PWINFO_OPERABORTED). Isso estava provado
+        // só no menu administrativo (AdministrativaAsync); aqui é a VENDA, que é o caminho do
+        // passo 05. Se a rede vier sem bNotificarCancelamento, vale a frase da casa (bloco 1).
+        {
+            var f = new FakePGWebLib();
+            var guardadas = new List<TransacaoPayGo>();
+            var p = Provedor(new UmaRedeSo(f) { PedeAviso = true }, (_, _) => Task.FromResult<string?>(null),
+                guardar: t => { guardadas.Add(t); return true; });
+            var d = p.CobrarAsync(TipoTef.Credito, Dinheiro.DeReais(10m), null, 1, null, CancellationToken.None)
+                     .GetAwaiter().GetResult();
+
+            checar(f.Ultima?.Params.GetValueOrDefault(PW.PWINFO_OPERABORTED) == "1",
+                "Esc no menu de redes DA VENDA: o caixa avisa a biblioteca (PWINFO_OPERABORTED)");
+            checar(d.Motivo == "OPERACAO CANCELADA",
+                "e a frase que o roteiro cobra no passo 05 é a da biblioteca, não a da casa: " + d.Motivo);
+            checar(!d.Pago && d.Situacao == SituacaoTef.Cancelado && f.Confirmadas.Count == 0
+                   && guardadas.Count > 0 && guardadas[^1].Situacao == "cancelado",
+                "venda negada, nada confirmado, linha 'cancelado' em tef_transacao");
+        }
+
         // ── 2. o atalho continua valendo para quem GRAVOU a rede na Configuração ──
         {
             var f = new FakePGWebLib { SempreMenuRede = true };
@@ -180,12 +203,22 @@ public static class TestesEscNaRede
         private readonly FakePGWebLib _f;
         public UmaRedeSo(FakePGWebLib f) => _f = f;
 
+        /// <summary>
+        /// O menu de redes vem com bNotificarCancelamento: a biblioteca quer ser avisada se o
+        /// operador desistir. É o que faz a frase do passo 05 ("OPERAÇÃO CANCELADA") ser dela.
+        /// </summary>
+        public bool PedeAviso { get; init; }
+
         public short ExecTransac(out IReadOnlyList<PwGetData> pedidos)
         {
             var r = _f.ExecTransac(out pedidos);
             pedidos = pedidos
-                .Select(p => p.EhMenu && p.Identificador == PW.PWINFO_AUTHSYST && p.Opcoes is { Count: > 1 }
-                    ? p with { Opcoes = new[] { p.Opcoes[0] } }
+                .Select(p => p.EhMenu && p.Identificador == PW.PWINFO_AUTHSYST
+                    ? p with
+                    {
+                        Opcoes = p.Opcoes is { Count: > 1 } ? new[] { p.Opcoes[0] } : p.Opcoes,
+                        NotificarCancelamento = PedeAviso,
+                    }
                     : p)
                 .ToList();
             return r;

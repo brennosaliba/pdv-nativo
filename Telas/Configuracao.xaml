@@ -487,6 +487,10 @@
                                 <ComboBox x:Name="CboPgwebRedePix" Margin="0,4,0,0"/>
                             </StackPanel>
                         </Grid>
+                        <TextBlock Text="Redes que aparecem para o caixa escolher" Style="{StaticResource Rotulo}"/>
+                        <TextBlock Text="Encurta a lista que a maquininha mostra na hora da venda. Separe por vírgula. Em branco aparecem todas as redes do terminal, que é o normal na loja."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        <TextBox x:Name="TxtPgwebRedes" Margin="0,4,0,8" Tag="em branco: todas" TextChanged="CampoMudou"/>
                         <UniformGrid Columns="3" Margin="0,0,-8,4">
                             <Button x:Name="BtnTestarPgweb" Content="Testar a maquininha" Click="TestarPGWebLib"
                                     Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="15" Margin="0,0,8,0"/>

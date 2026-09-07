@@ -1333,6 +1333,11 @@ TestesPasso28.Rodar((cond, nome) => Check("passo28: " + nome, cond));
 TestesPasso29.Rodar((cond, nome) => Check("passo29: " + nome, cond));
 // -- passo 05: o Esc no menu de selecao da rede nega a venda ------------------
 TestesEscNaRede.Rodar((cond, nome) => Check("esc-rede: " + nome, cond));
+// -- a lista de redes que a loja deixa o caixa ver (tef_pgweb_redes) ----------
+// O roteiro usa tres autorizadores e nenhum outro (C6PAY, REDE e PIX C6 BANK), e o
+// terminal lista tudo que tem instalado. Encurtar o menu SEM matar o passo 05: menu
+// vazio nunca, filtro que nao casa mostra tudo e audita, e so o menu de rede filtra.
+TestesRedesDoMenu.Rodar((cond, nome) => Check("redes-menu: " + nome, cond));
 
 // -- FILA: o que a nuvem RECUSA para sempre ----------------------------------
 // Dead-letter carimbava enviado_em: R$ 102.626,50 sumiram do contador com tudo verde.
@@ -1628,6 +1633,16 @@ TestesValorDeTeste.Rodar((cond, nome) => Check("valor-teste: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Venda de teste sem NFC-e (passo 30: R$ 1.002,00 no C6PAY) ---");
 TestesNotaNaHomologacao.Rodar((cond, nome) => Check("nota-homolog: " + nome, cond));
+
+// -- 07/09/2026: a FRASE DA REDE chegando ao operador ---------------------------
+// Quase metade do roteiro v20260819 cobra a mesma coisa: "Mensagem para o operador:
+// TRANSACAO APROVADA", "Mensagem de erro para a Automacao: OPERACAO CANCELADA".
+// Quem escreve e a biblioteca (PWINFO_RESULTMSG). A venda ja mostrava; o
+// cancelamento (passos 44 e 46), o Esc na tela do QR (passo 55) e a instalacao
+// (passos 01 e 18) jogavam a frase fora e mostravam texto da casa por cima.
+Console.WriteLine();
+Console.WriteLine("--- A frase da rede na tela (passos 01, 18, 32, 44, 46 e 55) ---");
+TestesMensagemDaRede.Rodar((cond, nome) => Check("msg-rede: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;
