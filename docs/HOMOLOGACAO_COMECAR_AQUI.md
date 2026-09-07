@@ -3,6 +3,28 @@
 Escrito em 07/09/2026, com a máquina já preparada. Este arquivo é o que abrir na hora de sentar para
 homologar. O mapa completo dos 58 passos vem em `TEF_PAYGO_homologacao.md`.
 
+## Qual executável abrir
+
+```
+C:\Users\Waz\pdv-nativo\publish\v38\Pdv.exe
+```
+
+64 bits, 180,9 MB, versão 0.5.9, gerado do commit `100065d`. É este que tem a tela do QR do Pix, a
+escolha de ambiente e o conserto do "TEF ativo" mentiroso.
+
+**Não use o `publish\homolog-x86\Pdv.exe`.** Ele era a saída para a biblioteca que só existia em 32
+bits. O kit avulso traz a de 64, então o caixa voltou ao build normal. Aquele exe também não tem
+nada do que foi feito hoje.
+
+Conferido: o exe abre (`Pdv.exe --cupom-teste` sai com código 0 e gera o cupom de teste), e a
+máquina do PE diz x64.
+
+Como foi gerado, se precisar refazer:
+
+```bash
+dotnet publish Pdv.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=true -p:DebugType=none -o publish/v38
+```
+
 ## O que já está pronto nesta máquina
 
 | item | estado |
