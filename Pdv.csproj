@@ -39,11 +39,11 @@
        sem isso ele tenta compilar os fontes (e os obj/) deles junto, dando erro de
        atributo duplicado. -->
   <ItemGroup>
-    <Compile Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
-    <Page Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
-    <None Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
-    <EmbeddedResource Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
-    <ApplicationDefinition Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**" />
+    <Compile Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**;Pdv.SmokePGWebLib\**" />
+    <Page Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**;Pdv.SmokePGWebLib\**" />
+    <None Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**;Pdv.SmokePGWebLib\**" />
+    <EmbeddedResource Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**;Pdv.SmokePGWebLib\**" />
+    <ApplicationDefinition Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**;Pdv.SmokePGWebLib\**" />
   </ItemGroup>
 
 </Project>

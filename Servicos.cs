@@ -440,6 +440,29 @@ public static class Servicos
         catch { /* provedor velho: o pior caso é o timer morrer com o processo */ }
     }
 
+    /// <summary>
+    /// Fechamento do processo (App.OnExit): PW_End na PGWebLib se ela foi usada. Medido em
+    /// 07/09/2026: a DLL iniciada e não encerrada aborta o processo no DLL_PROCESS_DETACH
+    /// (fail-fast 0xC0000409) e o operador vê "o caixa fechou com erro". PW_End com o processo
+    /// de pé leva ~2 s (warsaw) e zera o estado; o detach vira no-op. Nunca derruba o fechamento.
+    /// </summary>
+    public static void EncerrarTef()
+    {
+        if (!PGWebLibNativa.Carregada()) return;   // a DLL nunca entrou neste processo: nada a fazer
+        IProvedorTef? atual;
+        lock (Trava) { atual = _tef; }
+        try
+        {
+            if (atual is ProvedorPGWebLib pg && pg.Encerrar() != ProvedorPGWebLib.Encerramento.NaoIniciada) return;
+            // A DLL está no processo, mas o provedor atual não foi quem a iniciou: foi uma
+            // instância já trocada pelo RecarregarTef (Testar na Configuração e depois salvar,
+            // ou trocar de provedor). PW_End direto: a DLL conta a instância desde a carga, e o
+            // PW_End sem PW_iInit encerra essa instância e sai limpo (medido: --so-end, exit 0).
+            new PGWebLibNativa().End();
+        }
+        catch { /* já estamos saindo: sem onde reclamar */ }
+    }
+
     /// <summary>Config mudou com o provedor ocupado: o próximo Tef() com a instância livre reconstrói.</summary>
     private static bool _tefVencido;
 

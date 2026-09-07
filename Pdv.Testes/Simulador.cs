@@ -272,12 +272,13 @@ public static class Simulador
             }
             else
             {
-                var apurado = Caixa.Apurado(cx, sessao);
-                var contadas = Caixa.FormasContadas(cx, sessao);
+                // O operador declara o que ELE consegue contar: a gaveta e o cartão que
+                // passou fora do TEF. O cartão do TEF entra sozinho (não se declara).
                 var contagem = new Dictionary<string, Dinheiro>();
-                foreach (var f in contadas)
+                foreach (var plano in Caixa.PlanoDeConferencia(cx, sessao).Where(p => p.Conta))
                 {
-                    var certo = apurado.TryGetValue(f, out var a) ? a : Dinheiro.Zero;
+                    var f = plano.Forma;
+                    var certo = plano.AContar;
                     if (f == "dinheiro" && eDenise)
                         // a fraude clássica: declara MENOS e leva a diferença
                         contagem[f] = certo - Dinheiro.DeReais(20 + rand.Next(41));

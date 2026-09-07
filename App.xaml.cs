@@ -121,6 +121,14 @@ public partial class App : Application
         Agente.Encerrar();
         _trava?.Dispose();
         base.OnExit(e);
+        // POR ÚLTIMO, com tudo o mais já encerrado: PW_End na PGWebLib, se ela foi usada.
+        // Medido em 07/09/2026 (4.1.50.24, x86): a DLL iniciada e não encerrada aborta o
+        // processo no DLL_PROCESS_DETACH (0xC0000409) depois do Main devolver 0, e o operador
+        // vê "o caixa fechou com erro". PW_End é a mesma rotina, chamada com o processo de pé:
+        // termina limpa e o detach vira no-op. Fica por último porque é a única chamada nativa
+        // daqui; se ela cair, nada da casa ficou por gravar (o banco grava na hora, a fila e
+        // a auditoria também).
+        Servicos.EncerrarTef();
     }
 
     /// <summary>

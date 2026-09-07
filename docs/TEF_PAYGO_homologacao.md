@@ -169,6 +169,49 @@ Legenda: ✅ no provedor · 🔧 falta no PDV · 🟡 é do PayGo/pinpad · ⛔ 
 | 57 | SIM | Cancelamento do Pix (negado pelo host) | `SALEVOID` negado; mostrar `RESULTMSG` | ✅ |
 | 58 | C6Pay Android | comprovante gráfico | | ⛔ |
 
+### Medido com a DLL de verdade (07/09/2026, PGWebLib.dll 4.1.50.24 x86, harness `Pdv.SmokePGWebLib`)
+
+Binding bateu (22 de 22 símbolos, fluxo Init, NewTransac, AddParam, ExecTransac(MOREDATA), PP*, PPEventLoop,
+GetResult inteiro). O que a DLL faz diferente da spec, e o que o PDV faz a respeito:
+
+1. **A DLL só carrega da pasta onde o PayGo Windows a instalou** (`C:\Program Files (x86)\PayGo\PGWebLib`, ou a de
+   64 bits). Cópia da PGWebLib.dll em outra pasta carrega, mas `PW_iInit` devolve **-2414** (código fora da tabela
+   pública) e nada funciona. `tef_pgweb_dll` tem que apontar para a pasta original; a Configuração avisa em uma
+   linha se a pasta apontada não tem `PGWebLib.dll` (`ConfigPGWebLib.AvisoPastaDll`).
+2. **`PW_iInit` devolve `PWRET_WRITERR` (-2485) se o diretório de trabalho não existe.** A DLL não o cria. O
+   provedor cria (`Directory.CreateDirectory`) antes de cada `PW_iInit`; sem permissão, auditoria com a pasta e o
+   motivo e a tela diz "TEF não responde: a PGWebLib não iniciou, pasta de trabalho inacessível".
+3. **`PWINFO_IDLEPROCTIME` vem `"551231235959"`** (a DLL usa 31/12/2055 como "nunca"). Lido com `yyMMddHHmmss` o
+   .NET faz 1955 e o `PW_iIdleProc` rodaria a cada tique. O século é sempre 20 (`ProvedorPGWebLib.HorarioIdle`);
+   horário no passado ou inválido cai no intervalo de segurança (`IntervaloIdleMs`).
+4. **`PW_iAddParam(PWINFO_USINGPINPAD)` e `(PWINFO_PPCOMMPORT)` devolvem `PWRET_INVPARAM` em `PWOPER_ADMIN`** (são
+   aceitos em `PWOPER_INSTALL` e na venda). Parâmetro opcional recusado vira uma linha de auditoria; a operação segue.
+5. **`PW_iGetResult(PWINFO_AUTDATETIME)` devolve `PWRET_INVPARAM`** nesta DLL (os outros infos ausentes devolvem
+   `PWRET_NODATA`). O campo fica vazio (sem 022/023/952 na resposta), sem erro.
+6. **O processo morre com fail-fast `0xC0000409` NA SAÍDA** (depois do `Main` devolver 0) sempre que a DLL foi
+   iniciada e não encerrada: o `DLL_PROCESS_DETACH` roda `PGWLib_End` -> `warsaw_sdk::Initialize` sob o loader lock
+   e aborta. Só acontece com `PW_iInit` OK (com `WRITERR` sai limpo). `FreeLibrary` não descarrega a DLL (ela se
+   prende no processo). A saída é o export **`PW_End`** (fora do exemplo oficial; sem argumentos, `ret` simples,
+   a mesma rotina do detach): chamada com o processo de pé ela termina (~2 s, passa pelo warsaw) e zera o estado,
+   e o detach vira no-op. `ProvedorPGWebLib.Encerrar()` faz isso (nunca por cima de operação em voo) e
+   `App.OnExit` chama `Servicos.EncerrarTef()` por último. Exit code do harness: -1073740791 antes, 0 depois
+   (`--sem-end` reproduz o crash).
+7. A instalação (`PWOPER_INSTALL`) com o PdC do sandbox foi recusada pelo host com `[NA A110] TIPO PONTO DE
+   CAPTURA INCORRETO`: o ponto de captura 114975 é do tipo ControlPay. Precisa de um PdC de biblioteca no Jira da
+   PayGo (portal 16). Não repetir a instalação até lá.
+8. **Efeito colateral do `PW_End`: o Warsaw protege o exe da automação.** O kit instala o serviço "Warsaw
+   Technology" (core.exe, antifraude da Diebold). No caminho do End a DLL monta a lista "caminhos protegidos"
+   (`ConfiguraCaminhosProtegidos`: pastas do PayGo, a pasta de trabalho e `gszAutoPath` = o exe que a chamou) e
+   chama `warsaw_sdk::Protect`. Depois disso o exe não pode ser sobrescrito nem renomeado, mesmo com o processo já
+   encerrado (medido com o harness: `dotnet build` falha com acesso negado ao copiar o apphost; a ACL está normal).
+   Só o exe: os outros arquivos da pasta continuam graváveis. Isso NÃO acontece sem o `PW_End` porque o detach
+   aborta antes do `Protect`. Aberto: quanto tempo dura (reboot?) e o que faz com a atualização do caixa
+   (`--atualizar` troca o Pdv.exe). Medir com o Pdv.exe instalado antes de ligar a biblioteca numa loja.
+   `Servicos.EncerrarTef` também cobre a instância trocada pelo `RecarregarTef` (Testar na Configuração e depois
+   salvar ou trocar de provedor): se a DLL está no processo e a instância atual não a iniciou, `PW_End` direto.
+   A DLL conta a instância desde a carga (`Num da Instancia` no attach), então `PW_End` sem `PW_iInit` roda o
+   encerramento inteiro (com o `Protect`) e sai limpo (medido: `--so-end`, exit 0).
+
 ### O que falta para rodar o roteiro inteiro pela DLL
 
 1. Impressão das vias na bobina (mesma pendência do TXT).
@@ -177,3 +220,89 @@ Legenda: ✅ no provedor · 🔧 falta no PDV · 🟡 é do PayGo/pinpad · ⛔ 
 4. Ambiente: PayGo Windows 5.1.50.24 instalado na máquina de homologação (kit em `docs/paygo-kit-2026-08-21`),
    PdC de sandbox + CNPJ + senha pedidos no Jira da PayGo (portal 16), `tef_pgweb_dll` apontando para a DLL de 64 bits.
 5. Logs: PGLogCollector (manual no kit) anexado ao chamado com a planilha v20260819 preenchida.
+
+## Trava do Warsaw no executavel, medida em 07/09/2026 as 13h30
+
+Depois que o processo chama `PW_End`, a DLL manda o Warsaw proteger a lista de caminhos, e o
+executavel que carregou a `PGWebLib.dll` fica **permanentemente travado naquele caminho**, com o
+processo ja encerrado e com ACL normal. Medido, com o servico "Warsaw Technology" rodando
+(ele se declara NOT_STOPPABLE):
+
+| tentativa | resultado |
+|---|---|
+| renomear o exe que carregou a DLL | barrado |
+| sobrescrever esse exe | barrado |
+| apagar esse exe | barrado |
+| criar um exe novo, com outro nome, na mesma pasta | funciona |
+| copiar o exe para uma pasta nova e mexer nele la | funciona |
+| exe que nunca carregou a DLL (`publish\homolog-x86\Pdv.exe`, `bin\Release\...\Pdv.exe`) | livre |
+
+A trava e por caminho e so pega quem carregou a biblioteca. Nao e o servico que trava tudo.
+
+### O que isso quebra
+
+O `--atualizar` troca o `Pdv.exe` no lugar. Numa loja que ja tenha aberto o TEF pela biblioteca uma
+vez, essa troca passa a falhar para sempre. O caixa ficaria preso na versao instalada.
+
+### Como resolver, antes de ligar a biblioteca em qualquer loja
+
+Instalar cada versao na sua propria pasta e apontar o atalho para a nova, em vez de sobrescrever o
+executavel que esta rodando. A pasta antiga fica no disco com o exe travado, o que nao atrapalha.
+E o mesmo desenho que qualquer atualizador usa quando o binario pode estar em uso.
+
+Enquanto isso nao existir, a biblioteca so pode ser ligada nesta maquina de homologacao.
+
+## 07/09/2026, 15h30: o kit avulso da biblioteca mudou o jogo
+
+A PayGo publicou uma versão do kit de integração **só com a PGWebLib.dll, sem a camada Warsaw**. O
+dono desinstalou o PayGo Windows e o Warsaw e passou a usar esse kit
+(`20260820-Integracao-PGWebLib_v4.1.50.924`). Isso resolveu de uma vez três coisas que estavam
+travando a homologação.
+
+### O que ficou provado, medido nesta máquina
+
+| medida | antes (PayGo Windows + Warsaw) | agora (kit avulso) |
+|---|---|---|
+| precisa do PayGo Windows instalado | sim | **não** |
+| arquitetura da DLL | só x86 | **x64 e x86**, então o PDV continua no build normal |
+| `PW_iInit` numa pasta nova | `PWRET_WRITERR`, depois OK | `PWRET_OK` em meio segundo |
+| carregar a DLL de outra pasta | recusava com `-2414` | **carrega de qualquer pasta** |
+| trava do executável depois do `PW_End` | permanente, quebrava o `--atualizar` | **some** |
+| escolher produção ou homologação | vinha do instalador | `PW_iSetEnvironment` |
+
+O terminal responde `PWRET_NOTINST` na lista de operações de venda, e o menu administrativo abre
+normalmente com INSTALACAO disponível. Ou seja, falta só rodar a instalação com o ponto de captura e
+a senha. Esse passo é do dono: eu não digito senha em campo nenhum.
+
+### O que mudou no PDV por causa disso
+
+1. **`PW_iSetEnvironment` entrou no binding.** É ela que escolhe produção (`ENVRMNT_PROD`, o padrão)
+   ou homologação (`ENVRMNT_TEST`). É chamada **antes** do `PW_iInit`, como o cabeçalho oficial
+   exige. Se a biblioteca recusar (terminal já instalado) ou nem exportar a função (versão anterior
+   à 4.1.43.10), o caixa continua funcionando e a recusa vai para a auditoria.
+   Config nova: `tef_pgweb_ambiente`, com `producao` ou `homologacao`. Sem a chave, produção.
+2. **`AtivoAsync` parou de mentir.** O `PW_iInit` devolve OK mesmo num terminal sem instalação, e o
+   provedor respondia "ativo". A tela do caixa oferecia cartão e só falhava com o cliente esperando.
+   Agora ele confere a lista de operações de venda e, quando ela devolve `PWRET_NOTINST`, responde
+   que não está ativo com a frase que manda instalar.
+3. **O aviso da pasta da DLL foi corrigido.** Ele dizia para apontar "para a pasta onde o PayGo
+   Windows a instalou", e isso deixou de ser verdade.
+
+### O que a própria PayGo avisa sobre esse kit
+
+Sem o Warsaw não há a proteção contra o vírus Prillex, que ataca justamente terminais de pagamento.
+Eles permitem usar em produção, mas por conta de quem usa, e recomendam compensar com antivírus,
+política de rede e isolamento. Vale decidir isso antes de levar a biblioteca para a loja. Para a
+máquina de homologação não muda nada.
+
+### Configuração desta máquina, já aplicada
+
+```
+tef_provedor           = pgweblib
+tef_pgweb_dll          = C:\PGWebLib\x64
+tef_pgweb_dir          = C:\ProgramData\PdvNativo\pgweb64
+tef_pgweb_ambiente     = homologacao
+tef_pgweb_porta_pinpad = 5
+```
+
+Bateria do PDV depois de tudo: 2887 OK, 0 falhas.

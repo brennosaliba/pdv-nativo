@@ -12,11 +12,14 @@ public static class TestesPGWebLib
 {
     private static readonly OpcoesPGWebLib Opcoes = new("Pdv.AmericanDay", "0.5.9", "American Day", RedeCartao: "REDE", RedePix: "PIX ITAU");
 
+    /// <summary>Diretório de trabalho da bateria: o provedor CRIA a pasta antes do PW_iInit, então tem que ser uma que possa existir sem sujar a máquina.</summary>
+    public static readonly string PastaTeste = Path.Combine(Path.GetTempPath(), "pdv-pgweb-teste");
+
     private static ProvedorPGWebLib Provedor(FakePGWebLib f, Func<TransacaoPayGo, bool>? guardar = null,
         Func<TransacaoPayGo, Task<bool>>? imprimir = null, Func<PwGetData, CancellationToken, Task<string?>>? perguntar = null,
         OpcoesPGWebLib? opcoes = null, Func<string, bool>? conhecida = null, List<string>? auditoria = null,
         int tetoExecMs = 2000, int tetoCapturaMs = 2000)
-        => new(f, @"C:\PAYGO\teste", opcoes ?? Opcoes)
+        => new(f, PastaTeste, opcoes ?? Opcoes)
         {
             IntervaloPollMs = 5,
             TempoMaxExecMs = tetoExecMs,
@@ -491,14 +494,74 @@ public static class TestesPGWebLib
             checar(!guardadas.Any(g => g.Situacao == "pago"), "administrativa/reimpressão nunca viram 'pago'");
         }
 
+        // ── ambiente: produção x homologação (PW_iSetEnvironment) ────────
+        {
+            // O kit avulso da biblioteca, sem o PayGo Windows, atende os dois ambientes com a
+            // MESMA DLL. Quem escolhe é PW_iSetEnvironment, e sem chamar nada vale produção.
+            // Antes disso, quem escolhia era o instalador do PayGo Windows.
+            var f = new FakePGWebLib();
+            var p = Provedor(f, opcoes: Opcoes with { Ambiente = PW.ENVRMNT_TEST });
+            p.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(f.AmbientesPedidos.Count == 1 && f.AmbientesPedidos[0] == PW.ENVRMNT_TEST,
+                "config em homologação: PW_iSetEnvironment(ENVRMNT_TEST) uma vez");
+            var ordem = f.Chamadas.FindIndex(c => c.StartsWith("SetEnvironment"));
+            var ordemInit = f.Chamadas.IndexOf("Init");
+            checar(ordem >= 0 && ordemInit >= 0 && ordem < ordemInit,
+                "e ela vem ANTES do PW_iInit, como o cabeçalho oficial exige");
+
+            var f2 = new FakePGWebLib();
+            var p2 = Provedor(f2);
+            p2.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(f2.AmbientesPedidos.Count == 1 && f2.AmbientesPedidos[0] == PW.ENVRMNT_PROD,
+                "sem configuração o caixa fica em produção, que é o padrão da própria biblioteca");
+
+            // Terminal já instalado recusa a troca. Isso não é defeito e não pode derrubar o caixa.
+            var aud3 = new List<string>();
+            var f3 = new FakePGWebLib { RecusarAmbiente = true };
+            var p3 = Provedor(f3, auditoria: aud3);
+            checar(p3.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult(),
+                "biblioteca recusa trocar de ambiente (terminal já instalado): o caixa continua ativo");
+            checar(aud3.Any(a => a.Contains("PW_iSetEnvironment")), "e a recusa fica na auditoria");
+
+            // Biblioteca anterior à 4.1.43.10 não exporta a função.
+            var aud4 = new List<string>();
+            var f4 = new FakePGWebLib { AmbienteLanca = true };
+            var p4 = Provedor(f4, auditoria: aud4);
+            checar(p4.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult(),
+                "biblioteca antiga sem PW_iSetEnvironment: segue no ambiente padrão, sem derrubar o caixa");
+            checar(aud4.Any(a => a.Contains("indisponível")), "e o motivo fica na auditoria");
+
+            checar(ConfigPGWebLib.Ambiente(c => c == ConfigPGWebLib.ChaveAmbiente ? "homologacao" : null) == PW.ENVRMNT_TEST
+                && ConfigPGWebLib.Ambiente(c => c == ConfigPGWebLib.ChaveAmbiente ? "homologação" : null) == PW.ENVRMNT_TEST
+                && ConfigPGWebLib.Ambiente(c => c == ConfigPGWebLib.ChaveAmbiente ? "producao" : null) == PW.ENVRMNT_PROD
+                && ConfigPGWebLib.Ambiente(_ => null) == PW.ENVRMNT_PROD
+                && ConfigPGWebLib.Ambiente(c => c == ConfigPGWebLib.ChaveAmbiente ? "  " : null) == PW.ENVRMNT_PROD,
+                "tef_pgweb_ambiente: com e sem acento vale homologação; vazio e qualquer outra coisa é produção");
+            checar(ConfigPGWebLib.RotuloAmbiente(PW.ENVRMNT_TEST) == "Homologação" && ConfigPGWebLib.RotuloAmbiente(PW.ENVRMNT_PROD) == "Produção",
+                "o rótulo que a tela mostra");
+        }
+
         // ── NOTINST, INSTALL, Init ───────────────────────────────────────
         {
             var f = new FakePGWebLib { Instalado = false };
             var p = Provedor(f);
+
+            // Medido em 07/09/2026 com a PGWebLib 4.1.50.924 de verdade, numa pasta de
+            // trabalho nova: PW_iInit devolve PWRET_OK e a biblioteca sobe inteira, mas a
+            // lista de operações de venda devolve PWRET_NOTINST. Antes deste conserto o
+            // provedor respondia "ativo" nesse estado, e a tela do caixa oferecia cartão
+            // para depois falhar com o cliente esperando.
+            checar(!p.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult(),
+                "terminal sem instalação: AtivoAsync false mesmo com PW_iInit OK");
+            checar(p.MotivoIndisponivel == ProvedorPGWebLib.MsgNaoInstalado,
+                "e o motivo é o que manda instalar, não 'TEF não responde'");
+
             var d = Cobrar(p, TipoTef.Credito, 10m);
             checar(!d.Pago && d.Situacao == SituacaoTef.Erro && d.Motivo == ProvedorPGWebLib.MsgNaoInstalado, "PWRET_NOTINST: mensagem curta mandando instalar");
             var i = p.InstalarAsync(CancellationToken.None).GetAwaiter().GetResult();
             checar(i.Pago && f.Instalado, "PWOPER_INSTALL conclui a instalação");
+            checar(p.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult() && p.MotivoIndisponivel is null,
+                "instalado, AtivoAsync volta a ser true e o motivo some");
             d = Cobrar(p, TipoTef.Credito, 10m);
             checar(d.Pago, "depois da instalação a venda sai");
             checar(f.Inits == 1, "PW_iInit uma vez só por processo (não repete a cada comando)");
@@ -528,11 +591,17 @@ public static class TestesPGWebLib
 
         // ── idle ─────────────────────────────────────────────────────────
         {
+            // Horário que já passou NÃO é "agora": cai no intervalo de segurança (a DLL de verdade
+            // devolvia 1955 pelo pivô do .NET e o IdleProc rodaria a cada tique).
             var f = new FakePGWebLib { IdleProcTime = DateTime.Now.AddSeconds(-1).ToString("yyMMddHHmmss") };
             var p = Provedor(f);
+            p.IntervaloIdleMs = 200;
             checar(!p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 0, "sem IDLEPROCTIME lido ainda: não roda");
             Cobrar(p, TipoTef.Credito, 10m);
-            checar(p.ProximoIdle is not null && p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 1, "PWINFO_IDLEPROCTIME lido na venda; horário passou -> PW_iIdleProc");
+            checar(p.ProximoIdle is { } q0 && q0 > DateTime.Now && !p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 0,
+                "PWINFO_IDLEPROCTIME lido na venda; horário no passado vira agora + intervalo de segurança, não roda já");
+            Thread.Sleep(250);
+            checar(p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 1, "passado o intervalo -> PW_iIdleProc");
             checar(!p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 1, "não repete até a biblioteca informar horário novo");
         }
 
@@ -572,9 +641,12 @@ public static class TestesPGWebLib
             var futuro = DateTime.Now.AddHours(1).ToString("yyMMddHHmmss");
             var f = new FakePGWebLib { IdleProcTime = passado, IdleProcTimeDepois = futuro };
             var p = Provedor(f);
+            p.IntervaloIdleMs = 200;
             p.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();   // só PW_iInit, nenhuma venda
-            checar(p.ProximoIdle is { } q0 && q0 < DateTime.Now && f.Lidos.Contains(PW.PWINFO_IDLEPROCTIME), "após PW_iInit o provedor lê PWINFO_IDLEPROCTIME (sem esperar uma venda)");
-            checar(p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 1, "horário passou: PW_iIdleProc");
+            checar(p.ProximoIdle is { } q0 && q0 > DateTime.Now && q0 <= DateTime.Now.AddSeconds(1) && f.Lidos.Contains(PW.PWINFO_IDLEPROCTIME),
+                "após PW_iInit o provedor lê PWINFO_IDLEPROCTIME (sem esperar uma venda); horário no passado = agora + intervalo");
+            Thread.Sleep(250);
+            checar(p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 1, "passado o intervalo: PW_iIdleProc");
             checar(p.ProximoIdle is { } q1 && q1 > DateTime.Now.AddMinutes(30), "após o IdleProc releu o horário novo que a biblioteca informou");
             checar(!p.IdleSeDevidoAsync().GetAwaiter().GetResult() && f.IdleProcs == 1, "e não roda de novo antes dele");
 
@@ -596,6 +668,7 @@ public static class TestesPGWebLib
             // Em voo: nunca por cima de uma transação.
             var f3 = new FakePGWebLib { IdleProcTime = passado };
             var p3 = Provedor(f3, tetoExecMs: 300);
+            p3.IntervaloIdleMs = 100;   // fica devido no meio da venda em voo (que dura o teto de 300 ms)
             Cobrar(p3, TipoTef.Credito, 10m);
             f3.Roteiro.Enqueue(FakePGWebLib.Desfecho.NuncaTermina);
             var t = Task.Run(() => Cobrar(p3, TipoTef.Credito, 10m));
@@ -604,11 +677,13 @@ public static class TestesPGWebLib
             var rodouEmVoo = viuOcupado && p3.IdleSeDevidoAsync().GetAwaiter().GetResult();
             t.GetAwaiter().GetResult();
             checar(viuOcupado && !rodouEmVoo && f3.IdleProcs == 0, "IdleProc devido com venda em voo: espera (nunca por cima da transação)");
+            Thread.Sleep(150);   // a venda que acabou releu o horário (no passado): agora + 100 ms de novo
             checar(p3.IdleSeDevidoAsync().GetAwaiter().GetResult() && f3.IdleProcs == 1, "livre de novo: roda");
 
             // Timer: roda sozinho e MORRE no Dispose (é o que Servicos.RecarregarTef faz com a instância velha).
             var f4 = new FakePGWebLib { IdleProcTime = passado };
             var p4 = Provedor(f4);
+            p4.IntervaloIdleMs = 20;
             p4.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
             p4.IniciarIdle(20);
             for (var i = 0; i < 200 && f4.IdleProcs == 0; i++) Thread.Sleep(5);
@@ -669,6 +744,136 @@ public static class TestesPGWebLib
             checar(r.NomeCartao == "MASTERCARD DEBITO" && ClientePayGo.TBand(r.NomeCartao) == "02", "sem CARDNAMESTD, 040 recebe CARDNAME");
             var neg = ProvedorPGWebLib.RespostaDaLib("CRT", "1", 100, TipoTef.Debito, 1, false, new Dictionary<ushort, string> { [PW.PWINFO_RESULTMSG] = "SALDO\rINSUFICIENTE" });
             checar(!neg.Aprovada && neg.Mensagem == "SALDO INSUFICIENTE" && neg.TipoCartao == 2, "negada: 009=1, 030 sem 0Dh, 731 pelo tipo");
+        }
+
+        // ── achados da DLL de verdade (07/09/2026, PGWebLib.dll 4.1.50.24 x86) ─
+        // Cada bloco reproduz no fake o que a DLL fez no harness e prova o que o provedor faz a respeito.
+        {
+            // 1. PW_iInit devolve PWRET_WRITERR se o diretório de trabalho não existe: a DLL não o cria, o provedor cria.
+            var pasta = Path.Combine(Path.GetTempPath(), "pdv-pgweb-" + Guid.NewGuid().ToString("N"));
+            var f = new FakePGWebLib { ExigePasta = true };
+            var aud = new List<string>();
+            var p = new ProvedorPGWebLib(f, pasta, Opcoes) { Auditar = aud.Add };
+            checar(!Directory.Exists(pasta), "a pasta de trabalho ainda não existe");
+            checar(p.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult() && f.Inits == 1 && Directory.Exists(pasta),
+                "o provedor CRIA a pasta antes do PW_iInit e o Init passa (o fake devolve WRITERR sem ela)");
+            checar(p.MotivoIndisponivel is null && aud.Count == 0, "iniciada: sem motivo de indisponibilidade e sem auditoria");
+            try { Directory.Delete(pasta, true); } catch { }
+
+            // Pasta que NÃO dá para criar (um arquivo no lugar do pai): auditoria com a pasta e o motivo, mensagem curta na tela.
+            var arq = Path.Combine(Path.GetTempPath(), "pdv-pgweb-arq-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(arq, "x");
+            var pastaRuim = Path.Combine(arq, "pgweb");
+            var f2 = new FakePGWebLib { ExigePasta = true };
+            var aud2 = new List<string>();
+            var g2 = new List<TransacaoPayGo>();
+            var p2 = new ProvedorPGWebLib(f2, pastaRuim, Opcoes) { Auditar = aud2.Add, Guardar = t => { g2.Add(t); return true; } };
+            checar(!p2.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult() && f2.Inits == 0, "pasta inacessível: AtivoAsync false sem chamar PW_iInit");
+            checar(aud2.Count == 1 && aud2[0].Contains(pastaRuim) && aud2[0].Contains("pasta de trabalho inacessível") && !aud2[0].Contains('\n'),
+                "uma linha de auditoria com a pasta e o motivo: " + aud2.FirstOrDefault());
+            checar(p2.MotivoIndisponivel == ProvedorPGWebLib.MsgPastaInacessivel, "MotivoIndisponivel é a mensagem da pasta");
+            var d2 = Cobrar(p2, TipoTef.Credito, 10m);
+            checar(!d2.Pago && d2.Codigo == CodigoTef.TefNaoResponde && d2.Motivo == ProvedorPGWebLib.MsgPastaInacessivel, "cobrança: tef_nao_responde com a mensagem da pasta (" + d2.Motivo + ")");
+            checar(ProvedorPGWebLib.MsgPastaInacessivel.StartsWith("TEF não responde: a PGWebLib não iniciou", StringComparison.Ordinal)
+                   && ProvedorPGWebLib.MsgPastaInacessivel.EndsWith(", pasta de trabalho inacessível", StringComparison.Ordinal)
+                   && !ProvedorPGWebLib.MsgPastaInacessivel.Contains('—'),
+                "a mensagem de tela existente ganha o sufixo curto, sem travessão");
+            checar(g2.Count == 0 && f2.Chamadas.Count == 0, "nada gravado e nenhuma chamada à biblioteca");
+            try { File.Delete(arq); } catch { }
+
+            // 2. PWINFO_IDLEPROCTIME "551231235959": a DLL usa 2055 como "nunca"; pelo pivô do .NET seria 1955 (passado, IdleProc a cada tique).
+            var f3 = new FakePGWebLib { IdleProcTime = "551231235959" };
+            var p3 = Provedor(f3);
+            p3.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(p3.ProximoIdle == new DateTime(2055, 12, 31, 23, 59, 59), "551231235959 -> 31/12/2055 23:59:59 (século 20, não o pivô do .NET): " + p3.ProximoIdle?.ToString("s"));
+            checar(!p3.IdleSeDevidoAsync().GetAwaiter().GetResult() && f3.IdleProcs == 0, "PW_iIdleProc NÃO roda no tique seguinte");
+            p3.IniciarIdle(20);
+            Thread.Sleep(120);
+            checar(f3.IdleProcs == 0, "nem com o timer ligado");
+            p3.Dispose();
+            checar(ProvedorPGWebLib.HorarioIdle("260907120000") == new DateTime(2026, 9, 7, 12, 0, 0)
+                   && ProvedorPGWebLib.HorarioIdle("991231235959") == new DateTime(2099, 12, 31, 23, 59, 59)
+                   && ProvedorPGWebLib.HorarioIdle("lixo") is null && ProvedorPGWebLib.HorarioIdle("5512312359") is null
+                   && ProvedorPGWebLib.HorarioIdle("551331235959") is null && ProvedorPGWebLib.HorarioIdle(null) is null,
+                "HorarioIdle: sempre 20xx; lixo, tamanho errado e mês 13 são nulos");
+            // Horário no passado (a DLL informou um que já venceu) cai no intervalo padrão, com uma linha de auditoria por valor.
+            var f4 = new FakePGWebLib { IdleProcTime = "260101000000" };
+            var aud4 = new List<string>();
+            var p4 = Provedor(f4, auditoria: aud4);
+            p4.IntervaloIdleMs = 200;
+            p4.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(p4.ProximoIdle is { } q4 && q4 > DateTime.Now && q4 <= DateTime.Now.AddSeconds(1), "horário no passado (260101000000) cai em agora + intervalo padrão, nunca em 'já'");
+            checar(!p4.IdleSeDevidoAsync().GetAwaiter().GetResult() && f4.IdleProcs == 0, "e não roda no tique seguinte");
+            checar(aud4.Count(a => a.Contains("IDLEPROCTIME") && a.Contains("no passado") && a.Contains("260101000000")) == 1, "uma linha de auditoria: horário no passado");
+
+            // 3. PW_iAddParam(USINGPINPAD) e (PPCOMMPORT) devolvem PWRET_INVPARAM em PWOPER_ADMIN: parâmetro opcional, a operação segue.
+            var f5 = new FakePGWebLib();
+            f5.ParamsRecusadosNoAdmin.Add(PW.PWINFO_USINGPINPAD);
+            f5.ParamsRecusadosNoAdmin.Add(PW.PWINFO_PPCOMMPORT);
+            var aud5 = new List<string>();
+            var p5 = Provedor(f5, auditoria: aud5, perguntar: (_, _) => Task.FromResult<string?>("1"));
+            var d5 = p5.AdministrativaAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(d5.Pago && d5.PaymentStatus == "adm", "ADM conclui mesmo com INVPARAM nos dois parâmetros opcionais (" + d5.Motivo + ")");
+            checar(!f5.Ultima!.Params.ContainsKey(PW.PWINFO_USINGPINPAD) && !f5.Ultima.Params.ContainsKey(PW.PWINFO_PPCOMMPORT), "o fake de fato recusou (não guardou os dois)");
+            checar(aud5.Count(a => a.Contains("PW_iAddParam(32513)") && a.Contains("INVPARAM")) == 1 && aud5.Count(a => a.Contains("PW_iAddParam(32514)") && a.Contains("INVPARAM")) == 1,
+                "cada recusa vira UMA linha de auditoria");
+            var d5b = Cobrar(p5, TipoTef.Credito, 10m);
+            checar(d5b.Pago && P(f5, PW.PWINFO_USINGPINPAD) == "1" && P(f5, PW.PWINFO_PPCOMMPORT) == "0", "na venda os dois são aceitos e a venda sai");
+
+            // 4. PW_iGetResult(PWINFO_AUTDATETIME) devolve PWRET_INVPARAM nesta DLL: campo vazio, sem erro.
+            var f6 = new FakePGWebLib();
+            f6.InfosRecusados.Add(PW.PWINFO_AUTDATETIME);
+            var g6 = new List<TransacaoPayGo>();
+            var p6 = Provedor(f6, t => { g6.Add(t); return true; });
+            var d6 = Cobrar(p6, TipoTef.Credito, 10m);
+            checar(d6.Pago && d6.PaymentStatus == "pago" && f6.Lidos.Contains(PW.PWINFO_AUTDATETIME), "venda aprovada com AUTDATETIME recusado (INVPARAM): Pago");
+            var r6 = g6.First(g => g.Situacao == "aprovada").Resposta!;
+            checar(r6.Data is null && r6.Hora is null && !r6.Campos.ContainsKey("952-000") && r6.Nsu == f6.UltimoNsu && r6.CodigoControle == f6.UltimoReqNum,
+                "022/023/952 ausentes e o resto da resposta intacto");
+            var d6b = p6.AdministrativaAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(d6b.Situacao == SituacaoTef.Cancelado, "ADM sem quem responda o menu cancela como antes (LerResultados tolera o INVPARAM): " + d6b.Motivo);
+
+            // 5. PW_End no fechamento: a DLL iniciada e não encerrada aborta o processo no DLL_PROCESS_DETACH (0xC0000409).
+            var f7 = new FakePGWebLib();
+            var p7 = Provedor(f7);
+            checar(p7.Encerrar() == ProvedorPGWebLib.Encerramento.NaoIniciada && f7.Ends == 0, "sem PW_iInit nesta instância: NaoIniciada, sem PW_End");
+            p7.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            checar(p7.Encerrar() == ProvedorPGWebLib.Encerramento.Encerrada && f7.Ends == 1 && f7.Chamadas[^1] == "End", "iniciada: Encerrar chama PW_End (Encerrada)");
+            checar(p7.Encerrar() == ProvedorPGWebLib.Encerramento.NaoIniciada && f7.Ends == 1, "segunda vez: nada (PW_End uma vez só)");
+            checar(!p7.Ocupado && p7.ProximoIdle is null, "semáforo livre e nenhum idle agendado depois do PW_End");
+            var f7b = new FakePGWebLib { InitLanca = false };
+            var p7b = Provedor(f7b);
+            p7b.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            f7b.EndLanca = true;
+            var aud7b = new List<string>();
+            var p7c = new ProvedorPGWebLib(f7b, PastaTeste, Opcoes) { Auditar = aud7b.Add };
+            p7c.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();   // INVCALL: já iniciada, serve
+            checar(p7c.Encerrar() == ProvedorPGWebLib.Encerramento.Falhou && aud7b.Any(a => a.Contains("PW_End lançou")), "PW_End que lança: Falhou, com auditoria, sem derrubar o fechamento");
+            // Nunca por cima de uma operação em voo: espera o teto, desiste com auditoria, e faz depois.
+            var f8 = new FakePGWebLib();
+            f8.Roteiro.Enqueue(FakePGWebLib.Desfecho.NuncaTermina);
+            var aud8 = new List<string>();
+            var p8 = Provedor(f8, auditoria: aud8, tetoExecMs: 600);
+            var t8 = Task.Run(() => Cobrar(p8, TipoTef.Credito, 10m));
+            for (var i = 0; i < 200 && !p8.Ocupado; i++) Thread.Sleep(5);
+            var relogio8 = System.Diagnostics.Stopwatch.StartNew();
+            var r8 = p8.Encerrar(esperaMs: 100);
+            checar(p8.Ocupado && r8 == ProvedorPGWebLib.Encerramento.EmVoo && f8.Ends == 0 && relogio8.ElapsedMilliseconds < 500 && aud8.Any(a => a.Contains("PW_End") && a.Contains("em voo")),
+                $"venda em voo: EmVoo, não chama PW_End, desiste no teto ({relogio8.ElapsedMilliseconds} ms) e audita");
+            t8.GetAwaiter().GetResult();
+            checar(p8.Encerrar() == ProvedorPGWebLib.Encerramento.Encerrada && f8.Ends == 1 && f8.Chamadas.LastIndexOf("End") > f8.Chamadas.LastIndexOf("ExecTransac"), "livre de novo: PW_End depois da última chamada da venda");
+            // O timer do idle morre no Encerrar: nenhum PW_iIdleProc depois do PW_End.
+            var f9 = new FakePGWebLib { IdleProcTime = DateTime.Now.AddSeconds(-1).ToString("yyMMddHHmmss") };
+            var p9 = Provedor(f9);
+            p9.IntervaloIdleMs = 20;
+            p9.AtivoAsync(CancellationToken.None).GetAwaiter().GetResult();
+            p9.IniciarIdle(20);
+            for (var i = 0; i < 200 && f9.IdleProcs == 0; i++) Thread.Sleep(5);
+            checar(f9.IdleProcs >= 1 && p9.Encerrar() == ProvedorPGWebLib.Encerramento.Encerrada, "idle rodando; Encerrar chama PW_End");
+            var n9 = f9.IdleProcs;
+            Thread.Sleep(120);
+            checar(f9.IdleProcs == n9 && f9.Chamadas.LastIndexOf("IdleProc") < f9.Chamadas.LastIndexOf("End") && f9.Inits == 1,
+                "depois do PW_End: nenhum PW_iIdleProc e nenhum PW_iInit novo");
         }
 
         checar(FakePGWebLib.LeiturasDePan == 0, "em TODA a suíte, PWINFO_CARDFULLPAN nunca foi lido");

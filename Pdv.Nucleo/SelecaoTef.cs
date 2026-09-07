@@ -77,8 +77,37 @@ public static class ConfigPGWebLib
     /// </summary>
     public const string ChaveDll = "tef_pgweb_dll";
 
+    /// <summary>
+    /// `producao` (padrão) ou `homologacao`. Vira PW_iSetEnvironment. Antes, quem escolhia o
+    /// ambiente era o instalador do PayGo Windows; no kit avulso da biblioteca a mesma DLL
+    /// atende os dois, e a escolha é nossa. Em branco vale produção, que é o padrão da própria
+    /// biblioteca: assim ninguém entra em homologação sem pedir.
+    /// </summary>
+    public const string ChaveAmbiente = "tef_pgweb_ambiente";
+
     /// <summary>Diretório de trabalho da biblioteca (PW_iInit). Fora de C:\PAYGO de propósito: é nosso, não do PayGo Windows.</summary>
     public const string DirPadrao = @"C:\ProgramData\PdvNativo\pgweb";
+
+    /// <summary>
+    /// O que gravar em <see cref="ChaveAmbiente"/> para cada ambiente, e como ler de volta.
+    /// Aceita as grafias que uma pessoa digitaria, com e sem acento.
+    /// </summary>
+    public const string AmbienteProducao = "producao";
+    public const string AmbienteHomologacao = "homologacao";
+
+    /// <summary>ENVRMNT_TEST só quando a config pede homologação; qualquer outra coisa é produção.</summary>
+    public static short Ambiente(Func<string, string?> config)
+    {
+        var v = config(ChaveAmbiente)?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(v)) return PW.ENVRMNT_PROD;
+        return v is "homologacao" or "homologação" or "homolog" or "teste" or "test" or "sandbox"
+            ? PW.ENVRMNT_TEST
+            : PW.ENVRMNT_PROD;
+    }
+
+    /// <summary>Uma linha para a tela dizer em que ambiente o caixa está.</summary>
+    public static string RotuloAmbiente(short ambiente)
+        => ambiente == PW.ENVRMNT_TEST ? "Homologação" : "Produção";
 
     public const string NomeAutomacao = "Pdv.AmericanDay";
 
@@ -99,6 +128,24 @@ public static class ConfigPGWebLib
     }
 
     /// <summary>
+    /// Aviso de uma linha para a Configuração quando `tef_pgweb_dll` aponta para uma pasta sem
+    /// PGWebLib.dll. Null = em branco (o Windows procura) ou a DLL está lá.
+    ///
+    /// Antes valia outra regra, e ela caiu: com o PayGo Windows instalado, a DLL protegida pelo
+    /// Warsaw só carregava da pasta original e uma cópia devolvia -2414 no PW_iInit. O kit avulso
+    /// da biblioteca (4.1.50.924, sem Warsaw) carrega de qualquer pasta. Medido em 07/09/2026
+    /// rodando de C:\PGWebLib\x64, com PW_iInit devolvendo PWRET_OK em meio segundo.
+    /// </summary>
+    public static string? AvisoPastaDll(string? pasta, Func<string, bool>? existeArquivo = null)
+    {
+        var p = pasta?.Trim();
+        if (string.IsNullOrEmpty(p)) return null;
+        var existe = existeArquivo ?? File.Exists;
+        return existe(Path.Combine(p, "PGWebLib.dll")) ? null
+            : $"Não achei PGWebLib.dll em {p}. Aponte para a pasta onde você copiou a biblioteca.";
+    }
+
+    /// <summary>
     /// Monta as opções a partir da config. Reaproveita `tef_paygo_empresa` (AUTDEV),
     /// `tef_paygo_rede` (AUTHSYST cartão) e `tef_paygo_rede_pix` (AUTHSYST Pix): a loja só
     /// tem uma rede, seja qual for o caminho até o PayGo.
@@ -114,7 +161,8 @@ public static class ConfigPGWebLib
             Capacidades: caps,
             RedeCartao: Limpo(config("tef_paygo_rede")),
             RedePix: Limpo(config("tef_paygo_rede_pix")),
-            PortaPinpad: Limpo(config(ChavePortaPinpad)) ?? "0");
+            PortaPinpad: Limpo(config(ChavePortaPinpad)) ?? "0",
+            Ambiente: Ambiente(config));
     }
 }
 

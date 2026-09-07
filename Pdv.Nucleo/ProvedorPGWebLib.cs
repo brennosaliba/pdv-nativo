@@ -30,7 +30,7 @@ namespace Pdv.Nucleo;
 /// <param name="PortaPinpad">PWINFO_PPCOMMPORT; "0" = automática.</param>
 public sealed record OpcoesPGWebLib(string NomeAutomacao, string VersaoAutomacao, string Desenvolvedor,
     int Capacidades = ProvedorPGWebLib.CapacidadesPadrao, string? RedeCartao = null, string? RedePix = null,
-    string PortaPinpad = "0", string Moeda = "986");
+    string PortaPinpad = "0", string Moeda = "986", short Ambiente = PW.ENVRMNT_PROD);
 
 /// <summary>
 /// Provedor de TEF sobre <see cref="IPGWebLib"/>. Uma instância por processo; as chamadas são
@@ -47,6 +47,8 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public const string PastaPadrao = ConfigPGWebLib.DirPadrao;
 
     public const string MsgTefNaoResponde = "TEF não responde: a PGWebLib não iniciou. Confira o PayGo Windows";
+    /// <summary>O diretório de trabalho (tef_pgweb_dir) não pôde ser criado: sem ele a DLL devolve PWRET_WRITERR (medido em 07/09/2026).</summary>
+    public const string MsgPastaInacessivel = "TEF não responde: a PGWebLib não iniciou, pasta de trabalho inacessível";
     public const string MsgNaoInstalado = "PayGo não instalado neste terminal: faça a instalação pelo menu do TEF";
 
     /// <summary>CNFREQ=0 (já definitiva na rede) e o caixa não gravou: não existe REV; o cliente JÁ pagou.</summary>
@@ -104,6 +106,9 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// <summary>Horário (local) da próxima PW_iIdleProc, lido de PWINFO_IDLEPROCTIME. Null = não informado.</summary>
     public DateTime? ProximoIdle { get; private set; }
 
+    /// <summary>Por que o último PW_iInit não deu (a frase que a tela mostra). Null = iniciada.</summary>
+    public string? MotivoIndisponivel { get; private set; }
+
     /// <summary>CNF/REV que a biblioteca não acusou: reenviados antes do próximo comando e no religamento.</summary>
     private readonly List<(TransacaoPayGo Tx, uint Resultado, string Depois)> _reenvios = new();
 
@@ -124,26 +129,131 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     private bool Iniciar()
     {
         if (_iniciada) return true;
+        // A DLL NÃO cria o diretório de trabalho: sem ele PW_iInit devolve PWRET_WRITERR (medido
+        // em 07/09/2026 com a 4.1.50.24). Quem cria é o PDV, aqui, antes de cada tentativa.
+        try { Directory.CreateDirectory(_pasta); }
+        catch (Exception ex)
+        {
+            MotivoIndisponivel = MsgPastaInacessivel;
+            Auditar?.Invoke($"pgweblib: pasta de trabalho inacessível ({_pasta}): {ex.Message}");
+            return false;
+        }
+        // O ambiente vem ANTES do PW_iInit. No kit avulso da biblioteca (sem o PayGo Windows) a
+        // mesma DLL atende produção e homologação, e sem esta chamada vale produção, porque
+        // ENVRMNT_PROD é o primeiro da enumeração. O cabeçalho oficial diz que ela tem que ser
+        // chamada antes de o ponto de captura estar instalado; num terminal já instalado a
+        // biblioteca pode recusar, e recusar aí NÃO é defeito, então isso só vira auditoria.
+        try
+        {
+            var amb = _lib.SetEnvironment(_op.Ambiente);
+            if (amb != PW.PWRET_OK)
+                Auditar?.Invoke($"pgweblib: PW_iSetEnvironment({ConfigPGWebLib.RotuloAmbiente(_op.Ambiente)}) devolveu {PW.Nome(amb)} (terminal já instalado responde assim)");
+        }
+        catch (Exception ex)
+        {
+            // Biblioteca antiga, anterior à 4.1.43.10, não exporta a função. Seguir em produção
+            // é o comportamento que ela já tinha, então não derruba o caixa.
+            Auditar?.Invoke("pgweblib: PW_iSetEnvironment indisponível (" + ex.GetType().Name + "), seguindo no ambiente padrão da biblioteca");
+        }
+
         short ret;
         try { ret = _lib.Init(_pasta); }
         catch (Exception ex)
         {
             // DllNotFoundException, BadImageFormatException (bitness), AccessViolation da convenção errada…
+            MotivoIndisponivel = MsgTefNaoResponde;
             Auditar?.Invoke("pgweblib: PW_iInit lançou: " + ex.GetType().Name + " " + ex.Message);
             return false;
         }
         _iniciada = ret is PW.PWRET_OK or PW.PWRET_INVCALL;
-        if (!_iniciada) { Auditar?.Invoke("pgweblib: PW_iInit devolveu " + PW.Nome(ret)); return false; }
+        if (!_iniciada) { MotivoIndisponivel = MsgTefNaoResponde; Auditar?.Invoke("pgweblib: PW_iInit devolveu " + PW.Nome(ret)); return false; }
+        MotivoIndisponivel = null;
         // Spec: depois do PW_iInit (e de cada PW_iIdleProc) ler PWINFO_IDLEPROCTIME para saber
         // quando chamar o próximo PW_iIdleProc.
         AgendarIdle(Ler(PW.PWINFO_IDLEPROCTIME), "PW_iInit");
         return true;
     }
 
+    /// <summary>O que <see cref="Encerrar"/> fez.</summary>
+    public enum Encerramento
+    {
+        /// <summary>Esta instância nunca iniciou a DLL: PW_End não chamado (outra instância, já trocada, pode ter iniciado; Servicos.EncerrarTef cobre).</summary>
+        NaoIniciada,
+        /// <summary>PW_End chamado.</summary>
+        Encerrada,
+        /// <summary>Operação em voo até o teto: PW_End não chamado.</summary>
+        EmVoo,
+        /// <summary>PW_End lançou.</summary>
+        Falhou,
+    }
+
+    /// <summary>
+    /// PW_End no fechamento do processo. Medido em 07/09/2026 (PGWebLib.dll 4.1.50.24, x86): a
+    /// biblioteca iniciada e NÃO encerrada aborta o processo no DLL_PROCESS_DETACH (fail-fast
+    /// 0xC0000409, depois do Main devolver 0; o log dela mostra PGWLib_End -> warsaw_sdk::Initialize).
+    /// PW_End é a mesma rotina, chamada com o processo inteiro de pé: ela termina (~2 s) e zera o
+    /// estado, e o detach vira no-op. Nunca por cima de uma operação em voo: espera até
+    /// <paramref name="esperaMs"/> pelo semáforo e desiste com auditoria. Mata o timer do idle antes.
+    /// </summary>
+    public Encerramento Encerrar(int esperaMs = 5_000)
+    {
+        Dispose();
+        if (!_um.Wait(Math.Max(0, esperaMs)))
+        {
+            Auditar?.Invoke("pgweblib: PW_End não chamado: operação em voo no fechamento");
+            return Encerramento.EmVoo;
+        }
+        try
+        {
+            if (!_iniciada) return Encerramento.NaoIniciada;
+            _iniciada = false;
+            ProximoIdle = null;
+            try { _lib.End(); }
+            catch (Exception ex)
+            {
+                Auditar?.Invoke("pgweblib: PW_End lançou: " + ex.GetType().Name + " " + ex.Message);
+                return Encerramento.Falhou;
+            }
+            return Encerramento.Encerrada;
+        }
+        finally { _um.Release(); }
+    }
+
     public async Task<bool> AtivoAsync(CancellationToken ct)
     {
         await _um.WaitAsync(ct).ConfigureAwait(false);
-        try { return Iniciar(); }
+        try
+        {
+            if (!Iniciar()) return false;
+            // Iniciar() só prova que a biblioteca subiu. Terminal SEM INSTALAÇÃO sobe
+            // exatamente igual e só recusa na hora de cobrar. Medido em 07/09/2026 com a
+            // PGWebLib 4.1.50.924 numa pasta de trabalho nova: PW_iInit devolve PWRET_OK,
+            // o horário de idle vem no sentinela 551231235959 e a lista de operações de
+            // venda devolve PWRET_NOTINST. Responder "ativo" aqui faria a tela do caixa
+            // oferecer cartão e falhar só depois de o cliente já estar esperando.
+            //
+            // A checagem fica AQUI e não dentro de Iniciar() de propósito: o menu
+            // administrativo precisa continuar abrindo justamente para o operador poder
+            // rodar a INSTALAÇÃO. Fechar tudo travaria a única saída.
+            short ret;
+            IReadOnlyList<PwOperacao> ops;
+            try { ret = _lib.GetOperations(PW.OPERACOES_DE_VENDA, out ops); }
+            catch (Exception ex)
+            {
+                MotivoIndisponivel = MsgTefNaoResponde;
+                Auditar?.Invoke("pgweblib: PW_iGetOperations lançou: " + ex.GetType().Name + " " + ex.Message);
+                return false;
+            }
+            var quantas = ops?.Count ?? 0;
+            if (ret != PW.PWRET_OK || quantas == 0)
+            {
+                MotivoIndisponivel = ret is PW.PWRET_NOTINST ? MsgNaoInstalado : MsgTefNaoResponde;
+                Auditar?.Invoke($"pgweblib: sem operação de venda (PW_iGetOperations={PW.Nome(ret)}, {quantas} operações)");
+                return false;
+            }
+            MotivoIndisponivel = null;
+            return true;
+        }
         finally { _um.Release(); }
     }
 
@@ -490,11 +600,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// </summary>
     public async Task<bool> IdleSeDevidoAsync()
     {
-        if (ProximoIdle is not { } quando || quando > DateTime.Now) return false;
+        if (_descartado || ProximoIdle is not { } quando || quando > DateTime.Now) return false;
         if (!await _um.WaitAsync(0).ConfigureAwait(false)) return false;
         try
         {
-            if (!Iniciar()) return false;
+            // Relê o descarte já com o semáforo: um tique que entrou junto com o Encerrar() não pode reiniciar a DLL depois do PW_End.
+            if (_descartado || !Iniciar()) return false;
             short ret;
             try { ret = _lib.IdleProc(); }
             catch (Exception ex)
@@ -512,26 +623,38 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     }
 
     /// <summary>
-    /// PWINFO_IDLEPROCTIME (YYMMDDhhmmss, hora local) vira <see cref="ProximoIdle"/>. Vazio ou
-    /// inválido cai em agora + <see cref="IntervaloIdleMs"/>: a rotina nunca fica sem próxima vez.
+    /// PWINFO_IDLEPROCTIME (YYMMDDhhmmss, hora local) vira <see cref="ProximoIdle"/>. Vazio,
+    /// inválido ou NO PASSADO cai em agora + <see cref="IntervaloIdleMs"/>: a rotina nunca fica
+    /// sem próxima vez e nunca roda a cada tique.
     /// </summary>
     private void AgendarIdle(string? cru, string origem)
     {
         var v = cru?.Trim();
-        if (!string.IsNullOrEmpty(v) && DateTime.TryParseExact(v, "yyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var quando))
+        var quando = HorarioIdle(v);
+        if (quando is { } q && q > DateTime.Now)
         {
-            ProximoIdle = quando;
+            ProximoIdle = q;
             return;
         }
         ProximoIdle = DateTime.Now.AddMilliseconds(IntervaloIdleMs);
         if (!string.IsNullOrEmpty(v) && v != _idleInvalidoVisto)
         {
-            // Lixo no campo: uma linha por valor diferente, não uma por rodada.
+            // Lixo ou passado no campo: uma linha por valor diferente, não uma por rodada.
             _idleInvalidoVisto = v;
-            Auditar?.Invoke($"pgweblib: PWINFO_IDLEPROCTIME inválido após {origem} ({v}); próximo PW_iIdleProc em {IntervaloIdleMs} ms");
+            Auditar?.Invoke($"pgweblib: PWINFO_IDLEPROCTIME {(quando is null ? "inválido" : "no passado")} após {origem} ({v}); próximo PW_iIdleProc em {IntervaloIdleMs} ms");
         }
     }
     private string? _idleInvalidoVisto;
+
+    /// <summary>
+    /// YYMMDDhhmmss da biblioteca em hora local. O século é SEMPRE 20: a DLL devolve
+    /// "551231235959" (31/12/2055) como "nunca", e o pivô do .NET (2029) leria 1955, um horário
+    /// no passado que faria PW_iIdleProc rodar a cada tique (medido em 07/09/2026). Null = inválido.
+    /// </summary>
+    public static DateTime? HorarioIdle(string? v)
+        => v is { Length: 12 } && v.All(char.IsAsciiDigit)
+           && DateTime.TryParseExact("20" + v, "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var q)
+            ? q : null;
 
     /// <summary>Timer barato que chama <see cref="IdleSeDevidoAsync"/>; o intervalo também é a cadência de segurança (<see cref="IntervaloIdleMs"/>).</summary>
     public void IniciarIdle(int intervaloMs)
@@ -601,7 +724,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// <summary>Init + reenvios + pendência da biblioteca + PW_iNewTransac. Null = pode seguir; senão o desfecho que impede.</summary>
     private async Task<DesfechoTef?> PrepararAsync(byte oper, string chargeId)
     {
-        if (!Iniciar()) return Falha(SituacaoTef.Erro, chargeId, CodigoTef.TefNaoResponde, MsgTefNaoResponde);
+        if (!Iniciar()) return Falha(SituacaoTef.Erro, chargeId, CodigoTef.TefNaoResponde, MotivoIndisponivel ?? MsgTefNaoResponde);
         Reenviar();
         if (oper != PW.PWOPER_INSTALL && LerPendenciaDaLib() is { } pnd)
         {

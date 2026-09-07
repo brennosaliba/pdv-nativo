@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 using Pdv.Testes;
@@ -1575,6 +1575,21 @@ try { File.Delete(arquivo); } catch { }
 Console.WriteLine();
 Console.WriteLine("--- Menus da barra da venda (itens, ordem, handler, topo mais baixo) ---");
 TestesMenuBarra.Rodar((cond, nome) => Check("menu-barra: " + nome, cond));
+
+// -- 07/09/2026: cartao nao se declara, o valor vem do TEF -----------------------
+// "mas nao tem q declarara nda nao..o cartao tem q vir do TEF". Uma venda em POS
+// avulso puxava a forma INTEIRA para a contagem e o operador digitava o total da
+// maquininha avulsa contra o credito todo: falta inventada de R$ 3.107,46 num dia.
+Console.WriteLine();
+Console.WriteLine("--- Fechamento: cartao vem do TEF, dinheiro se conta, sem conferencia nao vira desvio ---");
+TestesFechamentoCartao.Rodar((cond, nome) => Check("fechamento-cartao: " + nome, cond));
+
+Console.WriteLine("--- Fechamento com a maquininha muda (parte avulsa contada) ---");
+TestesFechamentoTefMudo.Rodar((cond, nome) => Check("tef-mudo: " + nome, cond));
+
+Console.WriteLine();
+Console.WriteLine("--- CETICO: fechamento (forma sem venda, mesma maquininha, fechar duas vezes) ---");
+TestesCeticoFechamento.Rodar((cond, nome) => Check("cetico-fech: " + nome, cond));
 
 // -- 05/09/2026: COMBO com sub-escolhas no caixa --------------------------------
 // "COMBO 10 DONUTS" vendia como uma linha sem conteudo e o estoque baixava "10 de

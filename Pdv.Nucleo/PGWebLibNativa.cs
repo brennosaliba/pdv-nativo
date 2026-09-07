@@ -8,8 +8,10 @@ namespace Pdv.Nucleo;
 ///
 /// FONTE DE CADA ASSINATURA: o exemplo oficial da PayGo em C#
 /// (github.com/PGPagamentos/pdvWindowsPayGoLibC_CSharp, Exemplo CSharp/PGWLib/Interop.cs
-/// e CustomObjects.cs), lido em 05/09/2026. Nada aqui foi deduzido: convenção StdCall,
-/// retornos short, strings ANSI, PW_GetData sequencial com os tamanhos exatos do exemplo.
+/// e CustomObjects.cs), lido em 05/09/2026. Convenção StdCall, retornos short, strings ANSI,
+/// PW_GetData sequencial com os tamanhos exatos do exemplo. A ÚNICA exceção é PW_End, que o
+/// exemplo não declara: veio da tabela de exports da 4.1.50.24 e do desmontado (sem argumentos,
+/// `ret` simples, a mesma rotina que o DLL_PROCESS_DETACH chama). Medido em 07/09/2026.
 ///
 /// A DLL NÃO é distribuída com o PDV: ela vem com o PayGo Windows instalado na máquina da
 /// loja (em 32 e 64 bits; o Pdv.exe é x64, logo carrega a de 64). Por isso o carregamento é
@@ -121,6 +123,8 @@ public sealed class PGWebLibNativa : IPGWebLib
     // ── P/Invoke: nomes, tipos e convenção iguais ao Interop.cs oficial ─────────
 
     [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Ansi)] private static extern short PW_iInit(string pszWorkingDir);
+    // Sem argumentos e sem retorno (eax é lixo): com zero argumentos StdCall e Cdecl são o mesmo `ret`.
+    [DllImport(Dll, CallingConvention = Conv)] private static extern void PW_End();
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iNewTransac(byte bOper);
     [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Ansi)] private static extern short PW_iAddParam(ushort wParam, string pszValue);
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iExecTransac([Out] PW_GetData[] vstParam, ref short piNumParam);
@@ -131,6 +135,9 @@ public sealed class PGWebLibNativa : IPGWebLib
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iWaitConfirmation();
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iIdleProc();
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iGetOperations(byte bOperType, [Out] PW_Operations[] vstOperations, ref short piNumOperations);
+    // PGWebLib.h: extern Int16 PW_EXPORT PW_iSetEnvironment (Int16 iEnv);
+    // Existe no kit avulso 4.1.50.924 (conferido com TryGetExport nas duas arquiteturas).
+    [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iSetEnvironment(short iEnv);
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iPPAbort();
     [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Ansi)] private static extern short PW_iPPEventLoop(StringBuilder pszDisplay, uint ulDisplaySize);
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iPPGetCard(ushort uiIndex);
@@ -147,7 +154,13 @@ public sealed class PGWebLibNativa : IPGWebLib
     // ── IPGWebLib ───────────────────────────────────────────────────────────────
 
     public short Init(string diretorioTrabalho) => PW_iInit(diretorioTrabalho);
+    public void End() => PW_End();
     public short NewTransac(byte operacao) => PW_iNewTransac(operacao);
+
+    /// <summary>A PGWebLib.dll está neste processo (alguém já chamou a DLL). É o que decide se há PW_End a fazer no fechamento.</summary>
+    public static bool Carregada() => GetModuleHandleW(Dll) != IntPtr.Zero;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr GetModuleHandleW(string nome);
     public short AddParam(ushort info, string valor) => PW_iAddParam(info, ArquivoIntpos.Ascii(valor));
 
     public short ExecTransac(out IReadOnlyList<PwGetData> pedidos)
@@ -188,6 +201,8 @@ public sealed class PGWebLibNativa : IPGWebLib
         operacoes = lista;
         return ret;
     }
+
+    public short SetEnvironment(short ambiente) => PW_iSetEnvironment(ambiente);
 
     public short PPGetCard(ushort indice) => PW_iPPGetCard(indice);
     public short PPGetPIN(ushort indice) => PW_iPPGetPIN(indice);

@@ -1,4 +1,5 @@
 using Pdv.Nucleo;
+using Pdv.Telas;
 
 namespace Pdv.Testes;
 
@@ -154,13 +155,17 @@ public static class TestesCasaPGWebLib
                 return Task.FromResult(erro is null ? valor : null);
             }
             var guardadas = new List<TransacaoPayGo>();
-            var p = new ProvedorPGWebLib(f, ConfigPGWebLib.Diretorio(Cfg()), opcoes)
+            // O provedor CRIA a pasta de trabalho no PW_iInit: aqui ela é a da bateria (temp), não a de ProgramData.
+            checar(new ProvedorPGWebLib(f, ConfigPGWebLib.Diretorio(Cfg()), opcoes).PastaTrabalho == ConfigPGWebLib.DirPadrao
+                   && new ProvedorPGWebLib(f, "", opcoes).PastaTrabalho == ConfigPGWebLib.DirPadrao,
+                "o provedor nasce no diretório padrão (config em branco ou ausente)");
+            var p = new ProvedorPGWebLib(f, ConfigPGWebLib.Diretorio(Cfg((ConfigPGWebLib.ChaveDir, TestesPGWebLib.PastaTeste))), opcoes)
             {
                 IntervaloPollMs = 5, TempoMaxExecMs = 2000, TempoMaxCapturaMs = 2000, TempoPerguntaMs = 500,
                 Guardar = t => { guardadas.Add(t); return true; },
                 Perguntar = ComoATela,
             };
-            checar(p.PastaTrabalho == ConfigPGWebLib.DirPadrao, "o provedor nasce no diretório padrão");
+            checar(p.PastaTrabalho == TestesPGWebLib.PastaTeste, "tef_pgweb_dir preenchido manda no provedor");
             var d = p.CobrarAsync(TipoTef.Credito, Dinheiro.DeReais(25m), null, 1, null, CancellationToken.None).GetAwaiter().GetResult();
             checar(d.Pago && d.Cartao?.Adquirente == "CIELO", "venda sem rede gravada: o menu foi respondido pelo dedo (CIELO) e a venda passou");
             checar(perguntas.Count == 1 && perguntas[0].EhMenu && perguntas[0].Identificador == PW.PWINFO_AUTHSYST, "uma pergunta só: o menu de redes");
@@ -174,7 +179,7 @@ public static class TestesCasaPGWebLib
 
             // Voltar no menu = venda cancelada, nada confirmado.
             var f2 = new FakePGWebLib();
-            var p2 = new ProvedorPGWebLib(f2, "", opcoes)
+            var p2 = new ProvedorPGWebLib(f2, TestesPGWebLib.PastaTeste, opcoes)
             {
                 IntervaloPollMs = 5, TempoMaxExecMs = 2000, TempoMaxCapturaMs = 2000, TempoPerguntaMs = 500,
                 Perguntar = (q, _) => Task.FromResult(RespostaDaTela.Menu(q, -1)),
@@ -252,6 +257,39 @@ public static class TestesCasaPGWebLib
             checar(cfg.Contains("InstalarAsync(", StringComparison.Ordinal) && cfg.Contains("AdministrativaAsync(", StringComparison.Ordinal),
                 "Instalar e ADM chamam o provedor pelo mesmo laço (PWOPER_INSTALL / PWOPER_ADMIN)");
             checar(!cfg.Contains("PGWebLibNativa", StringComparison.Ordinal), "a Configuração não constrói a DLL nativa: pede a instância ao Servicos");
+
+            // Achados da DLL de verdade (07/09/2026) ligados na casa: PW_End no fechamento e o aviso da pasta da DLL.
+            checar(s.Contains("public static void EncerrarTef()", StringComparison.Ordinal) && s.Contains("pg.Encerrar()", StringComparison.Ordinal),
+                "Servicos.EncerrarTef() chama ProvedorPGWebLib.Encerrar() (PW_End) quando o provedor é a biblioteca");
+            var encerrar = s[Math.Max(0, s.IndexOf("public static void EncerrarTef()", StringComparison.Ordinal))..];
+            encerrar = encerrar[..Math.Max(0, encerrar.IndexOf("private static bool _tefVencido", StringComparison.Ordinal))];
+            checar(encerrar.Contains("PGWebLibNativa.Carregada()", StringComparison.Ordinal) && encerrar.Contains("Encerramento.NaoIniciada", StringComparison.Ordinal)
+                   && encerrar.Contains(agulha, StringComparison.Ordinal) && encerrar.Contains(".End()", StringComparison.Ordinal),
+                "EncerrarTef: DLL no processo e instância atual que não a iniciou (trocada pelo RecarregarTef) -> PW_End direto");
+            var app = Fonte("App.xaml.cs") ?? "";
+            var onExit = app.IndexOf("OnExit(ExitEventArgs", StringComparison.Ordinal);
+            var encerrarTef = app.IndexOf("Servicos.EncerrarTef()", StringComparison.Ordinal);
+            checar(onExit >= 0 && encerrarTef > onExit
+                   && encerrarTef > app.IndexOf("Agente.Encerrar()", StringComparison.Ordinal)
+                   && encerrarTef > app.IndexOf("base.OnExit(e)", StringComparison.Ordinal),
+                "App.OnExit chama Servicos.EncerrarTef() POR ÚLTIMO (depois do agente, da trava e do base.OnExit): nada da casa fica atrás do PW_End");
+            checar(app.Contains("0xC0000409", StringComparison.Ordinal), "o porquê (fail-fast no detach) está escrito no App.xaml.cs");
+            checar(cfg.Contains("ConfigPGWebLib.AvisoPastaDll(", StringComparison.Ordinal) && cfg.Contains("MotivoIndisponivel", StringComparison.Ordinal),
+                "a Configuração valida a pasta da DLL e mostra o motivo do PW_iInit que não deu (pasta de trabalho inacessível)");
+            checar(ConfigPGWebLib.AvisoPastaDll(null) is null && ConfigPGWebLib.AvisoPastaDll("  ") is null, "tef_pgweb_dll em branco: sem aviso (o Windows procura)");
+            var vistos = new List<string>();
+            bool Existe(string caminho) { vistos.Add(caminho); return caminho.StartsWith(@"C:\Program Files (x86)\PayGo\PGWebLib\", StringComparison.OrdinalIgnoreCase); }
+            checar(ConfigPGWebLib.AvisoPastaDll(@" C:\Program Files (x86)\PayGo\PGWebLib ", Existe) is null && vistos[^1] == @"C:\Program Files (x86)\PayGo\PGWebLib\PGWebLib.dll",
+                "pasta com PGWebLib.dll: sem aviso (confere o arquivo, sem espaços nas pontas)");
+            var aviso = ConfigPGWebLib.AvisoPastaDll(@"C:\ProgramData\PdvNativo\pgweb-dllcopy", Existe);
+            checar(aviso is { } a1 && a1.Contains("PGWebLib.dll") && a1.Contains(@"C:\ProgramData\PdvNativo\pgweb-dllcopy") && !a1.Contains('\n') && !a1.Contains('—'),
+                "pasta sem a DLL: aviso de uma linha com a pasta, sem travessão: " + aviso);
+            var semDll = Path.Combine(Path.GetTempPath(), "pdv-pgweb-sem-dll-" + Guid.NewGuid().ToString("N"));
+            checar(AssistenteConfig.Bloqueio(PassoConfig.Maquininha, new DadosAssistente { Tef = 4, PgwebDll = semDll }) is { } b4 && b4.Contains("PGWebLib.dll")
+                   && AssistenteConfig.Bloqueio(PassoConfig.Maquininha, new DadosAssistente { Tef = 4, PgwebDll = "" }) is null
+                   && AssistenteConfig.Bloqueio(PassoConfig.Maquininha, new DadosAssistente { Tef = 2, PayGoPasta = semDll }) is null,
+                "o rodapé da Maquininha mostra o aviso no modo biblioteca com pasta sem a DLL, e só nele");
+            checar(!ProvedorPGWebLib.MsgPastaInacessivel.Contains('—') && !(aviso ?? "").Contains('–'), "nenhum travessão nem meia-risca nos textos novos");
 
             var testes = new[] { "FakePGWebLib.cs", "TestesPGWebLib.cs", "TestesCasaPGWebLib.cs", "Program.cs" }
                 .Select(n => Fonte("Pdv.Testes", n) ?? "").ToList();

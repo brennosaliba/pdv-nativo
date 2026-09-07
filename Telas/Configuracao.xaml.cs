@@ -1674,6 +1674,8 @@ public partial class Configuracao : UserControl
         try
         {
             if (TefModo != 4) { StatusTef("Escolha \"PayGo (biblioteca)\" aqui em cima para usar este botão.", "Erro"); return; }
+            // A DLL só carrega da pasta onde o PayGo Windows a instalou: pasta apontada sem ela não adianta tentar.
+            if (ConfigPGWebLib.AvisoPastaDll(TxtPgwebDll.Text) is { } avisoDll) { StatusTef("✗ " + avisoDll, "Erro"); return; }
             using (var cx = Banco.Abrir()) GravarTef(cx);
             _tefGravadoPeloTeste = true;
             if (Servicos.PGWebLib() is not { } pg) { StatusTef("A biblioteca não está ligada nesta tela. Escolha o PayGo (biblioteca) aqui em cima e tente de novo.", "Erro"); return; }
@@ -1683,7 +1685,7 @@ public partial class Configuracao : UserControl
                     var ok = await pg.AtivoAsync(CancellationToken.None);
                     StatusTef(ok
                         ? $"✓ A biblioteca do PayGo respondeu (pasta de trabalho {pg.PastaTrabalho}). Salve para manter."
-                        : $"✗ {ProvedorPGWebLib.MsgTefNaoResponde}. Confira se o PayGo Windows está instalado nesta máquina.",
+                        : $"✗ {pg.MotivoIndisponivel ?? ProvedorPGWebLib.MsgTefNaoResponde}. Confira se o PayGo Windows está instalado nesta máquina.",
                         ok ? "Ok" : "Erro");
                     break;
                 case "instalar":
@@ -2159,10 +2161,13 @@ public static class AssistenteConfig
             "Falta o ID da pessoa do ControlPay: ele fica no portal, junto do seu login.",
         3 when d.CpayTerminal.Trim().Length == 0 =>
             "Falta o ID do terminal. O botão \"Testar conexão com a PayGo\" lista os desta conta.",
-        // Biblioteca: a pasta tem padrão e o PayGo instalado/ativado quem confere é o botão
-        // Testar. Só o AUTCAP pode vir torto (é número de bits, ninguém digita de cabeça).
+        // Biblioteca: a pasta de trabalho tem padrão e o PayGo instalado/ativado quem confere é
+        // o botão Testar. O AUTCAP pode vir torto (é número de bits, ninguém digita de cabeça), e
+        // a pasta da DLL, se preenchida, tem que ter a PGWebLib.dll: a DLL só carrega da pasta
+        // onde o PayGo Windows a instalou (cópia em outra pasta devolve -2414 no PW_iInit).
         4 when d.PgwebCapacidades.Trim().Length > 0 && !int.TryParse(d.PgwebCapacidades.Trim(), out _) =>
             "Capacidades (AUTCAP) tem que ser um número, ex.: 28. Em branco vale o padrão.",
+        4 when ConfigPGWebLib.AvisoPastaDll(d.PgwebDll) is { } avisoDll => avisoDll,
         _ => null,
     };
 

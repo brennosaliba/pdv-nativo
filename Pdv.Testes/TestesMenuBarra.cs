@@ -143,7 +143,9 @@ public static class TestesMenuBarra
         checar(Regex.Matches(fs, @"AbrirMenu\(").Count == 1, "sem submenu: o Fechar / Sair abre UM véu");
 
         // os handlers antigos continuam existindo, com as travas deles
-        var fechar = Trecho(cs, "private void FecharCaixa(object sender, RoutedEventArgs e)", "private static void MostrarResultado");
+        // async void desde 07/09: o fechamento pergunta ao TEF se ele responde antes de
+        // dizer que o cartão foi conferido.
+        var fechar = Trecho(cs, "private async void FecharCaixa(object sender, RoutedEventArgs e)", "private static void MostrarResultado");
         checar(fechar.Contains("TefEmAndamento(dono)", StringComparison.Ordinal) && fechar.Contains("Comanda aberta", StringComparison.Ordinal)
                && fechar.Contains("Caixa.Fechar(", StringComparison.Ordinal),
             "FecharCaixa continua o mesmo: trava de TEF, comanda aberta e Caixa.Fechar");

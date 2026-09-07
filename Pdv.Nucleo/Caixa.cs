@@ -13,21 +13,64 @@ public sealed record Sessao(
     string Id, string BusinessDate, string OperadorId, string OperadorNome,
     DateTime AberturaEm, Dinheiro FundoTroco);
 
-public sealed record LinhaFechamento(string Forma, Dinheiro Declarado, Dinheiro Apurado, bool Contada = true)
+/// <summary>
+/// Uma forma de pagamento no fechamento.
+///
+/// <paramref name="PeloTef"/> é a parte que a maquininha liquidou. Ela NÃO se declara:
+/// entra no declarado por construção, e é isso que impede a conta de nascer torta.
+/// O operador só responde pelo resto (<see cref="AContar"/>): o dinheiro da gaveta e o
+/// cartão que passou fora do TEF.
+///
+/// <paramref name="Conferida"/> separa "bateu" de "ninguém olhou". Linha não conferida
+/// fecha pelo valor apurado e fica FORA do desvio: inventar falta do tamanho do que não
+/// foi perguntado é pior que admitir que não se conferiu.
+/// </summary>
+public sealed record LinhaFechamento(string Forma, Dinheiro Declarado, Dinheiro Apurado,
+    bool Contada = true, Dinheiro PeloTef = default, bool Conferida = true)
 {
     public Dinheiro Diferenca => Declarado - Apurado;
+
+    /// <summary>O que o operador respondeu por: o apurado menos a parte do TEF.</summary>
+    public Dinheiro AContar => Apurado - PeloTef;
+
+    /// <summary>
+    /// A diferença que PODE virar sobra ou falta: a da parte que alguém contou.
+    ///
+    /// O critério é <see cref="Contada"/>, não <see cref="Conferida"/>. Linha automática
+    /// fecha com declarado = apurado, então já vale zero aqui, e TEF fora do ar não
+    /// fabrica desvio. Mas quando o operador conta a maquininha AVULSA e o TEF está
+    /// mudo, a linha fica sem conferência e mesmo assim a falta da avulsa é real: ela
+    /// foi contada. Zerar por `Conferida` engoliria essa falta.
+    /// </summary>
+    public Dinheiro DiferencaConferida => Contada ? Diferenca : Dinheiro.Zero;
 
     /// <summary>
     /// Sobra não é "boa notícia". Falta pode ser troco errado; sobra costuma ser venda
     /// que entrou na gaveta sem passar pelo PDV — o que também some do estoque e da
     /// nota fiscal. As duas precisam de explicação, e por motivos diferentes.
+    ///
+    /// `sem_conferencia` é a MESMA palavra que o painel já entende (o fechamento de
+    /// caixa esquecido usa ela desde sempre), então a nuvem lê a linha nova sem mudar.
     /// </summary>
     public string Situacao => Diferenca.Centavos switch
     {
-        0 => "confere",
         > 0 => "sobra",
-        _ => "falta",
+        < 0 => "falta",
+        // Bateu. Só é "confere" se alguém comparou com a fonte de fora; senão o valor
+        // é o que o sistema registrou e ninguém olhou.
+        _ => Conferida ? "confere" : "sem_conferencia",
     };
+}
+
+/// <summary>
+/// O que a tela de fechamento tem que PERGUNTAR, forma por forma. Sai pronto do Núcleo
+/// para a tela do caixa e a tela do caixa esquecido não divergirem: regra em dois
+/// lugares vira duas regras no dia seguinte.
+/// </summary>
+public sealed record ConferenciaForma(string Forma, Dinheiro Apurado, Dinheiro PeloTef, bool Conta)
+{
+    /// <summary>O valor que o operador confere. Zero quando o TEF liquidou tudo.</summary>
+    public Dinheiro AContar => Apurado - PeloTef;
 }
 
 /// <summary>Divergência entre o que o TEF cobrou e o que virou venda no PDV.</summary>
@@ -299,6 +342,58 @@ public static class Caixa
     }
 
     /// <summary>
+    /// O ROTEIRO do fechamento: para cada forma, quanto o TEF já liquidou, quanto sobra
+    /// para o operador conferir, e se a tela deve mesmo perguntar.
+    ///
+    /// Existe por causa de um buraco real: quando UMA venda saía como POS avulsa, a forma
+    /// inteira voltava para a contagem e o operador era obrigado a digitar um total que
+    /// incluía o cartão do TEF — que ele não tem como contar. Ele digitava o que a
+    /// maquininha avulsa mostrava e o fechamento acusava uma falta do tamanho exato do
+    /// TEF (R$ 3.107,46 num dia). Não era falta nenhuma: era pergunta errada.
+    ///
+    /// A regra agora: cartão não se declara, o valor vem do TEF. Pergunta-se só o
+    /// dinheiro (está na gaveta) e a parte que passou FORA do TEF (está no fechamento da
+    /// maquininha avulsa, fonte independente que continua valendo a pena conferir).
+    /// </summary>
+    public static List<ConferenciaForma> PlanoDeConferencia(SqliteConnection cx, Sessao sessao)
+    {
+        var apurado = Apurado(cx, sessao);
+        var integrado = ApuradoIntegrado(cx, sessao);
+        var contadas = FormasContadas(cx, sessao);
+        // As formas CONTADAS entram no roteiro mesmo sem venda no PDV. É o dia em que a
+        // maquininha avulsa vendeu e nada foi registrado: o apurado dela é zero, e se a
+        // pergunta sumir some junto o único jeito de enxergar a venda que não entrou.
+        return apurado.Keys.Union(integrado.Keys).Union(contadas)
+            .OrderBy(f => f == "dinheiro" ? 0 : 1).ThenBy(f => f, StringComparer.Ordinal)
+            .Select(f => Montar(f,
+                apurado.TryGetValue(f, out var a) ? a : Dinheiro.Zero,
+                integrado, contadas))
+            .ToList();
+    }
+
+    /// <summary>
+    /// A decisão de uma linha, usada pelo roteiro da tela E pelo <see cref="Fechar"/>.
+    /// Uma cópia só: se a tela decidir uma coisa e o fechamento outra, volta a nascer a
+    /// falta inventada.
+    /// </summary>
+    private static ConferenciaForma Montar(string forma, Dinheiro apurado,
+        Dictionary<string, Dinheiro> integrado, string[] contadas)
+    {
+        // Dinheiro nunca tem parte de TEF (pagamento em dinheiro não carrega carimbo), e
+        // o apurado dele ainda leva fundo, sangria e suprimento — que também se contam.
+        var peloTef = forma == "dinheiro" || !integrado.TryGetValue(forma, out var t)
+            ? Dinheiro.Zero : t;
+        var aContar = apurado - peloTef;
+        // Só entra na pergunta o que o operador consegue conferir. Sai da pergunta APENAS
+        // a forma que o TEF liquidou inteira (peloTef > 0 e nada sobrando fora dele) —
+        // essa ele não tem como contar. Forma sem TEF nenhum continua sendo perguntada
+        // mesmo com apurado zero: é assim que a maquininha avulsa que vendeu sem registro
+        // aparece como sobra, e era esse o motivo de contar cartão em caixa sem TEF.
+        var conta = contadas.Contains(forma) && (peloTef.Centavos == 0 || aContar.Centavos != 0);
+        return new ConferenciaForma(forma, apurado, peloTef, conta);
+    }
+
+    /// <summary>
     /// O que as vendas do turno receberam PELA MAQUININHA INTEGRADA, por forma. É o único
     /// lado do PDV que pode ser comparado com `tef_transacao`: o POS avulso passou em outra
     /// máquina (ou na mesma, à mão) e não deixa linha no TEF — somá-lo aqui inventaria
@@ -419,32 +514,57 @@ public static class Caixa
     /// Fecha o turno com a contagem DECLARADA pelo operador. A diferença só é
     /// calculada aqui — depois de ele declarar. Fechar é irreversível.
     ///
-    /// <paramref name="contagem"/> só precisa trazer as <see cref="FormasContadas"/>.
-    /// O resto fecha sozinho pelo valor do TEF.
+    /// <paramref name="contagem"/> traz SÓ o que o operador contou de fato: o dinheiro da
+    /// gaveta e, quando houver, a parte que passou fora do TEF (ver
+    /// <see cref="PlanoDeConferencia"/>). O cartão do TEF entra sozinho, pelo valor
+    /// apurado — não se declara cartão.
+    ///
+    /// <paramref name="tefDisponivel"/> é o TEF respondendo NA HORA de fechar. Fora do ar,
+    /// a linha do cartão fecha pelo apurado mas vai marcada como não conferida: o caixa
+    /// fecha do mesmo jeito e o desvio não engorda com um número que ninguém checou.
     /// </summary>
     public static List<LinhaFechamento> Fechar(SqliteConnection cx, Sessao sessao,
         Dictionary<string, Dinheiro> contagem, Operador quemFecha,
-        Dinheiro tolerancia, string? justificativa = null)
+        Dinheiro tolerancia, string? justificativa = null, bool tefDisponivel = true)
     {
+        ExigirAberto(cx, sessao);
         var apurado = Apurado(cx, sessao);
+        var integrado = ApuradoIntegrado(cx, sessao);
         var contadas = FormasContadas(cx, sessao);
         var formas = apurado.Keys.Union(contagem.Keys).ToList();
         var linhas = formas.Select(f =>
         {
-            var conta = contadas.Contains(f);
             var apu = apurado.TryGetValue(f, out var aa) ? aa : Dinheiro.Zero;
-            // forma automática fecha por construção: declarado = apurado, diferença zero
-            var dec = conta ? (contagem.TryGetValue(f, out var dd) ? dd : Dinheiro.Zero) : apu;
-            return new LinhaFechamento(f, dec, apu, conta);
+            var plano = Montar(f, apu, integrado, contadas);
+            // O operador contou: o declarado é a parte do TEF (que não se declara) MAIS o
+            // que ele contou. É aqui que a falta inventada morre — a parcela do TEF entra
+            // dos dois lados da subtração e some.
+            if (contadas.Contains(f) && contagem.TryGetValue(f, out var contadoAMao))
+            {
+                // O operador contou a parte de FORA do TEF. A parte da maquininha só se
+                // dá por conferida se ela respondeu: com o TEF mudo a tela avisa que o
+                // cartão fica sem conferência, e o registro tem que dizer a mesma coisa.
+                var conf = plano.PeloTef.Centavos == 0 || tefDisponivel;
+                return new LinhaFechamento(f, plano.PeloTef + contadoAMao, apu, true, plano.PeloTef, conf);
+            }
+
+            // Ninguém contou esta forma. Fecha pelo apurado (diferença zero, nunca uma
+            // falta do tamanho da pergunta que não foi feita) e só se chama CONFERIDA
+            // quando não havia nada a contar e o TEF respondeu.
+            var conferida = plano.AContar.Centavos == 0
+                            && (plano.PeloTef.Centavos == 0 || tefDisponivel);
+            return new LinhaFechamento(f, apu, apu, false, plano.PeloTef, conferida);
         }).ToList();
 
         // Soma dos MÓDULOS, não o líquido. Somar com sinal deixa uma falta de R$50 no
         // dinheiro se anular com uma sobra de R$50 no crédito — e essa combinação é a
         // assinatura de venda lançada na forma errada, justamente o que precisa aparecer.
-        var desvio = new Dinheiro(linhas.Sum(l => l.Diferenca.Abs.Centavos));
+        //
+        // E soma SÓ o que foi conferido: linha sem conferência não vira sobra nem falta.
+        var desvio = new Dinheiro(linhas.Sum(l => l.DiferencaConferida.Abs.Centavos));
         if (desvio > tolerancia && string.IsNullOrWhiteSpace(justificativa))
         {
-            var detalhe = string.Join("; ", linhas.Where(l => l.Diferenca.Centavos != 0)
+            var detalhe = string.Join("; ", linhas.Where(l => l.DiferencaConferida.Centavos != 0)
                 .Select(l => $"{l.Forma}: {l.Situacao} de {l.Diferenca.Abs.Formatado()}"));
             // "Justifique" e o marcador que a tela usa pra abrir o campo de
             // justificativa (catch por Contains) - manter a palavra ao reescrever.
@@ -478,13 +598,17 @@ public static class Caixa
         // A auditoria registra a QUEBRA discriminada, não só o número total: "faltou 50 no
         // dinheiro e sobrou 50 no crédito" e "bateu tudo" são fatos opostos que dariam o
         // mesmo total líquido.
-        var quebra = string.Join("; ", linhas.Where(l => l.Diferenca.Centavos != 0)
+        //
+        // A forma que ficou SEM conferência aparece aqui também. Ela não entra no desvio,
+        // e é exatamente por isso que precisa de rastro: fechamento com desvio zero e
+        // cartão não conferido não é a mesma coisa que fechamento que bateu.
+        var quebra = string.Join("; ", linhas.Where(l => l.Diferenca.Centavos != 0 || !l.Conferida)
             .Select(l => $"{l.Forma}:{l.Situacao}:{l.Diferenca.Abs.Formatado()}"));
         Auditar(cx, tx, "caixa_fechado", idFecha, null,
             $"desvio={desvio.Formatado()}{(quebra.Length == 0 ? " (conferiu)" : " · " + quebra)}" +
             $"{(justificativa is null ? "" : " · " + justificativa)}");
         Enfileirar(cx, tx, "fechamento", sessao.Id, sessao.Id,
-            new { sessao = sessao.Id, linhas = linhas.Select(l => new { l.Forma, l.Contada, l.Situacao, decl = l.Declarado.Centavos, apur = l.Apurado.Centavos, dif = l.Diferenca.Centavos }), justificativa });
+            new { sessao = sessao.Id, linhas = linhas.Select(l => new { l.Forma, l.Contada, l.Situacao, decl = l.Declarado.Centavos, apur = l.Apurado.Centavos, dif = l.Diferenca.Centavos, tef = l.PeloTef.Centavos, l.Conferida }), justificativa });
         tx.Commit();
         return linhas;
     }
@@ -500,6 +624,7 @@ public static class Caixa
     public static void FecharSemConferencia(SqliteConnection cx, Sessao sessao,
         Operador quemPula, Operador supervisor)
     {
+        ExigirAberto(cx, sessao);
         var apurado = Apurado(cx, sessao);
         const string marca = "FECHADO SEM CONFERÊNCIA: caixa esquecido, contagem pulada com autorização do gerente";
 
@@ -530,6 +655,30 @@ public static class Caixa
             justificativa = marca,
         });
         tx.Commit();
+    }
+
+    /// <summary>
+    /// Marcador da recusa de fechar turno já fechado. A tela procura por ele para dizer
+    /// a frase certa (o caixa NÃO continua aberto), do mesmo jeito que procura
+    /// "Justifique" para abrir o campo da justificativa.
+    /// </summary>
+    public const string MarcaJaFechado = "já foi fechado";
+
+    /// <summary>
+    /// Fechar é irreversível E acontece uma vez só. Sem esta trava, chamar
+    /// <see cref="Fechar"/> de novo no mesmo turno gravava OUTRO jogo de linhas em
+    /// `caixa_fechamento` e OUTRO item na fila: dois fechamentos para uma sessão, com
+    /// contagens diferentes, e o fundo esperado do dia seguinte saindo de um deles ao
+    /// acaso. A tela de venda espera pelo TEF antes de perguntar qualquer coisa, e um
+    /// segundo toque no botão nessa espera chegava aqui.
+    /// </summary>
+    private static void ExigirAberto(SqliteConnection cx, Sessao sessao)
+    {
+        var status = cx.ExecuteScalar<string?>(
+            "SELECT status FROM caixa_sessao WHERE id = @Id", new { Id = sessao.Id });
+        if (status is not null && status != "aberto")
+            throw new InvalidOperationException(
+                $"Este caixa {MarcaJaFechado}. O resultado está no relatório do turno.");
     }
 
     public static void Auditar(SqliteConnection cx, SqliteTransaction? tx, string evento,

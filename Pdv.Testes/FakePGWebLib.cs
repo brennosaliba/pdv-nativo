@@ -28,6 +28,14 @@ public sealed class FakePGWebLib : IPGWebLib
     public ConcurrentQueue<Desfecho> Roteiro { get; } = new();
     public bool Instalado { get; set; } = true;
     public bool InitLanca { get; set; }
+    /// <summary>PW_End lança (a DLL caiu no meio do encerramento).</summary>
+    public bool EndLanca { get; set; }
+    /// <summary>Como a DLL de verdade (07/09/2026): PW_iInit devolve PWRET_WRITERR se o diretório de trabalho não existe (ela não o cria).</summary>
+    public bool ExigePasta { get; set; }
+    /// <summary>PWINFO_* que PW_iAddParam recusa com PWRET_INVPARAM em PWOPER_ADMIN (a DLL recusa USINGPINPAD e PPCOMMPORT lá, e aceita em INSTALL).</summary>
+    public HashSet<ushort> ParamsRecusadosNoAdmin { get; } = new();
+    /// <summary>PWINFO_* que PW_iGetResult recusa com PWRET_INVPARAM em vez de PWRET_NODATA (a DLL faz isso com AUTDATETIME).</summary>
+    public HashSet<ushort> InfosRecusados { get; } = new();
     /// <summary>Pede o menu de redes mesmo com AUTHSYST já informado (prova o "responder do que já sabe").</summary>
     public bool SempreMenuRede { get; set; }
     public bool ComSenha { get; set; } = true;
@@ -60,6 +68,7 @@ public sealed class FakePGWebLib : IPGWebLib
     public List<(uint Resultado, string ReqNum)> Confirmadas { get; } = new();
     public HashSet<ushort> Lidos { get; } = new();
     public int Inits { get; private set; }
+    public int Ends { get; private set; }
     public int Abortos { get; private set; }
     public int IdleProcs { get; private set; }
     public Pendencia? Pendente => _pendente;
@@ -87,6 +96,23 @@ public sealed class FakePGWebLib : IPGWebLib
 
     private void Log(string s) => Chamadas.Add(s);
 
+    // ------------------------------------------------------------------ ambiente
+
+    /// <summary>O que PW_iSetEnvironment recebeu, na ordem. Null enquanto ninguém chamou.</summary>
+    public List<short> AmbientesPedidos { get; } = new();
+    /// <summary>Como a biblioteca num terminal já instalado: recusa a troca de ambiente.</summary>
+    public bool RecusarAmbiente { get; set; }
+    /// <summary>Biblioteca anterior à 4.1.43.10: o símbolo não existe.</summary>
+    public bool AmbienteLanca { get; set; }
+
+    public short SetEnvironment(short ambiente)
+    {
+        Log($"SetEnvironment({ambiente})");
+        if (AmbienteLanca) throw new EntryPointNotFoundException("PW_iSetEnvironment");
+        AmbientesPedidos.Add(ambiente);
+        return RecusarAmbiente ? PW.PWRET_INVCALL : PW.PWRET_OK;
+    }
+
     // ------------------------------------------------------------------ init
 
     public short Init(string diretorioTrabalho)
@@ -95,10 +121,20 @@ public sealed class FakePGWebLib : IPGWebLib
         if (InitLanca) throw new DllNotFoundException("PGWebLib.dll");
         Inits++;
         if (_iniciada) return PW.PWRET_INVCALL;
+        if (ExigePasta && !Directory.Exists(diretorioTrabalho)) return PW.PWRET_WRITERR;
         _iniciada = true;
         _idleProcTime = IdleProcTime;
         if (PendenciaNoInit is not null) _pendente = PendenciaNoInit;
         return PW.PWRET_OK;
+    }
+
+    /// <summary>PW_End: zera o "iniciada" (como a DLL, cujo detach vira no-op depois disto). Sem retorno, como na DLL.</summary>
+    public void End()
+    {
+        Log("End");
+        if (EndLanca) throw new AccessViolationException("PW_End caiu");
+        Ends++;
+        _iniciada = false;
     }
 
     public short NewTransac(byte operacao)
@@ -124,6 +160,7 @@ public sealed class FakePGWebLib : IPGWebLib
         Log($"AddParam({info}={valor})");
         if (Transacoes.Count == 0 || _params is null) return PW.PWRET_TRNNOTINIT;
         if (valor is null || valor.Any(ch => ch < 0x20 || ch > 0x7E)) return PW.PWRET_INVPARAM;
+        if (_oper == PW.PWOPER_ADMIN && ParamsRecusadosNoAdmin.Contains(info)) return PW.PWRET_INVPARAM;
         _params[info] = valor;
         return PW.PWRET_OK;
     }
@@ -352,6 +389,7 @@ public sealed class FakePGWebLib : IPGWebLib
         Lidos.Add(info);
         if (info == PW.PWINFO_CARDFULLPAN) Interlocked.Increment(ref LeiturasDePan);
         valor = "";
+        if (InfosRecusados.Contains(info)) return PW.PWRET_INVPARAM;
         if (_pendente is not null)
         {
             var p = _pendente;
@@ -395,6 +433,20 @@ public sealed class FakePGWebLib : IPGWebLib
 
     public short GetOperations(byte tipoOperacao, out IReadOnlyList<PwOperacao> operacoes)
     {
+        Log($"GetOperations({tipoOperacao})");
+        // Como a DLL de verdade (medido em 07/09/2026, PGWebLib 4.1.50.924): num terminal
+        // SEM instalação o menu administrativo continua respondendo, com INSTALACAO no
+        // meio, e a lista de VENDA devolve PWRET_NOTINST.
+        if (!Instalado && tipoOperacao == PW.OPERACOES_DE_VENDA)
+        {
+            operacoes = Array.Empty<PwOperacao>();
+            return PW.PWRET_NOTINST;
+        }
+        if (tipoOperacao == PW.OPERACOES_DE_VENDA)
+        {
+            operacoes = new[] { new PwOperacao(2, "VENDA", "33") };
+            return PW.PWRET_OK;
+        }
         operacoes = new[] { new PwOperacao(1, "TESTE DE COMUNICACAO", "1"), new PwOperacao(2, "REIMPRESSAO", "2") };
         return PW.PWRET_OK;
     }

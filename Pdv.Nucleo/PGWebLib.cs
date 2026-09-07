@@ -55,6 +55,25 @@ public static class PW
     public const byte PWOPER_CONFIG = 253;
     public const byte PWOPER_MAINTENANCE = 254;
 
+    // ── ambiente (ENVRMNT_*, PW_iSetEnvironment) ─────────────────────────
+    // Kit avulso da biblioteca, sem Warsaw e sem o PayGo Windows: a mesma DLL
+    // serve para produção e homologação, e quem escolhe é PW_iSetEnvironment.
+    // O cabeçalho oficial (PGWebLib.h) diz que ela "deve ser chamada antes do
+    // ponto de captura estar instalado". Sem chamar nada, vale ENVRMNT_PROD,
+    // porque é o primeiro da enumeração.
+    public const short ENVRMNT_PROD = 0;
+    public const short ENVRMNT_TEST = 1;
+
+    // ── categorias do PW_iGetOperations(bOperType) ───────────────────────
+    // NÃO são PWOPER_*: aqui o número é a CATEGORIA da lista pedida. Medido em
+    // 07/09/2026 com a PGWebLib 4.1.50.924: (1) devolve o menu administrativo,
+    // (2) devolve as operações de venda e (3) devolve as duas listas juntas.
+    // Num terminal sem instalação, (1) e (3) respondem normalmente, com
+    // INSTALACAO no meio, e (2) devolve PWRET_NOTINST.
+    public const byte OPERACOES_ADMINISTRATIVAS = 1;
+    public const byte OPERACOES_DE_VENDA = 2;
+    public const byte OPERACOES_TODAS = 3;
+
     // ── informações (PWINFO_*): entrada ──────────────────────────────────
     public const ushort PWINFO_AUTNAME = 21;
     public const ushort PWINFO_AUTVER = 22;
@@ -232,8 +251,15 @@ public sealed record PwOperacao(byte Codigo, string Texto, string Valor);
 /// </summary>
 public interface IPGWebLib
 {
-    /// <summary>PW_iInit(pszWorkingDir). PWRET_OK, ou PWRET_INVCALL se já iniciada.</summary>
+    /// <summary>PW_iInit(pszWorkingDir). PWRET_OK, ou PWRET_INVCALL se já iniciada. PWRET_WRITERR se o diretório não existe (a DLL não o cria).</summary>
     short Init(string diretorioTrabalho);
+
+    /// <summary>
+    /// PW_End(): encerra a instância iniciada por PW_iInit. Não está no exemplo oficial: veio da
+    /// tabela de exports da 4.1.50.24 (sem argumentos, `ret` simples) e é a MESMA rotina que o
+    /// DLL_PROCESS_DETACH chama; sem ela o processo x86 morre com 0xC0000409 na saída. Sem retorno.
+    /// </summary>
+    void End();
 
     /// <summary>PW_iNewTransac(bOper). PWRET_OK, PWRET_DLLNOTINIT, PWRET_NOTINST (precisa PWOPER_INSTALL).</summary>
     short NewTransac(byte operacao);
@@ -261,6 +287,15 @@ public interface IPGWebLib
 
     /// <summary>PW_iGetOperations(bOperType): lista de operações administrativas disponíveis.</summary>
     short GetOperations(byte tipoOperacao, out IReadOnlyList<PwOperacao> operacoes);
+
+    /// <summary>
+    /// PW_iSetEnvironment(iEnv): escolhe produção (<see cref="PW.ENVRMNT_PROD"/>) ou homologação
+    /// (<see cref="PW.ENVRMNT_TEST"/>). Existe desde a 4.1.43.10 e é o que substitui a escolha
+    /// que antes vinha do instalador do PayGo Windows. Tem que ser chamada ANTES de o ponto de
+    /// captura estar instalado; num terminal já instalado a biblioteca pode recusar, e recusar
+    /// aí não é defeito.
+    /// </summary>
+    short SetEnvironment(short ambiente);
 
     // Captura no pinpad (chamadas para os PWDAT_PP*; `indice` = posição do PwGetData na lista).
     short PPGetCard(ushort indice);

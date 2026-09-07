@@ -1,4 +1,4 @@
-using System.Net.NetworkInformation;
+﻿using System.Net.NetworkInformation;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -3199,13 +3199,22 @@ public partial class Venda : UserControl
     }
 
     /// <summary>
+    /// Fechamento em andamento. Existe porque desde 07/09 há uma ESPERA no meio do
+    /// caminho (a pergunta ao TEF) em que a tela volta a aceitar toque: sem esta
+    /// trava, dois toques no botão abrem dois fechamentos do mesmo turno e a gaveta
+    /// fecha duas vezes, com duas linhas por forma e dois itens na fila.
+    /// </summary>
+    private bool _fechandoCaixa;
+
+    /// <summary>
     /// Fechamento CEGO: o operador declara o que contou, forma por forma, SEM ver o
     /// esperado. Só depois o sistema mostra a diferença. Se ele visse antes, digitaria
     /// o esperado e a conferência não significaria nada.
     /// </summary>
-    private void FecharCaixa(object sender, RoutedEventArgs e)
+    private async void FecharCaixa(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;
+        if (_fechandoCaixa) return;   // segundo toque enquanto o primeiro fechamento corre
         if (TefEmAndamento(dono)) return;
         if (_comanda.Count > 0)
         {
@@ -3213,61 +3222,117 @@ public partial class Venda : UserControl
                 "Termine ou limpe a comanda antes de fechar o caixa.", "erro");
             return;
         }
-
-        // Só o que se conta de verdade — e isso muda com o caixa: com TEF, cartão e PIX
-        // fecham sozinhos pelo valor do sistema; com POS avulsa, o operador digita o
-        // total do FECHAMENTO DA MAQUININHA, que é fonte independente de verdade.
-        var contagem = new Dictionary<string, Dinheiro>();
-        string[] formasContadas;
-        // olha o TURNO: mesmo com TEF, venda que saiu como POS avulsa traz a forma
-        // de volta pra contagem — o total da maquininha é quem confere as duas
-        using (var cxf = Banco.Abrir()) formasContadas = Caixa.FormasContadas(cxf, _sessao);
-        foreach (var f in formasContadas)
-        {
-            var pergunta = f == "dinheiro"
-                ? "Quanto você contou em dinheiro? Conte a gaveta inteira, com o fundo de troco."
-                : $"Quanto deu em {Rotulo(f)} no fechamento da maquininha?";
-            var v = PedirValor.Mostrar(dono, "Fechamento de caixa", pergunta);
-            if (v is null) return;                 // desistiu no meio: não fecha nada
-            contagem[f] = v.Value;
-        }
-
-        var tolerancia = new Dinheiro(200);        // R$ 2,00
+        _fechandoCaixa = true;
         try
         {
-            using var cx = Banco.Abrir();
-            var divergencias = Caixa.DivergenciasTef(cx, _sessao);
-            var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
-            MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia), null, divergencias, resumoTeste);
-            FechouCaixa?.Invoke();
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
-        {
-            // A mensagem do Núcleo já termina pedindo a descrição; repetir
-            // "O que aconteceu?" só fazia ler a mesma pergunta duas vezes.
-            var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message, "");
-            if (string.IsNullOrWhiteSpace(just)) return;
+            // O ROTEIRO vem do Núcleo (Caixa.PlanoDeConferencia): ele diz, forma por forma,
+            // quanto a maquininha já liquidou e quanto sobra para o operador conferir.
+            // Cartão do TEF NÃO é campo: o valor vem do TEF e a tela só mostra.
+            List<ConferenciaForma> plano;
+            using (var cxf = Banco.Abrir()) plano = Caixa.PlanoDeConferencia(cxf, _sessao);
+
+            // O TEF responde AGORA? Só se pergunta quando há cartão do TEF no turno: caixa
+            // que só teve dinheiro não tem por que acordar a maquininha no fim do dia.
+            var doTef = plano.Where(p => p.PeloTef.Centavos != 0).ToList();
+            var tefDisponivel = doTef.Count == 0 || await TefRespondeAsync();
+            // A espera acima devolve a tela ao operador. O que valia antes dela precisa
+            // valer ainda: cancelamento ou estorno que começou no meio manda esperar.
+            if (TefEmAndamento(dono)) return;
+            if (doTef.Count > 0)
+            {
+                var corpo = string.Join("\n", doTef.Select(p => $"{Rotulo(p.Forma)} {p.PeloTef.Formatado()}"))
+                    + "\n\nEsses valores vêm da maquininha. Você conta só o dinheiro."
+                    + (tefDisponivel ? "" : "\n\n" + MsgTefSemResposta);
+                if (!Dialogo.Confirmar(dono, "Cartão da maquininha", corpo, "Contar o dinheiro", "Voltar"))
+                    return;
+            }
+
+            var contagem = new Dictionary<string, Dinheiro>();
+            foreach (var p in plano.Where(p => p.Conta))
+            {
+                var pergunta = p.Forma == "dinheiro"
+                    ? "Quanto você contou em dinheiro? Conte a gaveta inteira, com o fundo de troco."
+                    : p.PeloTef.Centavos == 0
+                        ? $"Quanto deu em {Rotulo(p.Forma)} no fechamento da maquininha?"
+                        // parte do turno passou pelo TEF e parte não: só a de fora se conta
+                        : $"Quanto deu em {Rotulo(p.Forma)} na outra maquininha? O cartão do caixa já entrou sozinho.";
+                var v = PedirValor.Mostrar(dono, "Fechamento de caixa", pergunta);
+                if (v is null) return;                 // desistiu no meio: não fecha nada
+                contagem[p.Forma] = v.Value;
+            }
+
+            var tolerancia = new Dinheiro(200);        // R$ 2,00
             try
             {
                 using var cx = Banco.Abrir();
                 var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                 var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
-                MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just), just, divergencias, resumoTeste);
+                MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, null, tefDisponivel), null, divergencias, resumoTeste);
                 FechouCaixa?.Invoke();
             }
-            catch (Exception e2)
+            catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
+            {
+                // A mensagem do Núcleo já termina pedindo a descrição; repetir
+                // "O que aconteceu?" só fazia ler a mesma pergunta duas vezes.
+                var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message, "");
+                if (string.IsNullOrWhiteSpace(just)) return;
+                try
+                {
+                    using var cx = Banco.Abrir();
+                    var divergencias = Caixa.DivergenciasTef(cx, _sessao);
+                    var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
+                    MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just, tefDisponivel), just, divergencias, resumoTeste);
+                    FechouCaixa?.Invoke();
+                }
+                catch (Exception e2)
+                {
+                    Dialogo.Avisar(dono, "Caixa não fechou",
+                        e2.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
+                        "se continuar, chame o gerente.", "erro");
+                }
+            }
+            // Turno já fechado: a frase de baixo diria "o caixa continua aberto", que é o
+            // contrário do que aconteceu. Aqui não há nada a refazer nem a anotar.
+            catch (InvalidOperationException ex) when (ex.Message.Contains(Caixa.MarcaJaFechado))
+            {
+                Dialogo.Avisar(dono, "Caixa já fechado", ex.Message, "ok");
+            }
+            catch (Exception ex)
             {
                 Dialogo.Avisar(dono, "Caixa não fechou",
-                    e2.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
+                    ex.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
                     "se continuar, chame o gerente.", "erro");
             }
         }
-        catch (Exception ex)
+        finally { _fechandoCaixa = false; }
+    }
+
+    /// <summary>
+    /// A frase que o operador lê quando a maquininha não responde na hora de fechar.
+    /// Uma linha: ele não resolve isso no balcão, e o caixa fecha do mesmo jeito.
+    /// </summary>
+    public const string MsgTefSemResposta =
+        "A maquininha não respondeu agora, então o cartão fica sem conferência.";
+
+    /// <summary>
+    /// O TEF está de pé NESTE momento? Serve para dizer se o valor do cartão pôde ser
+    /// conferido — não para barrar o fechamento: caixa que não fecha porque a maquininha
+    /// caiu vira turno esquecido, que é sempre pior.
+    ///
+    /// Sem provedor operável (nuvem, ou TEF desligado) devolve `true`: não há o que
+    /// perguntar, e chamar de "sem conferência" o que ninguém tentou conferir seria
+    /// alarme falso todo dia. Qualquer erro ou demora conta como fora do ar.
+    /// </summary>
+    private static async Task<bool> TefRespondeAsync()
+    {
+        var provedor = Servicos.Operavel();
+        if (provedor is null || provedor.Ocupado) return true;
+        try
         {
-            Dialogo.Avisar(dono, "Caixa não fechou",
-                ex.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
-                "se continuar, chame o gerente.", "erro");
+            using var prazo = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            return await provedor.AtivoAsync(prazo.Token);
         }
+        catch { return false; }
     }
 
     private static void MostrarResultado(Window dono, List<LinhaFechamento> linhas, string? justificativa,
@@ -3279,6 +3344,9 @@ public partial class Venda : UserControl
             {
                 "confere" => "confere",
                 "sobra" => "SOBRA " + l.Diferenca.Abs.Formatado(),
+                // linha que ninguém pôde conferir NÃO pode sair como falta de R$ 0,00:
+                // isso é o desvio inventado voltando pela porta do relatório
+                "sem_conferencia" => "sem conferência",
                 _ => "FALTA " + l.Diferenca.Abs.Formatado(),
             };
             // "TEF" não diz nada a quem está fechando a gaveta: o que importa é se o
@@ -3291,8 +3359,16 @@ public partial class Venda : UserControl
 
         // O desvio é a soma dos módulos. O líquido esconderia falta num lugar
         // compensada por sobra em outro, que é justamente o que se quer enxergar.
-        var desvio = new Dinheiro(linhas.Sum(l => l.Diferenca.Abs.Centavos));
+        // Só entra o que foi CONFERIDO: a mesma conta que o Núcleo faz para pedir
+        // justificativa, senão a tela mostra um número e o gate usa outro.
+        var desvio = new Dinheiro(linhas.Sum(l => l.DiferencaConferida.Abs.Centavos));
         var corpo = texto + $"\n\nDiferença total: {desvio.Formatado()}";
+
+        // Fechou com forma sem conferência: dizer isso é o oposto de fabricar desvio.
+        var semConferencia = linhas.Where(l => !l.Conferida).Select(l => Rotulo(l.Forma)).ToList();
+        if (semConferencia.Count > 0)
+            corpo += $"\n\n{string.Join(", ", semConferencia)}: sem conferência.\n" +
+                     "O valor é o que o sistema registrou, ninguém comparou com a maquininha.";
 
         if (linhas.Any(l => l.Situacao == "sobra"))
             corpo += "\n\nSobrou dinheiro na gaveta. Costuma ser venda feita fora do caixa,\n" +

@@ -103,9 +103,18 @@ public partial class AberturaCaixa : UserControl
     /// não foi gravada) e que ele não resolve isso sozinho no balcão.
     /// </summary>
     private static void NaoFechou(Window dono, Exception ex)
-        => Dialogo.Avisar(dono, "Caixa não fechou",
+    {
+        // Turno já fechado: a frase padrão diria "o caixa continua aberto", que é o
+        // contrário do que aconteceu. Não há nada para o operador refazer.
+        if (ex.Message.Contains(Caixa.MarcaJaFechado))
+        {
+            Dialogo.Avisar(dono, "Caixa já fechado", ex.Message, "ok");
+            return;
+        }
+        Dialogo.Avisar(dono, "Caixa não fechou",
             ex.Message + "\n\nO caixa continua aberto. Anote os valores que você contou e tente de novo; " +
             "se continuar, chame o gerente.", "erro");
+    }
 
     /// <summary>
     /// Fecha o turno esquecido, aqui mesmo. É o MESMO fechamento cego da tela de venda:
@@ -119,15 +128,20 @@ public partial class AberturaCaixa : UserControl
         var antiga = Caixa.SessaoAberta(cx);
         if (antiga is null || antiga.BusinessDate == Caixa.DiaOperacional()) { Avisar(); return; }
 
+        // Mesma regra da tela de venda, e pelo mesmo motivo: cartão do TEF não se
+        // declara. O roteiro sai do Núcleo (Caixa.PlanoDeConferencia) para as duas telas
+        // perguntarem exatamente a mesma coisa.
         var contagem = new Dictionary<string, Dinheiro>();
-        foreach (var f in Caixa.FormasContadas(cx, antiga))
+        foreach (var p in Caixa.PlanoDeConferencia(cx, antiga).Where(p => p.Conta))
         {
-            var pergunta = f == "dinheiro"
+            var pergunta = p.Forma == "dinheiro"
                 ? "Quanto tem em dinheiro na gaveta agora? O dinheiro daquele dia continua lá."
-                : $"Quanto deu em {FormaBr(f)} no fechamento da maquininha daquele dia?";
+                : p.PeloTef.Centavos == 0
+                    ? $"Quanto deu em {FormaBr(p.Forma)} no fechamento da maquininha daquele dia?"
+                    : $"Quanto deu em {FormaBr(p.Forma)} na outra maquininha naquele dia? O cartão do caixa já entrou sozinho.";
             var v = PedirValor.Mostrar(dono, $"Fechamento de {DataBr(antiga.BusinessDate)}", pergunta);
             if (v is null) return;                 // desistiu: nada fechado
-            contagem[f] = v.Value;
+            contagem[p.Forma] = v.Value;
         }
 
         var tolerancia = new Dinheiro(200);
@@ -157,11 +171,15 @@ public partial class AberturaCaixa : UserControl
                 {
                     "confere" => "confere",
                     "sobra" => "SOBRA " + l.Diferenca.Abs.Formatado(),
+                    "sem_conferencia" => "sem conferência",
                     _ => "FALTA " + l.Diferenca.Abs.Formatado(),
                 };
+                // "contou" era mentira na linha do cartão: ali quem informou foi a
+                // maquininha. A palavra tem que dizer de onde o número veio.
+                var origem = l.Contada ? "contou " : "máquina";
                 // "esperado", não "sistema": é o valor com que a contagem tem que
                 // bater, e é assim que a divergência da abertura chama a mesma coisa.
-                return $"{FormaBr(l.Forma),-9} contou {l.Declarado.Formatado(),11}  esperado {l.Apurado.Formatado(),11}  {dif}";
+                return $"{FormaBr(l.Forma),-9} {origem} {l.Declarado.Formatado(),11}  esperado {l.Apurado.Formatado(),11}  {dif}";
             }));
             // Venda de teste fica fora dos totais — mas aparece rotulada, aqui também.
             if (Caixa.ResumoDeTeste(cx, sessao) is string teste) texto += "\n\n" + teste;
