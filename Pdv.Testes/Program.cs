@@ -1324,6 +1324,7 @@ TestesPGWebLib.Rodar((cond, nome) => Check("pgweblib: " + nome, cond));
 // callback de menu/dado respondido como a tela responde, filtros por provedor.
 Console.WriteLine("--- TEF PayGo PGWebLib na casa (config, callback, filtros) ---");
 TestesCasaPGWebLib.Rodar((cond, nome) => Check("pgweb-casa: " + nome, cond));
+TestesQrNaTela.Rodar((cond, nome) => Check("qr-na-tela: " + nome, cond));
 
 // -- FILA: o que a nuvem RECUSA para sempre ----------------------------------
 // Dead-letter carimbava enviado_em: R$ 102.626,50 sumiram do contador com tudo verde.

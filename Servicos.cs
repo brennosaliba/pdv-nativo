@@ -311,6 +311,10 @@ public static class Servicos
                     // Menu de redes sem rede gravada, parcelas, senha do lojista: a biblioteca
                     // pergunta e a tela responde com os diálogos da casa.
                     Perguntar = PerguntarNaTelaAsync,
+                    // Pix: a biblioteca manda o caixa DESENHAR o QR (PWDAT_DSPQRCODE). A tela abre
+                    // e volta na hora; quem espera o cliente pagar e o laco do provedor.
+                    Exibir = ExibirNaTelaAsync,
+                    FecharExibicao = FecharExibicaoNaTela,
                     Auditar = detalhe =>
                     {
                         try
@@ -505,6 +509,54 @@ public static class Servicos
                 Dialogo.Avisar(dono, RespostaDaTela.Titulo(d), erro, "erro");
             }
         });
+
+    /// <summary>
+    /// Cancela a cobrança de TEF que está em voo. Quem preenche é a tela de pagamento, que é dona
+    /// do CancellationTokenSource da venda; quem chama é a tela do QR, quando o operador aperta Esc
+    /// (passo 55 do roteiro). Null fora de uma cobrança.
+    /// </summary>
+    internal static Action? CancelarTefEmVoo { get; set; }
+
+    private static Action? _fecharExibicaoTef;
+
+    /// <summary>
+    /// Abre a tela que a biblioteca mandou mostrar (o QR do Pix ou uma mensagem de checkout) e
+    /// devolve na hora. NÃO espera o cliente pagar: se esperasse, a biblioteca nunca saberia que o
+    /// QR foi mostrado e a venda morreria de tempo.
+    /// </summary>
+    private static Task<bool> ExibirNaTelaAsync(ExibicaoTef exibicao, CancellationToken ct)
+        => NaUiAsync(() =>
+        {
+            if (ct.IsCancellationRequested) return false;
+            FecharExibicaoNaTela();
+            try
+            {
+                _fecharExibicaoTef = TelaQrTef.Mostrar(JanelaAtiva(), exibicao,
+                    () => CancelarTefEmVoo?.Invoke());
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Sem tela, o provedor para a venda com uma frase clara. Melhor do que cobrar às
+                // cegas um QR que ninguém viu.
+                try
+                {
+                    using var c = Banco.Abrir();
+                    Caixa.Auditar(c, null, "tef_pgweblib", null, null, "tela do QR não abriu: " + ex.Message);
+                }
+                catch { }
+                return false;
+            }
+        });
+
+    private static void FecharExibicaoNaTela()
+    {
+        var fechar = Interlocked.Exchange(ref _fecharExibicaoTef, null);
+        if (fechar is null) return;
+        var disp = System.Windows.Application.Current?.Dispatcher;
+        if (disp is null || disp.CheckAccess()) { try { fechar(); } catch { } return; }
+        disp.InvokeAsync(() => { try { fechar(); } catch { } });
+    }
 
     /// <summary>A janela que está na frente (Configuração ou venda), para os diálogos do TEF nascerem em cima dela.</summary>
     private static System.Windows.Window JanelaAtiva()

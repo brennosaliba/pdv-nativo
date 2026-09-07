@@ -79,6 +79,7 @@ public sealed class FakePGWebLib : IPGWebLib
     public static int LeiturasDePan;
 
     private bool _iniciada;
+    private bool _pediuQr;
     private Pendencia? _pendente, _pendenteAoComecar;
     /// <summary>PWINFO_IDLEPROCTIME é da biblioteca, não da transação: sobrevive ao PW_iNewTransac.</summary>
     private string _idleProcTime = "";
@@ -102,6 +103,16 @@ public sealed class FakePGWebLib : IPGWebLib
     public List<short> AmbientesPedidos { get; } = new();
     /// <summary>Como a biblioteca num terminal já instalado: recusa a troca de ambiente.</summary>
     public bool RecusarAmbiente { get; set; }
+
+    /// <summary>
+    /// Venda de Pix: a biblioteca pede que o caixa DESENHE o QR na tela (PWDAT_DSPQRCODE), em vez
+    /// de mandar o cliente ler no pinpad. É o que o passo 55 do roteiro exercita.
+    /// </summary>
+    public bool PedirQrNaTela { get; set; }
+    /// <summary>O conteúdo do QR que a biblioteca devolve em PWINFO_AUTHPOSQRCODE.</summary>
+    public string QrCode { get; set; } = "00020126580014BR.GOV.BCB.PIX0136teste-pix-american-day-0000000000005204000053039865802BR5913AMERICAN DAY6009BELO HORIZ62070503***6304ABCD";
+    /// <summary>A biblioteca manda o QR mas esquece o conteúdo: o caixa não pode mostrar QR vazio.</summary>
+    public bool QrSemConteudo { get; set; }
     /// <summary>Biblioteca anterior à 4.1.43.10: o símbolo não existe.</summary>
     public bool AmbienteLanca { get; set; }
 
@@ -145,7 +156,7 @@ public sealed class FakePGWebLib : IPGWebLib
         _oper = operacao;
         _params = new Dictionary<ushort, string>();
         _etapa = 0;
-        _pediuRede = _cancelada = _abortada = false;
+        _pediuRede = _pediuQr = _cancelada = _abortada = false;
         _res.Clear();
         _ppEsperado = null;
         _eventos.Clear();
@@ -211,6 +222,13 @@ public sealed class FakePGWebLib : IPGWebLib
                 _etapa = 1;
                 return PW.PWRET_NOTHING;                           // "chamar de novo"
             case 1:
+                if (PedirQrNaTela && !_pediuQr)
+                {
+                    _pediuQr = true;
+                    if (!QrSemConteudo) _res[PW.PWINFO_AUTHPOSQRCODE] = QrCode;
+                    pedidos = new[] { new PwGetData(PW.PWDAT_DSPQRCODE, PW.PWINFO_AUTHPOSQRCODE, "LEIA O QR NO APLICATIVO DO BANCO") };
+                    return PW.PWRET_MOREDATA;
+                }
                 _etapa = 2;
                 pedidos = new[] { new PwGetData(PW.PWDAT_CARDINF, 0, "APROXIME OU INSIRA O CARTAO") };
                 _ppEsperado = PW.PWDAT_CARDINF;

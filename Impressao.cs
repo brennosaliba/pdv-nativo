@@ -1421,6 +1421,12 @@ public static class Impressao
     /// caminho honesto é montar os retângulos aqui: fica vetorial (o driver rasteriza
     /// na resolução real da térmica, sem borrão de reamostragem) e sem dependência nova.
     /// </summary>
+    /// <summary>
+    /// O mesmo desenho do QR do cupom, para a tela do caixa mostrar o QR do Pix que a PGWebLib
+    /// manda exibir. Uma geometria só, sem dependência nova e sem reamostragem.
+    /// </summary>
+    internal static FrameworkElement? QrParaTela(string? conteudo, double lado) => Qr(conteudo, lado);
+
     private static FrameworkElement? Qr(string? conteudo, double lado)
     {
         // Anulável de propósito: `ResultadoEmissao.QrCode` é string? e some inteiro quando

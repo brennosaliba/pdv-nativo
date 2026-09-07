@@ -39,7 +39,10 @@ INSERT INTO config (chave, valor, atualizado) VALUES
   ('tef_pgweb_porta_pinpad', '5',                               strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime')),
   -- producao (padrao) ou homologacao. Vira PW_iSetEnvironment, chamada antes do PW_iInit.
   -- Esta maquina e a de homologacao; loja fica em producao, que e o padrao quando a chave falta.
-  ('tef_pgweb_ambiente',     'homologacao',                     strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime'))
+  ('tef_pgweb_ambiente',     'homologacao',                     strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime')),
+  -- 1 desenha o QR do Pix na TELA DO CAIXA (o roteiro pede isso no passo 55: Esc na tela do QR
+  -- cancela a venda). Sem esta chave o cliente le o QR no pinpad, que e o que as lojas fazem hoje.
+  ('tef_pgweb_qr_na_tela',   '1',                               strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime'))
 ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor, atualizado = excluded.atualizado;
 COMMIT;
 

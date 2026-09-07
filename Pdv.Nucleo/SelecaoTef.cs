@@ -85,6 +85,16 @@ public static class ConfigPGWebLib
     /// </summary>
     public const string ChaveAmbiente = "tef_pgweb_ambiente";
 
+    /// <summary>
+    /// `1` liga o QR do Pix na TELA DO CAIXA. Sem isso a biblioteca continua mandando o cliente ler
+    /// no pinpad, que e o comportamento de hoje nas lojas.
+    ///
+    /// Fica desligado por padrao de proposito: ligar muda o fluxo de Pix de todo mundo, e o
+    /// roteiro de homologacao (passo 55) e quem exige a tela. A maquina de homologacao liga; as
+    /// lojas so depois de o dono ver funcionando.
+    /// </summary>
+    public const string ChaveQrNaTela = "tef_pgweb_qr_na_tela";
+
     /// <summary>Diretório de trabalho da biblioteca (PW_iInit). Fora de C:\PAYGO de propósito: é nosso, não do PayGo Windows.</summary>
     public const string DirPadrao = @"C:\ProgramData\PdvNativo\pgweb";
 
@@ -108,6 +118,18 @@ public static class ConfigPGWebLib
     /// <summary>Uma linha para a tela dizer em que ambiente o caixa está.</summary>
     public static string RotuloAmbiente(short ambiente)
         => ambiente == PW.ENVRMNT_TEST ? "Homologação" : "Produção";
+
+    /// <summary>A loja pediu para desenhar o QR do Pix na tela do caixa?</summary>
+    public static bool QrNaTela(Func<string, string?> config)
+        => (config(ChaveQrNaTela)?.Trim() ?? "") == "1";
+
+    /// <summary>
+    /// As capacidades que a automação declara. CAP_QR e CAP_MSG_CHECKOUT entram JUNTAS e só quando
+    /// a loja liga o QR na tela: declarar a capacidade é o que faz a biblioteca mandar
+    /// PWDAT_DSPQRCODE e PWDAT_DSPCHECKOUT, e prometer o que a tela não faz trava a venda.
+    /// </summary>
+    public static int CapacidadesCom(int capacidades, bool qrNaTela)
+        => qrNaTela ? capacidades | PW.CAP_QR | PW.CAP_MSG_CHECKOUT : capacidades;
 
     public const string NomeAutomacao = "Pdv.AmericanDay";
 
@@ -154,6 +176,7 @@ public static class ConfigPGWebLib
     {
         static string? Limpo(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
         var caps = int.TryParse(config(ChaveCapacidades)?.Trim(), out var c) && c >= 0 ? c : ProvedorPGWebLib.CapacidadesPadrao;
+        caps = CapacidadesCom(caps, QrNaTela(config));
         return new OpcoesPGWebLib(
             NomeAutomacao: NomeAutomacao,
             VersaoAutomacao: versao,

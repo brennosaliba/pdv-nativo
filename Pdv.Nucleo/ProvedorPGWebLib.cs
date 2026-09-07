@@ -33,6 +33,20 @@ public sealed record OpcoesPGWebLib(string NomeAutomacao, string VersaoAutomacao
     string PortaPinpad = "0", string Moeda = "986", short Ambiente = PW.ENVRMNT_PROD);
 
 /// <summary>
+/// O que a biblioteca mandou o caixa mostrar na tela enquanto a transação corre.
+/// </summary>
+/// <param name="Titulo">Uma linha, para o cabeçalho do diálogo.</param>
+/// <param name="Mensagem">O texto que a biblioteca mandou (szPrompt).</param>
+/// <param name="QrCode">
+/// O conteúdo do QR, quando é um QR. Vem de PW_iGetResult(PWINFO_AUTHPOSQRCODE), e não do prompt:
+/// o prompt tem 84 caracteres e um payload de Pix não cabe lá.
+/// </param>
+public sealed record ExibicaoTef(string Titulo, string Mensagem, string? QrCode)
+{
+    public bool EhQrCode => !string.IsNullOrWhiteSpace(QrCode);
+}
+
+/// <summary>
 /// Provedor de TEF sobre <see cref="IPGWebLib"/>. Uma instância por processo; as chamadas são
 /// serializadas por um semáforo porque a biblioteca guarda UMA transação corrente.
 /// </summary>
@@ -95,6 +109,21 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// para cancelar. Null aqui = nunca pergunta (cancela a captura).
     /// </summary>
     public Func<PwGetData, CancellationToken, Task<string?>>? Perguntar { get; init; }
+
+    /// <summary>
+    /// Mostra na tela do caixa o que a biblioteca mandou mostrar: uma mensagem de checkout ou o QR
+    /// do Pix. Devolve `true` se a tela mostrou e o cliente pode pagar, `false` se o operador
+    /// desistiu (o Esc do passo 55 do roteiro). Null aqui = o caixa não sabe mostrar, e aí a venda
+    /// para com um texto claro em vez de morrer com "captura que o caixa não suporta".
+    /// </summary>
+    public Func<ExibicaoTef, CancellationToken, Task<bool>>? Exibir { get; init; }
+
+    /// <summary>
+    /// Fecha a tela que <see cref="Exibir"/> abriu. Chamada UMA vez, no fim da cobrança, com
+    /// qualquer desfecho: paga, recusada, cancelada ou erro. Sem isto o QR fica na tela depois do
+    /// cliente pagar, e o proximo cliente ve o QR do anterior.
+    /// </summary>
+    public Action? FecharExibicao { get; init; }
 
     private readonly IPGWebLib _lib;
     private readonly string _pasta;
@@ -271,12 +300,14 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
 
         try { await _um.WaitAsync(ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { return Falha(SituacaoTef.Cancelado, chargeId, CodigoTef.Cancelado, "cobrança cancelada pelo operador"); }
+        Contexto? ctxExibicao = null;
         try
         {
             var prep = await PrepararAsync(PW.PWOPER_SALE, chargeId).ConfigureAwait(false);
             if (prep is not null) return prep;
 
             var ctx = new Contexto(chargeId, id, "CRT", tipo, valor.Centavos, parc, andamento, ct);
+            ctxExibicao = ctx;
             ParametrosDeIdentidade(ctx);
             Param(ctx, PW.PWINFO_TOTAMNT, valor.Centavos.ToString(CultureInfo.InvariantCulture));
             Param(ctx, PW.PWINFO_CURRENCY, _op.Moeda);
@@ -391,7 +422,17 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, null, false)
             { Codigo = CodigoTef.Pago, PaymentStatus = situacao };
         }
-        finally { _um.Release(); }
+        finally
+        {
+            // A tela do QR fecha com QUALQUER desfecho: paga, recusada, cancelada ou erro.
+            // Fica aqui, no finally da cobranca, porque e o unico ponto por onde todos passam.
+            if (ctxExibicao is { Exibiu: true })
+            {
+                try { FecharExibicao?.Invoke(); }
+                catch (Exception ex) { Auditar?.Invoke("pgweblib: fechar a tela de exibicao lancou: " + ex.GetType().Name); }
+            }
+            _um.Release();
+        }
     }
 
     // ------------------------------------------------------------------ cancelamento (SALEVOID)
@@ -689,6 +730,8 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         public int Parcelas { get; }
         public IProgress<AndamentoTef>? Andamento { get; }
         public CancellationToken Ct { get; }
+        /// <summary>Alguma tela de exibicao (QR, mensagem) foi aberta e precisa ser fechada no fim.</summary>
+        public bool Exibiu { get; set; }
         /// <summary>Tudo que já foi passado à biblioteca: é a resposta pronta se ela pedir de novo por MOREDATA.</summary>
         public Dictionary<ushort, string> Conhecidos { get; } = new();
         public string? UltimoDisplay;
@@ -870,8 +913,82 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 if (r is not null) return r;
                 continue;
             }
+            if (p.EhExibicao)
+            {
+                var r = await ExibirNaTelaAsync(ctx, p, fim).ConfigureAwait(false);
+                if (r is not null) return r;
+                continue;
+            }
             return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, $"TEF pediu captura que o caixa não suporta (tipo {p.Tipo})", ler: true);
         }
+        return null;
+    }
+
+    /// <summary>
+    /// PWDAT_DSPCHECKOUT e PWDAT_DSPQRCODE: a biblioteca não quer um dado, quer que o caixa MOSTRE
+    /// alguma coisa. É por aqui que o Pix funciona numa solução Windows: o cliente lê o QR na tela
+    /// do caixa, e o Esc do operador cancela a venda (passo 55 do roteiro v20260819).
+    ///
+    /// Duas coisas aqui são leitura do contrato oficial e precisam ser confirmadas contra o host na
+    /// primeira venda de Pix da homologação, porque não dá para provar com a biblioteca parada:
+    ///   1. o conteúdo do QR vem de PW_iGetResult(PWINFO_AUTHPOSQRCODE), e não do szPrompt, que só
+    ///      tem 84 caracteres;
+    ///   2. a resposta de um pedido de exibição é um PW_iAddParam do mesmo identificador com valor
+    ///      vazio, que é como a biblioteca sabe que a tela já mostrou.
+    /// Se algum dos dois estiver errado, o sintoma aparece no passo 11 e a auditoria abaixo diz
+    /// exatamente o que foi lido e o que foi respondido.
+    /// </summary>
+    private async Task<Fim?> ExibirNaTelaAsync(Contexto ctx, PwGetData p, Fim fim)
+    {
+        var qr = p.EhQrCode ? Ler(PW.PWINFO_AUTHPOSQRCODE) : null;
+        Auditar?.Invoke($"pgweblib: exibir tipo={p.Tipo} id={p.Identificador} prompt=\"{p.Prompt}\" qr={(string.IsNullOrWhiteSpace(qr) ? "vazio" : qr!.Length + " caracteres")}");
+
+        if (p.EhQrCode && string.IsNullOrWhiteSpace(qr))
+            return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
+                "O TEF pediu para mostrar o QR mas não mandou o código. Tente de novo ou cobre de outro jeito.", ler: true);
+
+        if (Exibir is null)
+            return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
+                p.EhQrCode
+                    ? "Este caixa não sabe mostrar o QR do Pix na tela. Cobre pelo pinpad ou de outro jeito."
+                    : "Este caixa não sabe mostrar a mensagem que o TEF pediu.", ler: true);
+
+        var titulo = p.EhQrCode ? "Pix: mostre o QR ao cliente" : "TEF";
+        var texto = string.IsNullOrWhiteSpace(p.Prompt)
+            ? (p.EhQrCode ? "O cliente lê o código com o aplicativo do banco." : "")
+            : p.Prompt;
+
+        // Exibir ABRE a tela e volta: nao espera o cliente pagar. Quem espera e o laco de
+        // PW_iExecTransac, que fica pedindo o desfecho ao host. Se a tela bloqueasse aqui, a
+        // biblioteca nunca saberia que o QR foi mostrado e a venda morreria de timeout.
+        // O Esc do operador cancela o CancellationToken da venda, e o laco de execucao ja trata
+        // isso: chama PW_iPPAbort e a biblioteca encerra com PWRET_CANCEL.
+        bool seguiu;
+        try
+        {
+            ctx.Exibiu = true;
+            seguiu = await Exibir(new ExibicaoTef(titulo, texto, qr), ctx.Ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            seguiu = false;
+        }
+        catch (Exception ex)
+        {
+            Auditar?.Invoke("pgweblib: a tela de exibição lançou: " + ex.GetType().Name + " " + ex.Message);
+            return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
+                "Não consegui mostrar a tela do TEF. A cobrança não foi feita.", ler: true);
+        }
+
+        if (!seguiu)
+            return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado,
+                "operação cancelada pelo operador", desfeita: true, ler: true);
+
+        // Resposta de exibição: mesmo identificador, valor vazio. Ver o comentário acima.
+        var ret = _lib.AddParam(p.Identificador, "");
+        if (ret != PW.PWRET_OK)
+            return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
+                $"TEF não aceitou o aviso de que a tela mostrou ({p.Identificador}): {PW.Nome(ret)}", ler: true);
         return null;
     }
 

@@ -111,6 +111,15 @@ public static class PW
     public const ushort PWINFO_PNDAUTEXTREF = 32521;
 
     // ── informações (PWINFO_*): saída ────────────────────────────────────
+    /// <summary>
+    /// Conteúdo do QR que a automação tem que desenhar no checkout, lido com PW_iGetResult quando
+    /// a biblioteca pede um PWDAT_DSPQRCODE. Não cabe no szPrompt do PW_GetData, que tem 84
+    /// caracteres: um payload de Pix passa disso com folga.
+    /// </summary>
+    public const ushort PWINFO_AUTHPOSQRCODE = 0x1F77;
+    /// <summary>Preferência de exibição do QR (PWINFO_DSPQRPREF), da mesma família.</summary>
+    public const ushort PWINFO_DSPQRPREF = 0x7F50;
+
     public const ushort PWINFO_RESULTMSG = 66;
     public const ushort PWINFO_AUTHCODE = 70;
     public const ushort PWINFO_AUTRESPCODE = 71;
@@ -239,6 +248,17 @@ public sealed record PwGetData(ushort Tipo, ushort Identificador, string Prompt,
     public bool EhDigitado => Tipo is PW.PWDAT_TYPED or PW.PWDAT_BARCODE or PW.PWDAT_USERAUTH;
     public bool EhPinpad => Tipo is PW.PWDAT_CARDINF or PW.PWDAT_PPENTRY or PW.PWDAT_PPENCPIN or PW.PWDAT_CARDOFF
         or PW.PWDAT_CARDONL or PW.PWDAT_PPCONF or PW.PWDAT_PPREMCRD or PW.PWDAT_PPGENCMD or PW.PWDAT_PPDATAPOSCNF;
+
+    /// <summary>
+    /// A biblioteca não está pedindo captura: está mandando MOSTRAR alguma coisa na tela do caixa,
+    /// uma mensagem (PWDAT_DSPCHECKOUT) ou o QR do Pix (PWDAT_DSPQRCODE). O roteiro de homologação
+    /// conta com isso: o passo 55 manda apertar Esc "na tela de exibição do QRCode" numa solução
+    /// Windows e esperar "OPERAÇÃO CANCELADA".
+    /// </summary>
+    public bool EhExibicao => Tipo is PW.PWDAT_DSPCHECKOUT or PW.PWDAT_DSPQRCODE;
+
+    /// <summary>Só o QR: a mensagem de checkout é texto e cabe no <see cref="Prompt"/>.</summary>
+    public bool EhQrCode => Tipo == PW.PWDAT_DSPQRCODE;
 }
 
 /// <summary>Uma operação devolvida por PW_iGetOperations (menu administrativo).</summary>

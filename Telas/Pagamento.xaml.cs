@@ -546,6 +546,9 @@ public partial class Pagamento : UserControl
         _cobranca?.Cancel();
         _cobranca = new CancellationTokenSource();
         var ct = _cobranca.Token;
+        // A tela do QR do Pix precisa cancelar ESTA cobrança quando o operador aperta Esc
+        // (passo 55 do roteiro). Ela não conhece a tela de pagamento, então o caminho é este gancho.
+        Servicos.CancelarTefEmVoo = () => { try { _cobranca?.Cancel(); } catch { } };
 
         // Parcelas no TÍTULO (os reports de andamento reescrevem o detalhe): o operador precisa
         // conferir o "3x" enquanto o cliente ainda não passou o cartão.

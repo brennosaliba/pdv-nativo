@@ -306,3 +306,48 @@ tef_pgweb_porta_pinpad = 5
 ```
 
 Bateria do PDV depois de tudo: 2887 OK, 0 falhas.
+
+## 07/09/2026, 16h: o QR do Pix na tela do caixa (passo 55)
+
+Lendo o roteiro v20260819 achei um buraco que teria derrubado a homologação de Pix. O passo 55 diz:
+
+> Realizar uma venda e na tela de exibição do QRCode, pressionar a tecla 'Esc' em uma solução Windows
+
+Ou seja: a tela do QR é **do caixa**, não do pinpad, e o Esc dela tem que virar "OPERAÇÃO CANCELADA".
+
+O provedor não sabia disso. Quando a biblioteca pede `PWDAT_DSPQRCODE`, ele caía no ramo final e
+matava a venda com "TEF pediu captura que o caixa não suporta (tipo 20)".
+
+### O que passou a existir
+
+1. **O provedor atende os pedidos de exibição** (`PWDAT_DSPQRCODE` e `PWDAT_DSPCHECKOUT`). Ele lê o
+   conteúdo do QR, manda a tela abrir e avisa a biblioteca que mostrou. A tela **não bloqueia**:
+   quem espera o cliente pagar é o laço que pergunta o desfecho ao host.
+2. **A tela** `Telas/TelaQrTef.cs`: QR grande sobre fundo branco, uma linha de instrução e o aviso
+   de que Esc cancela. Esc, o botão e o X da janela fazem a mesma coisa: cancelam a **venda**, não
+   só a janela. O provedor então chama `PW_iPPAbort` e a biblioteca encerra.
+3. **A janela fecha com qualquer desfecho**: aprovada, recusada, cancelada, host fora ou erro. Sem
+   isso o QR do cliente anterior ficaria na tela.
+4. **A capacidade é configurável e nasce desligada.** `tef_pgweb_qr_na_tela = 1` acrescenta
+   `CAP_QR` e `CAP_MSG_CHECKOUT` às capacidades declaradas. Declarar a capacidade é o que faz a
+   biblioteca pedir a tela, então prometer sem ter a tela travaria a venda. As lojas seguem com o
+   Pix no pinpad até o dono ver funcionando aqui.
+
+### Duas coisas para confirmar no passo 11, com o host de verdade
+
+Não dá para provar com a biblioteca parada, então elas estão escritas no código e aparecem na
+auditoria de toda venda de Pix:
+
+1. o conteúdo do QR vem de `PW_iGetResult(PWINFO_AUTHPOSQRCODE)`, e não do `szPrompt`, que tem 84
+   caracteres e não comporta um payload de Pix;
+2. a resposta de um pedido de exibição é `PW_iAddParam` do mesmo identificador com valor vazio.
+
+Se alguma das duas estiver errada, a linha de auditoria diz exatamente o que foi lido e respondido.
+
+### O que já estava pronto e o doc dizia que faltava
+
+Parcelas na tela de pagamento já existem, com a chave `tef_perguntar_parcelas` (desligada por
+padrão, todo crédito sai à vista). Cancelamento pela biblioteca também já existe
+(`ProvedorPGWebLib.CancelarAsync`, `PWOPER_SALEVOID`).
+
+Bateria do PDV: 2913 OK, 0 falhas, sendo 22 aferições novas só do QR na tela.
