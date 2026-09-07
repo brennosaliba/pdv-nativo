@@ -6,15 +6,16 @@ homologar. O mapa completo dos 58 passos vem em `TEF_PAYGO_homologacao.md`.
 ## Qual executável abrir
 
 ```
-C:\Users\Waz\pdv-nativo\publish\v39\Pdv.exe
+C:\Users\Waz\pdv-nativo\publish\v40\Pdv.exe
 ```
 
 64 bits, 180,9 MB, versão 0.5.9. É este que tem a tela do QR do Pix, a escolha de ambiente e o
 conserto do "TEF ativo" mentiroso.
 
-**O v38 não serve mais.** Ele chamava a escolha de ambiente antes de inicializar a biblioteca, e a
-biblioteca recusava com "não instalado": o caixa seguia falando com o servidor de produção sem
-ninguém perceber. Medido no seu teste das 17h13.
+**Não use o v38 nem o v39.** O v38 chamava a escolha de ambiente antes de inicializar a biblioteca, e
+ela recusava com "não instalado": o caixa seguia falando com o servidor de produção sem ninguém
+perceber, medido no seu teste das 17h13. O v39 corrigiu isso, mas é anterior aos oito consertos do
+roteiro e ao filtro de redes.
 
 **Não use o `publish\homolog-x86\Pdv.exe`.** Ele era a saída para a biblioteca que só existia em 32
 bits. O kit avulso traz a de 64, então o caixa voltou ao build normal. Aquele exe também não tem
@@ -26,7 +27,7 @@ máquina do PE diz x64.
 Como foi gerado, se precisar refazer:
 
 ```bash
-dotnet publish Pdv.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=true -p:DebugType=none -o publish/v39
+dotnet publish Pdv.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=true -p:DebugType=none -o publish/v40
 ```
 
 ## O que já está pronto nesta máquina
