@@ -98,6 +98,49 @@ public static class TestesLoginBuscaNoPainel
             checar(pendurou is null && relogio.ElapsedMilliseconds < 3_000,
                 $"rede pendurada: o login desiste no teto e devolve a tela (levou {relogio.ElapsedMilliseconds} ms)");
 
+            // ── 5c. COM A INTERNET CAÍDA, A BUSCA APRENDE ───────────────────
+            // Medido pelo revisor: com o link caído e o roteador vivo, o POST de
+            // autenticação demora 21 s até o Windows desistir. Sem descanso, CADA erro
+            // de digitação custaria os 8 s do teto, e a busca nunca terminaria dentro
+            // da janela: não valeria nem para a tentativa seguinte. Offline a mudança
+            // só somaria espera, que é o oposto do que ela existe para fazer.
+            {
+                var idas = 0;
+                var relogioFalso = new DateTime(2026, 9, 8, 13, 0, 0);
+                var busca = new BuscaNoPainel(
+                    () => { idas++; return Task.FromResult(0); },   // painel fora do ar
+                    TimeSpan.FromMinutes(1))
+                { Agora = () => relogioFalso };
+
+                await busca.BuscarAsync();
+                checar(idas == 1 && !busca.Vale, "primeira tentativa vai à rede e entra em descanso");
+
+                await busca.BuscarAsync();
+                await busca.BuscarAsync();
+                checar(idas == 1, $"as seguintes NÃO tocam na rede: erro de digitação volta a ser instantâneo (viu {idas} idas)");
+
+                relogioFalso = relogioFalso.AddMinutes(2);
+                checar(busca.Vale, "passado o descanso, ela volta a valer a pena");
+                await busca.BuscarAsync();
+                checar(idas == 2, $"e pergunta de novo, uma vez (viu {idas} idas)");
+            }
+
+            // Duas tentativas ao mesmo tempo não podem virar duas idas à rede: era assim
+            // que o operador nervoso empilhava tarefas de 21 s, cada uma segurando uma
+            // conexão do banco, todas em fila no mesmo semáforo da nuvem.
+            {
+                var idas = 0;
+                var porta = new TaskCompletionSource<int>();
+                var busca = new BuscaNoPainel(() => { idas++; return porta.Task; });
+                var a = busca.BuscarAsync();
+                var b = busca.BuscarAsync();
+                var c = busca.BuscarAsync();
+                checar(idas == 1 && ReferenceEquals(a, b) && ReferenceEquals(b, c),
+                    $"três tentativas ao mesmo tempo compartilham UMA busca (viu {idas} idas)");
+                porta.SetResult(1);
+                checar(await a == 1, "e todas recebem a mesma resposta");
+            }
+
             // ── 6. PAINEL QUE NÃO TROUXE NINGUÉM NÃO TENTA DE NOVO ──────────
             vezes = 0;
             var (vazio, buscou4) = await Operadores.EntrarComCpfAsync(cx, "11144477735", Senha,

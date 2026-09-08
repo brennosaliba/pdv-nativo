@@ -123,11 +123,18 @@ public partial class Login : UserControl
     /// depois de a tela ter fechado a dela, e escrever num banco já disposto derrubaria
     /// a única tela que a loja tem para entrar.
     /// </summary>
-    private static async Task<int> BaixarOperadoresAsync()
+    ///
+    /// ESTÁTICA de propósito: a trava de descanso e a de "uma busca por vez" (ver
+    /// <see cref="BuscaNoPainel"/>) só valem se forem as MESMAS entre uma tela de login
+    /// e a seguinte. Cada logout monta uma tela nova, e uma busca por tela era
+    /// exatamente como as chamadas empilhavam.
+    private static readonly BuscaNoPainel Painel = new(async () =>
     {
         using var cx2 = Banco.Abrir();
         return await Servicos.Nuvem().BaixarOperadoresAsync(cx2).ConfigureAwait(false);
-    }
+    });
+
+    private static Task<int> BaixarOperadoresAsync() => Painel.BuscarAsync();
 
     private async void Entrar(object sender, RoutedEventArgs e)
     {
