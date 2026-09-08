@@ -157,6 +157,14 @@ public static class Banco
             // caixa ("2x Ovomaltine, 3x Ninho"), JSON de Escolha[] por unidade da
             // linha. NULL = item simples (e toda venda anterior a esta coluna).
             "ALTER TABLE venda_item ADD COLUMN escolhas_json TEXT",
+            // 07/09/2026: TURNO DE TESTE. Sessão que o modo de homologação abre
+            // sozinho, para o roteiro do TEF rodar sem abertura e sem fechamento de
+            // caixa. A marca é do TURNO, e não da config, pelo mesmo motivo da marca
+            // da venda: a config desliga quando o roteiro acaba, e quem for ler o
+            // histórico depois precisa continuar sabendo que aquele turno foi teste.
+            // É ela que autoriza fechar o turno sem contagem e sem mandar nada para a
+            // nuvem — coisa que jamais pode acontecer com um turno de verdade.
+            "ALTER TABLE caixa_sessao ADD COLUMN homologacao INTEGER NOT NULL DEFAULT 0",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }

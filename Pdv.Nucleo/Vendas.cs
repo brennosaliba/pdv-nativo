@@ -129,7 +129,15 @@ public static class Vendas
         // conexão que já tem uma pendente. A marca é gravada NA VENDA, não consultada
         // depois — a config muda quando o roteiro acaba, e a venda tem que continuar
         // sabendo que nasceu de um teste.
-        var homologacao = Homologacao(cx);
+        //
+        // OU O TURNO É DE TESTE (07/09/2026). A config é lida AGORA e o turno foi aberto
+        // ANTES: quem desliga a chave com o PDV parado no turno de teste (é assim que o
+        // roteiro acaba, na mão, no SQLite) faria a venda seguinte nascer de VERDADE
+        // dentro dele. Ela iria para a fila da nuvem assinada por "Teste de homologação",
+        // um id que o painel não conhece, e entraria no apurado de um turno sem gaveta.
+        // A tela nem saberia: ela leu a chave uma vez, ao abrir, e continua mostrando o
+        // caixa de teste. Turno de teste só produz venda de teste.
+        var homologacao = Homologacao(cx) || sessao.Teste;
 
         // QUEM ASSINA. A identidade na memória do turno é a de quem logou — que pode ser
         // a que nasceu SÓ nesta máquina, se a reconciliação com o painel aconteceu depois

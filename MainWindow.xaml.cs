@@ -16,6 +16,12 @@ namespace Pdv;
 ///
 /// A configuração NÃO reaparece depois de feita: quem precisar mexer entra pelo
 /// botão discreto no login, e ele exige senha de administrador.
+///
+/// MODO DE HOMOLOGAÇÃO (config `homologacao` = 1, ver Pdv.Nucleo/ModoHomologacao):
+/// login e abertura de caixa saem do caminho e a casca vai direto para a VENDA, com o
+/// operador de teste e um turno de teste. É o roteiro do TEF que roda aqui, e nenhum
+/// dos 58 passos fala de caixa ou de operador. Com a config desligada nada disso
+/// existe: a ordem acima é a da loja, e continua sendo.
 /// </summary>
 public partial class MainWindow : Window
 {
@@ -48,9 +54,34 @@ public partial class MainWindow : Window
     {
         using var cx = Banco.Abrir();
 
+        // A faixa do modo de homologação antes de tudo: ela vale para QUALQUER tela,
+        // inclusive a de configuração, e quem liga o caixa tem que ver na hora.
+        PintarFaixaHomologacao(cx);
+
         // 1ª execução: sem terminal configurado ou sem nenhum operador cadastrado
         var configurado = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM terminal") > 0;
         if (!configurado || !Operadores.ExisteAlgum(cx)) { MostrarConfiguracao(); return; }
+
+        // ── MODO DE HOMOLOGAÇÃO ─────────────────────────────────────────────
+        // Desligado (a loja): EncerrarSobras e EntradaDireta não fazem nada e o caixa
+        // segue para o login como sempre. Ligado: entra direto na venda, com o
+        // operador de teste e o turno de teste.
+        // Turno de teste que ficou aberto depois de o modo sair do ar não pode
+        // segurar a abertura do caixa da loja (só existe UM turno aberto por vez).
+        ModoHomologacao.EncerrarSobras(cx);
+        if (ModoHomologacao.EntradaDireta(cx) is { } teste)
+        {
+            _operador = teste.Operador;
+            _sessao = teste.Sessao;
+            MostrarVenda();
+            return;
+        }
+
+        // A entrada direta não vale mais (o modo foi desligado com o PDV aberto, ou um
+        // turno de gente apareceu), mas quem ficou na mão é o operador de TESTE. Ele não
+        // segue: sem esta linha a tela de abertura viria com o nome dele no alto e o dia
+        // da loja sairia assinado por um operador que não é gente. Volta para o login.
+        if (ModoHomologacao.EhOperadorDeTeste(_operador?.Id)) _operador = null;
 
         if (_operador is null) { MostrarLogin(cx); return; }
 
@@ -59,6 +90,23 @@ public partial class MainWindow : Window
         if (_sessao is null || _sessao.BusinessDate != Caixa.DiaOperacional()) { MostrarAbertura(); return; }
 
         MostrarVenda();
+    }
+
+    /// <summary>
+    /// A faixa do modo de homologação, no alto da janela, em toda tela. O texto sai do
+    /// Núcleo para a tela e a suíte lerem a mesma frase.
+    ///
+    /// Com um turno de gente aberto o modo não tira o login do caminho, e a faixa diz
+    /// isso com todas as letras: senão quem está com o roteiro na mão vê "modo de
+    /// homologação", leva o login na cara e conclui que a mudança não funcionou.
+    /// </summary>
+    private void PintarFaixaHomologacao(Microsoft.Data.Sqlite.SqliteConnection cx)
+    {
+        TxtFaixaHomologacao.Text = ModoHomologacao.TituloFaixa;
+        TxtFaixaHomologacaoDetalhe.Text = ModoHomologacao.BloqueadoPorTurnoDeVerdade(cx)
+            ? ModoHomologacao.DetalheBloqueado
+            : ModoHomologacao.DetalheFaixa;
+        FaixaHomologacao.Visibility = ModoHomologacao.Ligado(cx) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void MostrarLogin(Microsoft.Data.Sqlite.SqliteConnection cx)

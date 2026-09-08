@@ -188,6 +188,19 @@
                             <TextBlock Text="Cancelar / Imprimir" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+                    <!-- MENU DO TEF (07/09, pedido do dono): as operações da maquininha num
+                         lugar só, para percorrer os 58 passos da homologação sem caçar botão
+                         pela tela. A lista de operações vem da própria biblioteca
+                         (PW_iGetOperations), e o quadro mostra terminal, ambiente, redes e a
+                         última frase que a maquininha disse. Fica INVISÍVEL na loja: só
+                         aparece com `homologacao` = 1 (Pdv.Nucleo/MenuTef.Aparece). -->
+                    <Button x:Name="BtnMenuTef" Click="AbrirMenuTef" Style="{StaticResource BotaoBarra}"
+                            Visibility="Collapsed" ToolTip="Operações da maquininha e o estado do terminal">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🧪" FontSize="13" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Menu do TEF" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="BtnFecharSair" Click="MenuFecharSair" Style="{StaticResource BotaoBarra}"
                             Background="{DynamicResource RosaDegrade}" Foreground="{DynamicResource SobreMarca}"
                             BorderThickness="0" FontWeight="Bold" Margin="14,0,0,0"

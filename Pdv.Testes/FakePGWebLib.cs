@@ -32,6 +32,31 @@ public sealed class FakePGWebLib : IPGWebLib
     public sealed record Pendencia(string ReqNum, string LocRef, string ExtRef, string VirtMerch, string AuthSyst);
     public sealed record Transacao(byte Oper, Dictionary<ushort, string> Params);
 
+    /// <summary>
+    /// O menu ADMINISTRATIVO que PW_iGetOperations(1) devolve: o CÓDIGO é o PWOPER_* da operação
+    /// (é ele que vai em PW_iNewTransac) e o texto é como a rede a chama, em caixa alta e sem
+    /// acento, do jeito que o roteiro de homologação escreve.
+    ///
+    /// Antes daqui saíam códigos 1 e 2 com os textos trocados ("TESTE DE COMUNICACAO" com o
+    /// código da INSTALAÇÃO): servia para contar quantas operações vieram, que era tudo o que a
+    /// suíte pedia, e passaria a mentir agora que o menu do TEF roda a operação pelo código.
+    /// </summary>
+    public PwOperacao[] OperacoesAdministrativas { get; set; } =
+    {
+        new(PW.PWOPER_INSTALL, "INSTALACAO", "1"),
+        new(PW.PWOPER_PARAMUPD, "ATUALIZACAO DE PARAMETROS", "2"),
+        new(PW.PWOPER_REPRINT, "REIMPRESSAO", "16"),
+        new(PW.PWOPER_RPTTRUNC, "RELATORIO RESUMIDO", "17"),
+        new(PW.PWOPER_RPTDETAIL, "RELATORIO DETALHADO", "18"),
+        new(PW.PWOPER_ADMIN, "ADMINISTRATIVA", "32"),
+        new(PW.PWOPER_VERSION, "VERSAO", "252"),
+        new(PW.PWOPER_CONFIG, "CONFIGURACAO", "253"),
+        new(PW.PWOPER_MAINTENANCE, "MANUTENCAO", "254"),
+    };
+
+    /// <summary>O que PW_iGetOperations(2) devolve num terminal instalado.</summary>
+    public PwOperacao[] OperacoesDeVenda { get; set; } = { new(PW.PWOPER_SALE, "VENDA", "33") };
+
     // ── roteiro ──────────────────────────────────────────────────────────
     public ConcurrentQueue<Desfecho> Roteiro { get; } = new();
     public bool Instalado { get; set; } = true;
@@ -180,6 +205,21 @@ public sealed class FakePGWebLib : IPGWebLib
 
     // ------------------------------------------------------------------ init
 
+    /// <summary>Quantas vezes a automacao ligou a protecao, e o que a biblioteca respondeu.</summary>
+    public int InitProcesses { get; private set; }
+    /// <summary>A protecao responde "nao ativa" (PWRET_PROTECTOFF).</summary>
+    public bool ProtecaoDesligada { get; set; }
+    /// <summary>Biblioteca antiga: o simbolo PW_iInitProcess nao existe.</summary>
+    public bool InitProcessLanca { get; set; }
+
+    public short InitProcess()
+    {
+        Log("InitProcess");
+        if (InitProcessLanca) throw new EntryPointNotFoundException("PW_iInitProcess");
+        InitProcesses++;
+        return ProtecaoDesligada ? PW.PWRET_PROTECTOFF : PW.PWRET_OK;
+    }
+
     public short Init(string diretorioTrabalho)
     {
         Log("Init");
@@ -272,6 +312,11 @@ public sealed class FakePGWebLib : IPGWebLib
             PW.PWOPER_REPRINT => Reimpressao(),
             PW.PWOPER_INSTALL => Instalacao(),
             PW.PWOPER_VERSION => Versao(),
+            // As outras do menu administrativo (parâmetros, relatórios, configuração,
+            // manutenção): a biblioteca resolve sozinha com a rede e devolve a frase dela. Sem
+            // isto elas caíam em PWRET_INVCALL, e o menu do TEF não teria como ser exercitado.
+            PW.PWOPER_PARAMUPD or PW.PWOPER_RPTTRUNC or PW.PWOPER_RPTDETAIL
+                or PW.PWOPER_CONFIG or PW.PWOPER_MAINTENANCE => Administrativa_(_oper),
             _ => PW.PWRET_INVCALL,
         };
         if (SemResultMsg) _res.Remove(PW.PWINFO_RESULTMSG);
@@ -520,6 +565,14 @@ public sealed class FakePGWebLib : IPGWebLib
         return PW.PWRET_OK;
     }
 
+    /// <summary>Operação administrativa sem captura: aprova, sem confirmação pendente, com a frase da rede.</summary>
+    private short Administrativa_(byte oper)
+    {
+        _res[PW.PWINFO_CNFREQ] = "0";
+        _res[PW.PWINFO_RESULTMSG] = "OPERACAO " + oper.ToString(CultureInfo.InvariantCulture) + " CONCLUIDA";
+        return PW.PWRET_OK;
+    }
+
     // ------------------------------------------------------------------ resultados
 
     public short GetResult(ushort info, out string valor)
@@ -582,10 +635,13 @@ public sealed class FakePGWebLib : IPGWebLib
         }
         if (tipoOperacao == PW.OPERACOES_DE_VENDA)
         {
-            operacoes = new[] { new PwOperacao(2, "VENDA", "33") };
+            operacoes = OperacoesDeVenda;
             return PW.PWRET_OK;
         }
-        operacoes = new[] { new PwOperacao(1, "TESTE DE COMUNICACAO", "1"), new PwOperacao(2, "REIMPRESSAO", "2") };
+        // OPERACOES_TODAS (3) devolve as DUAS listas juntas; a administrativa (1), só a dela.
+        operacoes = tipoOperacao == PW.OPERACOES_TODAS && Instalado
+            ? OperacoesAdministrativas.Concat(OperacoesDeVenda).ToArray()
+            : OperacoesAdministrativas;
         return PW.PWRET_OK;
     }
 

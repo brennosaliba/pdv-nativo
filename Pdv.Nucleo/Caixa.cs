@@ -9,9 +9,17 @@ public sealed record Operador(string Id, string Nome, string Perfil)
     public bool ESupervisor => Perfil is "supervisor" or "gerente";
 }
 
+/// <summary>
+/// Um turno de caixa.
+///
+/// <paramref name="Teste"/> (07/09/2026): turno que o MODO DE HOMOLOGAÇÃO abriu
+/// sozinho para o roteiro do TEF (ver <see cref="ModoHomologacao"/>). Ele não teve
+/// abertura contada, não vai ter fechamento cego e não sobe para a nuvem. Fora do
+/// modo é sempre falso, e nenhum caminho da loja o liga.
+/// </summary>
 public sealed record Sessao(
     string Id, string BusinessDate, string OperadorId, string OperadorNome,
-    DateTime AberturaEm, Dinheiro FundoTroco);
+    DateTime AberturaEm, Dinheiro FundoTroco, bool Teste = false);
 
 /// <summary>
 /// Uma forma de pagamento no fechamento.
@@ -104,12 +112,12 @@ public static class Caixa
     public static Sessao? SessaoAberta(SqliteConnection cx)
     {
         var r = cx.QueryFirstOrDefault(
-            "SELECT id, business_date, operador_id, operador_nome, abertura_em, fundo_troco_cent " +
+            "SELECT id, business_date, operador_id, operador_nome, abertura_em, fundo_troco_cent, homologacao " +
             "FROM caixa_sessao WHERE status = 'aberto' LIMIT 1");
         if (r is null) return null;
         return new Sessao((string)r.id, (string)r.business_date, (string)r.operador_id,
             (string)r.operador_nome, DateTime.Parse((string)r.abertura_em),
-            new Dinheiro((long)r.fundo_troco_cent));
+            new Dinheiro((long)r.fundo_troco_cent), (long)r.homologacao == 1);
     }
 
     /// <summary>
@@ -120,6 +128,21 @@ public static class Caixa
     public static Sessao Abrir(SqliteConnection cx, Operador operador, Dinheiro fundoTroco)
     {
         if (fundoTroco.Centavos < 0) throw new InvalidOperationException("Fundo de troco não pode ser negativo.");
+
+        // O OPERADOR DE TESTE NÃO ABRE CAIXA DE VERDADE (07/09/2026).
+        //
+        // Como ele chegaria aqui: o modo de homologação é desligado com o PDV JÁ ABERTO
+        // no turno de teste. A casca encerra a sobra do teste, a entrada direta deixa de
+        // valer, e quem ficou na mão dela é o operador de teste. Sem esta linha, a tela
+        // de abertura viria com "Teste de homologação" no alto e o dia inteiro da loja
+        // sairia assinado por ele: turno na nuvem com um id que o painel não conhece
+        // (409 até virar dead-letter) e um fechamento com dono que não é gente.
+        //
+        // A regra mora AQUI, e não só na casca, porque é aqui que a sessão nasce, é
+        // enfileirada e ganha assinatura. Defesa que só existe na tela é decoração.
+        if (ModoHomologacao.EhOperadorDeTeste(operador.Id))
+            throw new InvalidOperationException(ModoHomologacao.NaoAbreCaixa);
+
         var aberta = SessaoAberta(cx);
         if (aberta is not null)
         {

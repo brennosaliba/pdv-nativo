@@ -33,6 +33,24 @@ public static class PW
     public const short PWRET_PPCOMERR = -2484;
     public const short PWRET_NOMANDATORY = -2483;
     public const short PWRET_INVALIDTRN = -2482;
+
+    // ── protecao (PW_iInitProcess) ───────────────────────────────────────
+    /// <summary>
+    /// "Protecao nao ativa". Valor calculado a partir da ordem do enum no cabecalho oficial
+    /// (PWRET_OK = 0, PWRET_INVPARAM = -2499, e a contagem ate PWRET_PROTECTOFF).
+    ///
+    /// A PayGo respondeu ao dono que "essa versao precisa do modulo de protecao, vinculado ao PayGo
+    /// Windows". O binario do kit avulso 4.1.50.924 NAO tem uma linha sequer de Warsaw ou Topaz (a
+    /// que vinha no PayGo Windows, 4.1.50.24, tinha e aparece nos logs), mas EXPORTA
+    /// PW_iInitProcess, que o cabecalho descreve como "forca iniciar o processo de protecao". Ou
+    /// seja: a protecao continua existindo, so deixou de vir de carona no PayGo Windows. Quem tem
+    /// que inicia-la agora e a automacao.
+    /// </summary>
+    public const short PWRET_PROTECTOFF = -2416;
+    /// <summary>Caminho de biblioteca invalido.</summary>
+    public const short PWRET_INVLIBPATH = -2415;
+    /// <summary>Erro de Pix no ponto de captura.</summary>
+    public const short PWRET_TPNPIXERROR = -2414;
     /// <summary>Faixa "recusado pelo host" (-2599..-2596): a transação foi até o autorizador e voltou negada.</summary>
     public const short PWRET_FROMHOST_INICIO = -2599;
     public const short PWRET_FROMHOST_FIM = -2596;
@@ -210,6 +228,18 @@ public static class PW
 
     public static bool EhRecusaDoHost(short ret) => ret is >= PWRET_FROMHOST_INICIO and <= PWRET_FROMHOST_FIM;
 
+    /// <summary>
+    /// A operação move dinheiro: precisa de um VALOR (venda, recarga) ou de uma venda ORIGINAL
+    /// (cancelamento) que só o caixa conhece. Nenhuma delas pode sair de um menu de operações
+    /// avulsas: a venda sai da comanda e o cancelamento sai do estorno, que são os dois caminhos
+    /// que gravam a linha em `tef_transacao` e amarram a maquininha ao dinheiro do dia.
+    ///
+    /// Existe para ser lida em DOIS lugares (o menu, que não desenha botão para elas, e o
+    /// provedor, que recusa mesmo se alguém chamar assim): a regra é uma só.
+    /// </summary>
+    public static bool EhOperacaoDeValor(byte oper)
+        => oper is PWOPER_SALE or PWOPER_SALEVOID or PWOPER_PREPAID or PWOPER_VOID;
+
     /// <summary>Nome legível do retorno para auditoria ("PWRET_CANCEL (-2491)").</summary>
     public static string Nome(short ret) => ret switch
     {
@@ -288,6 +318,18 @@ public interface IPGWebLib
 {
     /// <summary>PW_iInit(pszWorkingDir). PWRET_OK, ou PWRET_INVCALL se já iniciada. PWRET_WRITERR se o diretório não existe (a DLL não o cria).</summary>
     short Init(string diretorioTrabalho);
+
+    /// <summary>
+    /// PW_iInitProcess(): "forca iniciar o processo de protecao", diz o cabecalho oficial.
+    ///
+    /// Com o PayGo Windows instalado, quem cuidava disso era ele. No kit avulso nao ha PayGo
+    /// Windows nenhum, e a unica porta para ligar a protecao e esta. Se ela nao for chamada, a
+    /// biblioteca pode responder PWRET_PROTECTOFF, e a suspeita e de que seja isso que derruba a
+    /// atualizacao de certificado que o log de 07/09 mostrou parando em tempo esgotado.
+    ///
+    /// Nao derruba o caixa: biblioteca antiga nao exporta o simbolo, e ai o binding lanca.
+    /// </summary>
+    short InitProcess();
 
     /// <summary>
     /// PW_End(): encerra a instância iniciada por PW_iInit. Não está no exemplo oficial: veio da

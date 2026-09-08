@@ -7,19 +7,42 @@
         Background="{DynamicResource Fundo}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
     <Grid>
-        <ContentControl x:Name="Conteudo"/>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>   <!-- faixa do modo de homologação -->
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ══ MODO DE HOMOLOGAÇÃO: o aviso que não sai da tela ══════════════════
+             Faixa de verdade, e não um selo flutuante: ela EMPURRA o caixa para
+             baixo, então não há tela, menu nem diálogo que a cubra. Um caixa que
+             não pede login e não fecha o dia, sem aviso permanente, é um caixa que
+             alguém usa de verdade sem perceber. Nasce escondida: na loja não existe.
+             O texto vem de Pdv.Nucleo/ModoHomologacao (uma fonte só). -->
+        <Border Grid.Row="0" x:Name="FaixaHomologacao" Visibility="Collapsed" Padding="12,4"
+                Background="{DynamicResource ChipAlertaFundo}"
+                BorderBrush="{DynamicResource ChipAlertaBorda}" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock x:Name="TxtFaixaHomologacao" FontSize="12" FontWeight="Bold"
+                           Foreground="{DynamicResource Amarelo}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TxtFaixaHomologacaoDetalhe" FontSize="12" Margin="10,0,0,0"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource Amarelo}" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <ContentControl Grid.Row="1" x:Name="Conteudo"/>
 
         <!-- Chat do iFood como CAMADA viva: nasce uma vez e NUNCA é destacada da
              árvore, para o WebView2 seguir vivo (observando não lidas) mesmo com o
              operador na venda. Some por Visibility (Collapsed), porque o WebView2
              é HWND e pintaria por cima de tudo se ficasse só atrás. -->
-        <telas:ChatIfood x:Name="CamadaChat" Visibility="Collapsed"/>
+        <telas:ChatIfood Grid.Row="1" x:Name="CamadaChat" Visibility="Collapsed"/>
 
         <!-- Janela sem moldura (quiosque) precisa dos próprios botões de janela.
              Discretos de propósito: existem pro dono/suporte, não pro operador. -->
         <!-- Ficavam colados no "Sair" da barra do caixa: um toque errado fechava o
              PDV no meio do atendimento. Vao para a ESQUERDA da barra, com folga. -->
-        <StackPanel x:Name="BotoesJanela" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top"
+        <StackPanel Grid.Row="1" x:Name="BotoesJanela" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top"
                     Panel.ZIndex="99" Margin="6,4,0,0">
             <Button Content="─" Click="Minimizar" Width="34" Height="26" FontSize="12"
                     Background="Transparent" BorderThickness="0" Cursor="Hand"

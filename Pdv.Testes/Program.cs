@@ -1644,5 +1644,35 @@ Console.WriteLine();
 Console.WriteLine("--- A frase da rede na tela (passos 01, 18, 32, 44, 46 e 55) ---");
 TestesMensagemDaRede.Rodar((cond, nome) => Check("msg-rede: " + nome, cond));
 
+// -- 07/09/2026: o MENU DO TEF do caixa de homologacao --------------------------
+// Pedido do dono: "menu tef igual tinhamos no outro antigo de homologacao pra
+// seguirmos todos passos e ter configuracao". Testar, Instalar e ADM moravam dentro
+// do assistente de Configuracao e o dono precisou perguntar onde ficavam; sao 58
+// passos para percorrer. A lista sai de PW_iGetOperations (nao de uma lista escrita
+// a mao), venda e cancelamento NAO saem daqui (tem valor e dono no caixa), o que o
+// menu roda fecha como 'adm' e nunca como 'pago', e o menu so existe com
+// `homologacao` = 1: na loja nao ha botao, nao ha tela, nao ha nada.
+Console.WriteLine();
+Console.WriteLine("--- Menu do TEF (58 passos num lugar so, so na homologacao) ---");
+TestesMenuTef.Rodar((cond, nome) => Check("menu-tef: " + nome, cond));
+
+// -- 07/09/2026: o caixa de homologacao sem login e sem fechamento de caixa -----
+// Pedido do dono: "tire funcao fechamento de caixa pra nao ficar mostrando toda hora
+// que fecha e abre ja que sera somente teste; login operador de caixa tambem remover
+// porque vamos pra teste". Sao 58 passos e mais de vinte vendas seguidas, e nenhum
+// passo fala de caixa ou de operador. Tudo atras da chave `homologacao`: metade
+// desta suite roda com ela DESLIGADA e cobra que o caixa da loja continue exigindo
+// login, abertura e fechamento.
+Console.WriteLine();
+Console.WriteLine("--- Caixa de homologacao: sem login e sem fechamento de caixa ---");
+TestesCaixaDeHomologacao.Rodar((cond, nome) => Check("caixa-homolog: " + nome, cond));
+
+// O botao do menu do TEF MEDIDO NA TELA. A suite acima prova a fiacao pelo fonte; esta
+// sobe a tela de venda com a chave em 0 e olha o botao. Alargar `_homologacao` acende o
+// menu na loja sem mexer em nenhuma daquelas linhas, e so esta checagem acusa.
+Console.WriteLine();
+Console.WriteLine("--- Menu do TEF: medido na tela, com a chave desligada ---");
+TestesMenuTefNaTela.Rodar((cond, nome) => Check("menu-tef-tela: " + nome, cond));
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

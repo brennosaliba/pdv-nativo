@@ -304,8 +304,13 @@ public static class TestesRedesDoMenu
         {
             // O guia quebra linha onde couber, e a frase que interessa cai no meio da quebra:
             // compara com o texto corrido, senão o teste passa a depender da largura da coluna.
+            // 07/09/2026: a quebra de linha do Windows é DOIS caracteres, e trocar cada um por um
+            // espaço fazia "dois a\r\nmenos" virar "dois a  menos", com dois espaços: a frase
+            // deixava de casar e o teste ficava vermelho pelo FIM DE LINHA do arquivo, não pelo
+            // que ele diz. O `git` desta máquina entrega o guia em CRLF (core.autocrlf = true),
+            // então a quebra do Windows entra primeiro e vira UM espaço só.
             var guia = (Fonte("docs", "HOMOLOGACAO_COMECAR_AQUI.md") ?? "")
-                .Replace((char)13, ' ').Replace((char)10, ' ');
+                .Replace("\r\n", " ").Replace((char)13, ' ').Replace((char)10, ' ');
             checar(guia.Length > 0, "achei o guia da homologação");
             checar(guia.Contains("Redes que aparecem para o caixa escolher", StringComparison.Ordinal)
                    && guia.Contains("C6PAY, REDE, PIX C6 BANK", StringComparison.Ordinal),

@@ -124,6 +124,9 @@ public sealed class PGWebLibNativa : IPGWebLib
     // ── P/Invoke: nomes, tipos e convenção iguais ao Interop.cs oficial ─────────
 
     [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Ansi)] private static extern short PW_iInit(string pszWorkingDir);
+    // Sem argumentos: "forca iniciar o processo de protecao" (cabecalho oficial). Exportada pela
+    // 4.1.50.924; biblioteca antiga sem o simbolo faz o P/Invoke lancar, e o provedor trata.
+    [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iInitProcess();
     // Sem argumentos e sem retorno (eax é lixo): com zero argumentos StdCall e Cdecl são o mesmo `ret`.
     [DllImport(Dll, CallingConvention = Conv)] private static extern void PW_End();
     [DllImport(Dll, CallingConvention = Conv)] private static extern short PW_iNewTransac(byte bOper);
@@ -153,6 +156,8 @@ public sealed class PGWebLibNativa : IPGWebLib
     [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Ansi)] private static extern short PW_iTransactionInquiry(string pszXmlRequest, StringBuilder pszXmlResponse, uint ulXmlResponseLen);
 
     // ── IPGWebLib ───────────────────────────────────────────────────────────────
+
+    public short InitProcess() => PW_iInitProcess();
 
     public short Init(string diretorioTrabalho) => PW_iInit(diretorioTrabalho);
     public void End() => PW_End();

@@ -225,6 +225,7 @@ public static class TestesEscNaRede
         }
 
         public short Init(string diretorioTrabalho) => _f.Init(diretorioTrabalho);
+        public short InitProcess() => _f.InitProcess();
         public void End() => _f.End();
         public short NewTransac(byte operacao) => _f.NewTransac(operacao);
         public short AddParam(ushort info, string valor) => _f.AddParam(info, valor);

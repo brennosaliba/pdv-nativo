@@ -162,6 +162,25 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public bool Ocupado => _um.CurrentCount == 0;
     public string Descricao => "PayGo Windows (PGWebLib) em " + _pasta;
 
+    /// <summary>As opções COM QUE ESTA INSTÂNCIA ESTÁ RODANDO (ambiente, redes, porta do pinpad).</summary>
+    /// <remarks>
+    /// O menu do TEF mostra isto em vez de reler a config: o que interessa a quem grava a
+    /// homologação é o que está no ar, não o que está gravado esperando um Salvar.
+    /// </remarks>
+    public OpcoesPGWebLib Opcoes => _op;
+
+    /// <summary>
+    /// A última frase que a biblioteca escreveu em PWINFO_RESULTMSG ("TRANSACAO APROVADA",
+    /// "OPERACAO CANCELADA"), de qualquer operação. Null enquanto ela não disser nada.
+    ///
+    /// Existe porque quase todo passo do roteiro de homologação cobra a frase exata que o
+    /// operador viu, e ela vive um instante numa tela que já fechou.
+    /// </summary>
+    public string? UltimaMensagem { get; private set; }
+
+    /// <summary>Quando <see cref="UltimaMensagem"/> chegou (hora do caixa, para casar com o roteiro).</summary>
+    public DateTime? UltimaMensagemEm { get; private set; }
+
     // ------------------------------------------------------------------ init / ativo
 
     /// <summary>PW_iInit uma vez por processo. PWRET_INVCALL = já iniciada (por nós ou por outro módulo) e serve.</summary>
@@ -189,6 +208,33 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         _iniciada = ret is PW.PWRET_OK or PW.PWRET_INVCALL;
         if (!_iniciada) { MotivoIndisponivel = MsgTefNaoResponde; Auditar?.Invoke("pgweblib: PW_iInit devolveu " + PW.Nome(ret)); return false; }
         MotivoIndisponivel = null;
+
+        // A PROTECAO, logo depois do PW_iInit e antes de qualquer transacao.
+        //
+        // Com o PayGo Windows instalado quem ligava a protecao era ele. O kit avulso 4.1.50.924 nao
+        // tem Warsaw nenhum no binario, mas EXPORTA PW_iInitProcess, que o cabecalho oficial
+        // descreve como "forca iniciar o processo de protecao", e declara PWRET_PROTECTOFF para
+        // "protecao nao ativa". Ou seja: a protecao nao sumiu, mudou de dono. Quem liga agora somos
+        // nos.
+        //
+        // Nao derruba o caixa: biblioteca antiga nao exporta o simbolo e o P/Invoke lanca. O que
+        // ela NAO pode e ficar calada, porque foi calada assim que a atualizacao de certificado
+        // ficou em tempo esgotado no teste de 07/09 as 17h13.
+        try
+        {
+            var prot = _lib.InitProcess();
+            if (prot != PW.PWRET_OK)
+                Auditar?.Invoke($"pgweblib: PW_iInitProcess devolveu {PW.Nome(prot)}"
+                    + (prot == PW.PWRET_PROTECTOFF ? " (protecao nao ativa)" : ""));
+        }
+        catch (EntryPointNotFoundException)
+        {
+            Auditar?.Invoke("pgweblib: PW_iInitProcess nao existe nesta biblioteca; a protecao, se houver, vem de fora");
+        }
+        catch (Exception ex)
+        {
+            Auditar?.Invoke("pgweblib: PW_iInitProcess falhou (" + ex.GetType().Name + "), seguindo");
+        }
 
         // O AMBIENTE vem DEPOIS do PW_iInit, e isso foi medido, não deduzido.
         //
@@ -265,6 +311,41 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         finally { _um.Release(); }
     }
 
+    /// <summary>
+    /// A lista de operações de VENDA prova que o ponto de captura está instalado? PWRET_OK com
+    /// pelo menos uma operação. É a regra que decide se o caixa oferece cartão (<see
+    /// cref="AtivoAsync"/>) e é a MESMA que o menu do TEF mostra no quadro de estado: um quadro
+    /// dizendo "instalado" para um terminal que a venda vai recusar seria pior que quadro nenhum.
+    /// </summary>
+    public static bool InstaladoPelaLista(short retorno, int quantasOperacoes)
+        => retorno == PW.PWRET_OK && quantasOperacoes > 0;
+
+    /// <summary>
+    /// PW_iGetOperations cru, para o menu do TEF montar os itens com o que ESTE terminal oferece
+    /// (<see cref="PW.OPERACOES_ADMINISTRATIVAS"/>, <see cref="PW.OPERACOES_DE_VENDA"/> ou
+    /// <see cref="PW.OPERACOES_TODAS"/>). Devolve o PWRET_* e a lista, sem interpretar: quem
+    /// decide o que fazer com PWRET_NOTINST é quem chamou.
+    /// </summary>
+    public async Task<(short Retorno, IReadOnlyList<PwOperacao> Operacoes)> OperacoesAsync(byte tipo, CancellationToken ct)
+    {
+        await _um.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!Iniciar()) return (PW.PWRET_DLLNOTINIT, Array.Empty<PwOperacao>());
+            try
+            {
+                var ret = _lib.GetOperations(tipo, out var ops);
+                return (ret, ops ?? (IReadOnlyList<PwOperacao>)Array.Empty<PwOperacao>());
+            }
+            catch (Exception ex)
+            {
+                Auditar?.Invoke("pgweblib: PW_iGetOperations lançou: " + ex.GetType().Name + " " + ex.Message);
+                return (PW.PWRET_DLLNOTINIT, Array.Empty<PwOperacao>());
+            }
+        }
+        finally { _um.Release(); }
+    }
+
     public async Task<bool> AtivoAsync(CancellationToken ct)
     {
         await _um.WaitAsync(ct).ConfigureAwait(false);
@@ -291,7 +372,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 return false;
             }
             var quantas = ops?.Count ?? 0;
-            if (ret != PW.PWRET_OK || quantas == 0)
+            if (!InstaladoPelaLista(ret, quantas))
             {
                 MotivoIndisponivel = ret is PW.PWRET_NOTINST ? MsgNaoInstalado : MsgTefNaoResponde;
                 Auditar?.Invoke($"pgweblib: sem operação de venda (PW_iGetOperations={PW.Nome(ret)}, {quantas} operações)");
@@ -548,6 +629,39 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
 
     /// <summary>PWOPER_INSTALL: ativação do ponto de captura (CNPJ + PdC). Só uma vez por terminal.</summary>
     public Task<DesfechoTef> InstalarAsync(CancellationToken ct) => OperacaoAsync(PW.PWOPER_INSTALL, "pgweb-inst-", "instalação", ct);
+
+    /// <summary>
+    /// Uma operação escolhida no MENU DO TEF (só existe no caixa de homologação). Não é caminho
+    /// novo: instalação, reimpressão e administrativa caem nos MESMOS três métodos acima, e o
+    /// resto passa pelo mesmo <c>OperacaoAsync</c> que eles usam.
+    ///
+    /// Duas coisas seguram aqui, e as duas são de dinheiro:
+    ///
+    ///   · operação de VALOR (venda, cancelamento, recarga) é recusada, mesmo que a tela peça.
+    ///     Elas têm valor e dono no caixa: a venda sai da comanda e o cancelamento sai do estorno,
+    ///     que são quem grava a linha em `tef_transacao`. Recusar aqui é cinto: a tela nem desenha
+    ///     botão para elas, mas defesa que mora só na tela é decoração;
+    ///   · o chargeId sai com o prefixo "pgweb-adm-" (ou o próprio da instalação/reimpressão).
+    ///     Não é enfeite: é por "-adm-", "-rep-" e "-inst-" que o religamento reconhece uma
+    ///     operação administrativa e a fecha como 'adm'. Prefixo novo faria uma pendência de
+    ///     relatório voltar do boot como 'pago', dinheiro que ninguém pagou.
+    /// </summary>
+    public Task<DesfechoTef> OperacaoDoMenuAsync(byte oper, string rotulo, CancellationToken ct)
+    {
+        if (PW.EhOperacaoDeValor(oper))
+        {
+            Auditar?.Invoke($"pgweblib: menu do TEF recusou a operação de valor {oper} ({rotulo})");
+            return Task.FromResult(Falha(SituacaoTef.Erro, "pgweb-menu-recusada", CodigoTef.Plataforma,
+                "Esta operação tem valor e sai pela comanda, não por este menu."));
+        }
+        return oper switch
+        {
+            PW.PWOPER_INSTALL => InstalarAsync(ct),
+            PW.PWOPER_REPRINT => ReimprimirAsync(ct),
+            PW.PWOPER_ADMIN => AdministrativaAsync(ct),
+            _ => OperacaoAsync(oper, "pgweb-adm-", rotulo, ct),
+        };
+    }
 
     private async Task<DesfechoTef> OperacaoAsync(byte oper, string prefixo, string rotulo, CancellationToken ct)
     {
@@ -1270,6 +1384,14 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         }
         // A biblioteca também informa o horário ao fim de uma transação: aproveita.
         if (fim.Resultados.TryGetValue(PW.PWINFO_IDLEPROCTIME, out var idle)) AgendarIdle(idle, "transação");
+        // A frase da rede fica guardada para o menu do TEF mostrar. É o único ponto do provedor
+        // que lê PWINFO_RESULTMSG de todos os desfechos (aprovado, recusado, cancelado, timeout),
+        // então guardar aqui é guardar uma vez só.
+        if (fim.Resultados.TryGetValue(PW.PWINFO_RESULTMSG, out var frase) && !string.IsNullOrWhiteSpace(frase))
+        {
+            UltimaMensagem = frase.Replace('\r', ' ').Trim();
+            UltimaMensagemEm = DateTime.Now;
+        }
     }
 
     private string? Ler(ushort info)

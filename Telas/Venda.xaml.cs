@@ -111,6 +111,17 @@ public partial class Venda : UserControl
     // Lido uma vez na abertura da tela (a config não muda com a tela aberta).
     private bool _homologacao;
 
+    /// <summary>
+    /// TURNO DE TESTE: o modo está ligado E o turno em que se vende foi aberto pelo
+    /// próprio modo (Pdv.Nucleo/ModoHomologacao). Aqui não existe fechamento de caixa,
+    /// porque não existe gaveta para contar nem dia para fechar.
+    ///
+    /// São DUAS condições, e não só a config, de propósito: se alguém ligar a
+    /// homologação com um turno de VERDADE aberto, aquele turno continua com o
+    /// fechamento dele. Turno de gente nunca perde o fechamento.
+    /// </summary>
+    private bool _semFechamento;
+
     public Venda(Operador operador, Sessao sessao)
     {
         InitializeComponent();
@@ -124,10 +135,22 @@ public partial class Venda : UserControl
         // O botão do valor de teste só existe no caixa de homologação. Na loja ele
         // some da tela inteira — preço livre no caixa é rombo, não recurso.
         BtnValorLivre.Visibility = _homologacao ? Visibility.Visible : Visibility.Collapsed;
+        // O menu do TEF idem: um lugar só para as operações da maquininha, para percorrer
+        // os 58 passos. Na loja ele não existe (Pdv.Nucleo/MenuTef.Aparece).
+        BtnMenuTef.Visibility = MenuTef.Aparece(_homologacao) ? Visibility.Visible : Visibility.Collapsed;
+        // Turno de teste: o menu "Fechar / Sair" sai da barra inteiro. O fechamento
+        // porque não há gaveta para contar (era ele que aparecia a cada volta do
+        // roteiro), e o Sair junto porque ele volta para um login que, neste modo, não
+        // existe: seria botão que não leva a lugar nenhum. Sair do PDV continua no ✕ da
+        // janela. Na loja nada disso muda.
+        _semFechamento = _homologacao && sessao.Teste;
+        BtnFecharSair.Visibility = _semFechamento ? Visibility.Collapsed : Visibility.Visible;
         PintarBotaoDensidade();
         TxtOperador.Text = operador.Nome;
         TxtInicial.Text = operador.Nome.Trim().Length > 0 ? operador.Nome.Trim()[..1].ToUpperInvariant() : "?";
-        TxtSessao.Text = $"Caixa aberto às {sessao.AberturaEm:HH:mm} · {DateTime.Parse(sessao.BusinessDate):dd/MM}";
+        TxtSessao.Text = _semFechamento
+            ? Nucleo.ModoHomologacao.LinhaDoTurno
+            : $"Caixa aberto às {sessao.AberturaEm:HH:mm} · {DateTime.Parse(sessao.BusinessDate):dd/MM}";
         CarregarIdentificacao();
         PintarModo();
         PintarBotaoTema();
@@ -1534,6 +1557,23 @@ public partial class Venda : UserControl
     // isso que faz a evidência valer. Cada toque cria uma linha própria (id novo),
     // porque dois valores de teste seguidos são dois valores diferentes.
     public const string CategoriaTeste = "Teste";
+
+    /// <summary>
+    /// MENU DO TEF, a um toque da barra (só no caixa de homologação). Reúne as operações que
+    /// estavam espalhadas: Testar, Instalar e ADM moravam dentro do assistente de Configuração,
+    /// e o roteiro tem 58 passos para percorrer sem caçar botão pela tela.
+    ///
+    /// A tela é fina: a lista sai da própria biblioteca (PW_iGetOperations), quem executa é o
+    /// MESMO provedor que a Configuração usa, e o "Configuração do caixa" volta para cá e cai
+    /// no <see cref="AbrirConfiguracao"/> que já existia, com as travas dele.
+    /// </summary>
+    private void AbrirMenuTef(object sender, RoutedEventArgs e)
+    {
+        if (!_homologacao) return;   // na loja o botão nem existe; aqui é o cinto
+        var dono = Window.GetWindow(this)!;
+        if (TefEmAndamento(dono)) return;
+        if (TelaMenuTef.Mostrar(dono)) AbrirConfiguracao(sender, e);
+    }
 
     private void LancarValorDeTeste(object sender, RoutedEventArgs e)
     {
@@ -3277,6 +3317,10 @@ public partial class Venda : UserControl
     private async void FecharCaixa(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;
+        // Turno de teste não fecha: não basta esconder o botão (mesmo cinto do valor
+        // de teste). Fechar aqui gravaria contagem e fundo esperado de um turno que
+        // nunca teve gaveta, e o caixa da loja abriria acusando diferença amanhã.
+        if (_semFechamento) return;
         if (_fechandoCaixa) return;   // segundo toque enquanto o primeiro fechamento corre
         if (TefEmAndamento(dono)) return;
         if (_comanda.Count > 0)
@@ -3481,6 +3525,9 @@ public partial class Venda : UserControl
 
     private void Sair(object sender, RoutedEventArgs e)
     {
+        // No turno de teste não há para onde sair (o login não existe neste modo) e
+        // sair jogaria fora a comanda do roteiro em silêncio.
+        if (_semFechamento) return;
         if (TefEmAndamento(Window.GetWindow(this)!)) return;
         if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Sair do caixa",
                 "A comanda aberta vai ser jogada fora. Ela não volta depois.",
@@ -3505,6 +3552,7 @@ public partial class Venda : UserControl
     /// </summary>
     private async void MenuFecharSair(object sender, RoutedEventArgs e)
     {
+        if (_semFechamento) return;   // no turno de teste o botão nem é desenhado
         var acao = await AbrirMenu(BtnFecharSair, MenuBarra.FecharSair());
         switch (acao)
         {
