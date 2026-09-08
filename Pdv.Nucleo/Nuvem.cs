@@ -454,18 +454,39 @@ public sealed class Nuvem
     /// servidor ja filtrou vigencia e loja; dia/hora quem decide e o motor
     /// local). Sem sessao ou sem rede devolve -1 e o espelho anterior fica.
     /// </summary>
+    /// <summary>Uma tentativa de pedir as promoções. Null quando o servidor recusou (aí o chamador decide).</summary>
+    private async Task<string?> PedirPromocoesAsync(object corpo)
+    {
+        using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_promocoes_ativas");
+        req.Content = new StringContent(JsonSerializer.Serialize(corpo), Encoding.UTF8, "application/json");
+        using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+        return resp.IsSuccessStatusCode
+            ? await resp.Content.ReadAsStringAsync().ConfigureAwait(false)
+            : null;
+    }
+
     public async Task<int> BaixarPromocoesAsync(SqliteConnection cx, string loja)
     {
         try
         {
             if (!await SessaoOkAsync().ConfigureAwait(false)) return -1;
-            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_promocoes_ativas");
-            req.Content = new StringContent(
-                JsonSerializer.Serialize(new { _loja = loja }), Encoding.UTF8, "application/json");
-            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return -1;
-
-            var corpo = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            // ⚠️ ESTA VERSÃO DECLARA QUE SABE COBRAR A SENHA DA PROMOÇÃO.
+            //
+            // Incidente da Savassi, 08/09/2026: uma promoção de 30% em todos os produtos
+            // com `config.autorizacao = gerente` desceu para um caixa 0.5.6, versão
+            // anterior ao portão de senha. Para ela aquele campo não existe, então virou
+            // desconto comum, aplicado sozinho, na comanda inteira, sem código nenhum.
+            //
+            // A regra de segurança morava só no caixa, e regra que mora só no caixa vale
+            // só nas versões que a conhecem. Agora quem corta é o servidor: promoção com
+            // senha só desce para quem declara `_com_senha`. Versão velha chama a RPC com
+            // um argumento só e não recebe — falha para o lado seguro sem atualizar nada.
+            var corpo = await PedirPromocoesAsync(new { _loja = loja, _com_senha = true }).ConfigureAwait(false)
+                // Servidor anterior a esta migration não conhece o segundo argumento.
+                // Cair para a chamada antiga é seguro: lá a promoção com senha também
+                // não desce, que é exatamente o que se quer.
+                ?? await PedirPromocoesAsync(new { _loja = loja }).ConfigureAwait(false);
+            if (corpo is null) return -1;
             using var doc = JsonDocument.Parse(corpo);
             if (doc.RootElement.ValueKind != JsonValueKind.Array) return -1;
 
