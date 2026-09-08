@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 // Dialogo.Encaixar é a metade do conserto que mora na TELA: a quebra de linha do
@@ -79,10 +79,10 @@ public static class TestesPendencias
             // O PRÓXIMO PASSO, e não o rótulo. Em 08/09 os rótulos em caixa alta
             // ("O QUE FAZER:", "SÓ MUDA", "NÃO MUDA") caíram junto com o resto do bloco
             // de onze linhas; o que tem que sobreviver é a ÚLTIMA linha dizer o que fazer.
-            checar(aviso.Split('\n')[^1].Contains("Sincronizar", StringComparison.OrdinalIgnoreCase),
-                $"a última linha diz o próximo passo e nomeia o botão (viu: {aviso.Split('\n')[^1]})");
-            checar(aviso.Split('\n').Length <= 4,
-                $"o aviso cabe em 4 linhas (viu {aviso.Split('\n').Length})");
+            checar(aviso.Split('\n')[^1].Contains("gerente", StringComparison.OrdinalIgnoreCase),
+                $"a última linha diz a quem chamar (viu: {aviso.Split('\n')[^1]})");
+            checar(aviso.Split('\n').Length <= 2,
+                $"o aviso cabe em 2 linhas (viu {aviso.Split('\n').Length})");
 
             // O rastro REAL do caixa da loja, byte a byte. Se a tradução não pegar
             // ESTA string, o dono lê JSON de Postgres na tela do balcão.
@@ -102,9 +102,9 @@ public static class TestesPendencias
             // o que ficou para trás é o REGISTRO dela no painel. Quem lê no susto
             // cancela venda certa e mexe em caixa fechado: o aviso sai mais caro que
             // o problema que ele denuncia.
-            checar(aviso.StartsWith("O dinheiro está certo", StringComparison.Ordinal),
+            checar(aviso.StartsWith("O registro de", StringComparison.Ordinal),
                 $"a PRIMEIRA linha mata o susto (viu: {aviso.Split('\n')[0]})");
-            checar(aviso.IndexOf("dinheiro", StringComparison.Ordinal) < aviso.IndexOf("R$", StringComparison.Ordinal),
+            checar(aviso.IndexOf("registro", StringComparison.Ordinal) < aviso.IndexOf("R$", StringComparison.Ordinal),
                 "o susto morre ANTES de o primeiro número aparecer na tela");
             checar(aviso.Contains("registro", StringComparison.OrdinalIgnoreCase),
                 "…e o aviso nomeia o que de fato não subiu: o registro, não a venda");

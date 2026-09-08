@@ -96,19 +96,20 @@ public sealed record VendasParadas(
     /// cliente levou o produto e o dinheiro entrou. No susto se cancela venda certa e
     /// se mexe em caixa fechado, e aí o aviso custa mais caro que o problema.
     ///
-    /// O QUE MUDOU EM 08/09/2026, E POR QUÊ. O aviso tinha virado um bloco de onze
-    /// linhas com rótulos em caixa alta, e o dono reprovou na hora: "pessimo, tanto de
-    /// clareza quanto de quantidade de informacao". Duas coisas saíram:
-    ///  · as linhas que não mudam o que ele faz nos próximos cinco minutos (o que muda
-    ///    e o que não muda no painel, a contagem de tentativas, a repetição da garantia
-    ///    em forma de lista);
-    ///  · a instrução que era falsa. Ver <see cref="SaidaParada"/>: mandar tocar em
-    ///    Sincronizar quando o painel nunca vai aceitar o registro não é só inútil,
-    ///    é um moedor, e o texto agora sai do que foi MEDIDO no motivo.
+    /// O QUE MUDOU EM 08/09/2026, E POR QUÊ. O aviso era um bloco de onze linhas com
+    /// rótulos em caixa alta. O dono reprovou ("pessimo, tanto de clareza quanto de
+    /// quantidade de informacao"), eu encurtei para quatro, e ele reprovou de novo,
+    /// linha por linha: "o que isso quer dizer? qual impacto pro funcionario? e
+    /// necessario?". A pergunta certa não era quantas linhas: era QUEM lê isto.
     ///
-    /// Sobrou o mínimo, nesta ordem: o dinheiro está certo, o tamanho do que travou, a
-    /// causa, e o próximo passo (inclusive quando o passo é não fazer nada). Teto de
-    /// quatro linhas, vigiado por teste.
+    /// Quem lê é o operador, em pé no balcão. Então só sobrevive o que ele pode fazer:
+    ///  · vai subir sozinho → uma linha, e nem pede ação;
+    ///  · alguém arruma no painel → uma linha a mais, dizendo a quem chamar;
+    ///  · o painel nunca vai aceitar → NADA. Ele não conserta, não abre a Configuração
+    ///    e não faz nada com o número. Isso mudou de tela: ver <see cref="Travadas"/>.
+    ///
+    /// A garantia de que nenhuma venda se perdeu virou uma PALAVRA, "o registro", em
+    /// vez de uma linha inteira. Teto de duas linhas, vigiado por teste.
     /// </summary>
     public string? Resumo
     {
@@ -116,51 +117,39 @@ public sealed record VendasParadas(
         {
             if (Total == 0) return null;
 
-            // A GARANTIA VEM ANTES DE QUALQUER NÚMERO. O dono já leu "3 venda(s) que o
-            // servidor não tem" e entendeu que 3 vendas não se concretizaram. Não é isso:
-            // a venda aconteceu, o cliente levou, o dinheiro entrou. No susto se cancela
-            // venda certa e se mexe em caixa fechado, e aí o aviso sai mais caro que o
-            // problema que denuncia.
-            var l = new List<string>();
+            // O QUE NAO TEM CONSERTO NAO APARECE AQUI. Ver SaidaParada.SemConserto: o
+            // operador nao pode arrumar, nao entra na Configuracao (senha de
+            // administrador) e nao faz nada com o numero. Isso e assunto de quem abre a
+            // Configuracao, e e la que aparece, com o numero da venda e o produto.
+            if (Saida == SaidaParada.SemConserto) return null;
 
+            var l = new List<string>();
+            var quantas = Desistidas > 0 ? Desistidas : Aguardando;
+            var quanto = (Desistidas > 0 ? ValorParado : Valor).Formatado();
+            var quais = Desistidas > 0 ? Nomear() : null;
+
+            // "O REGISTRO de 3 vendas" e nao "3 vendas": e a palavra que impede o
+            // operador de entender que tres vendas se perderam. Ela faz o trabalho que
+            // antes ocupava uma linha inteira de garantia.
+            var cabeca = $"O registro de {quantas} {(quantas == 1 ? "venda" : "vendas")} ";
             if (Desistidas == 0)
             {
-                l.Add($"O dinheiro está certo. Falta o registro de {Aguardando} "
-                      + $"{(Aguardando == 1 ? "venda" : "vendas")} subir para o painel ({Valor.Formatado()}).");
-                l.Add(Aguardando == 1
-                    ? "Sobe sozinha. Não precisa fazer nada no caixa."
-                    : "Sobem sozinhas. Não precisa fazer nada no caixa.");
+                l.Add(cabeca + $"ainda está subindo para o painel ({quanto}).");
                 return string.Join(NL, l);
             }
 
-            l.Add("O dinheiro está certo. O que não subiu foi só o registro no painel.");
-
-            // Os números só entram quando servem: no caso em que alguém vai procurar
-            // venda por venda no painel. Onde não há o que fazer com elas, número é peso.
-            var quais = Saida == SaidaParada.Resolver ? Nomear() : null;
-            var travaram = $"Travaram {Desistidas} {(Desistidas == 1 ? "venda" : "vendas")}, "
-                           + ValorParado.Formatado() + (quais is null ? "" : $" ({quais})") + ".";
+            var travou = cabeca + "não subiu para o painel"
+                         + (quais is null ? "" : $": {quais}") + $" ({quanto}).";
+            // O que ainda sobe sozinho entra como rabicho, e nunca somado ao valor
+            // travado: a soma única mostrava R$ 100.089,00 quando só R$ 24,00
+            // precisavam de gente.
             if (Aguardando > 0)
-                travaram += $" {(Aguardando == 1 ? "Outra sobe sozinha" : $"Outras {Aguardando} sobem sozinhas")}.";
-            l.Add(travaram);
+                travou += $" {(Aguardando == 1 ? "Outra está subindo" : $"Outras {Aguardando} estão subindo")}.";
+            l.Add(travou);
 
-            // O motivo é o MAIS COMUM entre as travadas, não o de todas: por isso ele é
-            // dito como causa, sem prometer que explica cada uma.
-            // "O painel recusou" só quando ELE recusou. Quando o caixa é que não
-            // alcançou o painel, dizer que o painel recusou é mandar procurar culpa no
-            // lugar errado.
-            if (Motivo is { Length: > 0 } m)
-                l.Add(Saida == SaidaParada.Espera ? $"O caixa {m}." : $"O painel recusou: {m}.");
-
-            l.Add(Saida switch
-            {
-                // Tentar de novo aqui não é inofensivo: cada toque reabre a linha, gasta
-                // uma chamada que não pode dar certo e recarimba a desistência.
-                SaidaParada.SemConserto =>
-                    "Tentar de novo não muda nada. Na Configuração dá para tirar essas vendas da fila.",
-                SaidaParada.Espera => "Assim que a internet voltar, toque em Sincronizar.",
-                _ => "Depois de resolver isso, toque em Sincronizar.",
-            });
+            l.Add(Saida == SaidaParada.Espera
+                ? "O caixa ficou dias sem falar com o painel. Tente de novo quando a internet voltar."
+                : $"Chame o gerente: {Motivo ?? "o painel recusou e não disse o motivo"}.");
 
             return string.Join(NL, l);
         }
@@ -191,7 +180,7 @@ public sealed record VendasParadas(
     }
 
     /// <summary>"41, 42 e 43" — como se fala, não "41,42,43".</summary>
-    private static string Juntar(IEnumerable<string> itens)
+    internal static string Juntar(IEnumerable<string> itens)
     {
         var v = itens.ToList();
         return v.Count <= 1 ? string.Concat(v)
@@ -380,44 +369,15 @@ public static class Sincronizacao
         try
         {
             using var cx = Banco.Abrir();
-            var r = cx.QuerySingle($"""
-                SELECT COALESCE(SUM(CASE WHEN {SqlDesistiu} THEN 0 ELSE 1 END), 0) AS aguardando,
-                       COALESCE(SUM(CASE WHEN {SqlDesistiu} THEN 1 ELSE 0 END), 0) AS desistidas,
-                       COALESCE(SUM(v.total_cent), 0)                              AS valor,
-                       COALESCE(SUM(CASE WHEN {SqlDesistiu} THEN v.total_cent ELSE 0 END), 0) AS valor_parado
-                  FROM outbox o
-                  JOIN venda  v ON v.id = o.ref_id
-                 WHERE o.tipo IN ('venda','venda_composta')
-                   AND v.status = 'finalizada'
-                   AND v.homologacao = 0
-                   AND o.descartado_em IS NULL
-                   AND (o.enviado_em IS NULL OR {SqlDesistiu})
-                """);
-            var desistidas = (int)r.desistidas;
-            // O motivo mais comum entre as desistidas. Uma causa só, dita uma vez: o
-            // operador não precisa de 16 linhas de rastro, precisa saber a quem ligar.
-            var cru = desistidas == 0 ? null : cx.ExecuteScalar<string?>($"""
-                SELECT o.ultimo_erro
-                  FROM outbox o
-                  JOIN venda  v ON v.id = o.ref_id
-                 WHERE o.tipo IN ('venda','venda_composta') AND v.status = 'finalizada' AND v.homologacao = 0
-                   AND o.descartado_em IS NULL
-                   AND {SqlDesistiu}
-                 GROUP BY o.ultimo_erro
-                 ORDER BY COUNT(*) DESC
-                 LIMIT 1
-                """);
-            var motivo = MotivoHumano(cru);
-            // QUAIS vendas são. O mesmo WHERE do contador acima, palavra por palavra —
-            // se as duas consultas divergirem, o aviso lista uma venda que ele mesmo
-            // não contou, e aí ninguém acredita em nenhum dos dois números.
-            //
-            // O teto de 400 é rede de segurança para o caixa que passou semanas offline:
-            // a lista mostra 6 números de qualquer jeito, e o "e mais N" sai do CONTADOR,
-            // que não tem teto. Ou seja: o teto encurta a leitura, nunca a verdade.
-            var lista = cx.Query($"""
+            // UMA consulta, linha a linha. Antes eram tres (contador, motivo e lista)
+            // com o mesmo WHERE repetido palavra por palavra, e agora a classificacao
+            // mora em C#: cada linha morta e perguntada a SaidaDoErro, e a que nao tem
+            // conserto sai da conta ANTES de virar numero na tela.
+            var linhas = cx.Query($"""
                 SELECT v.numero_local                              AS numero,
                        v.business_date                             AS dia,
+                       v.total_cent                                AS valor,
+                       o.ultimo_erro                               AS erro,
                        CASE WHEN {SqlDesistiu} THEN 1 ELSE 0 END   AS desistiu
                   FROM outbox o
                   JOIN venda  v ON v.id = o.ref_id
@@ -429,15 +389,115 @@ public static class Sincronizacao
                  ORDER BY desistiu DESC, v.business_date, v.numero_local
                  LIMIT 400
                 """)
-                .Select(x => new VendaParada((long)x.numero, (string)x.dia, (long)x.desistiu == 1))
+                .Select(x => (Numero: (long)x.numero, Dia: (string)x.dia, Valor: (long)x.valor,
+                              Erro: (string?)x.erro, Desistiu: (long)x.desistiu == 1))
                 .ToList();
 
-            var saida = desistidas == 0 ? SaidaParada.Sozinha : SaidaDoErro(cru);
-            return new VendasParadas((int)r.aguardando, desistidas, new Dinheiro((long)r.valor),
-                new Dinheiro((long)r.valor_parado), motivo, lista, saida);
+            // O que o painel nunca vai aceitar sai daqui inteiro: nao vira texto, nao
+            // vira numero no balao do botao. Quem cuida disso e a Configuracao, em
+            // Travadas().
+            var visiveis = linhas.Where(x => !x.Desistiu || SaidaDoErro(x.Erro) != SaidaParada.SemConserto).ToList();
+            var mortas = visiveis.Where(x => x.Desistiu).ToList();
+
+            // O motivo mais comum entre as travadas. Uma causa so, dita uma vez: o
+            // operador nao precisa de 16 linhas de rastro, precisa saber a quem ligar.
+            var cru = mortas.GroupBy(x => x.Erro ?? "")
+                .OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+
+            var lista = visiveis.Select(x => new VendaParada(x.Numero, x.Dia, x.Desistiu)).ToList();
+            return new VendasParadas(
+                Aguardando: visiveis.Count - mortas.Count,
+                Desistidas: mortas.Count,
+                Valor: new Dinheiro(visiveis.Sum(x => x.Valor)),
+                ValorParado: new Dinheiro(mortas.Sum(x => x.Valor)),
+                Motivo: mortas.Count == 0 ? null : MotivoHumano(cru),
+                Lista: lista,
+                Saida: mortas.Count == 0 ? SaidaParada.Sozinha : SaidaDoErro(cru));
         }
         catch { return new VendasParadas(0, 0, Dinheiro.Zero, Dinheiro.Zero); }
     }
+
+    /// <summary>
+    /// O que o painel NUNCA vai aceitar, para quem abre a Configuracao. Null quando
+    /// nao ha nada.
+    ///
+    /// POR QUE E SEPARADO DO AVISO DO CAIXA. O dono leu o aviso na tela de venda e
+    /// perguntou, linha por linha: "o que isso quer dizer? qual impacto pro
+    /// funcionario? e necessario?", e sobre a saida pela Configuracao: "totalmente sem
+    /// sentido". Esta certo. O operador nao pode consertar, nao abre a Configuracao e
+    /// nao faz nada com o numero. Entao a informacao inteira mudou de lugar, e aqui ela
+    /// pode ser DETALHADA: qual venda, de que dia, e o nome do produto que o painel
+    /// recusou (a outra pergunta dele foi "que produto?").
+    /// </summary>
+    /// <param name="Quantas">Linhas de venda paradas de vez.</param>
+    /// <param name="Valor">Quanto somam.</param>
+    /// <param name="Vendas">"nº 10 de 21/08", ate seis.</param>
+    /// <param name="Produtos">Os nomes que estao gravados no registro recusado.</param>
+    public sealed record FilaTravada(int Quantas, Dinheiro Valor, IReadOnlyList<string> Vendas,
+        IReadOnlyList<string> Produtos, string? Motivo);
+
+    public static FilaTravada? Travadas()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            var linhas = cx.Query($"""
+                SELECT v.numero_local AS numero, v.business_date AS dia, v.total_cent AS valor,
+                       o.ultimo_erro AS erro, o.payload AS payload
+                  FROM outbox o
+                  JOIN venda  v ON v.id = o.ref_id
+                 WHERE o.tipo IN ('venda','venda_composta')
+                   AND v.status = 'finalizada'
+                   AND v.homologacao = 0
+                   AND o.descartado_em IS NULL
+                   AND {SqlDesistiu}
+                 ORDER BY v.business_date, v.numero_local
+                 LIMIT 400
+                """)
+                .Select(x => (Numero: (long)x.numero, Dia: (string)x.dia, Valor: (long)x.valor,
+                              Erro: (string?)x.erro, Payload: (string?)x.payload))
+                .Where(x => SaidaDoErro(x.Erro) == SaidaParada.SemConserto)
+                .ToList();
+            if (linhas.Count == 0) return null;
+
+            // Agrupado por dia: "nº 1, 2, 3, 4, 5 e 6 de 21/08" em vez de repetir a data
+            // seis vezes. O "e mais N" sai do CONTADOR, não do tamanho da lista.
+            var mostradas = linhas.Take(6).ToList();
+            var vendas = mostradas.GroupBy(x => x.Dia)
+                .Select(g => "nº " + VendasParadas.Juntar(g.Select(x => x.Numero.ToString())) + $" de {DiaCurto(g.Key)}")
+                .ToList();
+            if (linhas.Count > mostradas.Count) vendas.Add($"e mais {linhas.Count - mostradas.Count}");
+            var produtos = linhas.SelectMany(x => ProdutosDoPayload(x.Payload))
+                .Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToList();
+            var cru = linhas.GroupBy(x => x.Erro ?? "")
+                .OrderByDescending(g => g.Count()).Select(g => g.Key).First();
+            return new FilaTravada(linhas.Count, new Dinheiro(linhas.Sum(x => x.Valor)),
+                vendas, produtos, MotivoHumano(cru));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Os nomes de produto que estao GRAVADOS no registro recusado. Lista vazia quando o payload nao abre.</summary>
+    private static IEnumerable<string> ProdutosDoPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload)) yield break;
+        List<string> nomes = new();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(payload!);
+            if (!doc.RootElement.TryGetProperty("p_itens", out var itens)
+                || itens.ValueKind != System.Text.Json.JsonValueKind.Array) yield break;
+            foreach (var i in itens.EnumerateArray())
+                if (i.TryGetProperty("descricao", out var d)
+                    && d.GetString() is { Length: > 0 } nome) nomes.Add(nome);
+        }
+        catch { yield break; }
+        foreach (var n in nomes) yield return n;
+    }
+
+    private static string DiaCurto(string dia)
+        => DateTime.TryParse(dia, System.Globalization.CultureInfo.InvariantCulture,
+                             System.Globalization.DateTimeStyles.None, out var d) ? d.ToString("dd/MM") : dia;
 
     /// <summary>
     /// Traduz o rastro do dead-letter para quem está no balcão. Os casos vieram do

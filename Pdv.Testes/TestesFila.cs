@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 
@@ -84,7 +84,7 @@ public static class TestesFila
             // O que a tela precisa dizer é o VALOR e que aquilo travou.
             checar(paradas.Resumo is string aviso
                    && aviso.Contains("2.493,00")
-                   && aviso.Contains("Travaram", StringComparison.Ordinal)
+                   && aviso.Contains("não subiu", StringComparison.Ordinal)
                    && !aviso.Contains("desistiu", StringComparison.OrdinalIgnoreCase),
                 $"o aviso leva o valor e diz que travou, sem falar a língua da fila (viu: {paradas.Resumo})");
 

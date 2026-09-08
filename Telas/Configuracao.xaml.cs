@@ -704,15 +704,28 @@ public partial class Configuracao : UserControl
     /// </summary>
     private void PintarFilaMorta()
     {
-        int quantos;
-        try { quantos = Sincronizacao.Dispensar(simular: true); }
-        catch { quantos = 0; }
-        BlocoFilaMorta.Visibility = quantos == 0 ? Visibility.Collapsed : Visibility.Visible;
-        if (quantos == 0) return;
-        TxtFilaMorta.Text = $"{quantos} {(quantos == 1 ? "registro está parado" : "registros estão parados")} "
-            + "esperando subir, e o painel não vai aceitar do jeito que eles estão gravados. "
-            + "Tentar de novo não muda nada. Tirar da fila não apaga nada: eles continuam no caixa, "
-            + "só param de aparecer no aviso.";
+        Sincronizacao.FilaTravada? t;
+        try { t = Sincronizacao.Travadas(); }
+        catch { t = null; }
+        BlocoFilaMorta.Visibility = t is null ? Visibility.Collapsed : Visibility.Visible;
+        if (t is null) return;
+
+        // Aqui pode ser detalhado: quem abre esta tela tem a senha e quer saber QUAL
+        // venda e QUAL produto. Foram as duas perguntas do dono sobre a versão antiga,
+        // que dizia "o código de produto" sem nomear nada.
+        var linhas = new List<string>
+        {
+            $"{t.Quantas} {(t.Quantas == 1 ? "venda não subiu" : "vendas não subiram")} "
+                + $"e o painel não vai aceitar do jeito que {(t.Quantas == 1 ? "ela está gravada" : "elas estão gravadas")} "
+                + $"({t.Valor.Formatado()}).",
+            "Quais: " + string.Join(", ", t.Vendas) + ".",
+        };
+        if (t.Produtos.Count > 0)
+            linhas.Add("O que o painel recusa é o código do produto gravado nelas: "
+                       + string.Join(", ", t.Produtos) + ".");
+        linhas.Add("Tirar da fila não apaga nada. A venda, o valor e o registro continuam no caixa, "
+                   + "e param de contar como pendência.");
+        TxtFilaMorta.Text = string.Join("\n", linhas);
     }
 
     private void DispensarFilaMorta(object sender, RoutedEventArgs e)

@@ -58,22 +58,20 @@ public static class TestesAvisoParadas
                && !motivo.Contains("uuid", StringComparison.OrdinalIgnoreCase),
             $"o 22P02 vira frase de gente, sem código de erro (viu: {motivo})");
 
-        // ── 2. O AVISO SEM CONSERTO NÃO MANDA SINCRONIZAR ───────────────────
+        // ── 2. O QUE NÃO TEM CONSERTO NÃO VAI PARA A TELA DO CAIXA ──────────
+        // O dono leu a primeira versão deste aviso e perguntou, sobre cada linha:
+        // "o que isso quer dizer? qual impacto pro funcionário? é necessário?" e,
+        // sobre a saída pela Configuração, "totalmente sem sentido". Está certo: o
+        // operador não pode consertar, não entra na Configuração (é senha de
+        // administrador) e não faz nada com o número. Recado sem ação é ruído, e
+        // ruído é o que ensina a ignorar o próximo recado.
         var semConserto = new VendasParadas(
             Aguardando: 0, Desistidas: 8, Valor: new Dinheiro(10008900),
             ValorParado: new Dinheiro(10008900), Motivo: motivo,
             Lista: Enumerable.Range(1, 8).Select(n => new VendaParada(n, "2026-08-21", true)).ToList(),
             Saida: SaidaParada.SemConserto);
-        var aviso = semConserto.Resumo ?? "";
-
-        checar(!aviso.Contains("toque em Sincronizar", StringComparison.OrdinalIgnoreCase)
-               && !aviso.Contains("aperte", StringComparison.OrdinalIgnoreCase),
-            $"o aviso sem conserto NÃO manda tocar no botão que não resolve (viu: {aviso})");
-        checar(aviso.Contains("não muda", StringComparison.OrdinalIgnoreCase)
-               || aviso.Contains("não adianta", StringComparison.OrdinalIgnoreCase),
-            $"…e diz com todas as letras que tentar de novo não muda nada (viu: {aviso})");
-        checar(aviso.Contains("Configuração", StringComparison.Ordinal),
-            $"…e aponta a única saída que o caixa tem de verdade (viu: {aviso})");
+        checar(semConserto.Resumo is null,
+            $"o que não tem conserto NÃO aparece na tela do caixa (viu: {semConserto.Resumo})");
 
         // ── 3. TAMANHO E TOM ────────────────────────────────────────────────
         // 11 linhas foi o que o dono reprovou. O teto entra aqui para não voltar
@@ -82,18 +80,23 @@ public static class TestesAvisoParadas
         {
             var t = v.Resumo ?? "";
             var linhas = t.Split('\n').Length;
-            checar(linhas <= 4, $"{nome}: cabe em 4 linhas (viu {linhas})");
+            checar(linhas <= 2, $"{nome}: cabe em 2 linhas (viu {linhas})");
             checar(!System.Text.RegularExpressions.Regex.IsMatch(t, @"HTTP \d{3}"),
                 $"{nome}: nenhum código de erro na tela");
             checar(!t.Contains("—", StringComparison.Ordinal),
                 $"{nome}: nenhum travessão (o dono lê como texto de robô)");
             checar(!System.Text.RegularExpressions.Regex.IsMatch(t, @"\b[A-ZÀ-Ú]{4,}\b"),
                 $"{nome}: nenhuma palavra gritando em caixa alta (viu: {t})");
-            checar(t.StartsWith("O dinheiro está certo", StringComparison.Ordinal),
-                $"{nome}: a garantia do dinheiro vem antes de qualquer número (viu: {t.Split('\n')[0]})");
+            // A garantia agora está na PALAVRA, não numa linha extra: o que não subiu
+            // é o REGISTRO. Dizer "3 vendas não subiram" faz o operador entender que
+            // três vendas se perderam, e no susto ele cancela venda certa.
+            checar(t.StartsWith("O registro de", StringComparison.Ordinal),
+                $"{nome}: a primeira linha diz que o que ficou para trás é o registro (viu: {t.Split('\n')[0]})");
             var primeiroReal = t.IndexOf("R$", StringComparison.Ordinal);
-            checar(primeiroReal < 0 || t.IndexOf("dinheiro", StringComparison.Ordinal) < primeiroReal,
-                $"{nome}: o susto morre antes do primeiro valor");
+            checar(primeiroReal < 0 || t.IndexOf("registro", StringComparison.Ordinal) < primeiroReal,
+                $"{nome}: isso vem antes do primeiro valor");
+            checar(!t.Contains("Configuração", StringComparison.Ordinal),
+                $"{nome}: o caixa nunca é mandado para uma tela que ele não abre (viu: {t})");
         }
 
         // O valor do que está TRAVADO não pode englobar o que sobe sozinho: misturar
@@ -101,7 +104,8 @@ public static class TestesAvisoParadas
         // precisam.
         var misto = new VendasParadas(
             Aguardando: 3, Desistidas: 2, Valor: new Dinheiro(17250), ValorParado: new Dinheiro(2400),
-            Motivo: motivo, Lista: null, Saida: SaidaParada.SemConserto);
+            Motivo: "o operador que fez a venda não está cadastrado lá", Lista: null,
+            Saida: SaidaParada.Resolver);
         var textoMisto = misto.Resumo ?? "";
         checar(textoMisto.Contains("24,00", StringComparison.Ordinal)
                && !textoMisto.Contains("172,50", StringComparison.Ordinal),
@@ -136,9 +140,49 @@ public static class TestesAvisoParadas
             checar(reaberta == 1,
                 "…e continua reabrindo a que o gerente pode ter resolvido");
 
+            // ── 4b. O CAIXA FICA MUDO SOBRE ELA ─────────────────────────────
+            // Não basta o texto sumir: o número no balão do botão Sincronizar também
+            // some, senão o operador continua vendo "1" e perguntando o que é.
+            var vendaMorta = Guid.NewGuid().ToString();
+            Operadores.Salvar(cx, "op", "Bia", "4321", "operador");
+            cx.Execute("""
+                INSERT INTO caixa_sessao (id, business_date, operador_id, operador_nome,
+                                          abertura_em, fundo_troco_cent, status)
+                VALUES ('s-morta', '2026-08-21', 'op', 'Bia', @Agora, 0, 'fechado')
+                """, new { Agora = DateTime.Now.ToString("o") });
+            cx.Execute("""
+                INSERT INTO venda (id, client_key, sessao_id, business_date, numero_local, operador_id,
+                                   subtotal_cent, total_cent, status, homologacao, criada_em)
+                VALUES (@Id, @Id, 's-morta', '2026-08-21', 77, 'op', 10000000, 10000000, 'finalizada', 0, @Agora)
+                """, new { Id = vendaMorta, Agora = DateTime.Now.ToString("o") });
+            cx.Execute("""
+                INSERT INTO outbox (tipo, ref_id, client_key, payload, tentativas, ultimo_erro,
+                                    criado_em, desistido_em)
+                VALUES ('venda', @Id, @Id, @P, 19, @E, @Agora, @Agora)
+                """, new
+            {
+                Id = vendaMorta, E = Rastro22P02, Agora = DateTime.Now.ToString("o"),
+                P = "{\"p_itens\":[{\"descricao\":\"P02 VALOR MAXIMO\",\"codigo\":\"900\"}]}",
+            });
+
+            var paradas = Sincronizacao.VendasNaoEntregues();
+            checar(paradas.Total == 0 && paradas.Resumo is null,
+                $"a venda que o painel nunca vai aceitar não conta no aviso nem no balão (viu {paradas.Total})");
+
+            // …e aparece inteira para quem abre a Configuração, com nome e produto:
+            // "que produto?" foi a pergunta do dono, e o aviso não respondia.
+            var travadas = Sincronizacao.Travadas();
+            checar(travadas is { Quantas: 1 } && travadas.Valor.Centavos == 10000000,
+                $"a Configuração vê quantas são e quanto somam (viu {travadas?.Quantas.ToString() ?? "<nulo>"})");
+            checar(travadas!.Vendas.Any(x => x.Contains("77", StringComparison.Ordinal)
+                                             && x.Contains("21/08", StringComparison.Ordinal)),
+                $"…com o número da venda e o dia (viu: {string.Join(" | ", travadas.Vendas)})");
+            checar(travadas.Produtos.Contains("P02 VALOR MAXIMO"),
+                $"…e o nome do produto que o painel recusou (viu: {string.Join(" | ", travadas.Produtos)})");
+
             // ── 5. EXISTE SAÍDA ─────────────────────────────────────────────
             var quantas = Sincronizacao.Dispensar();
-            checar(quantas == 1, $"dispensar tira da fila só o que não tem conserto (viu {quantas})");
+            checar(quantas == 2, $"dispensar tira da fila só o que não tem conserto (viu {quantas})");
             checar(cx.ExecuteScalar<int>(
                        "SELECT COUNT(*) FROM outbox WHERE ref_id = 'v-sem-conserto' AND descartado_em IS NOT NULL") == 1,
                 "a linha dispensada fica marcada, não apagada (o histórico continua lá)");
@@ -167,10 +211,9 @@ public static class TestesAvisoParadas
         var lista = new[] { new VendaParada(41, "2026-09-08", true), new VendaParada(42, "2026-09-08", true) };
         yield return ("só na fila", new VendasParadas(3, 0, new Dinheiro(14850), Dinheiro.Zero, null, null, SaidaParada.Sozinha));
         yield return ("gerente resolve", new VendasParadas(0, 2, new Dinheiro(14850), new Dinheiro(14850),
-            "o operador que fez a venda não está cadastrado no painel", lista, SaidaParada.Resolver));
+            "o operador que fez a venda não está cadastrado lá", lista, SaidaParada.Resolver));
         yield return ("sem rede", new VendasParadas(0, 2, new Dinheiro(14850), new Dinheiro(14850),
             "ficou dias sem conseguir falar com o painel", lista, SaidaParada.Espera));
-        yield return ("sem conserto", new VendasParadas(0, 8, new Dinheiro(10008900), new Dinheiro(10008900),
-            motivo, lista, SaidaParada.SemConserto));
+        // O caso sem conserto não entra: ele não produz texto nenhum para o caixa.
     }
 }
