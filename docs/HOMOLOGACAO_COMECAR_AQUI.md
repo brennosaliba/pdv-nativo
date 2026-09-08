@@ -6,13 +6,13 @@ homologar. O mapa completo dos 58 passos vem em `TEF_PAYGO_homologacao.md`.
 ## Qual executável abrir
 
 ```
-C:\Users\Waz\pdv-nativo\publish\v40\Pdv.exe
+C:\Users\Waz\pdv-nativo\publish\v41\Pdv.exe
 ```
 
 64 bits, 180,9 MB, versão 0.5.9. É este que tem a tela do QR do Pix, a escolha de ambiente e o
 conserto do "TEF ativo" mentiroso.
 
-**Não use o v38 nem o v39.** O v38 chamava a escolha de ambiente antes de inicializar a biblioteca, e
+**Não use nada anterior ao v41.** O v38 chamava a escolha de ambiente antes de inicializar a biblioteca, e
 ela recusava com "não instalado": o caixa seguia falando com o servidor de produção sem ninguém
 perceber, medido no seu teste das 17h13. O v39 corrigiu isso, mas é anterior aos oito consertos do
 roteiro e ao filtro de redes.
@@ -27,7 +27,7 @@ máquina do PE diz x64.
 Como foi gerado, se precisar refazer:
 
 ```bash
-dotnet publish Pdv.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=true -p:DebugType=none -o publish/v40
+dotnet publish Pdv.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:PublishReadyToRun=true -p:DebugType=none -o publish/v41
 ```
 
 ## O que já está pronto nesta máquina
@@ -59,6 +59,41 @@ de série queimado; autorizada, seria uma nota válida da loja para um produto q
 
 Agora a venda do roteiro sai como **recibo**: o papel continua saindo, e a nota não. Quando o roteiro
 acabar e o caixa voltar a vender, desligue o modo de homologação e a NFC-e volta sozinha.
+
+## O caixa entra em modo de homologação, e isso muda a rotina
+
+Com a chave `homologacao` ligada, que já está nesta máquina, o caixa:
+
+- **não pede login de operador.** Entra direto como "Teste de homologação", um operador que nasce
+  inativo e sem senha: ele não entra pelo login, não aparece na sincronização, não autoriza nada e
+  não consegue abrir o caixa da loja.
+- **não pede abertura nem fechamento de caixa.** Nenhum dos 58 passos fala de caixa, e você ia
+  topar com isso a cada uma das mais de vinte vendas.
+- **mostra uma faixa fixa no alto da janela** dizendo que é venda de teste. Ela empurra a tela para
+  baixo em vez de flutuar, para nenhum diálogo passar por cima. Se essa faixa não estiver lá, o
+  caixa NÃO está em homologação.
+
+Com a chave desligada tudo volta: login, abertura, fechamento. Isso é medido na bateria com a tela
+de venda de verdade, não por leitura de arquivo.
+
+Uma regra que vale saber: **se houver um turno de gente aberto, o modo sai de cena** e o caixa volta
+a pedir login. Dinheiro de gente manda. Se você abrir o PDV e ele pedir login, é isso: feche o turno
+que está aberto.
+
+## O menu do TEF
+
+Botão na barra da tela de venda, só existe em homologação. Ele mostra, num lugar só:
+
+- o estado do terminal: instalado ou não, ambiente, rede do cartão, rede do Pix, redes que aparecem
+  no menu, porta do pinpad e pasta da biblioteca;
+- **a última frase que a maquininha respondeu, com a hora**. É o que o roteiro cobra em quase todo
+  passo ("mensagem para o operador"), e agora ela fica na tela em vez de sumir;
+- as operações que este terminal oferece, perguntadas à própria biblioteca. Não é lista escrita à
+  mão: se o terminal oferecer algo que o caixa não conhece, aparece com o nome que a biblioteca dá;
+- atalho para a Configuração.
+
+Venda, cancelamento e recarga aparecem apagados de propósito: eles têm valor e dono, e saem pela
+tela de venda. A recusa está no provedor, não só na tela.
 
 ## Passo 01, a instalação
 
