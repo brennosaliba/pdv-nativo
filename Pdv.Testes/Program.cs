@@ -42,7 +42,7 @@ if (args.Length >= 1 && args[0] == "--empacotar")
 {
     if (args.Length < 5)
     {
-        Console.WriteLine("uso: Pdv.Testes.exe --empacotar <exe-base> <pasta-pdv> <paygo.exe|-> <saida.exe>");
+        Console.WriteLine("uso: Pdv.Testes.exe --empacotar <exe-base> <pasta-pdv> <paygo.exe|-> <saida.exe> [<pasta-agente>|-]");
         return 2;
     }
 
@@ -51,7 +51,10 @@ if (args.Length >= 1 && args[0] == "--empacotar")
         pastaPdv: args[2],
         paygoExe: args[3] == "-" ? null : args[3],
         saida: args[4],
-        progresso: Console.WriteLine);
+        progresso: Console.WriteLine,
+        // args[5] e OPCIONAL de proposito: as chamadas de 5 argumentos que ja existem
+        // continuam validas, e um build sem agente segue gerando o instalador de sempre.
+        pastaAgente: args.Length >= 6 && args[5] != "-" ? args[5] : null);
 
     if (erroPacote is not null) { Console.WriteLine("FALHOU: " + erroPacote); return 1; }
 

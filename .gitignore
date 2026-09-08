@@ -13,3 +13,5 @@ node_modules/
 dist/
 publish/
 .vs/
+# payload do agente fiscal montado pelo build (92 MB, sai de scripts/montar-agente.ps1)
+publish/agent/

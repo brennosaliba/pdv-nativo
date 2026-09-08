@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Windows;
 
@@ -21,6 +21,7 @@ public partial class JanelaInstalador : Window
     private Etapa _etapa = Etapa.Inicio;
     private string? _pastaTemporaria;
     private string? _paygoExe;
+    private string? _pastaAgente;
     private bool _atualizacao;
 
     public JanelaInstalador()
@@ -109,13 +110,27 @@ public partial class JanelaInstalador : Window
                 origem = Path.Combine(_pastaTemporaria, "pdv");
                 var pg = Path.Combine(_pastaTemporaria, "paygo.exe");
                 if (File.Exists(pg)) _paygoExe = pg;
+                var ag = Path.Combine(_pastaTemporaria, "agent");
+                if (Directory.Exists(ag)) _pastaAgente = ag;
             }
 
-            return Instalacao.Instalar(new Instalacao.Opcoes(
+            var falhaPdv = Instalacao.Instalar(new Instalacao.Opcoes(
                 OrigemPasta: origem ?? "",
                 PastaDestino: Instalacao.PastaDestinoPadrao,
                 IniciarComWindows: iniciar,
                 AtalhoAreaTrabalho: atalho), Progresso);
+            if (falhaPdv is not null) return falhaPdv;
+
+            // O AGENTE FISCAL DEPOIS DO CAIXA, e nunca no lugar dele: o caixa instalado
+            // sem contingencia vende (so nao emite nota com a internet fora); contingencia
+            // sem caixa nao serve para nada. Falha aqui NAO derruba a instalacao, pelo
+            // mesmo motivo: o rodape ja avisa quando nao ha contingencia local.
+            if (_pastaAgente is not null)
+            {
+                var falhaAg = Instalacao.InstalarAgente(_pastaAgente, Instalacao.PastaDestinoPadrao, Progresso);
+                if (falhaAg is not null) Progresso("Agente fiscal nao instalado: " + falhaAg);
+            }
+            return null;
         });
 
         if (erro is not null) { Falhou(erro); return; }

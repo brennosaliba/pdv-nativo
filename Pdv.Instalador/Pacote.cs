@@ -62,13 +62,24 @@ public static class Pacote
     /// Monta o instalador final: uma cópia deste exe + o zip do payload + o trailer.
     /// Chamado pelo build (<c>--empacotar</c>), não pela loja.
     /// </summary>
+    /// <param name="pastaAgente">
+    /// O agente fiscal (código + node.exe), ou null. Vai no MESMO zip, sob o prefixo
+    /// "agent/", exatamente como o PDV vai sob "pdv/": o formato do pacote já carrega
+    /// pasta, então isto não muda o trailer nem a versão do formato.
+    ///
+    /// Compatibilidade nas duas direções, e ela é limpa: instalador NOVO com pacote
+    /// VELHO não acha a pasta agent e pula o passo; instalador VELHO com pacote NOVO
+    /// extrai as entradas (o laço é cego), não olha para elas, e apaga tudo no fim.
+    /// </param>
     public static string? Empacotar(string exeBase, string pastaPdv, string? paygoExe, string saida,
-                                    Action<string>? progresso = null)
+                                    Action<string>? progresso = null, string? pastaAgente = null)
     {
         try
         {
             if (!File.Exists(exeBase)) return "Não achei o exe base: " + exeBase;
             if (Instalacao.ConferirOrigem(pastaPdv) is { } ruim) return "Payload recusado: " + ruim;
+            if (pastaAgente is not null && Instalacao.ConferirOrigemAgente(pastaAgente) is { } ruimAg)
+                return "Agente recusado: " + ruimAg;
 
             var zipTmp = Path.Combine(Path.GetTempPath(), "pdvpay-" + Guid.NewGuid().ToString("N")[..8] + ".zip");
             try
@@ -87,6 +98,17 @@ public static class Pacote
                         // 108,0 MB e cobra ~9 s de build por isso. Ele já vem
                         // comprimido por dentro; insistir é gastar tempo à toa.
                         zip.CreateEntryFromFile(paygoExe, "paygo.exe", CompressionLevel.NoCompression);
+                    }
+
+                    if (pastaAgente is not null)
+                    {
+                        // O node.exe são 92 MB que caem para 33 no zip: aqui, ao
+                        // contrário do paygo.exe, comprimir paga. NivelDe já decide isso
+                        // por extensão, então não há caso especial.
+                        progresso?.Invoke("Juntando o agente fiscal…");
+                        foreach (var rel in Instalacao.ArquivosDoAgente(pastaAgente))
+                            zip.CreateEntryFromFile(Path.Combine(pastaAgente, rel),
+                                "agent/" + rel.Replace('\\', '/'), NivelDe(rel));
                     }
                 }
 
@@ -197,7 +219,12 @@ public static class Pacote
                 // Caminho de dentro do zip nunca sai da pasta de destino: um ".." numa
                 // entrada escreveria em qualquer lugar do disco com privilégio de admin.
                 var alvo = Path.GetFullPath(Path.Combine(destino, e.FullName));
-                if (!alvo.StartsWith(Path.GetFullPath(destino), StringComparison.OrdinalIgnoreCase))
+                // Com separador no fim: sem ele, um destino "C:\tmp\pdv" deixaria passar
+                // um alvo "C:\tmp\pdv-outro\...". Passou a importar quando o pacote ganhou
+                // 622 entradas do agente, todas cruzando esta linha.
+                var raiz = Path.GetFullPath(destino);
+                if (!raiz.EndsWith(Path.DirectorySeparatorChar)) raiz += Path.DirectorySeparatorChar;
+                if (!alvo.StartsWith(raiz, StringComparison.OrdinalIgnoreCase))
                     return "O pacote deste instalador está corrompido.";
 
                 Directory.CreateDirectory(Path.GetDirectoryName(alvo)!);

@@ -195,6 +195,40 @@ public static class Instalacao
                 .ToList()
             : Array.Empty<string>();
 
+    /// <summary>
+    /// Os arquivos do AGENTE FISCAL, relativos à origem. Mesma regra do PDV (ver
+    /// <see cref="ArquivosParaCopiar"/>), e por isso é a mesma implementação.
+    ///
+    /// POR QUE O AGENTE ENTRA NO INSTALADOR (08/09/2026, pedido do dono). Ele é quem
+    /// emite nota com a internet caída, e até hoje ninguém o instalava: o caixa só tinha
+    /// contingência se alguém tivesse copiado a pasta na mão. Loja sem ele, sem internet,
+    /// vende sem nota nenhuma.
+    /// </summary>
+    public static IReadOnlyList<string> ArquivosDoAgente(string origem) => ArquivosParaCopiar(origem);
+
+    /// <summary>
+    /// A origem do agente é o que parece? Gêmeo de <see cref="ConferirOrigem"/>, e pelo
+    /// mesmo motivo: apontar a pasta errada no build gera um instalador que só falha na
+    /// loja, com a internet já caída, que é o pior lugar do mundo para descobrir isso.
+    ///
+    /// As três provas são o esqueleto do agente: quem o inicia, o motor da nota e o
+    /// runtime, porque o caixa roda "node.exe pdv-agent.cjs" de dentro da própria pasta.
+    /// </summary>
+    public static string? ConferirOrigemAgente(string? origem)
+    {
+        if (string.IsNullOrWhiteSpace(origem) || !Directory.Exists(origem))
+            return "A pasta do agente fiscal não existe: " + (origem ?? "(vazio)");
+        foreach (var (rel, oQueE) in new[]
+                 {
+                     ("pdv-agent.cjs", "quem inicia o agente"),
+                     (Path.Combine("nfce", "xml.cjs"), "o motor da nota"),
+                     ("node.exe", "o runtime"),
+                 })
+            if (!File.Exists(Path.Combine(origem, rel)))
+                return $"Falta {rel} ({oQueE}) na pasta do agente fiscal.";
+        return null;
+    }
+
     public sealed record Opcoes(
         string OrigemPasta,
         string PastaDestino,
@@ -318,6 +352,64 @@ public static class Instalacao
     /// RENOMEAR um exe/dll em uso, mas não sobrescrever — então o que está no
     /// caminho sai de lado como *.velho e some na instalação seguinte.
     /// </summary>
+    /// <summary>Onde o agente fiscal fica instalado: ao lado do caixa, na mesma árvore.</summary>
+    public static string PastaDoAgente(string pastaDestino) => Path.Combine(pastaDestino, "agent");
+
+    /// <summary>
+    /// Copia o agente fiscal para <c>&lt;destino&gt;\agent</c>.
+    ///
+    /// ⚠️ PARA O AGENTE ANTIGO ANTES DE COPIAR, e isto não é zelo: se o processo velho
+    /// continuar vivo, o <c>node.exe</c> só é RENOMEADO para .velho (o Windows deixa
+    /// renomear exe carregado), o velho segue de pé segurando a porta 4610, e na próxima
+    /// vez que o caixa perguntar "o agente está aí?" quem responde é ele. O caixa acha
+    /// que está tudo certo e a loja roda a versão antiga até alguém reiniciar a máquina,
+    /// sem nenhum aviso. É o pior jeito de isto falhar.
+    ///
+    /// Mira estreita de propósito: só mata node que esteja rodando DE DENTRO desta pasta.
+    /// O node de quem desenvolve na mesma máquina não é da nossa conta.
+    ///
+    /// Nunca encosta nos DADOS do agente (fila de notas assinadas, XMLs guardados): eles
+    /// moram em ProgramData, fora desta árvore, pela mesma regra que protege o banco de
+    /// vendas.
+    /// </summary>
+    public static string? InstalarAgente(string origem, string pastaDestino, Action<string>? progresso = null)
+    {
+        if (ConferirOrigemAgente(origem) is { } ruim) return ruim;
+        var alvo = PastaDoAgente(pastaDestino);
+        PararAgente(alvo);
+
+        var arquivos = ArquivosDoAgente(origem);
+        var n = 0;
+        foreach (var rel in arquivos)
+        {
+            if (CopiarUm(Path.Combine(origem, rel), Path.Combine(alvo, rel)) is { } erro) return erro;
+            if (++n % 50 == 0) progresso?.Invoke($"Instalando o agente fiscal… {n} de {arquivos.Count}");
+        }
+        LimparVelhos(alvo);
+        return null;
+    }
+
+    /// <summary>Mata o agente que estiver rodando DE DENTRO de <paramref name="pasta"/>. Silencioso.</summary>
+    public static void PararAgente(string pasta)
+    {
+        string raiz;
+        try { raiz = Path.GetFullPath(pasta); } catch { return; }
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName("node"))
+        {
+            try
+            {
+                var exe = p.MainModule?.FileName;
+                if (exe is not null && exe.StartsWith(raiz, StringComparison.OrdinalIgnoreCase))
+                {
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(5000);
+                }
+            }
+            catch { /* processo de outro usuário, ou já morreu: não é da nossa conta */ }
+            finally { p.Dispose(); }
+        }
+    }
+
     private static string? CopiarUm(string origem, string destino)
     {
         try

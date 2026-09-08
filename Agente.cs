@@ -21,7 +21,29 @@ public static class Agente
     private static Timer? _vigia;
     private static readonly object Trava = new();
 
-    private const string Pasta = @"C:\kiosk\agent";
+    /// <summary>
+    /// Onde o agente mora. Desde 08/09/2026 ele vem no instalador e fica ao lado do
+    /// caixa; antes disso alguém copiava a pasta na mão para C:\kiosk\agent.
+    ///
+    /// A ordem importa e é esta: o que veio com o instalador GANHA, porque é a versão
+    /// que casa com este exe. A pasta antiga fica como segunda opção para as máquinas
+    /// onde alguém já instalou na mão continuarem funcionando sem ninguém mexer nelas.
+    /// </summary>
+    private static string Pasta => _pasta ??= AcharPasta();
+    private static string? _pasta;
+
+    private const string PastaAntiga = @"C:\kiosk\agent";
+
+    private static string AcharPasta()
+    {
+        try
+        {
+            var aoLado = Path.Combine(AppContext.BaseDirectory, "agent");
+            if (File.Exists(Path.Combine(aoLado, "pdv-agent.cjs"))) return aoLado;
+        }
+        catch { /* caminho estranho: cai na pasta antiga */ }
+        return PastaAntiga;
+    }
     private const string Health = "http://127.0.0.1:4610/health";
 
     /// <summary>Garante o agente de pé. Chamado no boot e pela vigia a cada 30s.</summary>

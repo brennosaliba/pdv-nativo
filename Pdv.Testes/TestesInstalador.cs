@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Pdv.Instalador;
 
 namespace Pdv.Testes;
@@ -476,8 +476,34 @@ public static class TestesInstalador
         var exeBase = Path.Combine(raiz, "base.exe");
         File.WriteAllBytes(exeBase, Enumerable.Repeat((byte)0x4D, 4096).ToArray());
 
+        // ── O AGENTE FISCAL VIAJA JUNTO (08/09/2026) ────────────────────────
+        // Ate hoje ninguem instalava o agente: a loja so tinha contingencia se alguem
+        // tivesse copiado a pasta na mao, e loja sem ele, sem internet, vende sem nota.
+        // Ele vai no MESMO zip, sob "agent/", como o PDV vai sob "pdv/" — o formato do
+        // pacote ja carregava pasta, entao nada mudou no trailer.
+        var agente = Path.Combine(raiz, "pack-agente");
+        Directory.CreateDirectory(Path.Combine(agente, "nfce"));
+        Directory.CreateDirectory(Path.Combine(agente, "node_modules", "axios"));
+        File.WriteAllText(Path.Combine(agente, "pdv-agent.cjs"), "AGENTE VERSAO X");
+        File.WriteAllText(Path.Combine(agente, "node.exe"), "runtime de mentira");
+        File.WriteAllText(Path.Combine(agente, "nfce", "xml.cjs"), "motor da nota");
+        File.WriteAllText(Path.Combine(agente, "node_modules", "axios", "package.json"), "{}");
+
+        // A conferencia da origem: apontar a pasta errada no build gera um instalador
+        // que so falha na loja, com a internet ja caida.
+        checar(Instalacao.ConferirOrigemAgente(agente) is null,
+            "agente: a pasta completa passa na conferencia");
+        checar(Instalacao.ConferirOrigemAgente(Path.Combine(raiz, "nao-existe")) is not null,
+            "agente: pasta que nao existe e recusada no BUILD, nao na loja");
+        var semRuntime = Path.Combine(raiz, "pack-agente-sem-node");
+        Directory.CreateDirectory(Path.Combine(semRuntime, "nfce"));
+        File.WriteAllText(Path.Combine(semRuntime, "pdv-agent.cjs"), "x");
+        File.WriteAllText(Path.Combine(semRuntime, "nfce", "xml.cjs"), "x");
+        checar(Instalacao.ConferirOrigemAgente(semRuntime) is { } m && m.Contains("node.exe", StringComparison.Ordinal),
+            "agente: sem o runtime tambem e recusado, e a mensagem diz o que falta");
+
         var pacote = Path.Combine(raiz, "InstaladorTeste.exe");
-        var erro = Pacote.Empacotar(exeBase, origem, paygoFalso, pacote);
+        var erro = Pacote.Empacotar(exeBase, origem, paygoFalso, pacote, null, agente);
         checar(erro is null, "pacote: empacotar conclui sem erro");
         checar(File.Exists(pacote), "pacote: o instalador foi gravado");
 
@@ -497,6 +523,25 @@ public static class TestesInstalador
         checar(Instalacao.ConferirOrigem(pdvDentro) is null,
             "pacote: o PDV que sai do pacote é INSTALÁVEL (é o teste que fecha o ciclo)");
         checar(File.Exists(Path.Combine(aberto, "paygo.exe")), "pacote: o PayGo saiu no lugar combinado");
+
+        // O agente sai inteiro, com subpasta, e INSTALAVEL.
+        var agenteDentro = Path.Combine(aberto, "agent");
+        checar(Instalacao.ConferirOrigemAgente(agenteDentro) is null,
+            "agente: o que sai do pacote e instalavel (o ciclo fecha)");
+        checar(File.ReadAllText(Path.Combine(agenteDentro, "pdv-agent.cjs")) == "AGENTE VERSAO X",
+            "agente: o conteudo volta byte a byte igual");
+        checar(File.Exists(Path.Combine(agenteDentro, "node_modules", "axios", "package.json")),
+            "agente: as bibliotecas sobrevivem a viagem");
+
+        // PACOTE SEM AGENTE CONTINUA VALIDO: instalador novo com pacote velho nao pode
+        // quebrar, e e por isso que a pasta e opcional dos dois lados.
+        var semAgente = Path.Combine(raiz, "InstaladorSemAgente.exe");
+        checar(Pacote.Empacotar(exeBase, origem, null, semAgente) is null,
+            "pacote: empacotar SEM agente continua valendo (compatibilidade para tras)");
+        var abertoSem = Path.Combine(raiz, "pack-aberto-sem-agente");
+        checar(Pacote.Extrair(abertoSem, null, semAgente) is null
+               && !Directory.Exists(Path.Combine(abertoSem, "agent")),
+            "pacote: e quem abre um pacote sem agente simplesmente nao acha a pasta");
         checar(File.ReadAllText(Path.Combine(pdvDentro, "Pdv.exe")) == "PROGRAMA VERSAO X",
             "pacote: o conteúdo volta byte a byte igual");
         checar(File.Exists(Path.Combine(pdvDentro, "runtimes", "win-x64", "native", "extra.dll")),
@@ -506,6 +551,18 @@ public static class TestesInstalador
         var destino = Path.Combine(raiz, "pack-instalado");
         checar(Instalacao.Instalar(Sandbox(pdvDentro, destino)) is null,
             "pacote: e a instalação a partir do que foi extraído funciona");
+
+        // E o agente instala ao lado do caixa, na mesma arvore.
+        checar(Instalacao.InstalarAgente(agenteDentro, destino) is null,
+            "agente: instala ao lado do caixa");
+        checar(File.Exists(Path.Combine(Instalacao.PastaDoAgente(destino), "pdv-agent.cjs"))
+               && File.Exists(Path.Combine(Instalacao.PastaDoAgente(destino), "nfce", "xml.cjs")),
+            "agente: com a subpasta do motor da nota");
+        // Instalar de novo por cima (a atualizacao) nao pode falhar nem deixar .velho.
+        checar(Instalacao.InstalarAgente(agenteDentro, destino) is null,
+            "agente: instalar por cima de novo continua funcionando");
+        checar(!Directory.GetFiles(Instalacao.PastaDoAgente(destino), "*.velho", SearchOption.AllDirectories).Any(),
+            "agente: e nao sobra resto de atualizacao na pasta");
     }
 
     // ----------------------------------------------------------------- apoio

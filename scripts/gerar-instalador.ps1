@@ -6,6 +6,7 @@
         .\scripts\gerar-instalador.ps1                     # usa o publish mais novo
         .\scripts\gerar-instalador.ps1 -PastaPdv publish\v20
         .\scripts\gerar-instalador.ps1 -SemPayGo           # só o caixa
+        .\scripts\gerar-instalador.ps1 -SemAgente          # sem contingência fiscal
 
     O que sai:  publish\InstalarPdv.exe  (~236 MB)
 
@@ -23,7 +24,9 @@ param(
     [string] $PastaPdv,
     [string] $PayGo,
     [string] $Saida,
-    [switch] $SemPayGo
+    [switch] $SemPayGo,
+    [string] $Agente,
+    [switch] $SemAgente
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,6 +59,21 @@ if ($SemPayGo) {
 } else {
     $PayGo = (Resolve-Path $PayGo).Path
     Passo "PayGo: $PayGo"
+}
+
+# ---------------------------------------------------------------- 1b. o agente
+# O agente fiscal e quem emite nota com a internet caida. Ate 08/09/2026 ninguem o
+# instalava: a loja so tinha contingencia se alguem tivesse copiado a pasta na mao.
+# A pasta e montada por scripts\montar-agente.ps1 (codigo + bibliotecas + node.exe).
+if (-not $Agente -and -not $SemAgente) { $Agente = Join-Path $raiz 'publish\agent' }
+if ($SemAgente) {
+    $Agente = $null
+    Write-Host "    (sem agente: a loja vende, mas nao emite nota com a internet fora)" -ForegroundColor Yellow
+} elseif (-not (Test-Path $Agente)) {
+    Morre "nao achei o agente em $Agente. Rode scripts\montar-agente.ps1, ou use -SemAgente se for de proposito."
+} else {
+    $Agente = (Resolve-Path $Agente).Path
+    Passo "Agente fiscal: $Agente"
 }
 
 if (-not $Saida) { $Saida = Join-Path $raiz 'publish\InstalarPdv.exe' }
@@ -98,9 +116,10 @@ if (-not (Test-Path $ferramenta)) { Morre "nao achei $ferramenta" }
 # ⚠️ CHAMA O EXE DIRETO, nao `dotnet run -- ...`. O PowerShell 5.1 come o `--` na
 # passagem para comando nativo: os argumentos nao chegaram ao app, o modo nao casou e
 # o que rodou foi a SUITE DE TESTES inteira, com o script achando que empacotou.
-Passo 'Empacotando o PDV e o PayGo na cauda...'
+Passo 'Empacotando o PDV, o PayGo e o agente fiscal na cauda...'
 $argPayGo = if ($PayGo) { $PayGo } else { '-' }
-& $ferramenta --empacotar $casulo $PastaPdv $argPayGo $Saida | Write-Host
+$argAgente = if ($Agente) { $Agente } else { '-' }
+& $ferramenta --empacotar $casulo $PastaPdv $argPayGo $Saida $argAgente | Write-Host
 if ($LASTEXITCODE -ne 0) { Morre "o empacotamento falhou (codigo $LASTEXITCODE)." }
 
 # ------------------------------------------------------------- 4. conferencia
