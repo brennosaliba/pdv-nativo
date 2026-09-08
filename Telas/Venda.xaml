@@ -419,6 +419,19 @@
                                        FontSize="12" HorizontalAlignment="Right" TextWrapping="Wrap"
                                        TextAlignment="Right" Margin="0,0,0,6"/>
 
+                            <!-- PROMOÇÃO COM SENHA (08/09): oferecida, nunca imposta. Antes a
+                                 janela do código abria sozinha a cada item bipado. Só aparece
+                                 quando a promoção valeria para esta comanda. -->
+                            <Button x:Name="BtnPromoComSenha" Click="AplicarPromoComSenha" Style="{StaticResource BotaoBase}"
+                                    MinHeight="46" Margin="0,0,0,10" Visibility="Collapsed"
+                                    HorizontalContentAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="🔑" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="TxtPromoComSenha" FontSize="14" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </Button>
+
                             <!-- MODO DE HOMOLOGAÇÃO: o roteiro do TEF manda cobrar valores exatos
                                  (R$ 12.345,67, R$ 1.000,01) que soma nenhuma do cardápio fecha —
                                  os preços daqui andam de 25 em 25 centavos. Este botão põe o valor

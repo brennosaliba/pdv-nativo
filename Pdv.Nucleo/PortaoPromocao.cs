@@ -81,7 +81,15 @@ public static class PortaoPromocao
                 if (d.Autorizado)   // aprovado sem id de registro: nao da para auditar, entao nao vale
                     d = new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null,
                         "A nuvem aprovou sem registro. Promoção não autorizada.");
-                contexto.Excluir(p.PromoId);
+                // DESISTIR NAO E RECUSAR (08/09/2026). `Avisado` = foi o operador que
+                // fechou a janela do codigo. Enquanto a pergunta saia sozinha na
+                // pintura, excluir ali era o que impedia o laco: cada repintura
+                // perguntaria de novo. Agora a pergunta e um TOQUE no botao, e excluir
+                // vira armadilha: um toque errado, ou o gerente que ainda vai chegar,
+                // matava a promocao para o resto da venda sem jeito de voltar atras.
+                // Toda OUTRA recusa (sem internet, codigo errado tres vezes, nuvem que
+                // negou) continua excluindo, que e onde insistir sozinho nao ajuda.
+                if (!d.Avisado) contexto.Excluir(p.PromoId);
             }
             r.Add(new Resultado(new PromoPendenteRef(p.PromoId, p.Nome, p.Nivel, p.DescontoCent), d));
         }
@@ -103,6 +111,24 @@ public static class PortaoPromocao
     }
 
     /// <summary>Aviso de UMA linha para a tela quando a promocao nao entrou.</summary>
+    /// <summary>
+    /// O que o botão ao lado do total diz. Uma promoção: o nome dela, porque é isso que
+    /// o operador vai conferir com o cliente. Mais de uma: só o número, senão a linha
+    /// vira parede.
+    ///
+    /// POR QUE EXISTE (08/09/2026). Antes não havia botão: a janela do código abria
+    /// sozinha a cada item bipado, porque uma promoção de 30% em "todos os produtos"
+    /// vence sempre. O dono: "ela deveria pedir um poup com token somente qdo eh
+    /// selacionado". O verbo é APLICAR: a promoção existe, ela vale, e alguém precisa
+    /// liberar.
+    /// </summary>
+    public static string RotuloDoBotao(IReadOnlyList<string> nomes) => nomes.Count switch
+    {
+        0 => "",
+        1 => $"Aplicar {nomes[0]}",
+        _ => $"Aplicar promoção ({nomes.Count})",
+    };
+
     public static string AvisoNaoAplicada(string nome) => $"Promoção {nome} não aplicada";
 
     /// <summary>As recusadas de uma passagem numa linha so (nunca um aviso por promocao).</summary>

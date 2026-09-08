@@ -55,6 +55,54 @@ public static class TestesSefaz
             checar(p.Nota == SituacaoDaNota.SemNota && p.PodeSeguir,
                 $"nfce: '{(f.Length == 0 ? "(vazio)" : f)}' e sem nota de verdade, e segue");
         }
+
+        // ── LOJA QUE SO IMPRIME RECIBO (08/09/2026, pedido do dono) ─────────────
+        // "caso o cliente do SAAS opte somente por recibo ao inves de nf o cancelamento
+        // de pedido deve ser feito sem consulta na sefaz no menu cancelar/imprimir".
+        //
+        // Era um BLOQUEIO, nao so um texto. Em modo recibo o emissor nunca e chamado
+        // (Pagamento.xaml.cs: `if (modoRecibo) { await ConcluirReciboAsync(); return; }`),
+        // entao fiscal_status fica no padrao do banco, 'pendente'. Com a regra acima,
+        // 'pendente' virava SemResposta e o caixa RECUSAVA cancelar, mandando "chame o
+        // gerente para conferir na SEFAZ" numa loja que nunca emitiu nota nenhuma. Ou
+        // seja: uma loja so de recibo nao conseguia cancelar venda pelo PDV.
+        //
+        // O sinal certo nao e o modo da loja sozinho: e "esta venda PODE ter nota".
+        // Falso so quando a loja nao emite E esta venda nunca teve tentativa de emissao
+        // (nenhuma linha em nfce_emissao). Numa loja de NFC-e nada muda, nem no caso de
+        // queda entre a chamada do emissor e a gravacao: la `podeTerNota` continua true.
+        var soRecibo = CancelamentoVenda.Montar("pendente", null, null, null,
+            Array.Empty<PagamentoDaVenda>(), false, agora, podeTerNota: false);
+        checar(soRecibo.Nota == SituacaoDaNota.SemNota && soRecibo.PodeSeguir,
+            "recibo: loja que nao emite cancela venda 'pendente' sem travar");
+        checar(!soRecibo.PedeJustificativaFiscal,
+            "recibo: e o motivo nao precisa das 15 letras da SEFAZ");
+        checar(soRecibo.Impedimento is null
+               && !soRecibo.TextoDaNota.Contains("SEFAZ", StringComparison.OrdinalIgnoreCase),
+            $"recibo: nenhuma palavra de SEFAZ na tela de quem nao emite (viu: {soRecibo.TextoDaNota})");
+        // A frase fala da LOJA, nao da venda: "esta venda nao gerou nota fiscal" em
+        // toda venda faz parecer que falta alguma coisa em cada uma delas.
+        checar(soRecibo.TextoDaNota.StartsWith("Esta loja não emite", StringComparison.Ordinal),
+            $"recibo: a frase diz que e a loja que nao emite (viu: {soRecibo.TextoDaNota})");
+        var vendaSemNota = CancelamentoVenda.Montar("rejeitada", null, null, null,
+            Array.Empty<PagamentoDaVenda>(), false, agora);
+        checar(vendaSemNota.TextoDaNota.StartsWith("Esta venda", StringComparison.Ordinal),
+            "nfce: na loja que emite, a nota recusada continua sendo caso DESTA venda");
+
+        // A trava continua de pe onde ela existe para valer: mesma venda 'pendente',
+        // mas numa loja que EMITE.
+        var lojaEmite = CancelamentoVenda.Montar("pendente", null, null, null,
+            Array.Empty<PagamentoDaVenda>(), false, agora, podeTerNota: true);
+        checar(!lojaEmite.PodeSeguir,
+            "nfce: na loja que emite, 'pendente' continua bloqueando (a regra antiga nao afrouxou)");
+
+        // Venda ANTIGA com nota de verdade nao vira "sem nota" so porque a loja trocou
+        // de modo depois: quem manda e a chave, nao a configuracao de hoje.
+        var chave = new string('7', 44);
+        var comNota = CancelamentoVenda.Montar("autorizada", chave, "1312600007371",
+            agora.AddMinutes(-5), Array.Empty<PagamentoDaVenda>(), false, agora, podeTerNota: false);
+        checar(comNota.Nota == SituacaoDaNota.DentroDoPrazo && comNota.CancelaNota,
+            "recibo: venda que TEM nota autorizada continua cancelando a nota na SEFAZ");
     }
 
     public static void Rodar(Action<bool, string> checar)

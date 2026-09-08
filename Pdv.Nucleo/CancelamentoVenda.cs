@@ -155,15 +155,36 @@ public static class CancelamentoVenda
     /// na falta dela vale a hora da venda, que é sempre ANTES — errar para o lado
     /// de "resta menos tempo" nunca faz o PDV prometer o que não pode.
     /// </summary>
+    /// <param name="podeTerNota">
+    /// Esta venda pode ter documento na SEFAZ? Falso SÓ quando a loja não emite nota
+    /// (<c>modo_fiscal = recibo</c> ou modo de homologação) E esta venda nunca teve
+    /// tentativa de emissão registrada. Padrão true: quem não sabe, não afrouxa.
+    ///
+    /// POR QUE EXISTE (08/09/2026). Em modo recibo o emissor nunca é chamado, então
+    /// <c>fiscal_status</c> fica no padrão do banco, 'pendente'. E 'pendente' bloqueia,
+    /// de propósito, porque numa loja de NFC-e ele quer dizer "não sei se existe nota".
+    /// Numa loja que nunca emitiu, ele quer dizer "não existe nota" — e o resultado era
+    /// um caixa que RECUSAVA cancelar qualquer venda, mandando o operador "conferir na
+    /// SEFAZ" um documento que nunca foi criado.
+    ///
+    /// O sinal é da VENDA, não da configuração de hoje: loja que trocou de NFC-e para
+    /// recibo continua cancelando na SEFAZ a nota que já emitiu, porque essa venda tem
+    /// chave (e tem linha de emissão).
+    /// </param>
     public static PlanoDeCancelamento Montar(
         string? fiscalStatus, string? chave, string? protocolo, DateTime? notaAutorizadaEm,
-        IReadOnlyList<PagamentoDaVenda> pagamentos, bool estornoPeloPdv, DateTime agora)
+        IReadOnlyList<PagamentoDaVenda> pagamentos, bool estornoPeloPdv, DateTime agora,
+        bool podeTerNota = true)
     {
         var f = (fiscalStatus ?? "").Trim().ToLowerInvariant();
         TimeSpan? restante = null;
         SituacaoDaNota s;
 
-        if (f == "cancelada") s = SituacaoDaNota.JaCancelada;
+        // Sem emissor no caminho e sem chave: não há o que consultar nem o que derrubar.
+        // Vem ANTES de tudo menos do que a própria venda já registrou como cancelado.
+        if (!podeTerNota && (chave ?? "").Trim().Length != 44 && f != "cancelada")
+            s = SituacaoDaNota.SemNota;
+        else if (f == "cancelada") s = SituacaoDaNota.JaCancelada;
         else if (f == "contingencia") s = SituacaoDaNota.SemProtocolo;
         // ⚠️ "não sei" NÃO cai no mesmo balde de "não tem". Só o que a SEFAZ respondeu
         // recusando (ou a venda que nunca emitiu) é SemNota; 'pendente' e qualquer
@@ -201,6 +222,10 @@ public static class CancelamentoVenda
 
         var texto = s switch
         {
+            // Loja que nunca emite: a frase não trata isso como exceção da venda, que
+            // era o que fazia parecer que faltava alguma coisa em TODAS elas.
+            SituacaoDaNota.SemNota when !podeTerNota =>
+                "Esta loja não emite nota fiscal. Só a venda será cancelada.",
             SituacaoDaNota.SemNota =>
                 "Esta venda não gerou nota fiscal: só a venda será cancelada.",
             SituacaoDaNota.SemResposta =>

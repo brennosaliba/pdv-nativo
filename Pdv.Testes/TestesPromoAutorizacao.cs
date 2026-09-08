@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.RegularExpressions;
 using Dapper;
 using Pdv.Nucleo;
@@ -400,19 +400,26 @@ public static class TestesPromoAutorizacao
                 "PP-22 nível dono: o código do dono libera, e o corpo vai SEM _nivel (default 'dono' nas duas versões da RPC)");
         }
 
-        // PP-23 operador cancela: exclui, sem ir à nuvem, e não pergunta de novo
+        // PP-23 operador cancela: NAO exclui (desistir nao e recusar), e nao vai a nuvem
+        //
+        // Mudou em 08/09/2026. Enquanto a pergunta saia sozinha na pintura da comanda,
+        // excluir aqui era o que impedia o laco: cada repintura perguntaria de novo.
+        // Agora a promocao com senha e OFERECIDA num botao, e a pergunta e um toque. Ai
+        // excluir vira armadilha: um toque errado, ou o gerente que ainda vai chegar,
+        // matava a promocao pelo resto da venda sem jeito de voltar atras.
         {
             ctx.Zerar(); fake.ZerarBaldes();
             var chamadas = fake.Chamadas.Count;
             var tela = new TelaFalsa { AoPedirCodigo = _ => null };
             var r = await PortaoPromocao.ResolverAsync(new[] { pendFunc }, ctx, comanda, cli, tela);
-            checar(!r[0].Autorizada && r[0].Desfecho.Avisado && ctx.Excluida("func") && fake.Chamadas.Count == chamadas,
-                "PP-23 cancelou a tela do código: promoção excluída, nuvem nem chamada");
+            checar(!r[0].Autorizada && r[0].Desfecho.Avisado && !ctx.Excluida("func") && fake.Chamadas.Count == chamadas,
+                "PP-23 cancelou a tela do código: nada muda e a nuvem nem é chamada");
             var r2 = await PortaoPromocao.ResolverAsync(new[] { pendFunc }, ctx, comanda, cli, tela);
-            checar(r2.Count == 0 && tela.VezesPediuCodigo == 1, "PP-24 UMA pergunta por promoção por venda");
+            checar(r2.Count == 1 && tela.VezesPediuCodigo == 2,
+                "PP-24 e ela segue oferecida: tocar de novo pergunta de novo (o gerente chegou)");
             ctx.Zerar();
             var r3 = await PortaoPromocao.ResolverAsync(new[] { pendFunc }, ctx, comanda, cli, tela);
-            checar(r3.Count == 1 && tela.VezesPediuCodigo == 2, "PP-25 nova venda (Zerar): pergunta de novo");
+            checar(r3.Count == 1 && tela.VezesPediuCodigo == 3, "PP-25 nova venda (Zerar): pergunta de novo");
         }
 
         // PP-26 sem rede / sem nuvem / sem sessão: exclui com o texto certo
@@ -440,9 +447,9 @@ public static class TestesPromoAutorizacao
             var vez = 0;
             var tela = new TelaFalsa { AoPedirCodigo = _ => ++vez == 1 ? fake.CodigoAgoraGerente() : null };
             var r = await PortaoPromocao.ResolverAsync(new[] { pendFunc, pendDono }, ctx, comanda, cli, tela);
-            checar(r.Count == 2 && r[0].Autorizada && !r[1].Autorizada && ctx.Autorizada("func") && ctx.Excluida("dono25")
-                   && tela.Niveis.SequenceEqual(new[] { "gerente", "dono" }),
-                "PP-29 duas pendentes: cada uma perguntada no seu nível, uma liberada e a outra excluída");
+            checar(r.Count == 2 && r[0].Autorizada && !r[1].Autorizada && ctx.Autorizada("func")
+                   && ctx.Pendente("dono25") && tela.Niveis.SequenceEqual(new[] { "gerente", "dono" }),
+                "PP-29 duas pendentes: cada uma perguntada no seu nível, uma liberada e a outra segue oferecida");
         }
 
         // PP-30 o estorno e a RPC: corpo SEM _nivel (= dono), e o código do gerente não estorna
@@ -570,21 +577,35 @@ public static class TestesPromoAutorizacao
             checar(Ordem(portao, "Autorizacao.ResolverAsync", "contexto.Autorizar(") && portao.Contains("d.Autorizado && d.TokenId is { Length: > 0 }", StringComparison.Ordinal)
                    && !portao.Contains("ConfigureAwait(false)", StringComparison.Ordinal),
                 "FP-7 o portão só autoriza com desfecho aprovado E registro na nuvem, sem ConfigureAwait(false)");
+            // FP-8 mudou de sinal em 08/09/2026. A pintura NAO pode mais disparar a
+            // pergunta: com uma promocao de 30% em "todos", ela abria a janela do codigo
+            // no primeiro item bipado, em toda venda. Agora quem dispara e o toque no
+            // botao. O comportamento em si (bipar nao abre janela, o botao aparece com o
+            // nome da promocao) esta provado na tela de verdade em TestesPromoOferecida.
             var pintar = Metodo(venda, "private void PintarComanda()");
-            checar(pintar.Contains("Pendentes.Count > 0", StringComparison.Ordinal) && pintar.Contains("PerguntarPromocoesAsync", StringComparison.Ordinal),
-                "FP-8 PintarComanda dispara a pergunta quando o motor devolve pendentes");
+            checar(!pintar.Contains("PerguntarPromocoesAsync", StringComparison.Ordinal),
+                "FP-8 a pintura da comanda NAO pergunta o codigo sozinha");
+            checar(pintar.Contains("PintarBotaoPromoComSenha", StringComparison.Ordinal),
+                "FP-8b ela so pinta o botao que OFERECE a promocao");
+            checar(Metodo(venda, "private void AplicarPromoComSenha").Contains("PerguntarPromocoesAsync", StringComparison.Ordinal),
+                "FP-8c e quem pergunta e o toque no botao");
             var perguntar = Metodo(venda, "private async Task PerguntarPromocoesAsync()");
             checar(perguntar.Contains("PortaoPromocao.ResolverAsync", StringComparison.Ordinal) && perguntar.Contains("Caixa.Auditar", StringComparison.Ordinal)
                    && perguntar.Contains("AvisoNaoAplicada", StringComparison.Ordinal) && perguntar.Contains("new TelaAutorizacao(dono)", StringComparison.Ordinal)
                    && Ordem(perguntar, "PortaoPromocao.ResolverAsync", "PintarComanda()")
                    && perguntar.Contains("if (respondidas > 0)", StringComparison.Ordinal),
                 "FP-9 a pergunta passa pelo portão do núcleo, audita, avisa numa linha e repinta depois (só se respondeu algo: sem laço pelo BeginInvoke)");
+            // FP-10 virou o contrario em 08/09/2026, e o motivo importa. Com a pergunta
+            // saindo sozinha na pintura, segurar o Finalizar era certo: o popup vinha
+            // logo depois. Com a promocao virando OFERTA num botao, essa mesma guarda
+            // faz o Finalizar repintar e voltar para sempre, com o cliente na frente:
+            // botao morto. Quem nao tocou no botao nao quis a promocao, e a comanda ja
+            // esta avaliada sem ela.
             var finalizar = Metodo(venda, "private void Finalizar(object sender, RoutedEventArgs e)");
-            var guardaPendente = Trecho(finalizar, "if (agora.Pendentes.Count > 0)", "}");
-            checar(Ordem(finalizar, "agora.Pendentes.Count > 0", "new LinhaVenda(") && guardaPendente.Contains("return;", StringComparison.Ordinal)
-                   && guardaPendente.Contains("PintarComanda();", StringComparison.Ordinal)
-                   && finalizar.Contains("desconto.Centavos > 0 ? autorizacaoPromo : null", StringComparison.Ordinal),
-                "FP-10 Finalizar segura a venda com pendente e passa a autorização da promoção para a LinhaVenda");
+            checar(!finalizar.Contains("agora.Pendentes.Count > 0", StringComparison.Ordinal),
+                "FP-10 promocao com senha nao segura o Finalizar (senao o botao morre com pendente na comanda)");
+            checar(finalizar.Contains("desconto.Centavos > 0 ? autorizacaoPromo : null", StringComparison.Ordinal),
+                "FP-10b e a autorizacao da promocao continua indo para a LinhaVenda");
             var estorno = Metodo(venda, "private async Task EstornarTefAsync");
             var cancel = Metodo(venda, "private async Task CancelarVendaAsync");
             checar(estorno.Length > 0 && cancel.Length > 0 && !estorno.Contains("Nivel =", StringComparison.Ordinal) && !cancel.Contains("Nivel =", StringComparison.Ordinal),

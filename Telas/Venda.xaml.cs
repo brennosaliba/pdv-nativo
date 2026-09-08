@@ -1643,13 +1643,19 @@ public partial class Venda : UserControl
         if (PortaoPromocao.ComandaMudou(_autorizacao, _comanda.Count)) _comandaId = Guid.NewGuid().ToString("N");
         // motor de promoções ANTES de pintar: cada linha ganha o seu desconto
         _avaliacao = AvaliarComanda(DateTime.Now);
-        // Promoção com 2FA que venceria e ainda não foi perguntada NESTA comanda: a
-        // pergunta sai DEPOIS desta pintura (BeginInvoke), uma por promoção por venda.
-        if (_avaliacao.Pendentes.Count > 0 && !_perguntandoPromo)
-        {
-            _perguntandoPromo = true;
-            Dispatcher.BeginInvoke(new Action(() => _ = PerguntarPromocoesAsync()));
-        }
+        // PROMOÇÃO COM SENHA É OFERECIDA, NUNCA IMPOSTA (08/09/2026, pedido do dono).
+        //
+        // Até hoje esta pintura ABRIA a janela do código sozinha, e a pintura roda a
+        // cada item bipado. Com "DESCONTO FUNCIONARIO" (30% em alvo=todos, sem dia nem
+        // janela), a promoção vence sempre: o primeiro item da comanda já fazia o caixa
+        // pedir o código do gerente, em TODA venda. O operador fechava a janela e levava
+        // "Promoção Desconto funcionário não aplicada" na cara. Três vezes na auditoria
+        // só de hoje.
+        //
+        // "ela deveria pedir um poup com token somente qdo eh selacionado e nao qdo
+        // entra na aba promocao". Então agora ela vira um BOTÃO ao lado do total: só
+        // aparece quando valeria, e o código só é pedido se alguém tocar nele.
+        PintarBotaoPromoComSenha();
         ListaComanda.Items.Clear();
         foreach (var item in _comanda) ListaComanda.Items.Add(LinhaComanda(item));
 
@@ -1705,6 +1711,27 @@ public partial class Venda : UserControl
     /// testado contra o FakeTotp); aqui só auditoria, aviso de uma linha e repintura.
     /// Nunca lança: é chamado de um BeginInvoke sem ninguém para pegar exceção.
     /// </summary>
+    /// <summary>
+    /// O botão da promoção com senha: aparece só quando ela valeria para o que está na
+    /// comanda, e some assim que for respondida (aplicada ou recusada) ou quando a
+    /// comanda deixa de alcançá-la. Quem decide o texto é <see cref="PortaoPromocao"/>.
+    /// </summary>
+    private void PintarBotaoPromoComSenha()
+    {
+        var pendentes = _avaliacao?.Pendentes ?? Array.Empty<Nucleo.Promocoes.PromoPendente>();
+        BtnPromoComSenha.Visibility = pendentes.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (pendentes.Count == 0) return;
+        TxtPromoComSenha.Text = PortaoPromocao.RotuloDoBotao(pendentes.Select(p => Capitalizar(p.Nome)).ToList());
+        AutomationProperties.SetName(BtnPromoComSenha, TxtPromoComSenha.Text);
+    }
+
+    private void AplicarPromoComSenha(object sender, RoutedEventArgs e)
+    {
+        if (_perguntandoPromo) return;
+        _perguntandoPromo = true;
+        _ = PerguntarPromocoesAsync();
+    }
+
     private async Task PerguntarPromocoesAsync()
     {
         // só repinta se alguma promoção foi respondida: sem janela (tela ainda não
@@ -1733,7 +1760,12 @@ public partial class Venda : UserControl
                         _operador.Id, r.Desfecho.Autorizador, PortaoPromocao.LinhaAuditoria(r));
                 }
                 catch { /* auditoria não pode derrubar o caixa */ }
-                if (!r.Autorizada) recusadas.Add(Capitalizar(r.Promo.Nome));
+                // `Avisado` = o operador JÁ sabe (foi ele que fechou a janela do
+                // código). Repetir "não aplicada" para quem acabou de desistir de
+                // propósito é o aviso que mais irritou o dono: ele nem queria a
+                // promoção. Fica só o que ele não tem como adivinhar: sem internet,
+                // código errado três vezes, autenticador não cadastrado.
+                if (!r.Autorizada && !r.Desfecho.Avisado) recusadas.Add(Capitalizar(r.Promo.Nome));
             }
             // O operador acabou de fechar a janela do código: NÃO abre outra. O
             // "não aplicada" é aviso leve de uma linha, que some sozinho.
@@ -2160,13 +2192,11 @@ public partial class Venda : UserControl
         // reavalia AGORA e, se o total mudou, mostra e não cobra o valor velho
         var antes = _avaliacao?.TotalCent ?? 0;
         var agora = AvaliarComanda(DateTime.Now);
-        // Promoção com 2FA que passou a valer agora (janela abriu) e ainda não foi
-        // perguntada: pergunta primeiro (PintarComanda dispara), cobra depois.
-        if (agora.Pendentes.Count > 0)
-        {
-            PintarComanda();
-            return;
-        }
+        // PROMOÇÃO COM SENHA NÃO SEGURA A VENDA (08/09/2026). Ela é oferecida no botão
+        // ao lado do total; quem não tocou, não quis. Segurar aqui era o certo enquanto
+        // a pergunta saía sozinha na pintura: agora seria um botão Finalizar morto, o
+        // caixa repintando e voltando para sempre com o cliente na frente. A comanda já
+        // está avaliada SEM ela, então o valor cobrado é o de tabela: nada a corrigir.
         if (agora.TotalCent != antes || agora.PromoId != _avaliacao?.PromoId)
         {
             PintarComanda();
@@ -2958,6 +2988,7 @@ public partial class Venda : UserControl
         List<dynamic> linhas;
         var pagsPorVenda = new Dictionary<string, List<PagamentoDaVenda>>(StringComparer.Ordinal);
         bool temTef;
+        bool lojaEmite;
         // Quem monta é a consulta, quem usa é o diálogo — escopos diferentes.
         string? rodape = null;
         using (var cx = Banco.Abrir())
@@ -2969,7 +3000,12 @@ public partial class Venda : UserControl
                        -- 30 minutos, não da venda nem do pagamento.
                        (SELECT n.dh_recbto FROM nfce_emissao n
                          WHERE n.venda_id = v.id AND n.chave = v.nfce_chave
-                         ORDER BY n.tentativa DESC LIMIT 1) AS nota_em
+                         ORDER BY n.tentativa DESC LIMIT 1) AS nota_em,
+                       -- Esta venda chegou a TENTAR emitir? Em loja de recibo o emissor
+                       -- nunca é chamado, e sem isto o 'pendente' do padrão do banco
+                       -- bloqueava o cancelamento mandando conferir na SEFAZ uma nota
+                       -- que não existe. Ver CancelamentoVenda.Montar(podeTerNota).
+                       EXISTS (SELECT 1 FROM nfce_emissao n2 WHERE n2.venda_id = v.id) AS tentou_emitir
                   FROM venda v
                  WHERE v.sessao_id = @Ses AND v.status = 'finalizada'
                  ORDER BY v.finalizada_em DESC LIMIT 12
@@ -3001,6 +3037,9 @@ public partial class Venda : UserControl
             // é só para escolher o texto do dinheiro, e construir o cliente do TEF
             // aqui disputaria a pasta do PayGo à toa.
             temTef = Vendas.Config(cx, "tef_habilitado") == "1";
+            // A loja emite nota? É metade do sinal; a outra metade é por venda
+            // (tentou_emitir). As duas juntas é que dizem "esta venda não pode ter nota".
+            lojaEmite = !Vendas.SemNota(cx);
         }
         if (linhas.Count == 0)
         {
@@ -3033,13 +3072,17 @@ public partial class Venda : UserControl
             var pags = pagsPorVenda.TryGetValue((string)l.venda_id, out var lp) ? lp : new List<PagamentoDaVenda>();
             var p = CancelamentoVenda.Montar((string?)l.fiscal_status, (string?)l.nfce_chave,
                 (string?)l.nfce_protocolo, Data(l.nota_em) ?? Data(l.finalizada_em),
-                pags, estornoPeloPdv: temTef, agora);
+                pags, estornoPeloPdv: temTef, agora,
+                podeTerNota: lojaEmite || (long)l.tentou_emitir == 1);
             planos.Add(p);
             // O RELÓGIO APARECE JÁ NA LISTA: se o operador precisa abrir uma por uma
             // para descobrir de qual dá tempo, o prazo vence enquanto ele procura.
+            // A etiqueta da nota some na loja que nunca emite: "sem nota" em TODA
+            // linha nao informa nada e ainda faz parecer que falta alguma coisa.
+            var etiqueta = !lojaEmite && p.Nota == SituacaoDaNota.SemNota ? "" : " · " + Etiqueta(p);
             rotulos.Add($"Venda #{l.numero_local} · {Hora(l.finalizada_em)} · " +
                         $"{new Dinheiro((long)l.total_cent).Formatado()} · " +
-                        $"{CancelamentoVenda.ResumoDasFormas(pags)} · {Etiqueta(p)}");
+                        $"{CancelamentoVenda.ResumoDasFormas(pags)}{etiqueta}");
         }
 
         var i = EscolherOpcao(dono, "Cancelar venda",
