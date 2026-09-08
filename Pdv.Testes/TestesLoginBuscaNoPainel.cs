@@ -86,6 +86,18 @@ public static class TestesLoginBuscaNoPainel
                 () => throw new HttpRequestException("sem rede"));
             checar(caiu is null, "painel fora do ar recusa o login, mas não lança na cara do operador");
 
+            // ── 5b. REDE PENDURADA NÃO SEGURA O CAIXA ───────────────────────
+            // Rede que não responde (portal de wi-fi, DNS pendurado) é pior que rede
+            // caída: não dá erro, fica esperando. O HttpClient da nuvem espera 25 s.
+            // Sem teto, o operador ficaria 25 s parado a CADA tentativa, com fila.
+            var relogio = System.Diagnostics.Stopwatch.StartNew();
+            var (pendurou, _) = await Operadores.EntrarComCpfAsync(cx, "11144477735", Senha,
+                async () => { await Task.Delay(TimeSpan.FromSeconds(30)); return 1; },
+                teto: TimeSpan.FromMilliseconds(300));
+            relogio.Stop();
+            checar(pendurou is null && relogio.ElapsedMilliseconds < 3_000,
+                $"rede pendurada: o login desiste no teto e devolve a tela (levou {relogio.ElapsedMilliseconds} ms)");
+
             // ── 6. PAINEL QUE NÃO TROUXE NINGUÉM NÃO TENTA DE NOVO ──────────
             vezes = 0;
             var (vazio, buscou4) = await Operadores.EntrarComCpfAsync(cx, "11144477735", Senha,

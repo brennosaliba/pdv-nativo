@@ -143,14 +143,28 @@ public static class Operadores
     /// Quem vai à nuvem. Null = caixa sem painel: o login continua só local. Devolve
     /// quantos operadores desceram.
     /// </param>
+    /// <param name="teto">
+    /// Quanto se espera o painel antes de desistir. O TETO MORA AQUI, e não na tela, por
+    /// um motivo: é ele que garante que a internet caída não segura o caixa, e isso é
+    /// promessa que precisa de teste, não de confiança. O HttpClient da nuvem espera
+    /// 25 s (Nuvem.cs); sem este teto, uma rede que não responde (portal de wi-fi, DNS
+    /// pendurado) prenderia o operador esse tempo todo a cada tentativa.
+    /// A busca continua correndo sozinha e pode valer na tentativa seguinte.
+    /// </param>
     public static async Task<(Operador? Op, bool Buscou)> EntrarComCpfAsync(
-        SqliteConnection cx, string cpf, string senha, Func<Task<int>>? baixarDoPainel)
+        SqliteConnection cx, string cpf, string senha, Func<Task<int>>? baixarDoPainel,
+        TimeSpan? teto = null)
     {
         var op = EntrarComCpf(cx, cpf, senha);
         if (op is not null || baixarDoPainel is null) return (op, false);
 
         int quantos;
-        try { quantos = await baixarDoPainel().ConfigureAwait(false); }
+        try
+        {
+            var busca = baixarDoPainel();
+            quantos = teto is { } t ? await busca.WaitAsync(t).ConfigureAwait(false)
+                                    : await busca.ConfigureAwait(false);
+        }
         catch { return (null, false); }
         if (quantos <= 0) return (null, true);
 

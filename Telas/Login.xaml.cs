@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Pdv.Nucleo;
@@ -185,14 +185,10 @@ public partial class Login : UserControl
             _buscando = true;
             BtnEntrar.IsEnabled = false;
             TxtErro.Text = "Conferindo no painel…";
-            var busca = Operadores.EntrarComCpfAsync(cx, _cpf, _senha, BaixarOperadoresAsync);
-            (op, _) = await busca.WaitAsync(TimeSpan.FromSeconds(SegundosDeBusca));
-        }
-        catch (TimeoutException)
-        {
-            // O painel não respondeu a tempo. A busca segue sozinha e pode valer na
-            // próxima tentativa; aqui a recusa é a de sempre.
-            op = null;
+            // O teto mora no núcleo (Operadores.EntrarComCpfAsync), onde a suíte prova
+            // que rede pendurada não segura o caixa.
+            (op, _) = await Operadores.EntrarComCpfAsync(cx, _cpf, _senha, BaixarOperadoresAsync,
+                TimeSpan.FromSeconds(SegundosDeBusca));
         }
         catch { op = null; }
         finally
