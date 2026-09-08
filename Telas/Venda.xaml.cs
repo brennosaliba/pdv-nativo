@@ -196,6 +196,10 @@ public partial class Venda : UserControl
     private int _batidasKds;
     private bool _puxandoKds;
 
+    /// <summary>Quantas notas deste PC esperam a SEFAZ. Pintado no rodapé; ver Fiscal.AvisoDaFilaDaSefaz.</summary>
+    private int _esperandoSefaz;
+    private bool _puxandoFila;
+
     private bool _sincronizandoPainel;
 
     /// <summary>
@@ -432,6 +436,11 @@ public partial class Venda : UserControl
             // nem no extrato do contador, e a guarda de 5 anos passa a depender de um
             // HD de loja. Isso precisa estar à vista, não escondido numa tela de config.
             if (!Servicos.TemContaDeNuvem()) caminho += "  ·  ⚠ NOTAS SÓ NESTE PC";
+            // A fila da SEFAZ: nota assinada NESTE PC que ainda não tem protocolo. O
+            // número já chegava aqui dentro do /health do agente e era jogado fora, então
+            // a loja podia passar dias em contingência sem ninguém saber. Ver
+            // Fiscal.AvisoDaFilaDaSefaz.
+            if (Fiscal.AvisoDaFilaDaSefaz(_esperandoSefaz) is { } fila) caminho += "  ·  ⚠ " + fila;
             TxtRede.Text = (online ? "ONLINE" : "OFFLINE") + caminho;
             TxtRede.SetResourceReference(TextBlock.ForegroundProperty, corChave);
             LuzRede.SetResourceReference(Shape.FillProperty, corChave);
@@ -459,6 +468,21 @@ public partial class Venda : UserControl
                         if (tt.Status == TaskStatus.RanToCompletion && tt.Result > 0)
                             Dispatcher.Invoke(() => NotificarPedidoNovo(tt.Result));
                     });
+            }
+
+            // A fila da SEFAZ a cada 4 batidas (60 s), que é a cadência com que o
+            // próprio agente mexe nela (retransmitMs, padrão 60000): perguntar mais
+            // rápido não traz notícia nova. É 127.0.0.1 com 1,2 s de teto, e máquina sem
+            // agente recusa a conexão na hora.
+            if (_batidasKds % 4 == 0 && !_puxandoFila)
+            {
+                _puxandoFila = true;
+                _ = Servicos.NotasEsperandoSefazAsync().ContinueWith(tf =>
+                {
+                    _puxandoFila = false;
+                    if (tf.Status != TaskStatus.RanToCompletion) return;
+                    Dispatcher.Invoke(() => _esperandoSefaz = tf.Result);
+                });
             }
 
             // Promoção liga/desliga pelo RELÓGIO (meia-noite, janela de hora):

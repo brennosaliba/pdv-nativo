@@ -192,6 +192,28 @@ public static class Servicos
             && seg.GetValueOrDefault("nuvemSenha", "").Length > 0;
     }
 
+    /// <summary>
+    /// Quantas notas assinadas neste PC ainda esperam a SEFAZ. Ver
+    /// <see cref="EmissorResolvido.FilaLocalAsync"/>: pergunta ao agente mesmo com a nuvem
+    /// de pé, porque a fila que interessa é a que sobrou de ontem.
+    ///
+    /// O ramo do <see cref="EmissorAgente"/> puro não é enfeite: terminal sem conta de
+    /// nuvem opera SÓ pelo agente, e é justamente a loja que vive de contingência.
+    /// </summary>
+    public static async Task<int> NotasEsperandoSefazAsync()
+    {
+        try
+        {
+            return Emissor() switch
+            {
+                EmissorResolvido r => await r.FilaLocalAsync(CancellationToken.None),
+                EmissorAgente a => (await a.SondarAsync(CancellationToken.None)).Pendentes,
+                _ => 0,
+            };
+        }
+        catch { return 0; }
+    }
+
     /// <summary>De onde a nota está saindo — vai no rodapé, porque muda a série da nota.</summary>
     public static string CaminhoDoEmissor() => Emissor() switch
     {

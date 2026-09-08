@@ -311,6 +311,23 @@ public interface IEmissorFiscal
 /// <summary>Infra compartilhada pelos emissores: HTTP, leitura tolerante de JSON e as regras de tPag.</summary>
 public static class Fiscal
 {
+    /// <summary>
+    /// A frase do rodapé quando há nota assinada aqui esperando a SEFAZ. Null quando não
+    /// há nenhuma: número zero na tela é ruído, e ruído ensina a não olhar o rodapé.
+    ///
+    /// POR QUE EXISTE (08/09/2026). O agente devolve o tamanho da fila no /health, o PDV
+    /// lê esse número (<see cref="SaudeEmissor.Pendentes"/>) e nunca mostrava. Ou seja: a
+    /// loja podia passar dias com nota em contingência esperando autorização e o dono só
+    /// descobriria pelo contador. "Esperando a SEFAZ" e não "pendente": pendente é palavra
+    /// de fila, e o dono precisa saber DE QUEM se está esperando.
+    /// </summary>
+    public static string? AvisoDaFilaDaSefaz(int esperando) => esperando switch
+    {
+        <= 0 => null,
+        1 => "1 nota esperando a SEFAZ",
+        _ => $"{esperando} notas esperando a SEFAZ",
+    };
+
     // Formas que a fase 1 expõe. Fora deste mapa é ERRO EXPLÍCITO: tPag "99" exige
     // <xPag>, que o motor não emite, então o fallback silencioso garantiria rejeição
     // com nNF queimado. As strings da esquerda são contrato duro com o fechamento de
@@ -1212,6 +1229,27 @@ public sealed class EmissorResolvido : IEmissorFiscal, IDisposable
                     "Preencha SerieNuvem (nfce_config.serie): é o que impede Rejeição 539 em cascata.";
 
         return new ConferenciaDeBoot(impedimento is null, impedimento, aviso, nuvem, agente);
+    }
+
+    /// <summary>
+    /// Notas assinadas NESTE PC que ainda não têm protocolo da SEFAZ.
+    ///
+    /// Pergunta SEMPRE ao agente, mesmo com a nuvem de pé, e é esse o ponto: a fila que
+    /// interessa ao dono é a que sobrou de ontem, quando a internet já voltou. Enquanto
+    /// a nuvem responde, ninguém mais encosta no agente (a sonda só cai para ele quando
+    /// a nuvem some), e o número que ele guarda ficava invisível.
+    ///
+    /// Também não dá para contar isso no banco do caixa: `nfce_emissao` é gravada uma vez,
+    /// na emissão, e nunca reescrita quando o agente retransmite. Um contador local subiria
+    /// e nunca voltaria a zero.
+    ///
+    /// 0 quando não há agente neste terminal: sem contingência local não há fila.
+    /// </summary>
+    public async Task<int> FilaLocalAsync(CancellationToken ct)
+    {
+        if (_agente is null) return 0;
+        try { return (await _agente.SondarAsync(ct).ConfigureAwait(false)).Pendentes; }
+        catch { return 0; }
     }
 
     public async Task<SaudeEmissor> SondarAsync(CancellationToken ct)

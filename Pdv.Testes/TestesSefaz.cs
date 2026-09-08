@@ -105,8 +105,37 @@ public static class TestesSefaz
             "recibo: venda que TEM nota autorizada continua cancelando a nota na SEFAZ");
     }
 
+    /// <summary>
+    /// A FILA DA SEFAZ TEM QUE APARECER (08/09/2026).
+    ///
+    /// O agente devolve o tamanho da fila no /health, o PDV le esse numero
+    /// (SaudeEmissor.Pendentes, Fiscal.cs) e nunca mostrava. A loja podia passar dias com
+    /// nota em contingencia esperando autorizacao, com a internet ja de volta, e o dono
+    /// so descobriria pelo contador. Zero nao aparece: numero zero no rodape e ruido, e
+    /// ruido ensina a nao olhar o rodape.
+    /// </summary>
+    private static void FilaDaSefazNoRodape(Action<bool, string> checar)
+    {
+        checar(Fiscal.AvisoDaFilaDaSefaz(0) is null && Fiscal.AvisoDaFilaDaSefaz(-1) is null,
+            "nfce: sem nota esperando, o rodape nao ganha linha nenhuma");
+        checar(Fiscal.AvisoDaFilaDaSefaz(1) == "1 nota esperando a SEFAZ",
+            $"nfce: uma nota fala no singular (viu: {Fiscal.AvisoDaFilaDaSefaz(1)})");
+        checar(Fiscal.AvisoDaFilaDaSefaz(7) == "7 notas esperando a SEFAZ",
+            $"nfce: varias falam no plural (viu: {Fiscal.AvisoDaFilaDaSefaz(7)})");
+        // "esperando a SEFAZ" e nao "pendente": o dono precisa saber DE QUEM se espera.
+        foreach (var n in new[] { 1, 7 })
+        {
+            var t = Fiscal.AvisoDaFilaDaSefaz(n)!;
+            checar(!t.Contains("pendente", StringComparison.OrdinalIgnoreCase)
+                   && !t.Contains("—", StringComparison.Ordinal)
+                   && t.Contains("SEFAZ", StringComparison.Ordinal),
+                $"nfce: a frase diz de quem se espera, sem jargao de fila (viu: {t})");
+        }
+    }
+
     public static void Rodar(Action<bool, string> checar)
     {
+        FilaDaSefazNoRodape(checar);
         PendenteNaoEhSemNota(checar);
         // ── CANCELAMENTO DA NFC-e (evento 110111) ─────────────────────────
         // Regras que vieram da SEFAZ e do agente, nao de gosto nosso. O que este
