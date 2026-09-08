@@ -1337,6 +1337,9 @@ TestesAvisoParadas.Rodar((cond, nome) => Check("aviso-parada: " + nome, cond));
 
 // Promocao com senha: oferecida no botao, nunca imposta ao bipar o primeiro item.
 TestesPromoOferecida.Rodar((cond, nome) => Check("promo-oferecida: " + nome, cond));
+
+// Funcionario novo no painel consegue entrar no caixa (a Savassi ficou de fora hoje).
+await TestesLoginBuscaNoPainel.RodarAsync((cond, nome) => Check("login-painel: " + nome, cond));
 // -- passo 05: o Esc no menu de selecao da rede nega a venda ------------------
 TestesEscNaRede.Rodar((cond, nome) => Check("esc-rede: " + nome, cond));
 // -- a lista de redes que a loja deixa o caixa ver (tef_pgweb_redes) ----------

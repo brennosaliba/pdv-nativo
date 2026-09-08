@@ -41,7 +41,14 @@ public partial class Login : UserControl
         Teclado.Digitou += d => { if (Buffer.Length < Maximo) { Buffer += d; Pintar(); } };
         Teclado.Apagou += Apagar;
         Teclado.Limpou += () => { Buffer = ""; Pintar(); };
-        Loaded += (_, _) => Focus();
+        Loaded += (_, _) =>
+        {
+            Focus();
+            // Enquanto ninguém digita, o caixa vai buscando quem entrou na folha. Sem
+            // esperar e sem avisar: se chegar a tempo, o funcionário novo nem percebe
+            // que faltava alguma coisa. Se não chegar, o Entrar pergunta de novo.
+            _ = Task.Run(async () => { try { await BaixarOperadoresAsync(); } catch { } });
+        };
         Pintar();
 
     }
@@ -102,8 +109,29 @@ public partial class Login : UserControl
         else if (e.Key == Key.Enter && BtnEntrar.IsEnabled) { Entrar(this, new RoutedEventArgs()); e.Handled = true; }
     }
 
-    private void Entrar(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Quanto a tela espera o painel antes de desistir e recusar o login. Curto de
+    /// propósito: é balcão com fila, e a busca ainda pode terminar sozinha e valer na
+    /// próxima tentativa.
+    /// </summary>
+    private const int SegundosDeBusca = 8;
+
+    private bool _buscando;
+
+    /// <summary>
+    /// Pergunta ao painel quem entrou na folha. Conexão PRÓPRIA: a busca pode terminar
+    /// depois de a tela ter fechado a dela, e escrever num banco já disposto derrubaria
+    /// a única tela que a loja tem para entrar.
+    /// </summary>
+    private static async Task<int> BaixarOperadoresAsync()
     {
+        using var cx2 = Banco.Abrir();
+        return await Servicos.Nuvem().BaixarOperadoresAsync(cx2).ConfigureAwait(false);
+    }
+
+    private async void Entrar(object sender, RoutedEventArgs e)
+    {
+        if (_buscando) return;
         var espera = _bloqueadoAte - DateTime.Now;
         if (espera > TimeSpan.Zero)
         {
@@ -143,7 +171,37 @@ public partial class Login : UserControl
             return;
         }
 
-        var op = Operadores.EntrarComCpf(cx, _cpf, _senha);
+        // NÃO BATEU AQUI? PERGUNTA AO PAINEL, UMA VEZ.
+        //
+        // Savassi, 08/09/2026: três operadores cadastrados no painel de madrugada e
+        // nenhum conseguia entrar, com CPF e senha certos. O caixa só aprendia quem
+        // entrou na folha pelo botão Sincronizar e pelo aviso de catálogo novo, os dois
+        // na tela de VENDA, que só existe depois do login. Caixa sem ninguém logado não
+        // tinha como sair disso. Cobre também a senha trocada no painel.
+        Operador? op;
+        var estava = TxtErro.Text;
+        try
+        {
+            _buscando = true;
+            BtnEntrar.IsEnabled = false;
+            TxtErro.Text = "Conferindo no painel…";
+            var busca = Operadores.EntrarComCpfAsync(cx, _cpf, _senha, BaixarOperadoresAsync);
+            (op, _) = await busca.WaitAsync(TimeSpan.FromSeconds(SegundosDeBusca));
+        }
+        catch (TimeoutException)
+        {
+            // O painel não respondeu a tempo. A busca segue sozinha e pode valer na
+            // próxima tentativa; aqui a recusa é a de sempre.
+            op = null;
+        }
+        catch { op = null; }
+        finally
+        {
+            _buscando = false;
+            if (TxtErro.Text == "Conferindo no painel…") TxtErro.Text = estava;
+            BtnEntrar.IsEnabled = true;
+        }
+
         if (op is null)
         {
             // volta pra senha vazia, não pro CPF: o CPF provavelmente está certo

@@ -122,6 +122,41 @@ public static class Operadores
             : null;
     }
 
+    /// <summary>
+    /// O MESMO login, mas com uma pergunta ao painel quando ele não bate.
+    ///
+    /// POR QUE EXISTE (08/09/2026, Savassi). Três operadores novos foram cadastrados no
+    /// painel de madrugada e nenhum conseguiu entrar: CPF certo, senha certa, "Senha
+    /// errada" na tela. O painel estava correto (conferi os hashes contra os quatro
+    /// últimos dígitos do CPF de cada um). O caixa é que não sabia deles: operador só
+    /// desce em <see cref="Sincronizacao.ExecutarAsync"/>, chamada do botão Sincronizar
+    /// e do aviso de catálogo novo, os DOIS na tela de venda, que só existe depois do
+    /// login. Caixa sem ninguém logado não tinha como aprender quem entrou na folha.
+    ///
+    /// Cobre os dois lados do mesmo sintoma: gente nova no painel, e senha trocada lá.
+    ///
+    /// UMA busca por tentativa, nunca um laço, e login que bate localmente não encosta
+    /// na rede (é balcão com fila). Painel fora do ar recusa como sempre, sem lançar:
+    /// ficar sem entrada nenhuma é pior que o problema que isto resolve.
+    /// </summary>
+    /// <param name="baixarDoPainel">
+    /// Quem vai à nuvem. Null = caixa sem painel: o login continua só local. Devolve
+    /// quantos operadores desceram.
+    /// </param>
+    public static async Task<(Operador? Op, bool Buscou)> EntrarComCpfAsync(
+        SqliteConnection cx, string cpf, string senha, Func<Task<int>>? baixarDoPainel)
+    {
+        var op = EntrarComCpf(cx, cpf, senha);
+        if (op is not null || baixarDoPainel is null) return (op, false);
+
+        int quantos;
+        try { quantos = await baixarDoPainel().ConfigureAwait(false); }
+        catch { return (null, false); }
+        if (quantos <= 0) return (null, true);
+
+        return (EntrarComCpf(cx, cpf, senha), true);
+    }
+
     public static bool PinValido(string pin) =>
         pin.Length is >= 4 and <= 6 && pin.All(char.IsDigit);
 
