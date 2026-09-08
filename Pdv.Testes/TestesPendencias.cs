@@ -76,10 +76,13 @@ public static class TestesPendencias
                 "o aviso leva o VALOR parado, não só a contagem");
             checar(paradas.Motivo is { Length: > 0 } && !paradas.Motivo.Contains("23503", StringComparison.Ordinal),
                 $"o aviso traduz o motivo para quem está no balcão (viu: {paradas.Motivo ?? "<nulo>"})");
-            checar(aviso.Contains("O QUE FAZER", StringComparison.OrdinalIgnoreCase),
-                "o aviso diz o que fazer — número solto na tela não é instrução");
-            checar(aviso.Contains("Sincronizar", StringComparison.OrdinalIgnoreCase),
-                "o aviso nomeia o botão que resolve depois de o motivo ser tratado");
+            // O PRÓXIMO PASSO, e não o rótulo. Em 08/09 os rótulos em caixa alta
+            // ("O QUE FAZER:", "SÓ MUDA", "NÃO MUDA") caíram junto com o resto do bloco
+            // de onze linhas; o que tem que sobreviver é a ÚLTIMA linha dizer o que fazer.
+            checar(aviso.Split('\n')[^1].Contains("Sincronizar", StringComparison.OrdinalIgnoreCase),
+                $"a última linha diz o próximo passo e nomeia o botão (viu: {aviso.Split('\n')[^1]})");
+            checar(aviso.Split('\n').Length <= 4,
+                $"o aviso cabe em 4 linhas (viu {aviso.Split('\n').Length})");
 
             // O rastro REAL do caixa da loja, byte a byte. Se a tradução não pegar
             // ESTA string, o dono lê JSON de Postgres na tela do balcão.
@@ -88,7 +91,7 @@ public static class TestesPendencias
                 + """(operator_id)=(003e0aa7-99e2-4453-98ea-8cb129a4b0e9) is not present in table \"employees\".""";
             checar(Sincronizacao.MotivoHumano(RastroDaLoja) is string traduzido
                    && traduzido.Contains("operador", StringComparison.OrdinalIgnoreCase)
-                   && traduzido.Contains("painel", StringComparison.OrdinalIgnoreCase)
+                   && traduzido.Contains("cadastrado", StringComparison.OrdinalIgnoreCase)
                    && !traduzido.Contains("23503", StringComparison.Ordinal),
                 $"o 409 real do caixa vira uma frase acionável (viu: {Sincronizacao.MotivoHumano(RastroDaLoja)})");
 
@@ -99,20 +102,17 @@ public static class TestesPendencias
             // o que ficou para trás é o REGISTRO dela no painel. Quem lê no susto
             // cancela venda certa e mexe em caixa fechado: o aviso sai mais caro que
             // o problema que ele denuncia.
-            checar(aviso.StartsWith("NENHUMA VENDA FOI PERDIDA", StringComparison.Ordinal),
+            checar(aviso.StartsWith("O dinheiro está certo", StringComparison.Ordinal),
                 $"a PRIMEIRA linha mata o susto (viu: {aviso.Split('\n')[0]})");
-            checar(aviso.IndexOf("PERDIDA", StringComparison.Ordinal) < aviso.IndexOf("R$", StringComparison.Ordinal),
+            checar(aviso.IndexOf("dinheiro", StringComparison.Ordinal) < aviso.IndexOf("R$", StringComparison.Ordinal),
                 "o susto morre ANTES de o primeiro número aparecer na tela");
-            checar(aviso.Contains("gaveta", StringComparison.Ordinal),
-                "o aviso diz onde o dinheiro está: na gaveta");
-            checar(aviso.Contains("REGISTRO", StringComparison.Ordinal),
-                "…e nomeia o que de fato não subiu: o REGISTRO, não a venda");
-            checar(aviso.Contains("faturamento", StringComparison.Ordinal)
-                   && aviso.Contains("DRE", StringComparison.Ordinal),
-                "o aviso diz o que isso afeta DE VERDADE: faturamento e DRE do painel");
-            checar(aviso.Contains("NÃO MUDA", StringComparison.Ordinal)
-                   && aviso.Contains("cupom", StringComparison.Ordinal),
-                "…e o que NÃO afeta (venda, caixa, cupom) — senão o operador imagina o pior");
+            checar(aviso.Contains("registro", StringComparison.OrdinalIgnoreCase),
+                "…e o aviso nomeia o que de fato não subiu: o registro, não a venda");
+            // O bloco que dizia o que muda e o que não muda no painel saiu em 08/09,
+            // junto com os rótulos em caixa alta. Não era falso: era o excesso que o
+            // dono apontou, e nenhuma daquelas linhas mudava o que ele ia fazer.
+            checar(!System.Text.RegularExpressions.Regex.IsMatch(aviso, @"\b[A-ZÀ-Ú]{4,}\b"),
+                $"nenhuma palavra gritando em caixa alta (viu: {aviso})");
 
             // ── 2c. O AVISO NOMEIA AS VENDAS ────────────────────────────────────
             // A outra pergunta do dono foi "que vendas são essas?". Sem o número que
@@ -124,8 +124,8 @@ public static class TestesPendencias
             // O dia vai junto porque numero_local reinicia a cada dia operacional —
             // "nº 3" sozinho é ambíguo depois da virada das 05h.
             var diaEsperado = DateTime.Parse(Caixa.DiaOperacional()).ToString("dd/MM");
-            checar(aviso.Contains("(hoje)", StringComparison.Ordinal)
-                   || aviso.Contains($"({diaEsperado})", StringComparison.Ordinal),
+            checar(aviso.Contains("hoje", StringComparison.Ordinal)
+                   || aviso.Contains(diaEsperado, StringComparison.Ordinal),
                 "…e de que dia elas são (o número reinicia a cada dia operacional)");
 
             // ── 3. VENDA DE TESTE NÃO É PENDÊNCIA ───────────────────────────────
@@ -212,17 +212,20 @@ public static class TestesPendencias
             var muitas = Enumerable.Range(1, 40)
                 .Select(i => new VendaParada(100 + i, i <= 20 ? "2026-08-27" : "2026-08-28", true))
                 .ToList();
-            var lotado = new VendasParadas(0, 40, Dinheiro.DeReais(3122.45m),
-                "o operador que fez a venda não está cadastrado no painel", muitas).Resumo ?? "";
-            var quais = lotado.Split('\n').FirstOrDefault(x => x.StartsWith("Quais:", StringComparison.Ordinal)) ?? "";
+            // Os números só saem no caso em que alguém vai procurar venda por venda no
+            // painel (SaidaParada.Resolver). Onde não há o que fazer com elas, número é peso.
+            var lotado = new VendasParadas(0, 40, Dinheiro.DeReais(3122.45m), Dinheiro.DeReais(3122.45m),
+                "o operador que fez a venda não está cadastrado no painel", muitas,
+                SaidaParada.Resolver).Resumo ?? "";
+            var quais = lotado.Split('\n').FirstOrDefault(x => x.Contains("nº ", StringComparison.Ordinal)) ?? "";
             checar(quais.Contains("nº 101, 102, 103, 104, 105 e 106", StringComparison.Ordinal),
                 $"com 40 paradas, o aviso nomeia as 6 primeiras (viu: {quais})");
             checar(!quais.Contains("140", StringComparison.Ordinal),
                 "e NÃO despeja os 40 números — parede de texto não se lê");
             checar(quais.Contains("e mais 34", StringComparison.Ordinal),
                 $"as que não couberam são DITAS, não cortadas em silêncio (viu: {quais})");
-            checar(quais.Contains("27/08", StringComparison.Ordinal) && quais.Contains("28/08", StringComparison.Ordinal),
-                "…com os dias delas, que é por onde o gerente procura no painel");
+            checar(quais.Contains("27/08", StringComparison.Ordinal),
+                "…com o dia delas, que é por onde o gerente procura no painel");
 
             // ── 8. E TUDO ISSO PRECISA CABER NA TELA ────────────────────────────
             // O defeito nº 1 do print: o corpo do relatório era NoWrap (para não
@@ -235,7 +238,10 @@ public static class TestesPendencias
                 "Fotos:     nenhuma nova",
                 "Notas:     nenhuma para enviar",
             };
-            var corpo = Dialogo.Encaixar(string.Join("\n", tabela.Append("⚠ " + aviso)), Colunas);
+            // O aviso encolheu em 08/09 e hoje as linhas dele cabem inteiras. A quebra
+            // continua sendo testada com o aviso LOTADO (40 vendas nomeadas), que é o
+            // texto mais comprido que esta tela ainda produz.
+            var corpo = Dialogo.Encaixar(string.Join("\n", tabela.Append("⚠ " + lotado)), Colunas);
             var saida = corpo.Split('\n');
             checar(saida.All(x => x.Length <= Colunas),
                 $"nenhuma linha estoura a largura da tela (a maior tem {saida.Max(x => x.Length)} de {Colunas})");
@@ -246,7 +252,7 @@ public static class TestesPendencias
             // Desfazendo a quebra (continuação recuada volta a ser um espaço) tem que
             // sair EXATAMENTE o texto que entrou: nada de caractere perdido na borda,
             // que é o defeito do print.
-            checar(corpo.Replace("\n   ", " ") == string.Join("\n", tabela) + "\n⚠ " + aviso,
+            checar(corpo.Replace("\n   ", " ") == string.Join("\n", tabela) + "\n⚠ " + lotado,
                 "nenhum caractere se perde na quebra — o aviso chega inteiro na tela");
 
             checar(Dialogo.Encaixar("a\n\nb", Colunas) == "a\n\nb",

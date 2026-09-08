@@ -143,6 +143,7 @@ public sealed class Drenagem : IDisposable
                       FROM outbox
                      WHERE enviado_em IS NULL
                        AND desistido_em IS NULL
+                       AND descartado_em IS NULL
                        AND tipo IN ('{string.Join("','", TiposComHandler)}')
                      ORDER BY id
                      LIMIT 50
@@ -826,16 +827,34 @@ public sealed class Drenagem : IDisposable
         try
         {
             using var cx = Banco.Abrir();
+            // Quem PODE voltar: a mesma regra de sempre, agora sem as dispensadas.
+            var candidatas = cx.Query<(long Id, string? Erro)>($"""
+                SELECT id, ultimo_erro
+                  FROM outbox
+                 WHERE (desistido_em IS NOT NULL OR COALESCE(ultimo_erro,'') LIKE 'desistido%')
+                   AND descartado_em IS NULL
+                   AND tipo IN ('{string.Join("','", TiposComHandler)}')
+                   AND ref_id NOT IN (SELECT id FROM venda WHERE homologacao = 1)
+                """).ToList();
+
+            // Quem NÃO volta: a recusa que nenhuma tentativa resolve. Sem este filtro o
+            // toque em Sincronizar virava um moedor — em 08/09/2026 cada toque reabria 8
+            // linhas com identificador fora de formato, gastava 8 chamadas que não podiam
+            // dar certo e as devolvia mortas com o contador maior. O aviso da tela agora
+            // diz "tentar de novo não muda nada"; aqui é onde isso vira verdade.
+            var ids = candidatas
+                .Where(c => Sincronizacao.SaidaDoErro(c.Erro) != SaidaParada.SemConserto)
+                .Select(c => c.Id).ToList();
+            if (ids.Count == 0) return 0;
+
             return cx.Execute($"""
                 UPDATE outbox
                    SET desistido_em = NULL,
                        enviado_em   = NULL,
                        tentativas   = MAX(tentativas, {MaxTentativas}),
-                       ultimo_erro  = 'reaberto pelo operador — ' || COALESCE(ultimo_erro, 'sem rastro')
-                 WHERE (desistido_em IS NOT NULL OR COALESCE(ultimo_erro,'') LIKE 'desistido%')
-                   AND tipo IN ('{string.Join("','", TiposComHandler)}')
-                   AND ref_id NOT IN (SELECT id FROM venda WHERE homologacao = 1)
-                """);
+                       ultimo_erro  = 'reaberto pelo operador: ' || COALESCE(ultimo_erro, 'sem rastro')
+                 WHERE id IN @Ids
+                """, new { Ids = ids });
         }
         catch { return 0; }
     }

@@ -1331,6 +1331,9 @@ TestesQrNaTela.Rodar((cond, nome) => Check("qr-na-tela: " + nome, cond));
 TestesPasso28.Rodar((cond, nome) => Check("passo28: " + nome, cond));
 // -- passos 28 e 29: dado generico digitado (ABC123) e a frase da rede na tela ---
 TestesPasso29.Rodar((cond, nome) => Check("passo29: " + nome, cond));
+
+// O aviso de venda parada: curto, verdadeiro, e sem mandar tocar no botão que não resolve.
+TestesAvisoParadas.Rodar((cond, nome) => Check("aviso-parada: " + nome, cond));
 // -- passo 05: o Esc no menu de selecao da rede nega a venda ------------------
 TestesEscNaRede.Rodar((cond, nome) => Check("esc-rede: " + nome, cond));
 // -- a lista de redes que a loja deixa o caixa ver (tef_pgweb_redes) ----------

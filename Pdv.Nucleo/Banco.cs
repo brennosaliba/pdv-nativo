@@ -129,6 +129,10 @@ public static class Banco
             // verde. Agora cada desfecho tem a sua coluna: enviado_em = a nuvem
             // confirmou; desistido_em = o dreno parou de tentar e ela NUNCA vai ter.
             "ALTER TABLE outbox ADD COLUMN desistido_em TEXT",
+            // Linha que o painel NUNCA vai aceitar e alguém tirou da fila de propósito.
+            // Não apaga: o payload e o rastro ficam, com a hora em que saíram. Ver
+            // Sincronizacao.Dispensar.
+            "ALTER TABLE outbox ADD COLUMN descartado_em TEXT",
             // QUEM escreveu a comanda em andamento (processo, não turno). Dois Pdv.exe
             // na mesma máquina attacham no mesmo turno, então `sessao_id` não os separa:
             // sem esta coluna o segundo grava por cima do primeiro e a leitura com a

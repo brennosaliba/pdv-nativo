@@ -80,10 +80,13 @@ public static class TestesFila
                 "o resumo separa o que ainda espera do que já desistiu");
             checar(paradas.Valor.Centavos == 249300,
                 $"o resumo diz QUANTO está parado: {paradas.Valor.Formatado()} (esperado R$ 2.493,00)");
+            // "desistiu" é vocabulário da fila, não do balcão: saiu do texto em 08/09.
+            // O que a tela precisa dizer é o VALOR e que aquilo travou.
             checar(paradas.Resumo is string aviso
                    && aviso.Contains("2.493,00")
-                   && aviso.Contains("desistiu", StringComparison.OrdinalIgnoreCase),
-                "o aviso da tela leva o valor e diz que o envio DESISTIU (pede conferência)");
+                   && aviso.Contains("Travaram", StringComparison.Ordinal)
+                   && !aviso.Contains("desistiu", StringComparison.OrdinalIgnoreCase),
+                $"o aviso leva o valor e diz que travou, sem falar a língua da fila (viu: {paradas.Resumo})");
 
             // ── E O BUG QUE NÃO PODE NASCER NO LUGAR ────────────────────────
             // Parar de carimbar enviado_em sem consertar o WHERE da drenagem faria a

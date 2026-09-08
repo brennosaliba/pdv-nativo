@@ -263,6 +263,7 @@ public partial class Configuracao : UserControl
         PassoMaquininha.Visibility = Se(p == PassoConfig.Maquininha);
         PassoPareamento.Visibility = Se(p == PassoConfig.Pareamento);
         PassoResumo.Visibility = Se(p == PassoConfig.Resumo);
+        if (p == PassoConfig.Pareamento) PintarFilaMorta();
 
         _navegando = true;
         var indice = (int)p;
@@ -694,6 +695,40 @@ public partial class Configuracao : UserControl
     /// que fica cifrada nesta máquina. Nenhuma senha é digitada no balcão, e revogar
     /// um caixa é um clique no painel — é o que destrava a subida de vendas e notas.
     /// </summary>
+    /// <summary>
+    /// A SAÍDA para o registro que o painel nunca vai aceitar.
+    ///
+    /// Por que fica AQUI e não no botão Sincronizar: esta tela já pede a senha de
+    /// administrador para abrir, e tirar coisa da fila não é gesto de balcão. O bloco
+    /// só aparece quando existe algo a tirar, e diz quantos são antes de perguntar.
+    /// </summary>
+    private void PintarFilaMorta()
+    {
+        int quantos;
+        try { quantos = Sincronizacao.Dispensar(simular: true); }
+        catch { quantos = 0; }
+        BlocoFilaMorta.Visibility = quantos == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (quantos == 0) return;
+        TxtFilaMorta.Text = $"{quantos} {(quantos == 1 ? "registro está parado" : "registros estão parados")} "
+            + "esperando subir, e o painel não vai aceitar do jeito que eles estão gravados. "
+            + "Tentar de novo não muda nada. Tirar da fila não apaga nada: eles continuam no caixa, "
+            + "só param de aparecer no aviso.";
+    }
+
+    private void DispensarFilaMorta(object sender, RoutedEventArgs e)
+    {
+        var dono = Window.GetWindow(this)!;
+        var quantos = Sincronizacao.Dispensar(simular: true);
+        if (quantos == 0) { PintarFilaMorta(); return; }
+        if (!Dialogo.Confirmar(dono, "Tirar da fila",
+                $"Tirar {quantos} {(quantos == 1 ? "registro" : "registros")} da fila de envio?", "Tirar", "Deixar"))
+            return;
+        var tirados = Sincronizacao.Dispensar(quem: "configuração");
+        Dialogo.Avisar(dono, "Pronto",
+            $"{tirados} {(tirados == 1 ? "registro saiu" : "registros saíram")} da fila. O aviso do caixa some no próximo Sincronizar.", "ok");
+        PintarFilaMorta();
+    }
+
     private async void Parear(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;

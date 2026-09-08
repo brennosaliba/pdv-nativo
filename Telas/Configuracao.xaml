@@ -551,6 +551,17 @@
                         <TextBlock Text="Este primeiro cadastro é o dono: ele pode tudo: autoriza sangria e cancelamento, e a senha dele passa a ser a senha desta tela."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     </StackPanel>
+
+                    <!-- A saída para o registro que o painel nunca vai aceitar. Só
+                         aparece quando existe algum: aviso eterno é aviso ignorado. -->
+                    <StackPanel x:Name="BlocoFilaMorta" Visibility="Collapsed" Margin="0,16,0,0">
+                        <TextBlock Text="REGISTROS QUE O PAINEL NÃO ACEITA" Foreground="{DynamicResource Marca}"
+                                   FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
+                        <TextBlock x:Name="TxtFilaMorta" Foreground="{DynamicResource TextoFraco}"
+                                   FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <Button x:Name="BtnDispensarFila" Content="Tirar da fila" Click="DispensarFilaMorta"
+                                Style="{StaticResource BotaoBase}" MinHeight="48" FontSize="15"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- FIM · RESUMO ─────────────────────────────────────────── -->
