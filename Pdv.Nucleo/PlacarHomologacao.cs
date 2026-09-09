@@ -39,9 +39,29 @@ public static class PlacarHomologacao
     /// A tabela onde o caixa anota o roteiro. Criada na hora: ela so existe na
     /// maquina que esta homologando, e nao vale uma migracao para as lojas.
     /// </summary>
+    /// <summary>
+    /// A integracao a que uma anotacao pertence.
+    ///
+    /// ⚠️ EXISTE POR UM SUSTO (09/09/2026). A tabela ja tinha 30 linhas da
+    /// homologacao do CONTROLPAY, de 24 e 25 de agosto, com resultado "ok". Elas
+    /// entraram na planilha da PGWebLib como se fossem desta rodada. Entregar isso
+    /// seria afirmar para a PayGo que passos foram aprovados numa integracao em que
+    /// nunca foram executados.
+    ///
+    /// Anotacao de homologacao pertence a UMA integracao. Linha sem provedor e de
+    /// antes desta regra: aparece na conta de "outra rodada", nunca nesta.
+    /// </summary>
+    public const string Provedor = "pgweblib";
+
     private static void Garantir(Microsoft.Data.Sqlite.SqliteConnection cx)
-        => Dapper.SqlMapper.Execute(cx,
+    {
+        Dapper.SqlMapper.Execute(cx,
             "CREATE TABLE IF NOT EXISTS homolog_passo (numero TEXT PRIMARY KEY, intencao TEXT, resultado TEXT, quando TEXT, reqnum TEXT)");
+        // ALTER separados: banco de quem ja rodava o roteiro antes destas colunas
+        // tem a tabela sem elas, e CREATE TABLE IF NOT EXISTS nao as adiciona.
+        foreach (var col in new[] { "reqnum TEXT", "provedor TEXT" })
+            try { Dapper.SqlMapper.Execute(cx, "ALTER TABLE homolog_passo ADD COLUMN " + col); } catch { }
+    }
 
     /// <summary>Anota o desfecho de um passo, com o REQNUM que a planilha exige.</summary>
     public static void Anotar(int numero, string resultado, string? reqnum)
@@ -50,15 +70,13 @@ public static class PlacarHomologacao
         {
             using var cx = Banco.Abrir();
             Garantir(cx);
-            // ALTER separado: banco de quem ja rodava o roteiro antes de 09/09/2026
-            // tem a tabela sem a coluna, e CREATE TABLE IF NOT EXISTS nao a adiciona.
-            try { Dapper.SqlMapper.Execute(cx, "ALTER TABLE homolog_passo ADD COLUMN reqnum TEXT"); } catch { }
             Dapper.SqlMapper.Execute(cx, """
-                INSERT INTO homolog_passo (numero, resultado, quando, reqnum) VALUES (@N,@R,@Q,@X)
+                INSERT INTO homolog_passo (numero, resultado, quando, reqnum, provedor) VALUES (@N,@R,@Q,@X,@P)
                 ON CONFLICT(numero) DO UPDATE SET resultado=excluded.resultado,
-                    quando=excluded.quando, reqnum=COALESCE(excluded.reqnum, reqnum)
+                    quando=excluded.quando, reqnum=COALESCE(excluded.reqnum, reqnum),
+                    provedor=excluded.provedor
                 """,
-                new { N = numero.ToString(), R = resultado, Q = DateTime.Now.ToString("o"), X = reqnum });
+                new { N = numero.ToString(), R = resultado, Q = DateTime.Now.ToString("o"), X = reqnum, P = Provedor });
         }
         catch { /* o roteiro nao pode cair por causa do registro */ }
     }
@@ -71,8 +89,10 @@ public static class PlacarHomologacao
         {
             using var cx = Banco.Abrir();
             Garantir(cx);
-            try { Dapper.SqlMapper.Execute(cx, "ALTER TABLE homolog_passo ADD COLUMN reqnum TEXT"); } catch { }
-            foreach (var r in Dapper.SqlMapper.Query(cx, "SELECT numero, resultado, quando, reqnum FROM homolog_passo"))
+            // SO desta integracao: linha de outra rodada nao entra no placar nem na planilha.
+            foreach (var r in Dapper.SqlMapper.Query(cx,
+                "SELECT numero, resultado, quando, reqnum FROM homolog_passo WHERE provedor = @P",
+                new { P = Provedor }))
             {
                 if (!int.TryParse((string)r.numero, out var n)) continue;
                 DateTime.TryParse((string?)r.quando, out var q);
@@ -81,6 +101,20 @@ public static class PlacarHomologacao
         }
         catch { }
         return d;
+    }
+
+    /// <summary>Quantas anotacoes existem de OUTRA rodada, que esta ficando de fora.</summary>
+    public static int DeOutraRodada()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            Garantir(cx);
+            return Dapper.SqlMapper.ExecuteScalar<int>(cx,
+                "SELECT COUNT(*) FROM homolog_passo WHERE provedor IS NULL OR provedor <> @P",
+                new { P = Provedor });
+        }
+        catch { return 0; }
     }
 
     /// <summary>Junta o roteiro com o que foi feito, na ordem do roteiro.</summary>
