@@ -34,6 +34,9 @@ public partial class Pagamento : UserControl
 
     private System.Windows.Threading.DispatcherTimer? _voltaSozinha;
 
+    /// <summary>O PWINFO_REQNUM da cobranca desta venda, para a tela de sucesso mostrar.</summary>
+    private string? _reqnumDaVenda;
+
     /// <summary>
     /// A TELA DE SUCESSO SAI DA FRENTE SOZINHA (09/09/2026).
     ///
@@ -647,6 +650,9 @@ public partial class Pagamento : UserControl
         //
         // Guarda o REQNUM mesmo quando a venda NAO veio do roteiro: e ele que a tela
         // oferece para quem anota o passo a mao, depois de vender pelo caminho normal.
+        // Guardado tambem na instancia: as telas de sucesso sao outros metodos e nao
+        // tem o desfecho em maos, e e la que o operador consegue ler e anotar.
+        if (!string.IsNullOrWhiteSpace(d.Reqnum)) _reqnumDaVenda = d.Reqnum;
         PlacarHomologacao.GuardarUltimo(d.Reqnum, valor.Centavos,
             d.Situacao == SituacaoTef.Pago ? "aprovada"
             : d.Situacao == SituacaoTef.Recusado ? "negada"
@@ -814,6 +820,26 @@ public partial class Pagamento : UserControl
     /// linha. O texto é da REDE, não da casa: é o que o roteiro de homologação manda o operador
     /// ler ("TRANSACAO APROVADA"), e inventar uma frase nossa esconderia o que a rede respondeu.
     /// </summary>
+    /// <summary>
+    /// O REQNUM na tela de SUCESSO, no caixa de homologação.
+    ///
+    /// ⚠️ A primeira tentativa (0.7.0) pendurou o número no recado do TEF, que mora no
+    /// painel do PAGAMENTO. A tela de sucesso é outro painel: o número aparecia e
+    /// sumia junto com a troca, e o dono relatou "passo 2 ainda sem mostrar na tela o
+    /// reqnum". Com a volta automática em 3 segundos, então, nem piscava.
+    ///
+    /// Aqui ele entra no DETALHE da tela de sucesso, que é o texto que fica na frente
+    /// do operador até a tela sair. É de lá que ele copia para a planilha.
+    /// </summary>
+    private string ComReqnum(string detalhe)
+    {
+        if (string.IsNullOrWhiteSpace(_reqnumDaVenda) || !EhHomologacao()) return detalhe;
+        var linha = $"{Nucleo.RoteiroTef.RetornoExigido}: {_reqnumDaVenda}";
+        return string.IsNullOrWhiteSpace(detalhe)
+            ? linha
+            : detalhe + Environment.NewLine + Environment.NewLine + linha;
+    }
+
     private void RecadoDoTef(string mensagem)
     {
         var texto = mensagem.Trim();
@@ -949,7 +975,7 @@ public partial class Pagamento : UserControl
                 : default;
         // ícone honesto: com o recibo entalado na impressora, o ✅ dizia "pronto" bem
         // em cima do texto que avisa que o papel não saiu.
-        Estado(erro is null ? "✅" : "⚠️", "Venda concluída", detalhe,
+        Estado(erro is null ? "✅" : "⚠️", "Venda concluída", ComReqnum(detalhe),
             acaoImpressao,
             (FimDaVenda.RotuloDoBotao(FimDaVenda.VoltaSozinho(troco.Centavos, erro is not null)),
              () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
@@ -1139,7 +1165,7 @@ public partial class Pagamento : UserControl
                 ? ("Imprimir cupom", (Action)(() => _ = ImprimirEConcluirAsync(r, true)))
                 : default;
         // ícone honesto: cupom entalado na impressora não é ✅, mesmo com a nota autorizada.
-        Estado(r.Sucesso && erro is null ? "✅" : "⚠️", titulo, detalhe,
+        Estado(r.Sucesso && erro is null ? "✅" : "⚠️", titulo, ComReqnum(detalhe),
             acaoImpressao,
             (FimDaVenda.RotuloDoBotao(FimDaVenda.VoltaSozinho(troco.Centavos, erro is not null)),
              () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
