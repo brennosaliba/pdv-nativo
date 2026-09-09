@@ -126,9 +126,9 @@ public static class RoteiroTef
         new(31, "Solicitação de menu genérico 2, escolher ABCDEF", "SIM", "", "consertado hoje",
             "Toca em ABCDEF. O roteiro diz que a maquininha pede o MESMO menu de novo, e é isso que tem que aparecer na tela outra vez.",
             "Depois do conserto: o menu com 123456 e ABCDEF tem que reaparecer, com o prompt SELECIONAR:, e a venda tem que aprovar depois da segunda escolha."),
-        new(32, "Venda com mensagem resultado no tamanho máximo, R$ 1.003,00", "SIM", "1.003,00", "AINDA FALTA",
-            "Deveria ser: comanda de R$ 1.003,00, finaliza, Crédito, C6PAY, cartão, e ler na tela a mensagem de 80 caracteres que a rede devolveu. Hoje não dá para montar o valor e a tela não mostraria a mensagem.",
-            "Depois do conserto: a mensagem inteira, sem cortar, TRANSAÇÃO DE TESTE APROVADA. CÓDIGO AUTORIZAÇAO 13456789 TRANSACAO NAO PRODUTIVA. Enquanto não tem tela, dá para provar pelo banco: campo 030 dentro de tef_transacao.resposta_txt. Mais o recibo impresso e o CNF na auditoria."),
+        new(32, "Venda com mensagem resultado no tamanho máximo, R$ 1.003,00", "SIM", "1.003,00", "feito no caixa; a frase longa depende do sandbox",
+            "Abre o passo 32 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. A frase que a rede devolver aparece em verde no cabeçalho da tela de pagamento, inteira, quebrando linha se precisar (TxtRecadoTef em Pagamento.xaml), e fica gravada no campo 030 de tef_transacao.resposta_txt.",
+            "O roteiro espera a frase de 80 caracteres TRANSAÇÃO DE TESTE APROVADA. CÓDIGO AUTORIZAÇAO 13456789 TRANSACAO NAO PRODUTIVA. Em 09/09/2026 o simulador C6PAY do sandbox NÃO a mandou: nas duas vendas de R$ 1.003,00 (REQNUM 0000282973 às 20:17 e 0000282975 às 20:18) a biblioteca devolveu PWINFO_RESULTMSG = \"Transação autorizada\", e a frase longa não aparece em nenhum arquivo da PayGo (comms_260909.log). O caixa mostra o que recebe; o que falta é do lado do sandbox. Anotar o REQNUM 0000282973 na planilha e anexar o log: se a PayGo cobrar a frase, a resposta está no log dela."),
         new(33, "Transação pendente #1 (venda de R$ 1.005,50 no C6PAY)", "SIM", "1.005,50", "pronto",
             "Abre a venda, poe o produto de teste que soma R$ 1.005,50, escolhe Credito e aproxima o cartao no pinpad. A venda tem que sair aprovada e o comprovante sair na bobina.",
             "Na tela: a parte de credito entra na lista de pagamentos da venda. Na bobina: as vias do cliente e do estabelecimento (politica padrao imprime sozinho, Impressoes.Politica devolve Automatico quando a chave nao diz 0). No banco C:\\ProgramData\\PdvNativo\\pdv.db: linha em tef_transacao com provedor 'pgweblib', situacao 'pago' e cod_controle preenchido (esse cod_controle e o REQNUM, e e ele que o…"),
@@ -141,18 +141,18 @@ public static class RoteiroTef
         new(36, "Transação pendente não encontrada #2 (venda de R$ 1.005,61, negada com pendente desconhecida)", "SIM", "1.005,61", "AINDA FALTA",
             "Abre outra venda, de R$ 1.005,61, e passa o cartao. Volta negada trazendo uma transação que este caixa nunca viu, e o PDV tem que mandar sozinho o desfazimento dela, sem imprimir nada.",
             "O esperado e um PW_iConfirmation de DESFAZIMENTO com o REQNUM que veio da rede, na hora, sem recibo, e a venda atual como nao realizada. Conferir na auditoria (evento tef_pgweblib) e no log da biblioteca. Hoje nao sai nada ate a proxima operacao."),
-        new(37, "Confirmação #1 (venda de R$ 1.012,00 no C6PAY e confirmação manual)", "SIM", "1.012,00", "AINDA FALTA",
-            "Faz a venda de R$ 1.012,00 no credito e depois confirma a transação na mao, por um comando do PDV. Hoje ele so consegue a metade: a venda sai e o PDV confirma sozinho, sem o operador mandar.",
-            "Se a PayGo aceitar o fluxo automatico: venda aprovada, vias impressas, linha 'pago' em tef_transacao e a auditoria mostrando 'CNF ... PWRET_OK -> pago' com PWCNF_CNF_AUTO (289). Se exigir o manual: a auditoria tem que mostrar 12833 (PWCNF_CNF_MANU_AUT) disparado por um toque do operador."),
-        new(38, "Confirmação #2 (venda de R$ 10,00 na REDE e confirmação manual) (opcional)", "OPCIONAL", "10,00", "AINDA FALTA",
-            "O mesmo do passo 37, com R$ 10,00 e a rede REDE em vez do C6PAY. Para trocar de autorizador, ou muda a rede na Configuração, ou deixa a rede em branco e escolhe no menu que a biblioteca abre a cada venda.",
-            "Mesma coisa do 37, com AUTHSYST igual a REDE na resposta gravada (campo 010-000 do resposta_txt)."),
-        new(39, "Desfazimento manual #1 (venda de R$ 1.011,00 no C6PAY e desfazimento manual)", "SIM", "1.011,00", "AINDA FALTA",
-            "Faz a venda de R$ 1.011,00 no credito e, depois que a rede aprova, desfaz a transação na mao. Hoje o unico jeito de chegar perto e apertar Cancelar cobrança na tela de pagamento na janela curta entre o host aprovar e o PDV confirmar, o que e uma corrida, nao um comando.",
-            "A tela mostra 'Cobrança cancelada' com 'A cobrança foi desfeita: o cliente não pagou nada' (Pagamento.xaml.cs:640-649), a linha em tef_transacao vira 'desfeita' e a auditoria mostra 'REV ... REQNUM ...'. Conferir QUAL codigo saiu: hoje sai 274737 (PWCNF_REV_ABORT, 'interrompida durante a captura de dados'), e o roteiro pede desfazimento manual, que e 12849 (PWCNF_REV_MANU_AUT)."),
-        new(40, "Desfazimento manual #2 (venda de R$ 333,00 na REDE e desfazimento manual) (opcional)", "OPCIONAL", "333,00", "AINDA FALTA",
-            "O mesmo do passo 39, com R$ 333,00 e a rede REDE.",
-            "Transação considerada desfeita, linha 'desfeita' em tef_transacao, e o codigo do desfazimento na auditoria."),
+        new(37, "Confirmação #1 (venda de R$ 1.012,00 no C6PAY e confirmação manual)", "SIM", "1.012,00", "pronto",
+            "Abre o passo 37 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. Depois que a rede aprova e o comprovante sai, a tela pergunta \"Rede aprovou: confirmar a venda ou desfazer?\". Toque em Confirmar venda. Essa é a confirmação manual: o caixa manda PW_iConfirmation com PWCNF_CNF_MANU_AUT (12833) em vez do automático (289). Fora dos passos 37 a 40 a pergunta não existe e o caixa confirma sozinho. A venda tem que NASCER do roteiro: pelo caminho normal de loja não há pergunta.",
+            "Venda aprovada, vias impressas, REQNUM na tela, linha 'pago' em tef_transacao e a auditoria (tef_pgweblib) com 'CNF ... PWRET_OK -> pago (manual pelo operador, PWCNF_CNF_MANU_AUT 12833)'. A venda de R$ 1.012,00 feita em 09/09 às 20:29 saiu com 289, o automático, porque a pergunta ainda não existia: refazer no caixa 0.8.9 ou mais novo."),
+        new(38, "Confirmação #2 (venda de R$ 10,00 na REDE e confirmação manual) (opcional)", "OPCIONAL", "10,00", "pronto",
+            "O mesmo do passo 37, com R$ 10,00, escolhendo REDE no menu de redes que a biblioteca abre na venda (ou mudando a rede na Configuração). No fim, Confirmar venda.",
+            "Mesma coisa do 37, com AUTHSYST igual a REDE na resposta gravada (campo 010-000 do resposta_txt) e o 12833 na auditoria."),
+        new(39, "Desfazimento manual #1 (venda de R$ 1.011,00 no C6PAY e desfazimento manual)", "SIM", "1.011,00", "pronto",
+            "Abre o passo 39 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. Depois que a rede aprova e o comprovante sai, a tela pergunta \"Rede aprovou: confirmar a venda ou desfazer?\". Toque em Desfazer venda. O caixa manda PW_iConfirmation com PWCNF_REV_MANU_AUT (12849): a transação é desfeita na rede, o cliente não é cobrado e a venda volta para as formas de pagamento (aí é Cancelar venda). ATENÇÃO: estornar depois, em TEF e Estornar, NÃO é desfazimento, é cancelamento (CNC), e vale para os passos 43 a 46. Em 09/09 às 20:33 o que saiu para a venda de R$ 1.011,00 foi um estorno; refazer o passo no caixa 0.8.9 ou mais novo.",
+            "Tela 'Cobrança cancelada' com 'venda desfeita pelo operador' e 'A cobrança foi desfeita: o cliente não pagou nada', mais o REQNUM. Linha 'desfeita' em tef_transacao e a auditoria com 'desfeita pelo operador (PWCNF_REV_MANU_AUT 12849) REQNUM ...'."),
+        new(40, "Desfazimento manual #2 (venda de R$ 333,00 na REDE e desfazimento manual) (opcional)", "OPCIONAL", "333,00", "pronto",
+            "O mesmo do passo 39, com R$ 333,00, escolhendo REDE no menu de redes. No fim, Desfazer venda.",
+            "Mesma coisa do 39: linha 'desfeita' em tef_transacao, 12849 na auditoria e AUTHSYST igual a REDE."),
         new(41, "Desfazimento por falha na liberação da mercadoria #1 (venda de R$ 1.013,00)", "AUTOATENDIMENTO", "1.013,00", "duvida",
             "Confere que a mercadoria nao tem no estoque, faz a venda de R$ 1.013,00 e ela e aprovada. O passo continua no 42.",
             "Se a PayGo mantiver o passo: venda aprovada e recibo impresso, igual aos passos 33 e 35."),
@@ -253,4 +253,12 @@ public static class RoteiroTef
     /// <summary>Os dois passos sao o mesmo teste, em qualquer ordem?</summary>
     public static bool MesmoTeste(int a, int b)
         => a == b || PassosEmPar.Any(p => (p.Primeiro == a && p.Segundo == b) || (p.Primeiro == b && p.Segundo == a));
+
+    /// <summary>
+    /// Os passos em que a confirmacao da venda e MANUAL: a rede aprova, o comprovante sai, e o
+    /// operador manda confirmar (37 e 38, PWCNF_CNF_MANU_AUT) ou desfazer (39 e 40,
+    /// PWCNF_REV_MANU_AUT). Fora deles o caixa confirma sozinho, como em loja. Null (venda sem
+    /// passo) e false.
+    /// </summary>
+    public static bool ConfirmacaoManual(int? passo) => passo is 37 or 38 or 39 or 40;
 }

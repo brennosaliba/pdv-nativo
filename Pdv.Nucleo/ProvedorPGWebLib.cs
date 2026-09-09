@@ -137,6 +137,18 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public Func<TransacaoPayGo, Task<bool>>? ImprimirComprovante { get; init; }
 
     /// <summary>
+    /// CONFIRMACAO MANUAL (passos 37 a 40 do roteiro v20260819). Chamado numa venda aprovada
+    /// com CNFREQ=1, DEPOIS de gravar e imprimir e ANTES do CNF automatico. A resposta decide o
+    /// codigo que vai no PW_iConfirmation:
+    ///   true  = o operador confirmou na mao: PWCNF_CNF_MANU_AUT (12833);
+    ///   false = o operador desfez na mao:   PWCNF_REV_MANU_AUT (12849), a venda nao existe;
+    ///   null  = ninguem quis decidir: PWCNF_CNF_AUTO (289), o de sempre.
+    /// Quem decide QUANDO perguntar e a tela (so nos passos do roteiro que pedem isso); o
+    /// provedor so obedece. Sem o gancho, ou com ele lancando, e o automatico.
+    /// </summary>
+    public Func<TransacaoPayGo, CancellationToken, Task<bool?>>? DecidirConfirmacao { get; init; }
+
+    /// <summary>
     /// Pergunta à tela um dado que a automação não sabe (menu de redes sem rede pré-selecionada,
     /// dado digitado, senha do lojista). Devolve o valor (para menu: o `Valor` da opção) ou null
     /// para cancelar. Null aqui = nunca pergunta (cancela a captura).
@@ -574,7 +586,30 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                         ClientePayGo.MsgCancelada(r.Rede, r.Nsu, r.ValorCent ?? valor.Centavos), false)
                     { Codigo = CodigoTef.Cancelado, Desfeita = true };
                 }
-                switch (Confirmar(tx, "pago"))
+                // CONFIRMACAO MANUAL (passos 37 a 40 do roteiro v20260819). A rede aprovou, o
+                // caixa gravou e o comprovante saiu. Antes do CNF automatico, quem esta na tela
+                // pode mandar confirmar (PWCNF_CNF_MANU_AUT) ou desfazer (PWCNF_REV_MANU_AUT).
+                // Ate 09/09/2026 o caixa so sabia confirmar sozinho (289), e o roteiro cobra
+                // o codigo manual no log: 12833 na confirmacao, 12849 no desfazimento.
+                var codigoCnf = PW.PWCNF_CNF_AUTO;
+                if (DecidirConfirmacao is { } decidir)
+                {
+                    bool? manual = null;
+                    try { manual = await decidir(tx, ctx.Ct).ConfigureAwait(false); }
+                    catch (Exception ex) { Auditar?.Invoke($"pgweblib: {chargeId} a decisao manual da confirmacao lancou {ex.GetType().Name}: segue automatica"); }
+                    if (manual == false)
+                    {
+                        if (Desfazer(tx with { Motivo = "desfeita pelo operador (REV_MANU_AUT)" }, PW.PWCNF_REV_MANU_AUT, "desfeita") == Ack.Desconhecida)
+                            return Orfa(tx, cartao, MsgNaoReconhece(r.Nsu), gravar: false);
+                        Auditar?.Invoke($"pgweblib: {chargeId} desfeita pelo operador (PWCNF_REV_MANU_AUT {PW.PWCNF_REV_MANU_AUT}) REQNUM {r.CodigoControle}");
+                        // A tela completa com "A cobrança foi desfeita: o cliente não pagou nada".
+                        return new DesfechoTef(SituacaoTef.Cancelado, id, chargeId, cartao,
+                            "venda desfeita pelo operador", false)
+                        { Codigo = CodigoTef.Cancelado, Desfeita = true, Reqnum = r.CodigoControle };
+                    }
+                    if (manual == true) codigoCnf = PW.PWCNF_CNF_MANU_AUT;
+                }
+                switch (Confirmar(tx, "pago", codigoCnf))
                 {
                     case Ack.Ok: break;
                     case Ack.SemAck: situacao = "cnf_sem_ack"; break;
@@ -1580,21 +1615,26 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         }
     }
 
-    /// <summary>CNF_AUTO. Ok = acusado e linha `depois`; SemAck = 'cnf_sem_ack' para reenvio; Desconhecida = INVALIDTRN, linha 'orfa'.</summary>
-    private Ack Confirmar(TransacaoPayGo tx, string depois)
+    /// <summary>
+    /// CNF (automatico por padrao; PWCNF_CNF_MANU_AUT quando o operador confirmou na mao).
+    /// Ok = acusado e linha `depois`; SemAck = 'cnf_sem_ack' para reenvio com o MESMO codigo;
+    /// Desconhecida = INVALIDTRN, linha 'orfa'.
+    /// </summary>
+    private Ack Confirmar(TransacaoPayGo tx, string depois, uint resultado = PW.PWCNF_CNF_AUTO)
     {
         var (req, loc, ext, vm, aut) = Tupla(tx.Resposta);
-        var ret = ConfirmacaoCrua(PW.PWCNF_CNF_AUTO, req, loc, ext, vm, aut);
+        var ret = ConfirmacaoCrua(resultado, req, loc, ext, vm, aut);
         if (ret == PW.PWRET_OK)
         {
             GuardarSeguro(tx with { Situacao = depois });
-            Auditar?.Invoke($"pgweblib: CNF {tx.ChargeId} REQNUM {req} {PW.Nome(ret)} -> {depois}");
+            var manual = resultado == PW.PWCNF_CNF_MANU_AUT ? $" (manual pelo operador, PWCNF_CNF_MANU_AUT {resultado})" : "";
+            Auditar?.Invoke($"pgweblib: CNF {tx.ChargeId} REQNUM {req} {PW.Nome(ret)} -> {depois}{manual}");
             return Ack.Ok;
         }
         if (ret == PW.PWRET_INVALIDTRN && NaoReconhecida(tx, "CNF", req)) return Ack.Desconhecida;
         GuardarSeguro(tx with { Situacao = "cnf_sem_ack", Motivo = "confirmação sem ack: " + PW.Nome(ret) });
         _reenvios.RemoveAll(x => x.Tx.ChargeId == tx.ChargeId);
-        _reenvios.Add((tx, PW.PWCNF_CNF_AUTO, depois));
+        _reenvios.Add((tx, resultado, depois));
         Auditar?.Invoke($"pgweblib: CNF {tx.ChargeId} sem ack ({PW.Nome(ret)}); reenvio agendado");
         return Ack.SemAck;
     }
@@ -1674,7 +1714,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 Auditar?.Invoke($"pgweblib: reenvio de {tx.ChargeId} ({resultado}) acusado -> {depois}");
             }
             else if (ret == PW.PWRET_INVALIDTRN)
-                NaoReconhecida(tx, "reenvio de " + (resultado == PW.PWCNF_CNF_AUTO ? "CNF" : "REV"), req);   // tira da fila e grava 'orfa'
+                NaoReconhecida(tx, "reenvio de " + (resultado is PW.PWCNF_CNF_AUTO or PW.PWCNF_CNF_MANU_AUT ? "CNF" : "REV"), req);   // tira da fila e grava 'orfa'
         }
     }
 

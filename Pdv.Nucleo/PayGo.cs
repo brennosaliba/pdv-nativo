@@ -115,6 +115,21 @@ public sealed class RespostaPayGo
 
     public static RespostaPayGo Analisar(string? texto) => new(texto ?? "");
 
+    /// <summary>
+    /// A MESMA resposta, com a data da venda (022-000, DDMMAAAA) vinda do relogio do caixa
+    /// quando a resposta guardada nao tem nem o carimbo cru da biblioteca (952-000) nem a data
+    /// da rede (022-000). Existe para o estorno de venda feita antes do 0.8.8, que nao guardava
+    /// o carimbo: sem TRNORIGDATE a biblioteca para e pede a data ao operador (09/09/2026).
+    /// So a DATA entra: a hora do caixa nao e a hora da rede, e a rede nao pede a hora.
+    /// </summary>
+    public RespostaPayGo ComDataSeFaltar(DateTime? quando)
+    {
+        if (quando is not { } q) return this;
+        if (Campos.ContainsKey("952-000") || Campos.ContainsKey("022-000")) return this;
+        var texto = Texto.TrimEnd('\r', '\n');
+        return new RespostaPayGo((texto.Length > 0 ? texto + "\n" : "") + "022-000 = " + q.ToString("ddMMyyyy", CultureInfo.InvariantCulture));
+    }
+
     public string? Comando => Campo("000-000");
     public string? Identificacao => Campo("001-000");
     public int? Status => Inteiro("009-000");

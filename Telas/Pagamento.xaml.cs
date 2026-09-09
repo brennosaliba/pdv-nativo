@@ -604,6 +604,10 @@ public partial class Pagamento : UserControl
         // A tela do QR do Pix precisa cancelar ESTA cobrança quando o operador aperta Esc
         // (passo 55 do roteiro). Ela não conhece a tela de pagamento, então o caminho é este gancho.
         Servicos.CancelarTefEmVoo = () => { try { _cobranca?.Cancel(); } catch { } };
+        // Passos 37 a 40 do roteiro: a rede aprova e o operador confirma ou desfaz NA MAO
+        // (PWCNF_CNF_MANU_AUT / PWCNF_REV_MANU_AUT). Venda de loja, sem passo, nao pergunta
+        // nada: o caixa confirma sozinho. Refeito a cada cobranca, para passo velho nao sobrar.
+        Servicos.ConfirmacaoManualTef = RoteiroTef.ConfirmacaoManual(PassoDoRoteiro);
 
         // A frase da rede é sempre da cobrança ATUAL: começou outra, a de antes sai da tela.
         RecadoDoTef("");

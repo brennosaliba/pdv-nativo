@@ -336,6 +336,9 @@ public static class Servicos
                     // Menu de redes sem rede gravada, parcelas, senha do lojista: a biblioteca
                     // pergunta e a tela responde com os diálogos da casa.
                     Perguntar = PerguntarNaTelaAsync,
+                    // Passos 37 a 40 do roteiro: a rede aprova e o operador confirma ou desfaz
+                    // NA MAO. A tela so pergunta quando a venda nasceu de um desses passos.
+                    DecidirConfirmacao = DecidirConfirmacaoNaTelaAsync,
                     // Pix: a biblioteca manda o caixa DESENHAR o QR (PWDAT_DSPQRCODE). A tela abre
                     // e volta na hora; quem espera o cliente pagar e o laco do provedor.
                     Exibir = ExibirNaTelaAsync,
@@ -542,6 +545,29 @@ public static class Servicos
     /// (passo 55 do roteiro). Null fora de uma cobrança.
     /// </summary>
     internal static Action? CancelarTefEmVoo { get; set; }
+
+    /// <summary>
+    /// A venda em voo pede confirmacao MANUAL (passos 37 a 40 do roteiro v20260819)? Quem
+    /// preenche e a tela de pagamento, a cada cobranca, a partir do passo do roteiro. Venda de
+    /// loja deixa false e o provedor confirma sozinho, como sempre.
+    /// </summary>
+    internal static bool ConfirmacaoManualTef { get; set; }
+
+    /// <summary>
+    /// Depois da aprovacao, com o comprovante impresso: confirmar ou desfazer na mao. Null = a
+    /// venda nao e de um passo de confirmacao manual, e o provedor segue com o CNF automatico.
+    /// True vira PWCNF_CNF_MANU_AUT (passos 37 e 38); false vira PWCNF_REV_MANU_AUT (39 e 40).
+    /// </summary>
+    private static Task<bool?> DecidirConfirmacaoNaTelaAsync(TransacaoPayGo tx, CancellationToken ct)
+        => NaUiAsync<bool?>(() =>
+        {
+            if (!ConfirmacaoManualTef || ct.IsCancellationRequested) return null;
+            var dono = JanelaAtiva();
+            var valor = new Dinheiro(tx.ValorCent).Formatado();
+            return Dialogo.Confirmar(dono, "Rede aprovou",
+                $"Venda de {valor} aprovada na maquininha. Confirmar a venda ou desfazer?",
+                "Confirmar venda", "Desfazer venda");
+        });
 
     private static Action? _fecharExibicaoTef;
     private static Action<string>? _atualizarExibicaoTef;

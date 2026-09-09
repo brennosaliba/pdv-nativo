@@ -1776,9 +1776,13 @@ public partial class Configuracao : UserControl
                     break;
                 default:
                     var da = await pg.AdministrativaAsync(CancellationToken.None);
+                    // O REQNUM TAMBEM AQUI (09/09/2026): o cancelamento pelo menu da maquininha
+                    // saiu sem numero na tela, e a planilha cobra o numero de toda operacao.
+                    Nucleo.PlacarHomologacao.GuardarUltimo(da.Reqnum, 0, da.Pago ? "administrativa" : "nao concluida", null);
+                    var reqAdm = da.Reqnum is { Length: > 0 } rq ? $" REQNUM {rq}." : "";
                     StatusTef(da.Pago
-                        ? "✓ Operação administrativa concluída." + (da.Motivo is { Length: > 0 } m ? " " + m : "")
-                        : "✗ Operação administrativa não concluída: " + (da.Motivo ?? "sem detalhe"),
+                        ? "✓ Operação administrativa concluída." + (da.Motivo is { Length: > 0 } m ? " " + m + "." : "") + reqAdm
+                        : "✗ Operação administrativa não concluída: " + (da.Motivo ?? "sem detalhe") + "." + reqAdm,
                         da.Pago ? "Ok" : "Erro");
                     break;
             }

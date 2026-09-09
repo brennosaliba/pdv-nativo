@@ -2810,7 +2810,8 @@ public partial class Venda : UserControl
                 SELECT v.id AS venda_id, v.numero_local, v.finalizada_em, v.fiscal_status,
                        v.nfce_chave, v.nfce_protocolo,
                        p.forma, p.valor_cent, p.tef_nsu,
-                       t.id AS tef_id, t.identificacao, t.valor_cent AS tef_valor, t.parcelas, t.resposta_txt
+                       t.id AS tef_id, t.identificacao, t.valor_cent AS tef_valor, t.parcelas, t.resposta_txt,
+                       t.criado_em AS tef_criado_em
                   FROM venda v
                   JOIN venda_pagamento p ON p.venda_id = v.id AND p.tef_nsu IS NOT NULL
                   -- NSU (012) é contador curto e repete entre dias/redes: casar só no turno, pelo
@@ -2984,9 +2985,14 @@ public partial class Venda : UserControl
             }
         }
 
+        // A DATA DA VENDA, MESMO QUANDO A RESPOSTA GUARDADA NAO TEM (09/09/2026). As vendas
+        // feitas antes do 0.8.8 nao guardaram o carimbo (952/022), e sem TRNORIGDATE a
+        // biblioteca para o estorno para o operador digitar a data. O relogio do caixa na
+        // hora da venda serve: e o mesmo dia, e a rede so confere a data.
+        DateTime? quandoVendeu = DateTime.TryParse((string?)l.tef_criado_em, null, System.Globalization.DateTimeStyles.RoundtripKind, out var qv) ? qv : null;
         var original = new TransacaoPayGo((string)l.tef_id, (string?)l.identificacao ?? "",
             TipoTefExtensoes.Analisar((string)l.forma) ?? TipoTef.Credito, (long)l.tef_valor, (int)(long)l.parcelas, "pago",
-            RespostaPayGo.Analisar((string?)l.resposta_txt));
+            RespostaPayGo.Analisar((string?)l.resposta_txt).ComDataSeFaltar(quandoVendeu));
 
         DesfechoTef d;
         try { d = await cli.CancelarAsync(original, CancellationToken.None); }
@@ -2997,6 +3003,11 @@ public partial class Venda : UserControl
                 "e veja no comprovante se o estorno saiu antes de tentar de novo.\n\nDetalhe: " + ex.Message, "erro");
             return;
         }
+        // O REQNUM DO ESTORNO TAMBEM VAI PARA O PLACAR E PARA A TELA (09/09/2026, "nao apareceu
+        // numero na tela"). Os passos 44, 46 e 57 do roteiro sao estornos, e a planilha cobra o
+        // numero deles como o de qualquer venda. Fora da homologacao o numero nao aparece.
+        PlacarHomologacao.GuardarUltimo(d.Reqnum, (long)l.tef_valor, d.Pago ? "estorno aprovado" : "estorno negado", null);
+        var reqnumTxt = _homologacao && !string.IsNullOrWhiteSpace(d.Reqnum) ? $"\n\nREQNUM {d.Reqnum}" : "";
         if (!d.Pago)
         {
             // Estorno NEGADO pela rede: nenhum dinheiro voltou, mas a trilha (quem
@@ -3007,7 +3018,7 @@ public partial class Venda : UserControl
             Dialogo.Avisar(dono, "Estorno negado",
                 $"A maquininha não aprovou o estorno: {d.MensagemParaTela}.\n\n" +
                 "O dinheiro não voltou para o cliente." +
-                (precisaCancelarNota ? " A nota fiscal já foi cancelada. Chame o gerente." : " Tente de novo."),
+                (precisaCancelarNota ? " A nota fiscal já foi cancelada. Chame o gerente." : " Tente de novo.") + reqnumTxt,
                 "erro");
             return;
         }
@@ -3038,7 +3049,7 @@ public partial class Venda : UserControl
                 Dialogo.Avisar(dono, "Cartão estornado",
                     $"{valor.Formatado()} voltou para o cliente. A venda #{numero} ainda tem " +
                     $"{Conta(restantes, "outro pagamento", "outros pagamentos")} na maquininha: " +
-                    "estorne também, senão a venda continua aberta.", "ok");
+                    "estorne também, senão a venda continua aberta." + reqnumTxt, "ok");
                 return;
             }
             try
@@ -3050,7 +3061,7 @@ public partial class Venda : UserControl
                 Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, aut.Autorizador, detalhe + " · CARTÃO ESTORNADO, venda não cancelada: " + ex.Message);
                 Dialogo.Avisar(dono, "Venda ainda aberta",
                     $"O dinheiro voltou para o cliente, mas a venda #{numero} continua no caixa. " +
-                    "Chame o gerente para cancelar a venda.\n\nDetalhe: " + ex.Message, "erro");
+                    "Chame o gerente para cancelar a venda.\n\nDetalhe: " + ex.Message + reqnumTxt, "erro");
                 return;
             }
             Caixa.Auditar(cx, null, "tef_estorno", _operador.Id, aut.Autorizador, detalhe);
@@ -3061,7 +3072,7 @@ public partial class Venda : UserControl
             Dialogo.Avisar(dono, "Estorno feito",
                 (daRede.Length > 0 ? daRede + ".\n\n" : "") +
                 $"{valor.Formatado()} voltou para o cliente (NSU {nsu}) e a venda #{numero} foi cancelada." +
-                (dinheiro > 0 ? $" Essa venda também tinha {new Dinheiro(dinheiro).Formatado()} em dinheiro: devolva na mão." : ""),
+                (dinheiro > 0 ? $" Essa venda também tinha {new Dinheiro(dinheiro).Formatado()} em dinheiro: devolva na mão." : "") + reqnumTxt,
                 "ok");
         }
     }

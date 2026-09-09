@@ -129,6 +129,14 @@ RODAPE = '''    };
     /// <summary>Os dois passos sao o mesmo teste, em qualquer ordem?</summary>
     public static bool MesmoTeste(int a, int b)
         => a == b || PassosEmPar.Any(p => (p.Primeiro == a && p.Segundo == b) || (p.Primeiro == b && p.Segundo == a));
+
+    /// <summary>
+    /// Os passos em que a confirmacao da venda e MANUAL: a rede aprova, o comprovante sai, e o
+    /// operador manda confirmar (37 e 38, PWCNF_CNF_MANU_AUT) ou desfazer (39 e 40,
+    /// PWCNF_REV_MANU_AUT). Fora deles o caixa confirma sozinho, como em loja. Null (venda sem
+    /// passo) e false.
+    /// </summary>
+    public static bool ConfirmacaoManual(int? passo) => passo is 37 or 38 or 39 or 40;
 }
 '''
 
