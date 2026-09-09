@@ -1323,6 +1323,12 @@ Console.WriteLine();
 Console.WriteLine("--- Aviso de atualizacao (cabe na tela e na cabeca) ---");
 TestesAvisoAtualizacao.Rodar((cond, nome) => Check("aviso-atu: " + nome, cond));
 
+// -- PORTA DO PINPAD: a hora perdida em "PROBLEMA ARQUIVO DE PARAMETROS" ------
+// Nao era arquivo: era COM5 configurada numa maquina que so tem COM1 e COM3.
+Console.WriteLine();
+Console.WriteLine("--- Porta do pinpad (achar sozinho e avisar) ---");
+TestesPortaDoPinpad.Rodar((cond, nome) => Check("pinpad-porta: " + nome, cond));
+
 // -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
 // Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
 // religamento. Dinheiro que entra sem passar pela gaveta — de novo.
