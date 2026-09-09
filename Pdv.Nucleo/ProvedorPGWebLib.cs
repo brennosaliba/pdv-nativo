@@ -183,6 +183,29 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
 
     // ------------------------------------------------------------------ init / ativo
 
+
+    /// <summary>
+    /// SAI DA THREAD DA TELA ANTES DE TOCAR A BIBLIOTECA NATIVA.
+    ///
+    /// O QUE ACONTECIA (relatado em 08/09/2026): "quando vou no menu tef e instalar o
+    /// ponto de captura o sistema trava". Travava mesmo, e nao era a maquininha.
+    ///
+    /// `await _um.WaitAsync(ct).ConfigureAwait(false)` NAO troca de thread quando o
+    /// semaforo esta livre: um await que completa na hora continua na mesma thread.
+    /// Como quase sempre esta livre, a primeira chamada nativa (PW_iInit,
+    /// PW_iExecTransac) rodava na thread da TELA. E a instalacao e justamente a que
+    /// faz o handshake com pos-transac-sb.tpgweb.io, entao a janela congelava pelo
+    /// tempo da rede.
+    ///
+    /// O laco de ExecutarAsync ja saia da tela depois do primeiro `Task.Delay`. O que
+    /// faltava era sair ANTES da primeira chamada, que e a demorada.
+    /// </summary>
+    private static async Task ForaDaTelaAsync()
+    {
+        if (SynchronizationContext.Current is null) return;   // ja esta fora
+        await Task.Run(static () => { }).ConfigureAwait(false);
+    }
+
     /// <summary>PW_iInit uma vez por processo. PWRET_INVCALL = já iniciada (por nós ou por outro módulo) e serve.</summary>
     private bool Iniciar()
     {
@@ -329,6 +352,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public async Task<(short Retorno, IReadOnlyList<PwOperacao> Operacoes)> OperacoesAsync(byte tipo, CancellationToken ct)
     {
         await _um.WaitAsync(ct).ConfigureAwait(false);
+        await ForaDaTelaAsync();
         try
         {
             if (!Iniciar()) return (PW.PWRET_DLLNOTINIT, Array.Empty<PwOperacao>());
@@ -349,6 +373,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public async Task<bool> AtivoAsync(CancellationToken ct)
     {
         await _um.WaitAsync(ct).ConfigureAwait(false);
+        await ForaDaTelaAsync();
         try
         {
             if (!Iniciar()) return false;
@@ -398,6 +423,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
 
         try { await _um.WaitAsync(ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { return Falha(SituacaoTef.Cancelado, chargeId, CodigoTef.Cancelado, "cobrança cancelada pelo operador"); }
+        await ForaDaTelaAsync();   // a cobranca e a mais longa de todas: nunca na thread da tela
         Contexto? ctxExibicao = null;
         try
         {
@@ -547,6 +573,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "transação original sem NSU: cancele pelo menu do PayGo");
 
         await _um.WaitAsync(ct).ConfigureAwait(false);
+        await ForaDaTelaAsync();
         try
         {
             var prep = await PrepararAsync(PW.PWOPER_SALEVOID, chargeId).ConfigureAwait(false);
@@ -668,6 +695,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         var id = ClientePayGo.NovaIdentificacao();
         var chargeId = prefixo + id;
         await _um.WaitAsync(ct).ConfigureAwait(false);
+        await ForaDaTelaAsync();
         try
         {
             var prep = await PrepararAsync(oper, chargeId).ConfigureAwait(false);
@@ -728,6 +756,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         var n = 0;
         await _um.WaitAsync().ConfigureAwait(false);
+        await ForaDaTelaAsync();
         try
         {
             if (!Iniciar()) { Auditar?.Invoke("pgweblib: religamento sem PW_iInit; pendências ficam para o próximo boot"); return 0; }
@@ -782,6 +811,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         if (_descartado || ProximoIdle is not { } quando || quando > DateTime.Now) return false;
         if (!await _um.WaitAsync(0).ConfigureAwait(false)) return false;
+        await ForaDaTelaAsync();
         try
         {
             // Relê o descarte já com o semáforo: um tique que entrou junto com o Encerrar() não pode reiniciar a DLL depois do PW_End.

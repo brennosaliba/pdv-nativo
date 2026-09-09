@@ -25,6 +25,13 @@ public enum DesfechoVenda { Concluida, Desistiu }
 /// </summary>
 public partial class Pagamento : UserControl
 {
+    /// <summary>
+    /// O passo do roteiro de homologacao que esta venda executa, quando ela nasceu
+    /// de um toque no roteiro. Nulo na venda normal da loja, e por isso venda de
+    /// verdade nunca vira linha de planilha de homologacao.
+    /// </summary>
+    public int? PassoDoRoteiro { get; set; }
+
     private enum Fase { Forma, Dinheiro, Cobrando, Emitindo, Sucesso, Falha }
 
     private readonly Operador _operador;
@@ -591,6 +598,24 @@ public partial class Pagamento : UserControl
         }
 
         AtualizarTef(d, forma);
+
+        // O REQNUM DA TRANSACAO VIRA A LINHA DA PLANILHA (09/09/2026).
+        //
+        // A planilha de homologacao da PayGo exige, para integracao por biblioteca
+        // Windows, que a coluna "Retorno do teste" leve o PWINFO_REQNUM. Ate aqui ele
+        // so existia no log da biblioteca, e fechar os 39 passos obrigatorios era
+        // copiar 39 numeros de um arquivo de texto sem errar linha.
+        //
+        // So anota quando a venda NASCEU de um passo do roteiro: venda normal de loja
+        // nao tem passo e nao vira registro de homologacao.
+        if (PassoDoRoteiro is { } passoRoteiro)
+        {
+            PlacarHomologacao.Anotar(passoRoteiro,
+                d.Situacao == SituacaoTef.Pago ? PlacarHomologacao.Aprovado
+                : d.Situacao == SituacaoTef.Recusado ? PlacarHomologacao.Recusado
+                : PlacarHomologacao.Erro,
+                d.Reqnum);
+        }
 
         if (d.Situacao == SituacaoTef.Pago)
         {

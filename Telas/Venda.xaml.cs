@@ -135,6 +135,7 @@ public partial class Venda : UserControl
         // O botão do valor de teste só existe no caixa de homologação. Na loja ele
         // some da tela inteira — preço livre no caixa é rombo, não recurso.
         BtnValorLivre.Visibility = _homologacao ? Visibility.Visible : Visibility.Collapsed;
+        BtnRoteiroTef.Visibility = _homologacao ? Visibility.Visible : Visibility.Collapsed;
         // O menu do TEF idem: um lugar só para as operações da maquininha, para percorrer
         // os 58 passos. Na loja ele não existe (Pdv.Nucleo/MenuTef.Aparece).
         BtnMenuTef.Visibility = MenuTef.Aparece(_homologacao) ? Visibility.Visible : Visibility.Collapsed;
@@ -1686,10 +1687,37 @@ public partial class Venda : UserControl
     {
         if (!_homologacao) return;   // na loja o botão nem existe; aqui é o cinto
         var dono = Window.GetWindow(this)!;
+
         var valor = PedirValor.Mostrar(dono, "Valor do teste", "Quanto o roteiro pede nesta venda");
         if (valor is not { } v || !v.Positivo) return;
+        _passoEmExecucao = null;   // valor digitado a mao nao e passo do roteiro
         AdicionarValorDeTeste(v);
     }
+
+    /// <summary>
+    /// O ROTEIRO DE HOMOLOGACAO, COM O VALOR JA CERTO (09/09/2026).
+    ///
+    /// Porta separada do "Valor do teste" de proposito: aquele continua sendo digitar
+    /// um valor qualquer, e tem caminho de teste proprio. Este escolhe um PASSO, e o
+    /// valor vem do roteiro. Sao 39 passos obrigatorios, varios com centavo exato
+    /// (R$ 1.000,01 na venda negada): digitar isso 39 vezes e errar pelo menos uma, e
+    /// passo com centavo errado volta inteiro.
+    /// </summary>
+    private void AbrirRoteiroTef(object sender, RoutedEventArgs e)
+    {
+        if (!_homologacao) return;
+        var dono = Window.GetWindow(this)!;
+        if (TelaRoteiroTef.Mostrar(dono) is not { } passo) return;
+        if (Nucleo.RoteiroTef.ValorCent(passo) is not { } cent) return;
+        _passoEmExecucao = passo.Numero;
+        AdicionarValorDeTeste(new Dinheiro(cent));
+    }
+
+    /// <summary>
+    /// O passo do roteiro que esta venda está executando, quando ela nasceu de um
+    /// toque no roteiro. É o que liga o REQNUM da transação à linha da planilha.
+    /// </summary>
+    private int? _passoEmExecucao;
 
     private void AdicionarValorDeTeste(Dinheiro valor)
     {
@@ -2384,6 +2412,9 @@ public partial class Venda : UserControl
         var cortesiaAplicada = _cortesiaCodigo;
         var tela = new Pagamento(_operador, _sessao, itens,
             Servicos.Emissor(), Servicos.Tef(), _loja, _lojaId);
+        // Leva o passo do roteiro junto: e ele que liga o REQNUM da transacao a linha
+        // da planilha de homologacao. Venda normal de loja vai com null e nao anota nada.
+        tela.PassoDoRoteiro = _passoEmExecucao;
         tela.Encerrou += desfecho =>
         {
             PainelPagamento.Content = null;

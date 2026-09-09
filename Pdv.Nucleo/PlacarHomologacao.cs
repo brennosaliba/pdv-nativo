@@ -35,6 +35,54 @@ public static class PlacarHomologacao
     public const string Recusado = "recusado";
     public const string Erro = "erro";
 
+    /// <summary>
+    /// A tabela onde o caixa anota o roteiro. Criada na hora: ela so existe na
+    /// maquina que esta homologando, e nao vale uma migracao para as lojas.
+    /// </summary>
+    private static void Garantir(Microsoft.Data.Sqlite.SqliteConnection cx)
+        => Dapper.SqlMapper.Execute(cx,
+            "CREATE TABLE IF NOT EXISTS homolog_passo (numero TEXT PRIMARY KEY, intencao TEXT, resultado TEXT, quando TEXT, reqnum TEXT)");
+
+    /// <summary>Anota o desfecho de um passo, com o REQNUM que a planilha exige.</summary>
+    public static void Anotar(int numero, string resultado, string? reqnum)
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            Garantir(cx);
+            // ALTER separado: banco de quem ja rodava o roteiro antes de 09/09/2026
+            // tem a tabela sem a coluna, e CREATE TABLE IF NOT EXISTS nao a adiciona.
+            try { Dapper.SqlMapper.Execute(cx, "ALTER TABLE homolog_passo ADD COLUMN reqnum TEXT"); } catch { }
+            Dapper.SqlMapper.Execute(cx, """
+                INSERT INTO homolog_passo (numero, resultado, quando, reqnum) VALUES (@N,@R,@Q,@X)
+                ON CONFLICT(numero) DO UPDATE SET resultado=excluded.resultado,
+                    quando=excluded.quando, reqnum=COALESCE(excluded.reqnum, reqnum)
+                """,
+                new { N = numero.ToString(), R = resultado, Q = DateTime.Now.ToString("o"), X = reqnum });
+        }
+        catch { /* o roteiro nao pode cair por causa do registro */ }
+    }
+
+    /// <summary>O que ja foi anotado, por numero de passo.</summary>
+    public static IReadOnlyDictionary<int, PassoFeito> Anotados()
+    {
+        var d = new Dictionary<int, PassoFeito>();
+        try
+        {
+            using var cx = Banco.Abrir();
+            Garantir(cx);
+            try { Dapper.SqlMapper.Execute(cx, "ALTER TABLE homolog_passo ADD COLUMN reqnum TEXT"); } catch { }
+            foreach (var r in Dapper.SqlMapper.Query(cx, "SELECT numero, resultado, quando, reqnum FROM homolog_passo"))
+            {
+                if (!int.TryParse((string)r.numero, out var n)) continue;
+                DateTime.TryParse((string?)r.quando, out var q);
+                d[n] = new PassoFeito(n, (string?)r.resultado ?? "", r.reqnum as string, q);
+            }
+        }
+        catch { }
+        return d;
+    }
+
     /// <summary>Junta o roteiro com o que foi feito, na ordem do roteiro.</summary>
     public static IReadOnlyList<LinhaDoPlacar> Montar(
         IReadOnlyList<PassoTef> passos,
