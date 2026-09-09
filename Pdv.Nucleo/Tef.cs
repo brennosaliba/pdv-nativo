@@ -213,6 +213,15 @@ public static class FaseTef
 
     /// <summary>Só mensagem de progresso. Não mexa no banco por causa dela.</summary>
     public const string Recado = "recado";
+
+    /// <summary>
+    /// A rede JA RESPONDEU e a maquininha esta encerrando (pediu RETIRE O CARTAO). Cancelar
+    /// daqui em diante nao evita cobranca nenhuma: num cartao vira o desfazimento manual dos
+    /// passos 39 e 40 do roteiro, e num Pix desfaz um pagamento que o cliente ja fez (medido
+    /// em 09/09/2026, REQNUM 280555). E a tela que decide o que fazer com o botao. Nao mexa
+    /// no banco por causa dela.
+    /// </summary>
+    public const string Encerrando = "encerrando";
 }
 
 /// <summary>

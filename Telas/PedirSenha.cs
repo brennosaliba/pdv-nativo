@@ -50,10 +50,17 @@ public static class PedirSenha
         ok.Margin = new Thickness(5, 0, 0, 0);
         cancelar.Click += (_, _) => janela.Close();
         ok.Click += (_, _) => { resultado = caixa.Password; janela.Close(); };
+        // FECHA DEPOIS QUE A TECLA TERMINA DE SER PROCESSADA (09/09/2026). Fechar a janela
+        // dentro do KeyDown destruia o HWND com o Enter ainda em voo; o WM_CHAR e o KeyUp
+        // sobravam para a proxima janela (a pergunta seguinte do TEF) e o WPF caia em
+        // TextServicesContext.Keystroke. Handled=true segura o '\r', e o Close vai para a
+        // fila do Dispatcher, ja fora do processamento da tecla.
         caixa.KeyDown += (_, e) =>
         {
-            if (e.Key == System.Windows.Input.Key.Enter) { resultado = caixa.Password; janela.Close(); }
-            if (e.Key == System.Windows.Input.Key.Escape) janela.Close();
+            if (e.Key == System.Windows.Input.Key.Enter) resultado = caixa.Password;
+            else if (e.Key != System.Windows.Input.Key.Escape) return;
+            e.Handled = true;
+            janela.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, (Action)janela.Close);
         };
         Grid.SetColumn(cancelar, 0);
         Grid.SetColumn(ok, 1);

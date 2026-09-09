@@ -34,10 +34,15 @@ namespace Pdv.Nucleo;
 /// o menu continua aparecendo, e é nele que o passo 05 do roteiro manda apertar Esc. Ver
 /// <see cref="FiltroRedes"/>.
 /// </param>
+/// <param name="PreferenciaQr">
+/// PWINFO_DSPQRPREF na venda de Pix: <see cref="PW.DSPQRPREF_TELA"/> pede o QR na tela do caixa,
+/// <see cref="PW.DSPQRPREF_PINPAD"/> no pinpad, null nao manda nada e a biblioteca decide
+/// (medido em 09/09/2026: decide pelo pinpad, mesmo com CAP_QR declarada).
+/// </param>
 public sealed record OpcoesPGWebLib(string NomeAutomacao, string VersaoAutomacao, string Desenvolvedor,
     int Capacidades = ProvedorPGWebLib.CapacidadesPadrao, string? RedeCartao = null, string? RedePix = null,
     string PortaPinpad = "0", string Moeda = "986", short Ambiente = PW.ENVRMNT_PROD,
-    IReadOnlyList<string>? RedesPermitidas = null);
+    IReadOnlyList<string>? RedesPermitidas = null, string? PreferenciaQr = null);
 
 /// <summary>
 /// O que a biblioteca mandou o caixa mostrar na tela enquanto a transação corre.
@@ -469,6 +474,9 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     Param(ctx, PW.PWINFO_AUTHSYST, _op.RedePix!);
                     Param(ctx, PW.PWINFO_AUTHSYSTNOME, _op.RedePix!);
                 }
+                // Onde o QR sai. Sem isto a biblioteca manda para o pinpad mesmo com CAP_QR.
+                if (!string.IsNullOrWhiteSpace(_op.PreferenciaQr))
+                    Param(ctx, PW.PWINFO_DSPQRPREF, _op.PreferenciaQr!);
             }
             else
             {
@@ -1159,6 +1167,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             }
             if (p.EhPinpad)
             {
+                // A biblioteca passou da exibicao para o pinpad: o QR (ou a mensagem) ja
+                // cumpriu o papel. MEDIDO em 09/09/2026 as 18:59: o host aprovou o Pix, a
+                // biblioteca pediu RETIRE O CARTAO, e a janela do QR continuou aberta com o
+                // botao "Cancelar cobranca". O dono clicou nele e uma venda PAGA virou
+                // desfeita (REQNUM 280555). A janela fecha aqui, antes de falar com o pinpad.
+                FecharExibicaoSeAberta(ctx);
+                // E a tela de pagamento fica sabendo que a rede ja decidiu: e ela que tira o
+                // botao de cancelar do Pix (e o mantem no cartao, por causa dos passos 39 e 40).
+                if (p.Tipo == PW.PWDAT_PPREMCRD)
+                    ctx.Andamento?.Report(new AndamentoTef(FaseTef.Encerrando, ctx.ChargeId, ctx.Id, ""));
                 var r = await CapturarNoPinpadAsync(ctx, (ushort)i, p, fim).ConfigureAwait(false);
                 if (r is not null) return r;
                 continue;
@@ -1304,6 +1322,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
                 $"TEF não aceitou o aviso de que a tela mostrou ({p.Identificador}): {PW.Nome(ret)}", ler: true);
         return null;
+    }
+
+    /// <summary>Fecha a tela de exibicao (QR ou mensagem) se estiver aberta; o finally da cobranca nao fecha duas vezes.</summary>
+    private void FecharExibicaoSeAberta(Contexto ctx)
+    {
+        if (!ctx.Exibiu) return;
+        ctx.Exibiu = false;
+        ctx.NaTela = null;
+        try { FecharExibicao?.Invoke(); }
+        catch (Exception ex) { Auditar?.Invoke("pgweblib: fechar a tela de exibicao lancou: " + ex.GetType().Name); }
     }
 
     private async Task<Fim?> CapturarNoPinpadAsync(Contexto ctx, ushort indice, PwGetData p, Fim fim)

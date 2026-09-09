@@ -167,6 +167,15 @@ public static class PW
     public const ushort PWINFO_AUTHPOSQRCODE = 0x1F77;
     /// <summary>Preferência de exibição do QR (PWINFO_DSPQRPREF), da mesma família.</summary>
     public const ushort PWINFO_DSPQRPREF = 0x7F50;
+    /// <summary>
+    /// Os valores de PWINFO_DSPQRPREF. O cabecalho oficial declara a tag e nao os valores; a
+    /// fonte e o ACBrTEFPayGoWebComum.pas: IfThen(qreExibirNoCheckOut, '2', '1').
+    ///
+    /// Medido em 09/09/2026: declarar CAP_QR em AUTCAP sem mandar a preferencia deixa o QR
+    /// no pinpad, e o caixa so recebe a tela tipo 18 com o contador "QR CODE 06/07/08".
+    /// </summary>
+    public const string DSPQRPREF_PINPAD = "1";
+    public const string DSPQRPREF_TELA = "2";
 
     public const ushort PWINFO_RESULTMSG = 66;
     public const ushort PWINFO_AUTHCODE = 70;

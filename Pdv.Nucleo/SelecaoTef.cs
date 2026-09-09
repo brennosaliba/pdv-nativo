@@ -98,6 +98,18 @@ public static class ConfigPGWebLib
     public const string ChaveQrNaTela = "tef_pgweb_qr_na_tela";
 
     /// <summary>
+    /// ONDE o QR do Pix sai quando <see cref="ChaveQrNaTela"/> esta ligada: "tela" manda
+    /// PWINFO_DSPQRPREF=2 e a biblioteca entrega o QR para o caixa desenhar; "pinpad" manda 1;
+    /// em branco nao manda nada e a biblioteca decide.
+    ///
+    /// MEDIDO em 09/09/2026: com CAP_QR declarada e sem esta preferencia, a biblioteca gerou o
+    /// QR no pinpad em todas as 10 vendas de Pix e nunca pediu a tela tipo 20. Declarar a
+    /// capacidade sozinha nao muda onde o QR sai. Fica em branco por padrao: a homologacao
+    /// passou pelo pinpad e mudar o caminho no meio do roteiro e risco sem ganho.
+    /// </summary>
+    public const string ChaveQrOnde = "tef_pgweb_qr_onde";
+
+    /// <summary>
     /// As redes que a loja deixa aparecer no menu de seleção da rede, separadas por vírgula.
     /// Em branco (o padrão) o menu mostra tudo que a biblioteca listar, que é o certo numa loja
     /// de verdade: quem sabe o que está credenciado no terminal é o PayGo, não o caixa.
@@ -136,6 +148,20 @@ public static class ConfigPGWebLib
     /// <summary>A loja pediu para desenhar o QR do Pix na tela do caixa?</summary>
     public static bool QrNaTela(Func<string, string?> config)
         => (config(ChaveQrNaTela)?.Trim() ?? "") == "1";
+
+    /// <summary>
+    /// O valor de PWINFO_DSPQRPREF a mandar, ou null para nao mandar. "tela" so vale com
+    /// <see cref="ChaveQrNaTela"/> ligada: sem CAP_QR a biblioteca nao tem a quem entregar o QR
+    /// (documentacao oficial: "este tipo de captura somente ocorrera caso a Automacao indique
+    /// a capacidade correspondente atraves de PWINFO_AUTCAP").
+    /// </summary>
+    public static string? PreferenciaQr(Func<string, string?> config)
+        => (config(ChaveQrOnde)?.Trim().ToLowerInvariant() ?? "") switch
+        {
+            "tela" or "caixa" or "checkout" or "2" => QrNaTela(config) ? PW.DSPQRPREF_TELA : null,
+            "pinpad" or "maquininha" or "1" => PW.DSPQRPREF_PINPAD,
+            _ => null,
+        };
 
     /// <summary>As redes de <see cref="ChaveRedes"/> já quebradas. Vazia = o menu mostra todas.</summary>
     public static IReadOnlyList<string> Redes(Func<string, string?> config) => FiltroRedes.Ler(config(ChaveRedes));
@@ -203,7 +229,8 @@ public static class ConfigPGWebLib
             RedePix: Limpo(config("tef_paygo_rede_pix")),
             PortaPinpad: Limpo(config(ChavePortaPinpad)) ?? "0",
             Ambiente: Ambiente(config),
-            RedesPermitidas: Redes(config));
+            RedesPermitidas: Redes(config),
+            PreferenciaQr: PreferenciaQr(config));
     }
 }
 

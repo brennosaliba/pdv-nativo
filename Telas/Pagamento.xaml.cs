@@ -622,6 +622,12 @@ public partial class Pagamento : UserControl
         var andamento = new Progress<AndamentoTef>(a =>
         {
             RegistrarTef(a, forma, valor, parcelas);
+            // PIX JA RESPONDIDO: SEM BOTAO DE CANCELAR (09/09/2026). Quando a maquininha pede
+            // RETIRE O CARTAO a rede ja decidiu. Num cartao esse botao e o unico caminho do
+            // desfazimento manual (passos 39 e 40 do roteiro) e continua. Num Pix o cliente ja
+            // pagou, e um toque aqui desfez um Pix pago (REQNUM 280555, 18:59). Sai o botao.
+            if (a.Fase == FaseTef.Encerrando && forma == "pix")
+                Estado("💳", "Pix respondido", "A maquininha está terminando. Só um instante.");
             if (a.Mensagem.Length > 0) TxtDetalheEstado.Text = a.Mensagem + selo;
         });
 

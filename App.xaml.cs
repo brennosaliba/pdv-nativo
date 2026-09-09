@@ -63,10 +63,21 @@ public partial class App : Application
             Registrar("task", a.Exception);
             a.SetObserved();
         };
+        // TECLA QUE O WINDOWS DEIXOU CAIR NAO E MOTIVO PARA CAIXA DE AVISO (09/09/2026).
+        // NullReferenceException em System.Windows.Input.TextServicesContext.Keystroke: o
+        // QueryInterface do gerenciador de texto do Windows falhou no meio de uma tecla
+        // (WebView2 e teclado virtual tambem provocam, dotnet/wpf#6463). O WPF lanca ANTES
+        // de qualquer handler rodar: a unica consequencia e essa tecla se perder. Uma
+        // MessageBox aqui abre outro laco modal dentro da tecla meio processada, por cima
+        // do dialogo do TEF, e foi o que o dono viu como "erro no passo 18". Fica no log.
+        static bool TeclaPerdidaDoWindows(Exception ex)
+            => ex is NullReferenceException
+               && (ex.StackTrace ?? "").Contains("TextServicesContext.Keystroke", StringComparison.Ordinal);
         DispatcherUnhandledException += (_, args) =>
         {
             args.Handled = true;
             Registrar("tela", args.Exception);
+            if (TeclaPerdidaDoWindows(args.Exception)) return;
             try
             {
                 MessageBox.Show(

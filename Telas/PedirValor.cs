@@ -272,25 +272,52 @@ public static class PedirTexto
         linha.Children.Add(cancelar); linha.Children.Add(ok);
         painel.Children.Add(linha);
 
-        caixa.GotFocus += (_, _) => AbrirTecladoVirtual();
         janela.Content = Dialogo.Moldura(painel);
-        janela.Loaded += (_, _) => { caixa.Focus(); caixa.SelectAll(); };
-        janela.KeyDown += (_, e) => { if (e.Key == Key.Escape) janela.Close(); };
+        // O TECLADO VIRTUAL SO DEPOIS DE A JANELA ESTAR DE PE, E FORA DA THREAD DA TELA.
+        // Medido em 09/09/2026 (erros.log, passo 18 da homologacao): o caixa caia com
+        // NullReferenceException em TextServicesContext.Keystroke exatamente quando este
+        // dialogo abria logo depois de a caixa de senha fechar no Enter. O Process.Start do
+        // TabTip com UseShellExecute roda o ShellExecuteEx NA thread da tela (ela e STA),
+        // dentro do GotFocus, dentro do Loaded, com a tecla anterior ainda em voo: e uma
+        // chamada COM de fora no exato instante em que o KeyUp chega a janela nova. Agora
+        // ele espera a janela ficar ociosa e roda num worker (o .NET abre a propria STA).
+        janela.Loaded += (_, _) =>
+        {
+            caixa.Focus();
+            caixa.SelectAll();
+            janela.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, (Action)AbrirTecladoVirtual);
+        };
+        janela.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Escape) return;
+            e.Handled = true;
+            janela.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, (Action)janela.Close);
+        };
         janela.ShowDialog();
         return string.IsNullOrWhiteSpace(resultado) ? null : resultado;
     }
 
-    /// <summary>Melhor esforço: se o TabTip não existir/estiver bloqueado, segue sem ele.</summary>
+    /// <summary>
+    /// Melhor esforço: se o TabTip não existir/estiver bloqueado, segue sem ele. Num worker de
+    /// proposito (ver o comentario em Mostrar). SEMPRE chama o Process.Start, mesmo com um
+    /// TabTip.exe ja vivo: o processo fica residente com o teclado escondido (nesta maquina
+    /// havia tres, sem janela nenhuma), e e o Start de novo que traz o teclado de volta.
+    /// Um teste de "ja esta aberto" por processo mataria o teclado do caixa touch na segunda
+    /// vez, e a revisao de 09/09/2026 pegou isso antes de sair.
+    /// </summary>
     private static void AbrirTecladoVirtual()
     {
-        try
+        _ = System.Threading.Tasks.Task.Run(() =>
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            try
             {
-                FileName = @"C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe",
-                UseShellExecute = true,
-            });
-        }
-        catch { /* sem teclado virtual disponível — teclado físico ainda funciona */ }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = @"C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe",
+                    UseShellExecute = true,
+                });
+            }
+            catch { /* sem teclado virtual disponível — teclado físico ainda funciona */ }
+        });
     }
 }

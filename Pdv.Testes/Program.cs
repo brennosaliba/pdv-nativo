@@ -1372,6 +1372,7 @@ TestesPGWebLib.Rodar((cond, nome) => Check("pgweblib: " + nome, cond));
 Console.WriteLine("--- TEF PayGo PGWebLib na casa (config, callback, filtros) ---");
 TestesCasaPGWebLib.Rodar((cond, nome) => Check("pgweb-casa: " + nome, cond));
 TestesQrNaTela.Rodar((cond, nome) => Check("qr-na-tela: " + nome, cond));
+TestesTeclaEntreDialogos.Rodar((cond, nome) => Check("tecla-entre-dialogos: " + nome, cond));
 // -- passo 28: o VALOR de R$ 1.001,00 tem que chegar inteiro na maquininha ------
 // Promocao sem "alvo" alcanca tudo, inclusive a linha de valor de teste: a venda do
 // roteiro saia por R$ 900,90 e o C6PAY nao pedia dado generico nenhum.

@@ -22,6 +22,13 @@ namespace Pdv.Testes;
 /// </summary>
 public static class TestesQrNaTela
 {
+    private sealed class Andamentos : IProgress<AndamentoTef>
+    {
+        private readonly Action<AndamentoTef> _ao;
+        public Andamentos(Action<AndamentoTef> ao) { _ao = ao; }
+        public void Report(AndamentoTef v) => _ao(v);
+    }
+
     public static void Rodar(Action<bool, string> checar)
     {
         var pasta = TestesPGWebLib.PastaTeste;
@@ -193,5 +200,152 @@ public static class TestesQrNaTela
 
             checar(d.Pago && mostrados.Count == 0, "cartão não abre tela de QR: o caminho antigo não mudou");
         }
+
+        // ── 10. a tela do QR fecha quando a biblioteca passa para o pinpad, nao so no fim ──
+        // MEDIDO em 09/09/2026 as 18:59 (comms_260909.log, REQNUM 280555): o host aprovou o
+        // Pix, a biblioteca pediu RETIRE O CARTAO, e a janela do QR continuou aberta com o
+        // botao "Cancelar cobranca". O dono clicou nele, e um Pix PAGO virou desfeito.
+        {
+            var fechou = 0;
+            var fechadaQuandoOPinpadFalou = -1;
+            var f = new FakePGWebLib { PedirQrNaTela = true, ComSenha = false, PedirRemocao = false };
+            f.Roteiro.Enqueue(FakePGWebLib.Desfecho.Aprovar);
+            var prog = new Andamentos(a =>
+            {
+                if (a.Fase == FaseTef.Recado && fechadaQuandoOPinpadFalou < 0) fechadaQuandoOPinpadFalou = fechou;
+            });
+            var p = new ProvedorPGWebLib(f, pasta, Op())
+            {
+                IntervaloPollMs = 5,
+                TempoMaxExecMs = 2000,
+                TempoMaxCapturaMs = 2000,
+                TempoPerguntaMs = 500,
+                Guardar = _ => true,
+                Exibir = (_, _) => Task.FromResult(true),
+                FecharExibicao = () => fechou++,
+            };
+            var d = p.CobrarAsync(TipoTef.Pix, Dinheiro.DeReais(500m), null, 1, prog, CancellationToken.None)
+                     .GetAwaiter().GetResult();
+            checar(d.Pago, "a venda de Pix sai aprovada");
+            checar(fechadaQuandoOPinpadFalou == 1,
+                "a tela do QR ja estava fechada quando o pinpad mandou o primeiro recado (" + fechadaQuandoOPinpadFalou + ")");
+            checar(fechou == 1, "e fechou uma vez so, sem fechar de novo no fim (" + fechou + ")");
+        }
+
+        // ── 11. onde o QR sai: PWINFO_DSPQRPREF so quando a loja pede ─────────
+        // MEDIDO em 09/09/2026: com CAP_QR declarada e sem a preferencia, a biblioteca gerou o
+        // QR no pinpad nas 10 vendas e nunca pediu a tela tipo 20. O valor vem do ACBr
+        // (IfThen(qreExibirNoCheckOut, '2', '1')); o cabecalho oficial nao documenta.
+        {
+            ProvedorPGWebLib Com(FakePGWebLib fake, string? pref) => new(fake, pasta, Op() with { PreferenciaQr = pref })
+            {
+                IntervaloPollMs = 5,
+                TempoMaxExecMs = 2000,
+                TempoMaxCapturaMs = 2000,
+                TempoPerguntaMs = 500,
+                Guardar = _ => true,
+                Exibir = (_, _) => Task.FromResult(true),
+            };
+
+            var f = new FakePGWebLib { PedirQrNaTela = true, ComSenha = false, PedirRemocao = false };
+            f.Roteiro.Enqueue(FakePGWebLib.Desfecho.Aprovar);
+            Cobrar(Com(f, null));
+            checar(f.Ultima is not null && !f.Ultima.Params.ContainsKey(PW.PWINFO_DSPQRPREF),
+                "sem preferencia gravada o caixa nao manda DSPQRPREF: a biblioteca decide, como sempre fez");
+
+            var f2 = new FakePGWebLib { PedirQrNaTela = true, ComSenha = false, PedirRemocao = false };
+            f2.Roteiro.Enqueue(FakePGWebLib.Desfecho.Aprovar);
+            Cobrar(Com(f2, PW.DSPQRPREF_TELA));
+            checar(f2.Ultima is not null && f2.Ultima.Params.TryGetValue(PW.PWINFO_DSPQRPREF, out var pref) && pref == "2",
+                "com tef_pgweb_qr_onde=tela vai PWINFO_DSPQRPREF=2, o valor do checkout");
+
+            var f3 = new FakePGWebLib { ComSenha = false, PedirRemocao = false };
+            f3.Roteiro.Enqueue(FakePGWebLib.Desfecho.Aprovar);
+            Com(f3, PW.DSPQRPREF_TELA).CobrarAsync(TipoTef.Credito, Dinheiro.DeReais(10m), null, 1, null, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            checar(f3.Ultima is not null && !f3.Ultima.Params.ContainsKey(PW.PWINFO_DSPQRPREF),
+                "cartao nunca manda preferencia de QR");
+
+            static string? Cfg(string chave, string? onde, string? naTela)
+                => chave == ConfigPGWebLib.ChaveQrOnde ? onde : chave == ConfigPGWebLib.ChaveQrNaTela ? naTela : null;
+            checar(ConfigPGWebLib.PreferenciaQr(c => Cfg(c, "tela", "1")) == PW.DSPQRPREF_TELA, "\"tela\" com o QR na tela ligado = 2");
+            checar(ConfigPGWebLib.PreferenciaQr(c => Cfg(c, "tela", null)) is null,
+                "\"tela\" SEM o QR na tela ligado nao manda nada: sem CAP_QR a biblioteca nao teria a quem entregar o QR");
+            checar(ConfigPGWebLib.PreferenciaQr(c => Cfg(c, "pinpad", null)) == PW.DSPQRPREF_PINPAD, "\"pinpad\" = 1");
+            checar(ConfigPGWebLib.PreferenciaQr(c => Cfg(c, null, "1")) is null,
+                "em branco nao manda nada, mesmo com o QR na tela ligado: e o caminho de hoje, o que passou na homologacao");
+            checar(ConfigPGWebLib.Opcoes(c => Cfg(c, "tela", "1"), "0.8.7").PreferenciaQr == PW.DSPQRPREF_TELA,
+                "e a preferencia chega ao provedor pela config");
+        }
+
+        // ── 12. a rede respondeu: o provedor avisa a tela ANTES do RETIRE O CARTAO ─
+        // A revisao de 09/09/2026 mostrou que fechar a janela do QR nao bastava: a tela de
+        // pagamento tem o proprio "Cancelar cobranca", e ele continuava armado durante o
+        // RETIRE O CARTAO de um Pix ja pago. O provedor passa a anunciar FaseTef.Encerrando
+        // no instante em que a biblioteca pede a retirada; a tela decide o que fazer.
+        {
+            var fases = new List<(string Fase, string Msg)>();
+            var f = new FakePGWebLib { PedirQrNaTela = true, ComSenha = false, PedirRemocao = true };
+            f.Roteiro.Enqueue(FakePGWebLib.Desfecho.Aprovar);
+            var p = new ProvedorPGWebLib(f, pasta, Op())
+            {
+                IntervaloPollMs = 5,
+                TempoMaxExecMs = 2000,
+                TempoMaxCapturaMs = 2000,
+                TempoPerguntaMs = 500,
+                Guardar = _ => true,
+                Exibir = (_, _) => Task.FromResult(true),
+            };
+            var d = p.CobrarAsync(TipoTef.Pix, Dinheiro.DeReais(500m), null, 1, new Andamentos(a => fases.Add((a.Fase, a.Mensagem))), CancellationToken.None)
+                     .GetAwaiter().GetResult();
+            checar(d.Pago, "a venda de Pix com retirada sai aprovada");
+            var encerrando = fases.FindIndex(x => x.Fase == FaseTef.Encerrando);
+            var retire = fases.FindIndex(x => x.Msg == "RETIRE O CARTAO");
+            checar(encerrando >= 0, "o provedor anuncia FaseTef.Encerrando");
+            checar(encerrando >= 0 && retire > encerrando,
+                "e anuncia ANTES do recado RETIRE O CARTAO, para a tela tirar o botao a tempo");
+            checar(fases.Count(x => x.Fase == FaseTef.Encerrando) == 1, "uma vez so por cobranca");
+
+            var semRetirada = new List<string>();
+            var f2 = new FakePGWebLib { PedirQrNaTela = true, ComSenha = false, PedirRemocao = false };
+            f2.Roteiro.Enqueue(FakePGWebLib.Desfecho.Aprovar);
+            var p2 = new ProvedorPGWebLib(f2, pasta, Op())
+            {
+                IntervaloPollMs = 5, TempoMaxExecMs = 2000, TempoMaxCapturaMs = 2000, TempoPerguntaMs = 500,
+                Guardar = _ => true, Exibir = (_, _) => Task.FromResult(true),
+            };
+            p2.CobrarAsync(TipoTef.Pix, Dinheiro.DeReais(500m), null, 1, new Andamentos(a => semRetirada.Add(a.Fase)), CancellationToken.None)
+              .GetAwaiter().GetResult();
+            checar(!semRetirada.Contains(FaseTef.Encerrando), "sem pedido de retirada nao ha o anuncio: ele e do RETIRE O CARTAO, nao da aprovacao");
+        }
+
+        // ── 13. a tela de pagamento: Pix respondido perde o Cancelar; cartao mantem ──
+        {
+            var raiz = AcharRaiz();
+            checar(raiz is not null, "achei a raiz do repositorio para ler a tela de pagamento");
+            if (raiz is not null)
+            {
+                var tela = File.ReadAllText(Path.Combine(raiz, "Telas", "Pagamento.xaml.cs"));
+                var i = tela.IndexOf("var andamento = new Progress<AndamentoTef>(a =>", StringComparison.Ordinal);
+                var j = i < 0 ? -1 : tela.IndexOf("});", i, StringComparison.Ordinal);
+                var trecho = i < 0 || j < 0 ? "" : tela[i..j];
+                checar(trecho.Contains("a.Fase == FaseTef.Encerrando && forma == \"pix\"", StringComparison.Ordinal),
+                    "no Encerrando de um PIX a tela troca o estado (e so no Pix: no cartao o botao e o desfazimento manual dos passos 39 e 40)");
+                checar(trecho.Contains("Estado(", StringComparison.Ordinal) && !trecho.Contains("Cancelar cobran", StringComparison.Ordinal),
+                    "e o estado novo vem SEM o botao Cancelar cobranca");
+                checar(tela.Contains("(\"Cancelar cobrança\", CancelarCobrancaNoTef)", StringComparison.Ordinal),
+                    "o botao continua existindo no inicio da cobranca, para o cartao e para o Esc do passo 55");
+                checar(!trecho.Contains('—'), "sem travessao no texto novo");
+            }
+        }
+    }
+
+    private static string? AcharRaiz()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+            if (Directory.Exists(Path.Combine(dir.FullName, "Telas")) && File.Exists(Path.Combine(dir.FullName, "Servicos.cs")))
+                return dir.FullName;
+        return null;
     }
 }

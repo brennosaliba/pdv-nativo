@@ -105,9 +105,9 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **Situação:** pronto
 
-**O que você faz:** Abre a venda, toca em PIX, confirma o valor e vira a tela do caixa para o cliente ler o QR com o aplicativo do banco. A aprovação chega sozinha.
+**O que você faz:** Abre a venda, lanca R$ 500,00 (o sandbox da PayGo so aprovou sozinho esse valor: em 09/09/2026 oito Pix de R$ 9,99 morreram em 2 minutos com A283 e os dois de R$ 500,00 aprovaram em menos de 1 minuto), toca em PIX e confirma. O QR sai no pinpad (na tela do caixa so com tef_pgweb_qr_onde=tela). O cliente le com o aplicativo e a aprovacao chega sozinha. NAO toque em Cancelar depois de "Transacao autorizada".
 
-**O que conferir:** A janela do QR abrindo com o código grande e legível. Aprovação automática, recibo impresso e a janela fechando sozinha no fim. tef_transacao 'pago' com campo 010 = PIX C6 BANK e o NSU virando carimbo do fechamento (Pagamento.xaml.cs:602-603). Na auditoria, a linha "exibir tipo=20 ... qr=N caracteres", que prova de onde o QR veio. A rede PIX C6 BANK já está gravada em tef_paygo_rede_pix, então…
+**O que conferir:** A janela "Realize a leitura do QR code" parada, sem piscar, com o contador da biblioteca. Aprovacao automatica em ate 1 minuto, recibo impresso e a janela fechando sozinha. tef_transacao 'pago' com rede PIX C6 BANK, nsu = E2E do Pix (comeca com E19283746) e cod_controle = REQNUM. Anota o REQNUM que a tela mostra.
 
 ### Passo 12. Teste de comunicação bem-sucedido
 
@@ -153,7 +153,7 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **Situação:** pronto
 
-**O que você faz:** Configuração, botão ADM, escolhe MANUTENÇÃO na lista da maquininha e responde o que ela pedir. Se pedir a senha do lojista, o campo aparece sem eco.
+**O que você faz:** Configuração, botão ADM, escolhe MANUTENÇÃO na lista da maquininha e responde o que ela pedir. Se pedir a senha do lojista, o campo aparece sem eco. Se perguntar "Apagar todos os arquivos?", responde Sim: e o esperado, e o passo 18 reinstala logo em seguida. Depois da manutencao o terminal fica sem tabelas (no log: Versao Param 0, NumReq 0), entao NENHUMA venda funciona ate o passo 18 terminar. Feito em 09/09/2026 as 19:09 (TRANSACAO OK).
 
 **O que conferir:** Tela: "Operação administrativa concluída" (Configuracao.xaml.cs:1702). Sem recibo, e isso é o esperado: sem vias na resposta o hook de impressão devolve true sem imprimir (ProvedorPGWebLib.cs:1423). A prova de "transação confirmada para a automação" é a linha de auditoria do evento tef_pgweblib: "CNF pgweb-adm-... PWRET_OK (0) -> adm" (ProvedorPGWebLib.cs:1221). Vale exportar essa linha da…
 
@@ -161,7 +161,7 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **Situação:** depende da PayGo
 
-**O que você faz:** Configuração, seção da maquininha, toca em "Instalar ponto de captura". A biblioteca pergunta os dados na tela do caixa (CNPJ, ponto de captura, senha) e quem digita é o dono.
+**O que você faz:** Configuração, seção da maquininha, toca em "Instalar ponto de captura". A biblioteca pergunta os dados na tela do caixa (menu INSTALACAO, senha tecnica, ponto de captura, CNPJ, endereco do host) e quem digita e o dono. Depois de responder a senha com Enter, espera a proxima pergunta abrir; em 09/09/2026 (0.8.6) o Windows derrubou a tela nesse instante (erro do WPF ao processar a tecla, erros.log) e a 0.8.7 abre a pergunta seguinte so depois de o teclado esvaziar.
 
 **O que conferir:** Tela: "Ponto de captura instalado" (Configuracao.xaml.cs:1694) e recibo impresso pelas vias da resposta (ProvedorPGWebLib.cs:559 chama a impressão ANTES do CNF). Depois, tocar em "Testar a maquininha": tem que sair de "PayGo não instalado neste terminal" (ProvedorPGWebLib.cs:66 e 279) para "a biblioteca respondeu".
 
@@ -465,9 +465,9 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **Situação:** pronto
 
-**O que você faz:** Abre a venda, monta uma comanda de R$ 500,00 (por exemplo 3 itens de R$ 153,00 mais 2 de R$ 20,50), toca Finalizar, escolhe PIX, digita 50000 e confirma. Mostra o QR da tela para o cliente ler e espera a aprovacao chegar sozinha.
+**O que você faz:** Abre a venda, monta uma comanda de R$ 500,00 (por exemplo 3 itens de R$ 153,00 mais 2 de R$ 20,50), toca Finalizar, escolhe PIX, digita 50000 e confirma. O QR sai no pinpad; espera a aprovacao chegar sozinha (menos de 1 minuto no sandbox). NAO toque em Cancelar depois de "Transacao autorizada": em 09/09/2026 isso desfez um Pix pago (REQNUM 280555).
 
-**O que conferir:** O QR aparece na tela do caixa, grande e legivel por celular. Depois da leitura, a tela vira paga, a janela do QR fecha sozinha e as duas vias saem na impressora. Na base: tef_transacao situacao pago, com nsu preenchido (Pix pelo TEF vem sem codigo de autorizacao, so com NSU, e o PDV ja usa o NSU como carimbo, Telas/Pagamento.xaml.cs:600-605). Na auditoria tem que aparecer a linha "pgweblib:…
+**O que conferir:** O QR aparece no pinpad e o caixa mostra "Realize a leitura do QR code" sem piscar. Depois da aprovacao a janela fecha sozinha, a tela vira paga e as duas vias saem na impressora. Na base: tef_transacao situacao pago, nsu = E2E do Pix (Pix pelo TEF vem sem codigo de autorizacao, so com NSU, e o PDV ja usa o NSU como carimbo, Telas/Pagamento.xaml.cs:600-605), cod_controle = REQNUM. Na auditoria tem que aparecer a linha "pgweblib: CNF ... -> pago".
 
 ### Passo 57. Cancelamento PIX (tem que ser negado pelo host)
 

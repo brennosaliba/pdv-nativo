@@ -946,12 +946,21 @@ public static class Servicos
         }
     }
 
-    /// <summary>Roda na thread de UI (diálogo modal) a partir de qualquer thread; na própria UI, executa direto.</summary>
+    /// <summary>
+    /// Roda na thread de UI (diálogo modal) a partir de qualquer thread; na própria UI, executa direto.
+    ///
+    /// PRIORIDADE BACKGROUND DE PROPOSITO (09/09/2026). As perguntas do TEF vem em cadeia:
+    /// a senha fecha no Enter e a pergunta seguinte abre em seguida. Com a prioridade
+    /// normal (acima de Input) a janela nova nascia ANTES de o Windows entregar o KeyUp e
+    /// o WM_CHAR daquele Enter, que caiam na janela nova e derrubavam o WPF em
+    /// TextServicesContext.Keystroke (erros.log, passo 18 da homologacao). Background fica
+    /// abaixo de Input: o teclado esvazia primeiro, a janela abre depois. Custo: milissegundos.
+    /// </summary>
     private static Task<T> NaUiAsync<T>(Func<T> acao)
     {
         var disp = System.Windows.Application.Current?.Dispatcher;
         if (disp is null || disp.CheckAccess()) return Task.FromResult(acao());
-        return disp.InvokeAsync(acao).Task;
+        return disp.InvokeAsync(acao, System.Windows.Threading.DispatcherPriority.Background).Task;
     }
 
     /// <summary>
