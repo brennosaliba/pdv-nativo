@@ -60,6 +60,20 @@ public static class RedesPayGo
         "CONDUCTOR/DOCK",
         "CREDISHOP",
         "CTF",
+        // AS DUAS GRAFIAS, e nao e descuido: para o PayGo sao redes DIFERENTES.
+        //
+        // 09/09/2026, medido no log da homologacao: `C6 PAY` aprovou quatro vezes
+        // (13:52, 14:28, 14:35, 14:45) e `C6PAY` devolveu [NA A116] SERVICO NAO
+        // HABILITADO nas duas em que foi tentada. Quem escolhe a rede no pinpad manda
+        // `C6 PAY`, que e o nome que o terminal do sandbox conhece.
+        //
+        // A nota do topo deste arquivo ja dizia isso desde a homologacao do ControlPay.
+        // A lista mesmo assim so tinha a sem espaco, entao a caixa de selecao oferecia
+        // exatamente a grafia que este terminal recusa, e o dono nao tinha como
+        // escolher a certa: ele nao digita, escolhe.
+        //
+        // Nenhuma das duas sai da lista: instalacao de producao pode estar na outra.
+        "C6 PAY",
         "C6PAY",
         "DMCARD",
         "GETNET",

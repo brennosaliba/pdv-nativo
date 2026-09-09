@@ -21,7 +21,7 @@ public static class TestesRedesPayGo
         var oficiaisCartao = new[]
         {
             "BANESECARD/MULVI", "BANRISUL/VERO", "BIN", "CIELO", "CONDUCTOR/DOCK", "CREDISHOP",
-            "CTF", "C6PAY", "DMCARD", "GETNET", "GLOBALPAYMENTS/ENTREPAYMENTS", "MERCADO PAGO",
+            "CTF", "C6 PAY", "C6PAY", "DMCARD", "GETNET", "GLOBALPAYMENTS/ENTREPAYMENTS", "MERCADO PAGO",
             "PAGSEGURO", "PAGBANK", "REDE", "RV", "SAFRAPAY", "SIPAG", "STONE", "TICKETLOG",
         };
         var oficiaisPix = new[]
@@ -105,9 +105,17 @@ public static class TestesRedesPayGo
         // ── C6 PAY x C6PAY: o espaço interno é sagrado ──────────────────────
         // A homologação roda com "C6 PAY"; "C6PAY" devolveu SERVICO NAO HABILITADOO e derrubou
         // quatro cobranças em 21/08. Aproximar um do outro trocaria uma config que funciona.
+        // 09/09/2026: "C6 PAY" passou a estar NA lista, e nao mais so sobreviver como
+        // valor gravado de fora. O dono nao digita a rede, escolhe na caixa, e a caixa
+        // so oferecia a grafia que o terminal do sandbox RECUSA. Medido no log: com
+        // espaco aprovou quatro vezes; sem espaco, A116 nas duas tentativas.
         var homolog = RedesPayGo.OpcoesCartao("C6 PAY");
-        checar(homolog.Count == cartao.Count + 1 && homolog.Any(o => o.Valor == "C6 PAY"),
-            "C6 PAY (com espaço) sobrevive: é outra string para o PayGo");
+        checar(homolog.Count == cartao.Count && homolog.Any(o => o.Valor == "C6 PAY"),
+            "C6 PAY (com espaço) esta na lista, e nao entra como valor de fora");
+        checar(cartao.Any(o => o.Valor == "C6 PAY") && cartao.Any(o => o.Valor == "C6PAY"),
+            "as DUAS grafias sao oferecidas: sao redes diferentes para o PayGo");
+        checar(homolog.Where(o => o.Valor is "C6 PAY" or "C6PAY").All(o => o.Conhecida),
+            "e as duas contam como conhecidas, sem aviso de config herdada");
         checar(RedesPayGo.ParaEnvioCartao("C6 PAY") == "C6 PAY",
             "e vai para o TEF com o espaço, não vira C6PAY sozinho");
 
