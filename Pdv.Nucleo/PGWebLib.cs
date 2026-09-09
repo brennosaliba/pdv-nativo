@@ -103,6 +103,26 @@ public static class PW
     public const ushort PWINFO_FISCALREF = 40;
     public const ushort PWINFO_CARDTYPE = 41;
     public const ushort PWINFO_AUTHSYST = 53;
+
+    /// <summary>
+    /// 0x87. O NOME DA REDE QUE A BIBLIOTECA MANDA JUNTO, e que faltava na pre-selecao.
+    ///
+    /// ⚠️ MEDIDO NO LOG DA HOMOLOGACAO (09/09/2026). A mesma venda PIX, duas vezes:
+    ///
+    ///   17:55, rede escolhida NO MENU do pinpad .... 0x35 e 0x87, ambos PIX C6 BANK
+    ///          -> QR gerado, laco de espera normal
+    ///   18:00, rede PRE-SELECIONADA na config ...... so 0x35
+    ///          -> [NA A266] MENSAGEM INVALIDA
+    ///
+    /// Quando o operador escolhe no menu, a propria biblioteca preenche os dois. Quando
+    /// a automacao pre-seleciona, ela preenche so o que a automacao mandou, e a
+    /// mensagem sai incompleta para o host.
+    ///
+    /// O roteiro EXIGE pre-selecao no passo do PIX ("Realizar uma venda de qualquer
+    /// valor, pre-selecionado: Rede PIX C6 BANK"), entao pre-selecionar tem que
+    /// funcionar. Mandamos os dois, como a biblioteca faz.
+    /// </summary>
+    public const ushort PWINFO_AUTHSYSTNOME = 135;
     public const ushort PWINFO_VIRTMERCH = 54;
     public const ushort PWINFO_FINTYPE = 59;
     public const ushort PWINFO_INSTALLMENTS = 60;

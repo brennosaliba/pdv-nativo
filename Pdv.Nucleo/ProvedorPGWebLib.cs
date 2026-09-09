@@ -458,7 +458,14 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             if (tipo == TipoTef.Pix)
             {
                 Param(ctx, PW.PWINFO_PAYMNTTYPE, PW.PAYMNTTYPE_CARTEIRA_DIGITAL);
-                if (!string.IsNullOrWhiteSpace(_op.RedePix)) Param(ctx, PW.PWINFO_AUTHSYST, _op.RedePix!);
+                // OS DOIS CAMPOS, como a biblioteca faz quando o operador escolhe no
+                // menu. So o 0x35 devolve [NA A266] MENSAGEM INVALIDA: ver a nota em
+                // PW.PWINFO_AUTHSYSTNOME, com os dois logs lado a lado.
+                if (!string.IsNullOrWhiteSpace(_op.RedePix))
+                {
+                    Param(ctx, PW.PWINFO_AUTHSYST, _op.RedePix!);
+                    Param(ctx, PW.PWINFO_AUTHSYSTNOME, _op.RedePix!);
+                }
             }
             else
             {
@@ -471,7 +478,11 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 });
                 Param(ctx, PW.PWINFO_FINTYPE, parc > 1 ? PW.FINTYPE_PARCELADO_LOJA : PW.FINTYPE_AVISTA);
                 if (parc > 1) Param(ctx, PW.PWINFO_INSTALLMENTS, parc.ToString(CultureInfo.InvariantCulture));
-                if (!string.IsNullOrWhiteSpace(_op.RedeCartao)) Param(ctx, PW.PWINFO_AUTHSYST, _op.RedeCartao!);
+                if (!string.IsNullOrWhiteSpace(_op.RedeCartao))
+                {
+                    Param(ctx, PW.PWINFO_AUTHSYST, _op.RedeCartao!);
+                    Param(ctx, PW.PWINFO_AUTHSYSTNOME, _op.RedeCartao!);
+                }
             }
             Param(ctx, PW.PWINFO_USINGPINPAD, "1");
             Param(ctx, PW.PWINFO_PPCOMMPORT, _op.PortaPinpad);
