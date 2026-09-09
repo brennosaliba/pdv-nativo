@@ -615,7 +615,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             // cancelamento, não só depois da venda. Antes o desfecho vinha mudo e a tela do estorno
             // não tinha o que mostrar. Biblioteca calada continua devolvendo vazio, nunca uma frase
             // nossa disfarçada de resposta da rede.
-            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, Cartao(r), r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit };
+            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, Cartao(r), r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit, Reqnum = r.CodigoControle };
         }
         finally { _um.Release(); }
     }
@@ -711,7 +711,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             }
             else
                 await ImprimirSeguroAsync(tx).ConfigureAwait(false);
-            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, null, r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit };
+            return new DesfechoTef(SituacaoTef.Pago, id, chargeId, null, r.Mensagem, false) { Codigo = CodigoTef.Pago, PaymentStatus = sit, Reqnum = r.CodigoControle };
         }
         finally { _um.Release(); }
     }

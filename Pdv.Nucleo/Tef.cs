@@ -149,6 +149,17 @@ public sealed record DesfechoTef(SituacaoTef Situacao, string? PaymentIdentifier
     public string? PaymentStatus { get; init; }
 
     /// <summary>
+    /// PWINFO_REQNUM: o número de controle que a biblioteca dá à transação.
+    ///
+    /// Já era usado por dentro para confirmar e desfazer. Passou a sair no desfecho
+    /// em 09/09/2026 por um motivo de fora: a planilha de homologação da PayGo exige,
+    /// para integração por DLL, que a coluna "Retorno do teste" leve exatamente este
+    /// número, em cada um dos 58 passos. Sem ele no desfecho, o operador teria que
+    /// caçá-lo no log da biblioteca, 36 vezes, no meio da gravação.
+    /// </summary>
+    public string? Reqnum { get; init; }
+
+    /// <summary>
     /// A transação chegou a ser aprovada e foi DESFEITA (PayGo: NCN) — não existe cobrança
     /// nenhuma. A tela não pode oferecer "registrar como POS" para isto: o operador registraria
     /// um cartão que o cliente não pagou.

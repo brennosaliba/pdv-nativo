@@ -1329,6 +1329,11 @@ Console.WriteLine();
 Console.WriteLine("--- Porta do pinpad (achar sozinho e avisar) ---");
 TestesPortaDoPinpad.Rodar((cond, nome) => Check("pinpad-porta: " + nome, cond));
 
+// -- ROTEIRO DE HOMOLOGACAO DO TEF: os 58 passos e a planilha ----------------
+Console.WriteLine();
+Console.WriteLine("--- Roteiro do TEF (58 passos, valores e planilha) ---");
+TestesRoteiroTef.Rodar((cond, nome) => Check("roteiro-tef: " + nome, cond));
+
 // -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
 // Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
 // religamento. Dinheiro que entra sem passar pela gaveta — de novo.
