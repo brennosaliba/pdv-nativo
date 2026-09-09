@@ -170,10 +170,14 @@ public static class TelaRoteiroTef
         var p = l.Passo;
         var corpo = new StackPanel();
 
+        // ✓ NO TITULO, e nao so uma etiqueta pequena embaixo. O dono anotou o passo 1
+        // e disse "nem fica marcado como feito": o sinal existia, mas discreto demais
+        // para quem esta correndo 39 passos.
         var titulo = new TextBlock
         {
-            Text = $"{p.Numero}. {p.Titulo}", FontSize = 15, FontWeight = FontWeights.Bold,
-            Foreground = R("Texto"), TextWrapping = TextWrapping.Wrap,
+            Text = (l.Ok ? "✓ " : l.Tentado ? "✗ " : "") + $"{p.Numero}. {p.Titulo}",
+            FontSize = 15, FontWeight = FontWeights.Bold,
+            Foreground = l.Ok ? R("Sucesso") : R("Texto"), TextWrapping = TextWrapping.Wrap,
         };
         corpo.Children.Add(titulo);
 
@@ -243,7 +247,8 @@ public static class TelaRoteiroTef
 
             var digitado = PedirReqnum(janela, p.Numero);
             string? req = null;
-            switch (PlacarHomologacao.Conferir(digitado, doSistema))
+            var conferencia = PlacarHomologacao.Conferir(digitado, doSistema);
+            switch (conferencia)
             {
                 case PlacarHomologacao.Conferencia.Confere:
                 case PlacarHomologacao.Conferencia.SemComparacao:
@@ -269,6 +274,22 @@ public static class TelaRoteiroTef
             PlacarHomologacao.Anotar(p.Numero,
                 ok ? PlacarHomologacao.Aprovado : PlacarHomologacao.Recusado, req);
             redesenhar?.Invoke();
+
+            // O RESULTADO DA CONFERENCIA, DITO (09/09/2026). O dono anotou o passo 1,
+            // digitou o numero e nao recebeu nada: "nao da resultado positivo nem
+            // negativo, nem que ta certo nem errado". Contra-prova que nao diz o que
+            // conferiu nao e contra-prova, e so mais uma caixa para fechar.
+            var marca = ok ? "✓" : "✗";
+            var estado = ok ? "aprovado" : "não aprovado";
+            var sobreNumero = req is null
+                ? "Sem número: este passo não gerou transação."
+                : conferencia == PlacarHomologacao.Conferencia.Confere
+                    ? $"Número {req} conferido: bate com o que o caixa registrou."
+                    : conferencia == PlacarHomologacao.Conferencia.SemComparacao
+                        ? $"Número {req} gravado. O caixa não tinha número desta operação para conferir."
+                        : $"Número {req} gravado, mas ele NÃO batia com o do caixa. Confira antes de entregar.";
+            Dialogo.Avisar(janela, $"{marca} Passo {p.Numero} {estado}", sobreNumero,
+                ok && conferencia != PlacarHomologacao.Conferencia.Difere ? "ok" : "erro");
         };
         botoes.Children.Add(anotar);
 
@@ -276,7 +297,10 @@ public static class TelaRoteiroTef
 
         return new Border
         {
-            Background = l.Ok ? R("Fundo") : R("PainelAlto"),
+            Background = R("PainelAlto"),
+            // Faixa na lateral: passo feito se enxerga descendo a lista sem ler nada.
+            BorderBrush = l.Ok ? R("Sucesso") : l.Tentado ? R("Aviso") : R("PainelAlto"),
+            BorderThickness = new Thickness(4, 0, 0, 0),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(14, 12, 14, 12),
             Margin = new Thickness(0, 0, 0, 8),

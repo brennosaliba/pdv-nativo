@@ -1761,6 +1761,11 @@ public partial class Configuracao : UserControl
                     // biblioteca nao devolve via nenhuma nesta operacao, so o REQNUM e
                     // uma mensagem vazia. O passo 1 do roteiro exige o recibo saindo na
                     // impressora, entao a automacao compoe com o que sabe.
+                    // A instalacao tambem registra o REQNUM: sem isto o passo 1 nao
+                    // tinha com que conferir a contra-prova, e o dono digitava o numero
+                    // no vazio.
+                    Nucleo.PlacarHomologacao.GuardarUltimo(di.Reqnum, 0,
+                        di.Pago ? "instalacao" : "nao concluida", passo: 1);
                     var papel = di.Pago ? await ImprimirInstalacaoAsync(di) : null;
                     StatusTef(di.Pago
                         ? "✓ Ponto de captura instalado." + (di.Motivo is { Length: > 0 } mi ? " " + mi + "." : "")
