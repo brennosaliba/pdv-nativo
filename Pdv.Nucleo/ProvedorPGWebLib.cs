@@ -938,6 +938,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         public CancellationToken Ct { get; }
         /// <summary>Alguma tela de exibicao (QR, mensagem) foi aberta e precisa ser fechada no fim.</summary>
         public bool Exibiu { get; set; }
+
+        /// <summary>
+        /// O que ja esta na tela, para nao redesenhar o mesmo QR a cada segundo.
+        ///
+        /// ⚠️ MEDIDO (09/09/2026): numa venda PIX a biblioteca pediu a exibicao 497
+        /// vezes, uma por segundo, sempre com o MESMO conteudo. Cada pedido recriava a
+        /// janela, e o dono viu o QR piscando sem parar. Ler um QR piscando com o
+        /// aplicativo do banco e quase impossivel.
+        /// </summary>
+        public string? NaTela { get; set; }
         /// <summary>
         /// O que a AUTOMAÇÃO mandou (valor, moeda, parcelas, rede pré-selecionada…). Se a biblioteca
         /// pedir de novo por MOREDATA, é a resposta pronta: o operador nem fica sabendo.
@@ -1247,10 +1257,25 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         // biblioteca nunca saberia que o QR foi mostrado e a venda morreria de timeout.
         // O Esc do operador cancela o CancellationToken da venda, e o laco de execucao ja trata
         // isso: chama PW_iPPAbort e a biblioteca encerra com PWRET_CANCEL.
+        // MESMO CONTEUDO NAO REDESENHA. A biblioteca repete o pedido de exibicao a cada
+        // segundo enquanto espera o pagamento; recriar a janela em cada um faz o QR
+        // piscar, e QR piscando nao se le com o aplicativo do banco.
+        var assinatura = titulo + "" + texto + "" + (qr ?? "");
+        if (ctx.Exibiu && string.Equals(ctx.NaTela, assinatura, StringComparison.Ordinal))
+        {
+            // Ja esta na tela: so avisa a biblioteca que foi mostrado e segue o laco.
+            var jaRet = _lib.AddParam(p.Identificador, "");
+            if (jaRet != PW.PWRET_OK)
+                return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
+                    $"TEF não aceitou o aviso de que a tela mostrou ({p.Identificador}): {PW.Nome(jaRet)}", ler: true);
+            return null;
+        }
+
         bool seguiu;
         try
         {
             ctx.Exibiu = true;
+            ctx.NaTela = assinatura;
             seguiu = await Exibir(new ExibicaoTef(titulo, texto, qr), ctx.Ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
