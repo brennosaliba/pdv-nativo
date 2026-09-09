@@ -221,8 +221,26 @@ public static class TelaRoteiroTef
             // Sem botão "aprovar" sozinho: o operador diz o que a maquininha fez.
             var ok = Dialogo.Confirmar(janela, $"Passo {p.Numero}",
                 "A maquininha aprovou este passo?", "Aprovou", "Não aprovou");
+
+            // O REQNUM da ultima transacao entra AQUI, e nao no "Cobrar este valor"
+            // apenas. Sem isto, quem vendia pelo caminho normal e anotava depois
+            // gravava a linha com a coluna vazia, e a planilha ia para a PayGo sem o
+            // unico dado que ela exige nela.
+            //
+            // OFERECIDO, nunca imposto: numero errado na planilha e pior do que
+            // coluna vazia, e so quem estava na frente do pinpad sabe se aquela
+            // transacao e a deste passo.
+            string? req = null;
+            if (PlacarHomologacao.ReqnumParaOferecer(DateTime.Now) is { } candidato)
+            {
+                if (Dialogo.Confirmar(janela, $"Passo {p.Numero}",
+                        $"A última transação do TEF foi a {candidato}.\nÉ a deste passo?",
+                        "Sim, é esta", "Não"))
+                    req = candidato;
+            }
+
             PlacarHomologacao.Anotar(p.Numero,
-                ok ? PlacarHomologacao.Aprovado : PlacarHomologacao.Recusado, null);
+                ok ? PlacarHomologacao.Aprovado : PlacarHomologacao.Recusado, req);
             // Redesenha na hora. Mandar "reabra o roteiro" e empurrar para o operador
             // o trabalho que a tela devia fazer, e foi o que fez o dono achar que a
             // anotacao nao tinha salvado.

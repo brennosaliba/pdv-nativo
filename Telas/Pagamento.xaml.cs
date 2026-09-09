@@ -606,6 +606,10 @@ public partial class Pagamento : UserControl
         // so existia no log da biblioteca, e fechar os 39 passos obrigatorios era
         // copiar 39 numeros de um arquivo de texto sem errar linha.
         //
+        // Guarda o REQNUM mesmo quando a venda NAO veio do roteiro: e ele que a tela
+        // oferece para quem anota o passo a mao, depois de vender pelo caminho normal.
+        PlacarHomologacao.GuardarUltimo(d.Reqnum);
+
         // So anota quando a venda NASCEU de um passo do roteiro: venda normal de loja
         // nao tem passo e nao vira registro de homologacao.
         if (PassoDoRoteiro is { } passoRoteiro)

@@ -53,6 +53,36 @@ public static class PlacarHomologacao
     /// </summary>
     public const string Provedor = "pgweblib";
 
+    /// <summary>
+    /// O REQNUM da ultima transacao que a biblioteca devolveu, e quando.
+    ///
+    /// ⚠️ EXISTE PORQUE A ANOTACAO A MAO FICAVA SEM ELE (09/09/2026). O caixa so
+    /// capturava o REQNUM quando a venda nascia de "Cobrar este valor". Quem fazia a
+    /// venda pelo caminho normal e depois tocava em "Anotar resultado" gravava a
+    /// linha com a coluna vazia, e a planilha saia sem o unico dado que a PayGo
+    /// exige nela.
+    ///
+    /// Guardado em memoria, nao no banco: e um auxilio de digitacao, nao um registro.
+    /// Some quando o caixa fecha, e ai a tela simplesmente nao oferece nada.
+    /// </summary>
+    public static (string Reqnum, DateTime Quando)? Ultimo { get; private set; }
+
+    /// <summary>Chamado a cada desfecho de TEF que traz REQNUM.</summary>
+    public static void GuardarUltimo(string? reqnum)
+    {
+        if (!string.IsNullOrWhiteSpace(reqnum)) Ultimo = (reqnum!.Trim(), DateTime.Now);
+    }
+
+    /// <summary>
+    /// O REQNUM que vale oferecer para um passo anotado a mao. `null` quando nao ha
+    /// nenhum ou quando ja e velho demais para ter a ver com o que acabou de rodar.
+    ///
+    /// Dez minutos: e o tempo de um passo do roteiro. Mais que isso, oferecer o
+    /// numero seria chutar, e numero errado na planilha e pior do que coluna vazia.
+    /// </summary>
+    public static string? ReqnumParaOferecer(DateTime agora)
+        => Ultimo is { } u && (agora - u.Quando).TotalMinutes <= 10 ? u.Reqnum : null;
+
     private static void Garantir(Microsoft.Data.Sqlite.SqliteConnection cx)
     {
         Dapper.SqlMapper.Execute(cx,
