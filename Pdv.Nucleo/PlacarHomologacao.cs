@@ -65,13 +65,13 @@ public static class PlacarHomologacao
     /// Guardado em memoria, nao no banco: e um auxilio de digitacao, nao um registro.
     /// Some quando o caixa fecha, e ai a tela simplesmente nao oferece nada.
     /// </summary>
-    public static (string Reqnum, DateTime Quando, long ValorCent, string Resultado)? Ultimo { get; private set; }
+    public static (string Reqnum, DateTime Quando, long ValorCent, string Resultado, int? Passo)? Ultimo { get; private set; }
 
     /// <summary>Chamado a cada desfecho de TEF que traz REQNUM.</summary>
-    public static void GuardarUltimo(string? reqnum, long valorCent = 0, string resultado = "")
+    public static void GuardarUltimo(string? reqnum, long valorCent = 0, string resultado = "", int? passo = null)
     {
         if (!string.IsNullOrWhiteSpace(reqnum))
-            Ultimo = (reqnum!.Trim(), DateTime.Now, valorCent, resultado ?? "");
+            Ultimo = (reqnum!.Trim(), DateTime.Now, valorCent, resultado ?? "", passo);
     }
 
     /// <summary>
@@ -122,10 +122,26 @@ public static class PlacarHomologacao
     /// Dez minutos continuam valendo por cima: numero velho tambem nao serve.
     /// </summary>
     public static string? ReqnumParaOferecer(DateTime agora, IReadOnlyCollection<string> jaUsados)
+        => ReqnumParaOferecer(agora, jaUsados, passoAtual: null);
+
+    /// <summary>
+    /// O REQNUM que vale oferecer PARA ESTE PASSO.
+    ///
+    /// ⚠️ A REGRA DO PASSO DONO NASCEU DE UM ESTRAGO (09/09/2026). O dono rodou o
+    /// passo 3 duas vezes, a tela mostrou 278745 e 278747, e na planilha o 278747 foi
+    /// parar no PASSO 2. Uma transacao que nasceu de "Cobrar este valor" no passo 3
+    /// nao pode ser oferecida ao passo 2, por mais recente que seja: ela tem dono.
+    ///
+    /// Transacao sem passo (venda feita pelo caminho normal) continua sendo oferecida
+    /// a qualquer um: ai quem sabe de quem e, e so quem estava na frente do pinpad.
+    /// </summary>
+    public static string? ReqnumParaOferecer(DateTime agora, IReadOnlyCollection<string> jaUsados, int? passoAtual)
     {
         if (Ultimo is not { } u) return null;
         if ((agora - u.Quando).TotalMinutes > 10) return null;
         if (jaUsados is not null && jaUsados.Contains(u.Reqnum, StringComparer.Ordinal)) return null;
+        // Nasceu de outro passo: tem dono, e nao e este.
+        if (u.Passo is { } dono && passoAtual is { } atual && dono != atual) return null;
         return u.Reqnum;
     }
 

@@ -244,7 +244,7 @@ public static class TelaRoteiroTef
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x!.Trim())
                 .ToHashSet(StringComparer.Ordinal);
-            if (PlacarHomologacao.ReqnumParaOferecer(DateTime.Now, usados) is { } candidato)
+            if (PlacarHomologacao.ReqnumParaOferecer(DateTime.Now, usados, p.Numero) is { } candidato)
             {
                 if (Dialogo.Confirmar(janela, $"Passo {p.Numero}",
                         $"A última transação do TEF foi a {candidato}.\nÉ a deste passo?",

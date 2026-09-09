@@ -167,6 +167,24 @@ public static class TestesRoteiroTef
         checar(System.Text.RegularExpressions.Regex.IsMatch(desc, @"\d{2}:\d{2}:\d{2}"),
             "e a hora com segundos, para casar com o log");
 
+        // ── TRANSACAO QUE NASCEU DE UM PASSO TEM DONO ──────────────────────
+        // 09/09/2026: o dono rodou o passo 3 duas vezes, a tela mostrou 278745 e
+        // 278747, e na planilha o 278747 foi parar no PASSO 2. Transacao que nasceu de
+        // "Cobrar este valor" no passo 3 nao pode ser oferecida ao passo 2, por mais
+        // recente que seja.
+        PlacarHomologacao.GuardarUltimo("278747", 100000, "aprovada", passo: 3);
+        var vazio = Array.Empty<string>();
+        checar(PlacarHomologacao.ReqnumParaOferecer(DateTime.Now, vazio, passoAtual: 3) == "278747",
+            "ao passo dono, e oferecida");
+        checar(PlacarHomologacao.ReqnumParaOferecer(DateTime.Now, vazio, passoAtual: 2) is null,
+            "a OUTRO passo, nao e oferecida nem sendo a mais recente");
+
+        // Venda pelo caminho normal nao tem dono: serve a qualquer passo, e quem sabe
+        // de quem e, e so quem estava na frente do pinpad.
+        PlacarHomologacao.GuardarUltimo("278900", 100000, "aprovada", passo: null);
+        checar(PlacarHomologacao.ReqnumParaOferecer(DateTime.Now, vazio, passoAtual: 2) == "278900",
+            "transacao sem passo continua sendo oferecida a qualquer um");
+
         // Velha demais nao e oferecida: numero de meia hora atras nao e deste passo.
         PlacarHomologacao.GuardarUltimo("0000000001", 100, "aprovada");
         checar(PlacarHomologacao.DescricaoDaUltima(DateTime.Now.AddMinutes(30)) is null,

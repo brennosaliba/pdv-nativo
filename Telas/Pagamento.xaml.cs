@@ -656,7 +656,8 @@ public partial class Pagamento : UserControl
         PlacarHomologacao.GuardarUltimo(d.Reqnum, valor.Centavos,
             d.Situacao == SituacaoTef.Pago ? "aprovada"
             : d.Situacao == SituacaoTef.Recusado ? "negada"
-            : d.Situacao.ToString().ToLowerInvariant());
+            : d.Situacao.ToString().ToLowerInvariant(),
+            PassoDoRoteiro);
 
         // So anota quando a venda NASCEU de um passo do roteiro: venda normal de loja
         // nao tem passo e nao vira registro de homologacao.
