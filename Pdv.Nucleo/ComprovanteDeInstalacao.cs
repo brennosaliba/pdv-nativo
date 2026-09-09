@@ -33,7 +33,7 @@ public static class ComprovanteDeInstalacao
     /// </summary>
     public static IReadOnlyList<string> Linhas(
         string? loja, string? cnpj, string? pontoCaptura, string? terminal,
-        string? reqnum, string? versaoBiblioteca, bool homologacao, DateTime quando)
+        string? reqnum, string? versaoAutomacao, bool homologacao, DateTime quando)
     {
         var l = new List<string> { "COMPROVANTE DE INSTALACAO", "PONTO DE CAPTURA", "" };
 
@@ -47,7 +47,11 @@ public static class ComprovanteDeInstalacao
         Par("CNPJ", cnpj);
         Par("Ponto de captura", pontoCaptura);
         Par("Terminal", terminal);
-        Par("Biblioteca", versaoBiblioteca);
+        // "Automacao" e nao "Biblioteca": este numero e a versao do PDV, e foi
+        // exatamente o que saiu errado no primeiro papel (dizia "Biblioteca: 0.7.4",
+        // que e a versao do caixa, e nao a 4.1.50.24 da PGWebLib). Rotulo que promete
+        // um dado e entrega outro e pior do que rotulo nenhum numa analise.
+        Par("Automacao", versaoAutomacao);
         l.Add("Data: " + quando.ToString("dd/MM/yyyy HH:mm:ss"));
         Par(RoteiroTef.RetornoExigido, reqnum);
 

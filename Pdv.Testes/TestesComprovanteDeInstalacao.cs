@@ -21,7 +21,7 @@ public static class TestesComprovanteDeInstalacao
         var l = ComprovanteDeInstalacao.Linhas(
             loja: "American Day Savassi", cnpj: "62.177.839/0001-57",
             pontoCaptura: "115998", terminal: "PDV01", reqnum: "0000275742",
-            versaoBiblioteca: "4.1.50.24", homologacao: true, quando: quando);
+            versaoAutomacao: "0.7.4", homologacao: true, quando: quando);
         var txt = string.Join("\n", l);
 
         // ── O QUE A ANALISE DA PAYGO PROCURA ────────────────────────────────
@@ -32,14 +32,18 @@ public static class TestesComprovanteDeInstalacao
         checar(txt.Contains("0000275742"), "e o REQNUM, que e o que a planilha exige");
         checar(txt.Contains(RoteiroTef.RetornoExigido),
             "o REQNUM sai com o nome do campo, para nao virar numero solto");
-        checar(txt.Contains("4.1.50.24"), "a versao da biblioteca");
+        // ⚠️ O primeiro papel saiu com "Biblioteca: 0.7.4", que e a versao do CAIXA e
+        // nao a 4.1.50.24 da PGWebLib. Rotulo que promete um dado e entrega outro e
+        // pior do que rotulo nenhum numa analise de homologacao.
+        checar(txt.Contains("Automacao: 0.7.4"), "a versao sai rotulada como AUTOMACAO");
+        checar(!txt.Contains("Biblioteca"), "e nao se chama biblioteca, que seria mentira");
 
         // ── PAPEL DE TESTE NAO PODE PARECER PAPEL DE PRODUCAO ───────────────
         checar(txt.Contains("SEM VALOR FINANCEIRO"),
             "em homologacao o papel diz que e teste");
         var producao = string.Join("\n", ComprovanteDeInstalacao.Linhas(
             "American Day Savassi", "62.177.839/0001-57", "115998", "PDV01",
-            "0000275742", "4.1.50.24", homologacao: false, quando: quando));
+            "0000275742", "0.7.4", homologacao: false, quando: quando));
         checar(!producao.Contains("SEM VALOR FINANCEIRO"),
             "e em producao nao diz, senao o aviso perde o sentido");
 
@@ -47,8 +51,8 @@ public static class TestesComprovanteDeInstalacao
         // Papel de homologacao com "CNPJ:" e nada do lado vira duvida na analise.
         var incompleto = string.Join("\n", ComprovanteDeInstalacao.Linhas(
             loja: "Loja", cnpj: null, pontoCaptura: "", terminal: "   ",
-            reqnum: null, versaoBiblioteca: null, homologacao: false, quando: quando));
-        foreach (var rotulo in new[] { "CNPJ:", "Ponto de captura:", "Terminal:", "Biblioteca:" })
+            reqnum: null, versaoAutomacao: null, homologacao: false, quando: quando));
+        foreach (var rotulo in new[] { "CNPJ:", "Ponto de captura:", "Terminal:", "Automacao:" })
             checar(!incompleto.Contains(rotulo), $"rotulo sem valor nao sai no papel ({rotulo})");
         checar(incompleto.Contains("Loja: Loja"), "o que existe continua saindo");
         checar(incompleto.Contains("Data:"), "e a data sai sempre: sem ela o papel nao prova quando");

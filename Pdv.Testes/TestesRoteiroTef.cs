@@ -155,6 +155,23 @@ public static class TestesRoteiroTef
             "sem repeticao, nao ha o que avisar");
         checar(!avisoRep.Contains('—'), "sem travessao");
 
+        // ── A ULTIMA TRANSACAO PRECISA SER RECONHECIVEL ────────────────────
+        // 09/09/2026, o dono: "ele mostra ultima transacao TEF XXXXXX, mas eu nao sei
+        // se a ultima foi essa". Numero de oito digitos ninguem reconhece; hora e valor
+        // sim. Quem acabou de cobrar R$ 100.000,00 as 15:42 sabe na hora se e aquela.
+        PlacarHomologacao.GuardarUltimo("0000278036", 10000000, "aprovada");
+        var desc = PlacarHomologacao.DescricaoDaUltima(DateTime.Now)!;
+        checar(desc.Contains("0000278036"), $"a descricao traz o numero ({desc})");
+        checar(desc.Contains("100.000,00"), "e o VALOR, que e o que se reconhece");
+        checar(desc.Contains("aprovada"), "e como ela terminou");
+        checar(System.Text.RegularExpressions.Regex.IsMatch(desc, @"\d{2}:\d{2}:\d{2}"),
+            "e a hora com segundos, para casar com o log");
+
+        // Velha demais nao e oferecida: numero de meia hora atras nao e deste passo.
+        PlacarHomologacao.GuardarUltimo("0000000001", 100, "aprovada");
+        checar(PlacarHomologacao.DescricaoDaUltima(DateTime.Now.AddMinutes(30)) is null,
+            "transacao de meia hora atras nao e descrita");
+
         // ── E O QUE JA FOI USADO NAO E OFERECIDO DE NOVO ────────────────────
         var usados = PlacarHomologacao.ReqnumsJaUsados(repetido);
         checar(usados.Contains("276864") && usados.Contains("276865"),

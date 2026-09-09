@@ -65,12 +65,35 @@ public static class PlacarHomologacao
     /// Guardado em memoria, nao no banco: e um auxilio de digitacao, nao um registro.
     /// Some quando o caixa fecha, e ai a tela simplesmente nao oferece nada.
     /// </summary>
-    public static (string Reqnum, DateTime Quando)? Ultimo { get; private set; }
+    public static (string Reqnum, DateTime Quando, long ValorCent, string Resultado)? Ultimo { get; private set; }
 
     /// <summary>Chamado a cada desfecho de TEF que traz REQNUM.</summary>
-    public static void GuardarUltimo(string? reqnum)
+    public static void GuardarUltimo(string? reqnum, long valorCent = 0, string resultado = "")
     {
-        if (!string.IsNullOrWhiteSpace(reqnum)) Ultimo = (reqnum!.Trim(), DateTime.Now);
+        if (!string.IsNullOrWhiteSpace(reqnum))
+            Ultimo = (reqnum!.Trim(), DateTime.Now, valorCent, resultado ?? "");
+    }
+
+    /// <summary>
+    /// A ultima transacao descrita para o operador RECONHECER, e nao so o numero.
+    ///
+    /// ⚠️ O dono, 09/09/2026: "quando eu coloco anotar resultado ele mostra ultima
+    /// transacao TEF XXXXXX, mas eu nao sei se a ultima foi essa". Numero de oito
+    /// digitos nao se reconhece; hora e valor sim. Quem acabou de cobrar
+    /// R$ 100.000,00 as 15:42 sabe na hora se e aquela.
+    ///
+    /// `null` quando nao ha nenhuma, ou quando ela ja e velha demais para ter a ver
+    /// com o passo que esta sendo anotado.
+    /// </summary>
+    public static string? DescricaoDaUltima(DateTime agora)
+    {
+        if (Ultimo is not { } u) return null;
+        if ((agora - u.Quando).TotalMinutes > 10) return null;
+        var valor = u.ValorCent > 0
+            ? " de " + new Dinheiro(u.ValorCent).Formatado()
+            : "";
+        var resultado = string.IsNullOrWhiteSpace(u.Resultado) ? "" : " (" + u.Resultado + ")";
+        return $"{u.Reqnum}, as {u.Quando:HH:mm:ss}{valor}{resultado}";
     }
 
     /// <summary>
