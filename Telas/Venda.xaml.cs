@@ -2415,6 +2415,14 @@ public partial class Venda : UserControl
         // Leva o passo do roteiro junto: e ele que liga o REQNUM da transacao a linha
         // da planilha de homologacao. Venda normal de loja vai com null e nao anota nada.
         tela.PassoDoRoteiro = _passoEmExecucao;
+        // ⚠️ LIMPA NA HORA, e este esquecimento custou caro (09/09/2026). O passo 3 do
+        // roteiro nao tem valor fixo, entao nao tem botao "Cobrar este valor": o dono
+        // fez a venda pelo caminho normal, e o passo guardado ainda era o 2, do passo
+        // anterior. A venda do passo 3 carimbou o REQNUM no PASSO 2, e o 3 ficou vazio.
+        //
+        // UMA venda carrega UM passo, e uma vez so. Passo que sobra de antes vira
+        // carimbo em quem nao pediu.
+        _passoEmExecucao = null;
         tela.Encerrou += desfecho =>
         {
             PainelPagamento.Content = null;

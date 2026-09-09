@@ -228,35 +228,46 @@ public static class TelaRoteiroTef
             var ok = Dialogo.Confirmar(janela, $"Passo {p.Numero}",
                 "A maquininha aprovou este passo?", "Aprovou", "Não aprovou");
 
-            // O REQNUM da ultima transacao entra AQUI, e nao no "Cobrar este valor"
-            // apenas. Sem isto, quem vendia pelo caminho normal e anotava depois
-            // gravava a linha com a coluna vazia, e a planilha ia para a PayGo sem o
-            // unico dado que ela exige nela.
-            //
-            // OFERECIDO, nunca imposto: numero errado na planilha e pior do que
-            // coluna vazia, e so quem estava na frente do pinpad sabe se aquela
-            // transacao e a deste passo.
+            // CONTRA-PROVA (ideia do dono, 09/09/2026). Ele digita o que LEU na tela de
+            // aprovação; o caixa compara com o que registrou. Oferecer o número e
+            // perguntar "é este?" convidava a dizer sim sem conferir, e foi assim que
+            // quatro passos ficaram com o mesmo REQNUM e um passo ficou com o de outro.
+            var doSistema = PlacarHomologacao.ReqnumParaOferecer(DateTime.Now,
+                PlacarHomologacao.Anotados().Values
+                    .Where(f => f.Numero != p.Numero)
+                    .Select(f => f.Reqnum)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x!.Trim())
+                    .ToHashSet(StringComparer.Ordinal),
+                p.Numero);
+
+            var digitado = PedirReqnum(janela, p.Numero);
             string? req = null;
-            // Os ja carimbados saem do banco na hora: REQNUM que ja esta em outro
-            // passo e prova de que nao e deste, e nem chega a ser oferecido.
-            var usados = PlacarHomologacao.Anotados().Values
-                .Select(f => f.Reqnum)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x!.Trim())
-                .ToHashSet(StringComparer.Ordinal);
-            if (PlacarHomologacao.ReqnumParaOferecer(DateTime.Now, usados, p.Numero) is { } candidato)
+            switch (PlacarHomologacao.Conferir(digitado, doSistema))
             {
-                if (Dialogo.Confirmar(janela, $"Passo {p.Numero}",
-                        $"A última transação do TEF foi a {candidato}.\nÉ a deste passo?",
-                        "Sim, é esta", "Não"))
-                    req = candidato;
+                case PlacarHomologacao.Conferencia.Confere:
+                case PlacarHomologacao.Conferencia.SemComparacao:
+                    req = PlacarHomologacao.Normalizar(digitado);
+                    break;
+                case PlacarHomologacao.Conferencia.Difere:
+                    // O que o operador LEU manda: ele estava na frente do pinpad. Mas a
+                    // divergência não pode passar calada, porque ela quer dizer que
+                    // alguma coisa está errada, e é agora que dá para descobrir.
+                    var usar = Dialogo.Confirmar(janela, $"Passo {p.Numero}: os números não batem",
+                        $"Você digitou {PlacarHomologacao.Normalizar(digitado)}."
+                        + Environment.NewLine + $"O caixa registrou {doSistema}."
+                        + Environment.NewLine + Environment.NewLine
+                        + "Confira na tela de aprovação. Qual vale?",
+                        "O que eu digitei", "O do caixa");
+                    req = usar ? PlacarHomologacao.Normalizar(digitado) : doSistema;
+                    break;
+                case PlacarHomologacao.Conferencia.NadaDigitado:
+                    req = null;   // anota o resultado, sem número
+                    break;
             }
 
             PlacarHomologacao.Anotar(p.Numero,
                 ok ? PlacarHomologacao.Aprovado : PlacarHomologacao.Recusado, req);
-            // Redesenha na hora. Mandar "reabra o roteiro" e empurrar para o operador
-            // o trabalho que a tela devia fazer, e foi o que fez o dono achar que a
-            // anotacao nao tinha salvado.
             redesenhar?.Invoke();
         };
         botoes.Children.Add(anotar);
@@ -271,6 +282,55 @@ public static class TelaRoteiroTef
             Margin = new Thickness(0, 0, 0, 8),
             Child = corpo,
         };
+    }
+
+    /// <summary>
+    /// Pede o REQNUM que o operador leu na tela de aprovação.
+    ///
+    /// Campo livre de propósito: se o caixa preenchesse sozinho, não seria
+    /// contra-prova nenhuma, seria a mesma resposta duas vezes.
+    /// </summary>
+    private static string? PedirReqnum(Window dono, int passo)
+    {
+        var janela = Dialogo.Base(dono, 460);
+        var pilha = new StackPanel();
+        pilha.Children.Add(PedirValor.Cabecalho(janela, $"Passo {passo}: confira o número"));
+        pilha.Children.Add(new TextBlock
+        {
+            Text = "Digite o " + RoteiroTef.RetornoExigido + " que apareceu na tela de aprovação. "
+                 + "Deixe em branco se este passo não gerou transação.",
+            FontSize = 13, Foreground = R("TextoFraco"), TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        var caixa = new TextBox
+        {
+            FontSize = 22, MinHeight = 48, Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+        pilha.Children.Add(caixa);
+
+        string? resposta = null;
+        var confirmar = new Button
+        {
+            Content = "Confirmar", Style = (Style)Application.Current.Resources["BotaoBase"],
+            MinHeight = 46, FontSize = 15, Margin = new Thickness(0, 0, 0, 6),
+        };
+        confirmar.Click += (_, _) => { resposta = caixa.Text; janela.Close(); };
+        pilha.Children.Add(confirmar);
+
+        var semNumero = new Button
+        {
+            Content = "Este passo não gerou transação",
+            Style = (Style)Application.Current.Resources["BotaoBase"], MinHeight = 46, FontSize = 14,
+        };
+        semNumero.Click += (_, _) => { resposta = null; janela.Close(); };
+        pilha.Children.Add(semNumero);
+
+        janela.Content = new Border { Padding = new Thickness(16), Child = pilha };
+        caixa.Loaded += (_, _) => caixa.Focus();
+        caixa.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter) { resposta = caixa.Text; janela.Close(); } };
+        janela.ShowDialog();
+        return resposta;
     }
 
     private static Border Etiqueta(string texto, Brush cor) => new()

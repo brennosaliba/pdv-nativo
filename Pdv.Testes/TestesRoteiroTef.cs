@@ -167,6 +167,30 @@ public static class TestesRoteiroTef
         checar(System.Text.RegularExpressions.Regex.IsMatch(desc, @"\d{2}:\d{2}:\d{2}"),
             "e a hora com segundos, para casar com o log");
 
+        // ── A CONTRA-PROVA (ideia do dono, 09/09/2026) ─────────────────────
+        // "eu clico, abre um popup que eu digito o que apareceu pra mim na tela de
+        // aprovacao, e tem que bater os dois". E melhor que oferecer e perguntar "e
+        // este?", que convidava a dizer sim sem conferir.
+        checar(PlacarHomologacao.Conferir("278755", "0000278755") == PlacarHomologacao.Conferencia.Confere,
+            "zero a esquerda nao faz numero diferente: a tela mostra 0000278755, ele digita 278755");
+        checar(PlacarHomologacao.Conferir("0000278755", "0000278755") == PlacarHomologacao.Conferencia.Confere,
+            "digitado igualzinho tambem confere");
+        checar(PlacarHomologacao.Conferir("278 755", "278755") == PlacarHomologacao.Conferencia.Confere,
+            "espaco no meio nao reprova: quem digita numero longo separa");
+        checar(PlacarHomologacao.Conferir("278753", "278755") == PlacarHomologacao.Conferencia.Difere,
+            "numeros diferentes sao denunciados, e nao silenciados");
+        checar(PlacarHomologacao.Conferir("278755", null) == PlacarHomologacao.Conferencia.SemComparacao,
+            "sem numero no caixa, vale o que o operador leu");
+        checar(PlacarHomologacao.Conferir("", "278755") == PlacarHomologacao.Conferencia.NadaDigitado,
+            "nada digitado nao vira comparacao");
+        checar(PlacarHomologacao.Conferir("   ", null) == PlacarHomologacao.Conferencia.NadaDigitado,
+            "so espaco tambem nao");
+
+        checar(PlacarHomologacao.Normalizar(" 0000278755 ") == "0000278755",
+            "o que vai para a planilha e so digito");
+        checar(PlacarHomologacao.Normalizar("REQNUM: 278755") == "278755",
+            "e sobrevive a quem colar o rotulo junto");
+
         // ── TRANSACAO QUE NASCEU DE UM PASSO TEM DONO ──────────────────────
         // 09/09/2026: o dono rodou o passo 3 duas vezes, a tela mostrou 278745 e
         // 278747, e na planilha o 278747 foi parar no PASSO 2. Transacao que nasceu de

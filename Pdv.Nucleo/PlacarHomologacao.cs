@@ -145,6 +145,52 @@ public static class PlacarHomologacao
         return u.Reqnum;
     }
 
+    /// <summary>O que a contra-prova do REQNUM concluiu.</summary>
+    public enum Conferencia
+    {
+        /// <summary>O que o operador leu bate com o que o caixa registrou.</summary>
+        Confere,
+        /// <summary>Os dois existem e sao DIFERENTES. Alguma coisa esta errada.</summary>
+        Difere,
+        /// <summary>O caixa nao tem numero para comparar: vale o que o operador leu.</summary>
+        SemComparacao,
+        /// <summary>O operador nao digitou nada aproveitavel.</summary>
+        NadaDigitado,
+    }
+
+    /// <summary>
+    /// A CONTRA-PROVA DO REQNUM.
+    ///
+    /// ⚠️ IDEIA DO DONO, 09/09/2026: "algo como contra prova. Voce tem o numero ai;
+    /// quando eu clicar em anotar resultado, abre um popup que eu digito o que
+    /// apareceu pra mim na tela de aprovacao, e tem que bater os dois".
+    ///
+    /// E melhor do que o que eu tinha feito. Oferecer o numero e pedir "e este?"
+    /// convida o operador a dizer sim sem conferir, e foi assim que quatro passos
+    /// ficaram com o mesmo REQNUM e um passo ficou com o numero de outro. Aqui os dois
+    /// lados sao independentes: o que ele LEU na tela e o que o caixa REGISTROU. Se
+    /// discordam, alguma coisa esta errada, e e melhor descobrir agora.
+    ///
+    /// Quem manda no que vai para a planilha e o que o operador leu: ele estava na
+    /// frente do pinpad. O numero do caixa e a conferencia, nao a verdade.
+    /// </summary>
+    public static Conferencia Conferir(string? digitado, string? doSistema)
+    {
+        var d = SoDigitos(digitado);
+        if (d.Length == 0) return Conferencia.NadaDigitado;
+        var s = SoDigitos(doSistema);
+        if (s.Length == 0) return Conferencia.SemComparacao;
+        // Zero a esquerda nao faz numero diferente: a tela mostra 0000278755 e o
+        // operador digita 278755.
+        return d.TrimStart('0') == s.TrimStart('0') ? Conferencia.Confere : Conferencia.Difere;
+    }
+
+    /// <summary>O REQNUM como ele vai para a planilha: so digitos, sem espaco nem ponto.</summary>
+    public static string Normalizar(string? reqnum) => SoDigitos(reqnum);
+
+    private static string SoDigitos(string? v)
+        => new((v ?? "").Where(char.IsDigit).ToArray());
+
     /// <summary>Os REQNUM ja carimbados, para nao repetir um em dois passos.</summary>
     public static IReadOnlyCollection<string> ReqnumsJaUsados(IReadOnlyList<LinhaDoPlacar> linhas)
         => (linhas ?? Array.Empty<LinhaDoPlacar>())
