@@ -29,7 +29,15 @@ public static class TelaQrTef
     /// Abre a tela e devolve a ação que a fecha. `aoCancelar` roda quando o operador aperta Esc ou
     /// o botão: é ela que cancela a venda no provedor.
     /// </summary>
-    public static Action Mostrar(Window dono, ExibicaoTef exibicao, Action aoCancelar)
+    /// <summary>
+    /// Abre a tela e devolve DUAS acoes: fechar, e atualizar o texto no lugar.
+    ///
+    /// A segunda existe por causa do contador (09/09/2026). A biblioteca manda
+    /// "REALIZE A LEITURA DO QR CODE 06", depois "07", "08"... um pedido por segundo, e
+    /// o caixa recriava a janela em cada um. O dono viu o QR piscando. Agora o texto
+    /// muda dentro da mesma janela e o QR fica parado.
+    /// </summary>
+    public static (Action Fechar, Action<string> AtualizarTexto) Mostrar(Window dono, ExibicaoTef exibicao, Action aoCancelar)
     {
         var pilha = new StackPanel();
 
@@ -56,18 +64,18 @@ public static class TelaQrTef
             });
         }
 
-        if (!string.IsNullOrWhiteSpace(exibicao.Mensagem))
+        // Sempre criado (escondido quando vazio): e ele que o contador atualiza no lugar.
+        var mensagem = new TextBlock
         {
-            pilha.Children.Add(new TextBlock
-            {
-                Text = exibicao.Mensagem,
-                FontSize = 20,
-                Foreground = R("TextoFraco"),
-                TextWrapping = TextWrapping.Wrap,
-                TextAlignment = TextAlignment.Center,
-                Margin = new Thickness(0, 16, 0, 0),
-            });
-        }
+            Text = exibicao.Mensagem ?? "",
+            FontSize = 20,
+            Foreground = R("TextoFraco"),
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center,
+            Margin = new Thickness(0, 16, 0, 0),
+            Visibility = string.IsNullOrWhiteSpace(exibicao.Mensagem) ? Visibility.Collapsed : Visibility.Visible,
+        };
+        pilha.Children.Add(mensagem);
 
         pilha.Children.Add(new TextBlock
         {
@@ -122,10 +130,16 @@ public static class TelaQrTef
         janela.Show();
         janela.Activate();
 
-        return () =>
+        void Fechar()
         {
             fechada = true;
             try { janela.Close(); } catch { /* já fechada */ }
-        };
+        }
+        void AtualizarTexto(string texto)
+        {
+            mensagem.Text = texto ?? "";
+            mensagem.Visibility = string.IsNullOrWhiteSpace(texto) ? Visibility.Collapsed : Visibility.Visible;
+        }
+        return (Fechar, AtualizarTexto);
     }
 }

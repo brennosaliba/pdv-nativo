@@ -31,22 +31,49 @@ public partial class App : Application
         // já tem defesa própria: a venda grava em transação, o TEF confirma ou
         // desfaz, e o rascunho traz a comanda de volta. O que faltava era a tela
         // não levar tudo junto quando ela mesma tropeça.
+        // 09/09/2026: a primeira versao deste guarda auditava com conexao NULA (a
+        // chamada lancava e o catch engolia), entao o erro que o dono viu na Configuracao
+        // ficou sem rastro nenhum. E o PDV caiu MESMO com o dialogo, porque so a thread da
+        // tela estava coberta. Agora: pilha completa em erros.log, auditoria com conexao
+        // aberta, e as excecoes de thread de fundo tambem registradas antes de derrubar.
+        static void Registrar(string origem, Exception ex)
+        {
+            try
+            {
+                var pasta = Nucleo.Banco.Pasta;
+                System.IO.Directory.CreateDirectory(pasta);
+                System.IO.File.AppendAllText(System.IO.Path.Combine(pasta, "erros.log"),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " [" + origem + "] " + ex
+                    + Environment.NewLine + Environment.NewLine);
+            }
+            catch { }
+            try
+            {
+                var primeira = (ex.StackTrace ?? "").Split(Environment.NewLine).FirstOrDefault()?.Trim() ?? "";
+                using var cx = Nucleo.Banco.Abrir();
+                Nucleo.Caixa.Auditar(cx, null, "erro_de_tela", null, null,
+                    origem + ": " + ex.GetType().Name + ": " + ex.Message + " @ " + primeira);
+            }
+            catch { }
+        }
+        AppDomain.CurrentDomain.UnhandledException += (_, a) =>
+            Registrar("fundo", a.ExceptionObject as Exception ?? new Exception(a.ExceptionObject?.ToString() ?? "?"));
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, a) =>
+        {
+            Registrar("task", a.Exception);
+            a.SetObserved();
+        };
         DispatcherUnhandledException += (_, args) =>
         {
             args.Handled = true;
-            try
-            {
-                Nucleo.Caixa.Auditar(null, null, "erro_de_tela", null, null,
-                    args.Exception.GetType().Name + ": " + args.Exception.Message);
-            }
-            catch { }
+            Registrar("tela", args.Exception);
             try
             {
                 MessageBox.Show(
                     "Alguma coisa falhou nesta tela e eu segurei o caixa de pe."
                     + Environment.NewLine + Environment.NewLine + args.Exception.Message
                     + Environment.NewLine + Environment.NewLine
-                    + "A venda e o turno continuam como estavam. Se repetir, chame o suporte.",
+                    + "A venda e o turno continuam como estavam. O detalhe ficou em erros.log.",
                     "O caixa continua aberto", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             catch { }

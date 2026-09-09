@@ -32,6 +32,23 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Banco.Migrar();
+        // NO CAIXA DE HOMOLOGACAO, JANELA COMUM (09/09/2026, pedido do dono: "tem como
+        // tirar full screen desse modo de homologacao?"). Quem homologa tem o log da
+        // biblioteca, a planilha e o PayGo abertos do lado; quiosque em tela cheia e o
+        // certo para a loja e um estorvo para o roteiro. A senha continua ligada: o que
+        // muda e so a moldura da janela.
+        try
+        {
+            using var cxH = Banco.Abrir();
+            if (Pdv.Nucleo.ModoHomologacao.Ligado(cxH))
+            {
+                WindowStyle = WindowStyle.SingleBorderWindow;
+                ResizeMode = ResizeMode.CanResize;
+                WindowState = WindowState.Normal;
+                Width = 1280; Height = 800;
+            }
+        }
+        catch { /* sem banco, fica o quiosque de sempre */ }
         // Quiosque em tela cheia, sempre (o XAML já nasce Maximized/WindowStyle=None).
         // O modo de homologação saiu quando a operação começou: ele abria a janela comum
         // E desligava as senhas, e num caixa de verdade isso é porta dos fundos.

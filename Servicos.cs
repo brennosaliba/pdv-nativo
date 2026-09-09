@@ -340,6 +340,7 @@ public static class Servicos
                     // e volta na hora; quem espera o cliente pagar e o laco do provedor.
                     Exibir = ExibirNaTelaAsync,
                     FecharExibicao = FecharExibicaoNaTela,
+                    AtualizarExibicao = AtualizarExibicaoNaTela,
                     Auditar = detalhe =>
                     {
                         try
@@ -543,6 +544,7 @@ public static class Servicos
     internal static Action? CancelarTefEmVoo { get; set; }
 
     private static Action? _fecharExibicaoTef;
+    private static Action<string>? _atualizarExibicaoTef;
 
     /// <summary>
     /// Abre a tela que a biblioteca mandou mostrar (o QR do Pix ou uma mensagem de checkout) e
@@ -556,8 +558,10 @@ public static class Servicos
             FecharExibicaoNaTela();
             try
             {
-                _fecharExibicaoTef = TelaQrTef.Mostrar(JanelaAtiva(), exibicao,
+                var (fechar, atualizar) = TelaQrTef.Mostrar(JanelaAtiva(), exibicao,
                     () => CancelarTefEmVoo?.Invoke());
+                _fecharExibicaoTef = fechar;
+                _atualizarExibicaoTef = atualizar;
                 return true;
             }
             catch (Exception ex)
@@ -574,8 +578,19 @@ public static class Servicos
             }
         });
 
+    /// <summary>So o texto muda (o contador da biblioteca); a janela e o QR ficam parados.</summary>
+    private static void AtualizarExibicaoNaTela(string texto)
+    {
+        var atualizar = _atualizarExibicaoTef;
+        if (atualizar is null) return;
+        var disp = System.Windows.Application.Current?.Dispatcher;
+        if (disp is null || disp.CheckAccess()) { try { atualizar(texto); } catch { } return; }
+        disp.InvokeAsync(() => { try { atualizar(texto); } catch { } });
+    }
+
     private static void FecharExibicaoNaTela()
     {
+        Interlocked.Exchange(ref _atualizarExibicaoTef, null);
         var fechar = Interlocked.Exchange(ref _fecharExibicaoTef, null);
         if (fechar is null) return;
         var disp = System.Windows.Application.Current?.Dispatcher;

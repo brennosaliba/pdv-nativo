@@ -153,6 +153,9 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// </summary>
     public Action? FecharExibicao { get; init; }
 
+    /// <summary>Troca so o texto da exibicao ja aberta (o contador da biblioteca), sem recriar a janela.</summary>
+    public Action<string>? AtualizarExibicao { get; init; }
+
     private readonly IPGWebLib _lib;
     private readonly string _pasta;
     private readonly OpcoesPGWebLib _op;
@@ -1257,13 +1260,15 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         // biblioteca nunca saberia que o QR foi mostrado e a venda morreria de timeout.
         // O Esc do operador cancela o CancellationToken da venda, e o laco de execucao ja trata
         // isso: chama PW_iPPAbort e a biblioteca encerra com PWRET_CANCEL.
-        // MESMO CONTEUDO NAO REDESENHA. A biblioteca repete o pedido de exibicao a cada
-        // segundo enquanto espera o pagamento; recriar a janela em cada um faz o QR
-        // piscar, e QR piscando nao se le com o aplicativo do banco.
-        var assinatura = titulo + "" + texto + "" + (qr ?? "");
+        // MESMA TELA NAO REDESENHA. A biblioteca repete o pedido de exibicao a cada
+        // segundo, e o TEXTO carrega um contador ("REALIZE A LEITURA DO QR CODE 06",
+        // "07", "08"...). Medido na auditoria em 09/09/2026: um pedido por segundo, texto
+        // diferente em cada um. A identidade da tela e o titulo mais o QR; o texto muda
+        // dentro da janela aberta, e o QR fica parado para o cliente ler.
+        var assinatura = titulo + "|" + (qr ?? "");
         if (ctx.Exibiu && string.Equals(ctx.NaTela, assinatura, StringComparison.Ordinal))
         {
-            // Ja esta na tela: so avisa a biblioteca que foi mostrado e segue o laco.
+            try { AtualizarExibicao?.Invoke(texto); } catch { /* texto e conforto */ }
             var jaRet = _lib.AddParam(p.Identificador, "");
             if (jaRet != PW.PWRET_OK)
                 return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
