@@ -28,7 +28,24 @@ namespace Pdv.Telas;
 /// </summary>
 public static class TelaRoteiroTef
 {
-    private static Brush R(string chave) => (Brush)Application.Current.Resources[chave];
+    /// <summary>
+    /// Uma cor do tema, e NUNCA nulo.
+    ///
+    /// ⚠️ ISTO CUSTOU A TARDE (09/09/2026). Eu usei as chaves "Sucesso", "Aviso" e
+    /// "Primaria", que NAO EXISTEM neste tema. `Resources["Sucesso"]` devolve null, o
+    /// TextBlock fica com Foreground nulo, e o texto some sem erro nenhum: a tela
+    /// desenha o fundo da etiqueta e o texto invisivel dentro. O dono viu retangulos
+    /// cinzas onde deviam estar o titulo, o valor e o REQNUM, e as etiquetas nunca
+    /// apareceram desde a primeira versao.
+    ///
+    /// Chave errada agora cai no texto normal, que e visivel. E TestesCoresDoRoteiro
+    /// le este arquivo e reprova qualquer chave que o tema nao tenha, para o proximo
+    /// erro de digitacao nao virar tela em branco de novo.
+    /// </summary>
+    private static Brush R(string chave)
+        => Application.Current.Resources[chave] as Brush
+           ?? Application.Current.Resources["Texto"] as Brush
+           ?? Brushes.Black;
 
     /// <summary>Onde o CSV da planilha é gravado quando o operador exporta.</summary>
     public static string CaminhoDaPlanilha =>
@@ -93,7 +110,7 @@ public static class TelaRoteiroTef
         if (PlacarHomologacao.AvisoDeReqnumFaltando(linhas) is { } falta)
             resumo.Children.Add(new TextBlock
             {
-                Text = "⚠ " + falta, FontSize = 13, Foreground = R("Aviso"),
+                Text = "⚠ " + falta, FontSize = 13, Foreground = R("Amarelo"),
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0),
             });
         pilha.Children.Add(new Border
@@ -177,20 +194,20 @@ public static class TelaRoteiroTef
         {
             Text = (l.Ok ? "✓ " : l.Tentado ? "✗ " : "") + $"{p.Numero}. {p.Titulo}",
             FontSize = 15, FontWeight = FontWeights.Bold,
-            Foreground = l.Ok ? R("Sucesso") : R("Texto"), TextWrapping = TextWrapping.Wrap,
+            Foreground = l.Ok ? R("Ok") : R("Texto"), TextWrapping = TextWrapping.Wrap,
         };
         corpo.Children.Add(titulo);
 
         // O VALOR EXATO em destaque: é o que o roteiro cobra e o que se digita errado.
         var etiquetas = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
         if (p.Valor.Length > 0)
-            etiquetas.Children.Add(Etiqueta("R$ " + p.Valor, R("Primaria")));
+            etiquetas.Children.Add(Etiqueta("R$ " + p.Valor, R("Texto")));
         if (p.Obrigatoriedade == "OPCIONAL")
             etiquetas.Children.Add(Etiqueta("opcional", R("TextoFraco")));
         if (l.Feito is not null)
             etiquetas.Children.Add(Etiqueta(
                 l.Feito.Resultado + (string.IsNullOrWhiteSpace(l.Feito.Reqnum) ? " (sem REQNUM)" : " · " + l.Feito.Reqnum),
-                l.Ok ? R("Sucesso") : R("Aviso")));
+                l.Ok ? R("Ok") : R("Amarelo")));
         if (etiquetas.Children.Count > 0) corpo.Children.Add(etiquetas);
 
         corpo.Children.Add(new TextBlock
@@ -299,7 +316,7 @@ public static class TelaRoteiroTef
         {
             Background = R("PainelAlto"),
             // Faixa na lateral: passo feito se enxerga descendo a lista sem ler nada.
-            BorderBrush = l.Ok ? R("Sucesso") : l.Tentado ? R("Aviso") : R("PainelAlto"),
+            BorderBrush = l.Ok ? R("Ok") : l.Tentado ? R("Amarelo") : R("PainelAlto"),
             BorderThickness = new Thickness(4, 0, 0, 0),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(14, 12, 14, 12),

@@ -1344,6 +1344,11 @@ Console.WriteLine();
 Console.WriteLine("--- Comprovante de instalacao ---");
 TestesComprovanteDeInstalacao.Rodar((cond, nome) => Check("comprov-inst: " + nome, cond));
 
+// -- COR QUE NAO EXISTE NO TEMA DEIXA A TELA EM BRANCO, SEM ERRO NENHUM -----
+Console.WriteLine();
+Console.WriteLine("--- Cores das telas x tema ---");
+TestesCoresDoRoteiro.Rodar((cond, nome) => Check("cores: " + nome, cond));
+
 // -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
 // Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
 // religamento. Dinheiro que entra sem passar pela gaveta — de novo.
