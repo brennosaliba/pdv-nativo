@@ -560,6 +560,12 @@ public partial class Venda : UserControl
             }
             else if (r.SemNovidade)
             {
+                // "Sem novidade" compara a NUVEM com o BANCO LOCAL, e não com o que
+                // esta tela tem na memória. Se o preço já tinha descido para o disco
+                // por outro caminho, a tela podia continuar com a tabela velha e o
+                // botão dizer "Tudo em dia" sem corrigir nada. Recarregar aqui é
+                // barato (lê o SQLite local) e faz a frase ser verdade.
+                RecarregarCatalogo();
                 // Sem novidade o relatório detalhado só confunde: parecia estar
                 // mostrando "a última sincronização" de novo.
                 Dialogo.Avisar(dono, "Tudo em dia",
