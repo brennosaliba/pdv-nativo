@@ -142,7 +142,10 @@ public static class TelaMenuTef
                 Dizer("Não consegui falar com a maquininha. " + ex.Message, "Erro");
             }
             finally { Travar(false); }
-            await AtualizarAsync(quieto: true);
+            // Fora do try acima de proposito ate 09/09/2026, e era por aqui que o exe
+            // morria: `Rodar` e async void, entao excecao daqui nao tem quem pegue.
+            try { await AtualizarAsync(quieto: true); }
+            catch (Exception ex) { Dizer("A maquininha respondeu, mas nao consegui reler o estado. " + ex.Message, "Erro"); }
         }
 
         void Desenhar(IReadOnlyList<MenuTef.Item> itens)
@@ -227,7 +230,11 @@ public static class TelaMenuTef
 
         janela.KeyDown += (_, e) => { if (e.Key == Key.Escape && !ocupado) janela.Close(); };
         janela.Content = Dialogo.Moldura(pilha);
-        janela.Loaded += async (_, _) => await AtualizarAsync();
+        janela.Loaded += async (_, _) =>
+        {
+            try { await AtualizarAsync(); }
+            catch (Exception ex) { Dizer("Nao consegui perguntar a biblioteca. " + ex.Message, "Erro"); }
+        };
         janela.ShowDialog();
         return pediuConfiguracao;
     }

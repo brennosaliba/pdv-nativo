@@ -547,7 +547,10 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             // aprovação: é ela que o passo 29 do roteiro v20260819 manda o operador ler no caixa.
             // A administrativa já fazia assim; a venda voltava muda e a tela não tinha o que mostrar.
             return new DesfechoTef(SituacaoTef.Pago, id, chargeId, cartao, r.Mensagem, false)
-            { Codigo = CodigoTef.Pago, PaymentStatus = situacao };
+            // O REQNUM sobe TAMBEM na venda. Ele ja subia nas administrativas, e eu
+            // deixei o caminho da venda de fora: a planilha de homologacao saiu com a
+            // coluna vazia justamente nos passos que sao venda, que sao a maioria.
+            { Codigo = CodigoTef.Pago, PaymentStatus = situacao, Reqnum = r.CodigoControle };
         }
         finally
         {

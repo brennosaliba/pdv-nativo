@@ -20,6 +20,38 @@ public partial class App : Application
     /// </summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // ── O CAIXA NÃO MORRE POR UMA EXCEÇÃO DE TELA ───────────────────────
+        //
+        // 09/09/2026: o dono tocou em "exportar logs" no menu do PayGo e o exe
+        // FECHOU. Não havia guarda nenhuma: qualquer exceção não tratada na thread
+        // da tela derrubava o processo. No meio de uma homologação isso custa a
+        // sequência; no balcão, custa a venda e o cliente esperando.
+        //
+        // Continuar vivo com um erro à vista é melhor que morrer calado. O dinheiro
+        // já tem defesa própria: a venda grava em transação, o TEF confirma ou
+        // desfaz, e o rascunho traz a comanda de volta. O que faltava era a tela
+        // não levar tudo junto quando ela mesma tropeça.
+        DispatcherUnhandledException += (_, args) =>
+        {
+            args.Handled = true;
+            try
+            {
+                Nucleo.Caixa.Auditar(null, null, "erro_de_tela", null, null,
+                    args.Exception.GetType().Name + ": " + args.Exception.Message);
+            }
+            catch { }
+            try
+            {
+                MessageBox.Show(
+                    "Alguma coisa falhou nesta tela e eu segurei o caixa de pe."
+                    + Environment.NewLine + Environment.NewLine + args.Exception.Message
+                    + Environment.NewLine + Environment.NewLine
+                    + "A venda e o turno continuam como estavam. Se repetir, chame o suporte.",
+                    "O caixa continua aberto", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            catch { }
+        };
+
         var args = e.Args;
         if (args.Length > 0 && (args[0] == "--cupom-teste" || args[0] == "--imprimir-teste"))
         {

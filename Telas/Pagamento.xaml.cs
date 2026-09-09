@@ -32,6 +32,13 @@ public partial class Pagamento : UserControl
     /// </summary>
     public int? PassoDoRoteiro { get; set; }
 
+    /// <summary>Este caixa esta rodando o roteiro? Le do banco, sem derrubar a venda.</summary>
+    private static bool EhHomologacao()
+    {
+        try { using var cx = Banco.Abrir(); return ModoHomologacao.Ligado(cx); }
+        catch { return false; }
+    }
+
     private enum Fase { Forma, Dinheiro, Cobrando, Emitindo, Sucesso, Falha }
 
     private readonly Operador _operador;
@@ -626,7 +633,14 @@ public partial class Pagamento : UserControl
             // O que a REDE respondeu ("TRANSACAO APROVADA") fica à vista antes de a tela andar:
             // daqui em diante ela lança a parte e volta para as formas, ou emite a nota, sem
             // parar. O passo 29 do roteiro v20260819 cobra essa frase para o operador.
-            RecadoDoTef(d.MensagemParaTela);
+            // O REQNUM A VISTA, no caixa de homologacao (09/09/2026, pedido do dono:
+            // "coloca o reqnum pra mostrar na tela q eu anoto"). A planilha da PayGo
+            // exige esse numero em cada um dos 39 passos obrigatorios, e ate aqui ele
+            // so existia no log da biblioteca. Fora da homologacao nao aparece: e
+            // numero de tecnico, nao interessa a quem esta atendendo cliente.
+            RecadoDoTef(EhHomologacao() && !string.IsNullOrWhiteSpace(d.Reqnum)
+                ? $"{d.MensagemParaTela}   ·   REQNUM {d.Reqnum}"
+                : d.MensagemParaTela);
             // Guarda o charge para o pop-up das vias em "Perguntar" depois da conclusão.
             if (d.ChargeId is { Length: > 0 } chg) _chargesTefPagos.Add(chg);
             // 03/09 (Savassi): PIX pelo TEF volta APROVADO com NSU mas sem "codigo de
