@@ -110,6 +110,25 @@ RODAPE = '''    };
         var v = (p.Valor ?? "").Replace(".", "").Replace(",", "").Trim();
         return v.Length > 0 && long.TryParse(v, out var c) ? c : null;
     }
+
+    /// <summary>
+    /// Os pares de passos que sao A MESMA TRANSACAO. O roteiro oficial v20260819 diz, nas
+    /// Observacoes do primeiro de cada par: "O teste sera continuado no passo seguinte".
+    /// O primeiro monta a situacao (o valor que faz o simulador pedir o dado, o menu, a venda)
+    /// e o segundo responde. Sai UM REQNUM para os dois.
+    ///
+    /// Serve para o placar nao acusar repeticao onde a repeticao e o certo: em 09/09/2026 os
+    /// passos 28 e 29 sairam da mesma venda de R$ 1.001,00 (REQNUM 282955) e a tela se recusava
+    /// a carimbar o segundo.
+    /// </summary>
+    public static readonly IReadOnlyList<(int Primeiro, int Segundo)> PassosEmPar = new[]
+    {
+        (28, 29), (30, 31), (33, 34), (35, 36), (41, 42), (43, 44), (45, 46),
+    };
+
+    /// <summary>Os dois passos sao o mesmo teste, em qualquer ordem?</summary>
+    public static bool MesmoTeste(int a, int b)
+        => a == b || PassosEmPar.Any(p => (p.Primeiro == a && p.Segundo == b) || (p.Primeiro == b && p.Segundo == a));
 }
 '''
 

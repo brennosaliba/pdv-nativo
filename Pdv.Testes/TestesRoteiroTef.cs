@@ -227,5 +227,39 @@ public static class TestesRoteiroTef
         });
         checar(PlacarHomologacao.AvisoDeReqnumFaltando(recusadoSemReq) is null,
             "passo recusado sem REQNUM nao vira alarme");
+        // ── PASSOS QUE SAO A MESMA TRANSACAO (09/09/2026) ────────────────────
+        // O roteiro oficial diz "O teste sera continuado no passo seguinte" no primeiro de
+        // cada par. O dono rodou a venda de R$ 1.001,00, a caixa de dado generico apareceu
+        // (passo 28) e ele digitou ABC123 (passo 29): uma venda, REQNUM 282955, dois passos.
+        // A tela se recusava a carimbar o segundo, porque o numero "ja estava usado".
+        {
+            checar(RoteiroTef.MesmoTeste(28, 29) && RoteiroTef.MesmoTeste(29, 28),
+                "28 e 29 sao o mesmo teste, nos dois sentidos");
+            checar(RoteiroTef.MesmoTeste(30, 31) && RoteiroTef.MesmoTeste(43, 44) && RoteiroTef.MesmoTeste(45, 46),
+                "e os outros pares que o roteiro declara");
+            checar(!RoteiroTef.MesmoTeste(2, 3) && !RoteiroTef.MesmoTeste(29, 30),
+                "passos vizinhos que NAO sao par continuam separados (2/3 e 29/30)");
+            checar(RoteiroTef.MesmoTeste(7, 7), "o mesmo passo e ele mesmo");
+            checar(RoteiroTef.PassosEmPar.All(par => par.Segundo == par.Primeiro + 1),
+                "todo par e um passo e o seguinte");
+            checar(RoteiroTef.PassosEmPar.All(par =>
+                       RoteiroTef.Passos.Any(p => p.Numero == par.Primeiro) && RoteiroTef.Passos.Any(p => p.Numero == par.Segundo)),
+                "e os dois passos de cada par existem no roteiro");
+        }
+
+        // ── O PLACAR OFERECE O MESMO NUMERO AO PAR, E NAO ACUSA REPETICAO ────
+        {
+            // GuardarUltimo carimba a hora de AGORA, entao o relogio do teste sai dela.
+            var agora = DateTime.Now;
+            PlacarHomologacao.GuardarUltimo("0000282955", 100100, "aprovado", passo: 28);
+
+            checar(PlacarHomologacao.ReqnumParaOferecer(agora, new[] { "0000282955" }, passoAtual: 29) == "0000282955",
+                "o numero carimbado no passo 28 e oferecido ao 29: e a mesma venda");
+            checar(PlacarHomologacao.ReqnumParaOferecer(agora, new[] { "0000282955" }, passoAtual: 30) is null,
+                "mas nao ao passo 30, que e outra venda");
+            checar(PlacarHomologacao.ReqnumParaOferecer(agora.AddMinutes(11), new[] { "0000282955" }, passoAtual: 29) is null,
+                "e nem ao par depois de 10 minutos: numero velho nao serve nem no par");
+        }
+
     }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 // SelecaoTef.cs: a ligação dos provedores de TEF na casa, sem WPF e sem banco:
 //   · SelecaoTef: qual provedor a config pede (tef_habilitado + tef_provedor) e os códigos/modos
 //     que Servicos.Tef() e a Configuração compartilham (uma regra só, testada uma vez);
@@ -242,8 +243,18 @@ public static class ConfigPGWebLib
 public static class RespostaDaTela
 {
     public const string ErroParcelas = "Digite um número de 1 a 99.";
+    public const string ErroValor = "Digite o valor em reais, como 2,00.";
 
     public static bool EhParcelas(PwGetData d) => !d.EhMenu && d.Identificador == PW.PWINFO_INSTALLMENTS;
+
+    /// <summary>
+    /// A biblioteca pede um VALOR (PWINFO_TOTAMNT ou o valor da transacao original) e espera
+    /// CENTAVOS, sem virgula. Quem opera nao sabe disso: em 09/09/2026 o dono digitou "2" num
+    /// estorno de R$ 2,00 e o caixa mandou dois centavos; "2,00" foi para o host com virgula.
+    /// A regra da casa e a mesma da tela de venda: quem digita fala em reais.
+    /// </summary>
+    public static bool EhValor(PwGetData d)
+        => !d.EhMenu && d.Identificador is PW.PWINFO_TOTAMNT or PW.PWINFO_TRNORIGAMNT;
 
     /// <summary>Senha do lojista (PWDAT_USERAUTH) ou dado que a biblioteca marcou como oculto: diálogo de senha, sem eco.</summary>
     public static bool Ocultar(PwGetData d) => d.Ocultar || d.Tipo == PW.PWDAT_USERAUTH;
@@ -252,6 +263,7 @@ public static class RespostaDaTela
     {
         if (d.EhMenu && d.Identificador == PW.PWINFO_AUTHSYST) return "Rede";
         if (EhParcelas(d)) return "Parcelas no crédito";
+        if (EhValor(d)) return "Valor";
         if (d.Tipo == PW.PWDAT_USERAUTH) return "Senha do lojista";
         var p = d.Prompt?.Trim();
         return string.IsNullOrEmpty(p) ? "Maquininha" : p;
@@ -261,6 +273,7 @@ public static class RespostaDaTela
     public static string Rotulo(PwGetData d)
     {
         if (EhParcelas(d)) return "Em quantas vezes? (1 = à vista, até 99)";
+        if (EhValor(d)) return "Quanto, em reais (por exemplo 2,00)";
         if (d.Tipo == PW.PWDAT_USERAUTH) return "Senha do lojista";
         var p = d.Prompt?.Trim();
         return string.IsNullOrEmpty(p) ? "Digite o dado pedido pela maquininha" : p;
@@ -295,11 +308,41 @@ public static class RespostaDaTela
         var v = texto.Trim();
         if (EhParcelas(d))
             return int.TryParse(v, out var n) && n >= 1 && n <= 99 ? (n.ToString(), null) : (null, ErroParcelas);
+        if (EhValor(d))
+        {
+            var cent = CentavosDoTexto(v);
+            return cent is > 0 ? (cent.Value.ToString(CultureInfo.InvariantCulture), null) : (null, ErroValor);
+        }
         if (v.Length == 0 && !d.AceitaNulo) return (null, "Este campo não pode ficar em branco.");
         var min = d.TamanhoMinimo; var max = d.TamanhoMaximo;
         if ((min > 0 && v.Length < min) || (max > 0 && v.Length > max))
             return (null, max > 0 ? $"Digite entre {min} e {max} caracteres." : $"Digite pelo menos {min} caracteres.");
         return (v, null);
+    }
+
+    /// <summary>
+    /// "2", "2,00", "2.00" e "R$ 2,00" viram 200. Sem separador nenhum o numero e lido como
+    /// REAIS INTEIROS, que e como uma pessoa fala: quem quer dois centavos digita 0,02. Null =
+    /// nao da para ler.
+    /// </summary>
+    public static long? CentavosDoTexto(string? texto)
+    {
+        var v = (texto ?? "").Trim().Replace("R$", "", StringComparison.OrdinalIgnoreCase).Trim();
+        if (v.Length == 0) return null;
+        v = v.Replace(" ", "");
+        var sep = v.LastIndexOfAny(new[] { ',', '.' });
+        string inteiros, centavos;
+        if (sep < 0) { inteiros = v; centavos = "00"; }
+        else
+        {
+            inteiros = v[..sep].Replace(".", "").Replace(",", "");
+            centavos = v[(sep + 1)..];
+            if (centavos.Length is 0 or > 2) return null;
+            centavos = centavos.PadRight(2, '0');
+        }
+        if (inteiros.Length == 0) inteiros = "0";
+        if (!inteiros.All(char.IsAsciiDigit) || !centavos.All(char.IsAsciiDigit)) return null;
+        return long.TryParse(inteiros + centavos, NumberStyles.None, CultureInfo.InvariantCulture, out var c) ? c : null;
     }
 }
 

@@ -633,6 +633,22 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             Param(ctx, PW.PWINFO_CURREXP, "2");
             Param(ctx, PW.PWINFO_TRNORIGNSU, r0.Nsu!);
             Param(ctx, PW.PWINFO_TRNORIGAMNT, original.ValorCent.ToString(CultureInfo.InvariantCulture));
+            // O QUE O CAIXA JA SABE, O OPERADOR NAO DIGITA (09/09/2026). Medido no log: num
+            // estorno de R$ 2,00 a biblioteca parou quatro vezes pedindo valor (0x25), data
+            // (0x57), forma de pagamento (0x29) e a Referencia Local (0x78). Tudo isso esta na
+            // venda guardada. Pior: o valor vai em CENTAVOS, entao quem digitava "2" estornava
+            // dois centavos e quem digitava "2,00" mandava uma vírgula para o host.
+            // Mandando aqui, a biblioteca nao pergunta; e se perguntar assim mesmo, o caixa
+            // responde sozinho pelo caminho de Predefinido.
+            Param(ctx, PW.PWINFO_TOTAMNT, original.ValorCent.ToString(CultureInfo.InvariantCulture));
+            Param(ctx, PW.PWINFO_CARDTYPE, original.Tipo switch
+            {
+                TipoTef.Debito => PW.CARDTYPE_DEBITO,
+                TipoTef.Voucher => PW.CARDTYPE_VOUCHER,
+                _ => PW.CARDTYPE_CREDITO,
+            });
+            var locref = r0.Campos.GetValueOrDefault("950-000")?.Trim();
+            if (!string.IsNullOrEmpty(locref)) Param(ctx, PW.PWINFO_TRNORIGLOCREF, locref!);
             if (r0.Autorizacao is not null) Param(ctx, PW.PWINFO_TRNORIGAUTH, r0.Autorizacao);
             if (r0.CodigoControle is not null) Param(ctx, PW.PWINFO_TRNORIGREQNUM, r0.CodigoControle);
             var (data, hora) = DataHoraOriginal(r0);
@@ -1715,9 +1731,17 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         Def("950-000", PW.PWINFO_AUTLOCREF);
         Def("951-000", PW.PWINFO_VIRTMERCH);
         Def("952-000", PW.PWINFO_AUTDATETIME);
-        if (r.TryGetValue(PW.PWINFO_AUTDATETIME, out var dt) && dt.Trim().Length >= 14)
+        // A DATA DA VENDA, DE QUALQUER UMA DAS DUAS TAGS (09/09/2026). O carimbo da rede
+        // (PWINFO_AUTDATETIME) nao veio em nenhuma venda desta homologacao; o que a biblioteca
+        // devolve sempre e PWINFO_DATETIME. Sem data guardada, o estorno saia sem TRNORIGDATE e
+        // a biblioteca parava para o operador digitar "090926" na mao.
+        var carimbo = r.TryGetValue(PW.PWINFO_AUTDATETIME, out var dtRede) && dtRede.Trim().Length >= 14
+            ? dtRede.Trim()
+            : r.TryGetValue(PW.PWINFO_DATETIME, out var dtLib) && dtLib.Trim().Length >= 14 ? dtLib.Trim() : null;
+        if (!c.ContainsKey("952-000") && carimbo is not null) c["952-000"] = carimbo;
+        if (carimbo is not null)
         {
-            var s = dt.Trim();
+            var s = carimbo;
             c["022-000"] = s.Substring(6, 2) + s.Substring(4, 2) + s.Substring(0, 4);   // DDMMYYYY
             c["023-000"] = s.Substring(8, 6);                                              // hhmmss
         }

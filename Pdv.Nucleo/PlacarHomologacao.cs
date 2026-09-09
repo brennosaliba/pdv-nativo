@@ -139,9 +139,12 @@ public static class PlacarHomologacao
     {
         if (Ultimo is not { } u) return null;
         if ((agora - u.Quando).TotalMinutes > 10) return null;
-        if (jaUsados is not null && jaUsados.Contains(u.Reqnum, StringComparer.Ordinal)) return null;
-        // Nasceu de outro passo: tem dono, e nao e este.
-        if (u.Passo is { } dono && passoAtual is { } atual && dono != atual) return null;
+        // JA USADO, MENOS NO PAR. Passos como 28 e 29 sao uma venda so ("o teste sera
+        // continuado no passo seguinte"), entao o numero do primeiro E o do segundo.
+        var noPar = passoAtual is { } p2 && u.Passo is { } p1 && RoteiroTef.MesmoTeste(p1, p2);
+        if (!noPar && jaUsados is not null && jaUsados.Contains(u.Reqnum, StringComparer.Ordinal)) return null;
+        // Nasceu de outro passo: tem dono, e nao e este (a menos que os dois sejam o mesmo teste).
+        if (u.Passo is { } dono && passoAtual is { } atual && dono != atual && !RoteiroTef.MesmoTeste(dono, atual)) return null;
         return u.Reqnum;
     }
 
@@ -212,6 +215,9 @@ public static class PlacarHomologacao
             .Where(l => !string.IsNullOrWhiteSpace(l.Feito?.Reqnum))
             .GroupBy(l => l.Feito!.Reqnum!.Trim(), StringComparer.Ordinal)
             .Where(g => g.Count() > 1)
+            // Par declarado pelo roteiro (28/29, 30/31, 43/44...): uma transacao, dois passos.
+            // Repetir ali nao e engano, e o teste.
+            .Where(g => !(g.Count() == 2 && RoteiroTef.MesmoTeste(g.First().Passo.Numero, g.Last().Passo.Numero)))
             .ToList();
         if (porNumero.Count == 0) return null;
         var partes = porNumero.Select(g =>

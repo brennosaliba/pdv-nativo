@@ -130,11 +130,24 @@ public static class PW
     public const ushort PWINFO_USINGPINPAD = 32513;
     public const ushort PWINFO_PPCOMMPORT = 32514;
     // cancelamento (PWOPER_SALEVOID)
+    /// <summary>
+    /// Data e hora da transacao, AAAAMMDDhhmmss, como a BIBLIOTECA devolve na venda
+    /// (PWINFO_DATETIME, 0x31). Nao confundir com PWINFO_AUTDATETIME (72), que e o carimbo da
+    /// REDE: medido em 09/09/2026, a PGWebLib devolve 0x31 em toda venda e o 72 so as vezes.
+    /// Sem um dos dois o estorno fica sem data e a biblioteca pergunta ao operador.
+    /// </summary>
+    public const ushort PWINFO_DATETIME = 49;
     public const ushort PWINFO_TRNORIGDATE = 87;
     public const ushort PWINFO_TRNORIGNSU = 88;
     public const ushort PWINFO_TRNORIGAMNT = 96;
     public const ushort PWINFO_TRNORIGAUTH = 98;
     public const ushort PWINFO_TRNORIGREQNUM = 114;
+    /// <summary>
+    /// Referencia Local da venda original (PWINFO_TRNORIGLOCREF, 0x78). E o "REF" impresso no
+    /// comprovante, e vem da venda em PWINFO_AUTLOCREF. O passo 43/44 do roteiro e exatamente
+    /// isto: "Cancelamento aprovado solicitando Referencia Local".
+    /// </summary>
+    public const ushort PWINFO_TRNORIGLOCREF = 120;
     public const ushort PWINFO_TRNORIGTIME = 115;
 
     // ── informações (PWINFO_*): confirmação e pendência ──────────────────
