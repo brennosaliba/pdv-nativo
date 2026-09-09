@@ -1334,6 +1334,11 @@ Console.WriteLine();
 Console.WriteLine("--- Roteiro do TEF (58 passos, valores e planilha) ---");
 TestesRoteiroTef.Rodar((cond, nome) => Check("roteiro-tef: " + nome, cond));
 
+// -- FIM DA VENDA: a tela de sucesso sai da frente, menos quando nao pode -----
+Console.WriteLine();
+Console.WriteLine("--- Fim da venda (voltar sozinho) ---");
+TestesFimDaVenda.Rodar((cond, nome) => Check("fim-venda: " + nome, cond));
+
 // -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
 // Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
 // religamento. Dinheiro que entra sem passar pela gaveta — de novo.

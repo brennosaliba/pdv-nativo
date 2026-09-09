@@ -81,7 +81,59 @@ public static class PlacarHomologacao
     /// numero seria chutar, e numero errado na planilha e pior do que coluna vazia.
     /// </summary>
     public static string? ReqnumParaOferecer(DateTime agora)
-        => Ultimo is { } u && (agora - u.Quando).TotalMinutes <= 10 ? u.Reqnum : null;
+        => ReqnumParaOferecer(agora, Array.Empty<string>());
+
+    /// <summary>
+    /// O REQNUM que vale oferecer, sabendo os que JA estao carimbados em outros passos.
+    ///
+    /// ⚠️ A REGRA DO JA USADO NASCEU DE UM ESTRAGO (09/09/2026). A primeira versao so
+    /// olhava o relogio, e o dono rodou os passos 2, 3, 4 e 5 em poucos minutos. O
+    /// passo 5 e "Esc no menu de rede": ele NAO completa transacao, entao o ultimo
+    /// REQNUM continuava sendo o do passo 4. A tela ofereceu, ele aceitou, e os quatro
+    /// passos ficaram com 276864.
+    ///
+    /// Oferecer e pedir confirmacao nao basta: quem esta rodando o roteiro confia que
+    /// o sistema so oferece o que faz sentido. REQNUM ja carimbado em outro passo e
+    /// prova de que NAO e deste, e o certo e nao oferecer.
+    ///
+    /// Dez minutos continuam valendo por cima: numero velho tambem nao serve.
+    /// </summary>
+    public static string? ReqnumParaOferecer(DateTime agora, IReadOnlyCollection<string> jaUsados)
+    {
+        if (Ultimo is not { } u) return null;
+        if ((agora - u.Quando).TotalMinutes > 10) return null;
+        if (jaUsados is not null && jaUsados.Contains(u.Reqnum, StringComparer.Ordinal)) return null;
+        return u.Reqnum;
+    }
+
+    /// <summary>Os REQNUM ja carimbados, para nao repetir um em dois passos.</summary>
+    public static IReadOnlyCollection<string> ReqnumsJaUsados(IReadOnlyList<LinhaDoPlacar> linhas)
+        => (linhas ?? Array.Empty<LinhaDoPlacar>())
+            .Select(l => l.Feito?.Reqnum)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!.Trim())
+            .ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// O aviso de REQNUM repetido em mais de um passo.
+    ///
+    /// A PayGo confere numero por numero: dois passos com o mesmo REQNUM e a planilha
+    /// dizendo que a mesma transacao provou duas coisas diferentes. Melhor descobrir
+    /// aqui.
+    /// </summary>
+    public static string? AvisoDeReqnumRepetido(IReadOnlyList<LinhaDoPlacar> linhas)
+    {
+        var porNumero = (linhas ?? Array.Empty<LinhaDoPlacar>())
+            .Where(l => !string.IsNullOrWhiteSpace(l.Feito?.Reqnum))
+            .GroupBy(l => l.Feito!.Reqnum!.Trim(), StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .ToList();
+        if (porNumero.Count == 0) return null;
+        var partes = porNumero.Select(g =>
+            $"{g.Key} em {string.Join(", ", g.Select(l => "passo " + l.Passo.Numero))}");
+        return "O mesmo REQNUM aparece em mais de um passo: " + string.Join("; ", partes)
+            + ". Cada passo tem a transação dele; refaça os repetidos.";
+    }
 
     private static void Garantir(Microsoft.Data.Sqlite.SqliteConnection cx)
     {

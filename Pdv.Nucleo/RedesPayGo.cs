@@ -100,9 +100,79 @@ public static class RedesPayGo
         "PIX BRADESCO",
     };
 
+    /// <summary>A chave onde ficam as redes que o terminal ja ofereceu.</summary>
+    public const string ChaveVistas = "tef_redes_do_terminal";
+
+    /// <summary>
+    /// Guarda as redes que o TERMINAL ofereceu no menu.
+    ///
+    /// So acrescenta, nunca substitui: um menu que veio curto (porque a loja
+    /// encurtou, ou porque a rede estava fora do ar) nao pode apagar o que ja se
+    /// sabia deste terminal.
+    /// </summary>
+    public static void GuardarVistas(IReadOnlyList<string> redes)
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            var atuais = Vistas(c => Vendas.Config(cx, c)).ToList();
+            var mudou = false;
+            foreach (var r in redes ?? Array.Empty<string>())
+            {
+                var v = (r ?? "").Trim();
+                if (v.Length == 0 || atuais.Contains(v, StringComparer.Ordinal)) continue;
+                atuais.Add(v);
+                mudou = true;
+            }
+            if (mudou) Vendas.GravarConfig(cx, ChaveVistas, string.Join("|", atuais));
+        }
+        catch { /* saber as redes e conforto: nunca derruba a cobranca */ }
+    }
+
+    /// <summary>As redes que este terminal ja ofereceu, na ordem em que apareceram.</summary>
+    public static IReadOnlyList<string> Vistas(Func<string, string?> config)
+    {
+        var bruto = config(ChaveVistas);
+        if (string.IsNullOrWhiteSpace(bruto)) return Array.Empty<string>();
+        return bruto.Split('|', StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+    }
+
     /// <summary>Opções do campo de CARTÃO, já contando o valor gravado (mesmo fora da lista).</summary>
     public static IReadOnlyList<OpcaoRede> OpcoesCartao(string? gravado = null)
         => Opcoes(Cartao, Pix, "Pix", gravado);
+
+    /// <summary>
+    /// Opcoes do campo de CARTAO com as redes que ESTE TERMINAL ja ofereceu na frente.
+    ///
+    /// A lista escrita a mao continua embaixo, porque terminal recem instalado nunca
+    /// abriu menu de rede e nao tem o que oferecer. O que muda e a ordem e o rotulo:
+    /// quem o terminal ja mostrou vem primeiro, dito como tal.
+    /// </summary>
+    public static IReadOnlyList<OpcaoRede> OpcoesCartao(string? gravado, IReadOnlyList<string> vistas)
+    {
+        var basica = Opcoes(Cartao, Pix, "Pix", gravado);
+        if (vistas is null || vistas.Count == 0) return basica;
+
+        var fora = new List<OpcaoRede>();
+        foreach (var v in vistas)
+        {
+            var nome = (v ?? "").Trim();
+            if (nome.Length == 0) continue;
+            if (basica.Any(o => string.Equals(o.Valor, nome, StringComparison.Ordinal))) continue;
+            fora.Add(new OpcaoRede(nome, nome + "  (este terminal oferece)", Conhecida: true));
+        }
+
+        // As vistas primeiro, na ordem em que o terminal as mostrou; depois o resto.
+        var naFrente = vistas
+            .Select(v => basica.FirstOrDefault(o => string.Equals(o.Valor, (v ?? "").Trim(), StringComparison.Ordinal)))
+            .Where(o => o is not null)!
+            .Select(o => o! with { Rotulo = o.Rotulo + "  (este terminal oferece)" })
+            .ToList();
+
+        var resto = basica.Where(o => !naFrente.Any(f => string.Equals(f.Valor, o.Valor, StringComparison.Ordinal)));
+        return naFrente.Concat(fora).Concat(resto).ToList();
+    }
 
     /// <summary>Opções do campo de PIX, já contando o valor gravado (mesmo fora da lista).</summary>
     public static IReadOnlyList<OpcaoRede> OpcoesPix(string? gravado = null)

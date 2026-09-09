@@ -84,6 +84,12 @@ public static class TelaRoteiroTef
                 FontSize = 13, Foreground = R("TextoFraco"),
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0),
             });
+        if (PlacarHomologacao.AvisoDeReqnumRepetido(linhas) is { } repetido)
+            resumo.Children.Add(new TextBlock
+            {
+                Text = "⚠ " + repetido, FontSize = 13, Foreground = R("Erro"),
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0),
+            });
         if (PlacarHomologacao.AvisoDeReqnumFaltando(linhas) is { } falta)
             resumo.Children.Add(new TextBlock
             {
@@ -231,7 +237,14 @@ public static class TelaRoteiroTef
             // coluna vazia, e so quem estava na frente do pinpad sabe se aquela
             // transacao e a deste passo.
             string? req = null;
-            if (PlacarHomologacao.ReqnumParaOferecer(DateTime.Now) is { } candidato)
+            // Os ja carimbados saem do banco na hora: REQNUM que ja esta em outro
+            // passo e prova de que nao e deste, e nem chega a ser oferecido.
+            var usados = PlacarHomologacao.Anotados().Values
+                .Select(f => f.Reqnum)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!.Trim())
+                .ToHashSet(StringComparer.Ordinal);
+            if (PlacarHomologacao.ReqnumParaOferecer(DateTime.Now, usados) is { } candidato)
             {
                 if (Dialogo.Confirmar(janela, $"Passo {p.Numero}",
                         $"A última transação do TEF foi a {candidato}.\nÉ a deste passo?",

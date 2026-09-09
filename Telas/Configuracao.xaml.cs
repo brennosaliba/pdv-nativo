@@ -190,7 +190,13 @@ public partial class Configuracao : UserControl
         // recusada. O que está no banco continua aparecendo mesmo fora da lista.
         EncherRedes(CboPayGoRede, RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_paygo_rede")), Vendas.Config(cx, "tef_paygo_rede"));
         EncherRedes(CboPayGoRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_paygo_rede_pix")), Vendas.Config(cx, "tef_paygo_rede_pix"));
-        EncherRedes(CboPgwebRede, RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_paygo_rede")), Vendas.Config(cx, "tef_paygo_rede"));
+        // A lista do PGWebLib prefere o que ESTE TERMINAL ja ofereceu no menu de rede.
+        // Foi assim que o dono caiu no A116: a lista escrita a mao so tinha "C6PAY", e
+        // este terminal so aceita "C6 PAY". Quem sabe a grafia e o terminal.
+        EncherRedes(CboPgwebRede,
+            RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_paygo_rede"),
+                                    RedesPayGo.Vistas(c => Vendas.Config(cx, c))),
+            Vendas.Config(cx, "tef_paygo_rede"));
         EncherRedes(CboPgwebRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_paygo_rede_pix")), Vendas.Config(cx, "tef_paygo_rede_pix"));
         EncherRedes(CboCpayRede, RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_cpay_adquirente")), Vendas.Config(cx, "tef_cpay_adquirente"));
         EncherRedes(CboCpayRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_cpay_adquirente_pix")), Vendas.Config(cx, "tef_cpay_adquirente_pix"));

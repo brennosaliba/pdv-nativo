@@ -135,6 +135,32 @@ public static class TestesRoteiroTef
         checar(PlacarHomologacao.AvisoDeReqnumFaltando(umSo)!.Contains("O passo 1"),
             "um so fala no singular");
 
+        // ── O MESMO REQNUM EM DOIS PASSOS ──────────────────────────────────
+        // 09/09/2026: o dono rodou os passos 2, 3, 4 e 5 em poucos minutos e os
+        // QUATRO ficaram com 276864. O passo 5 e "Esc no menu de rede": nao completa
+        // transacao, entao o ultimo REQNUM continuava sendo o do passo 4. A tela
+        // ofereceu e ele aceitou, porque quem roda o roteiro confia que o sistema so
+        // oferece o que faz sentido.
+        var repetido = PlacarHomologacao.Montar(nossos, new Dictionary<int, PassoFeito>
+        {
+            [2] = new(2, PlacarHomologacao.Aprovado, "276864", quando),
+            [3] = new(3, PlacarHomologacao.Aprovado, "276864", quando),
+            [4] = new(4, PlacarHomologacao.Aprovado, "276865", quando),
+        });
+        var avisoRep = PlacarHomologacao.AvisoDeReqnumRepetido(repetido)!;
+        checar(avisoRep.Contains("276864"), $"denuncia o REQNUM repetido ({avisoRep})");
+        checar(avisoRep.Contains("passo 2") && avisoRep.Contains("passo 3"), "e diz em quais passos");
+        checar(!avisoRep.Contains("276865"), "o que aparece uma vez so nao entra no aviso");
+        checar(PlacarHomologacao.AvisoDeReqnumRepetido(linhas) is null,
+            "sem repeticao, nao ha o que avisar");
+        checar(!avisoRep.Contains('—'), "sem travessao");
+
+        // ── E O QUE JA FOI USADO NAO E OFERECIDO DE NOVO ────────────────────
+        var usados = PlacarHomologacao.ReqnumsJaUsados(repetido);
+        checar(usados.Contains("276864") && usados.Contains("276865"),
+            "os carimbados sao reconhecidos");
+        checar(!usados.Contains("999999"), "e so eles");
+
         // Passo RECUSADO sem reqnum nao e problema: nao vai para a planilha como ok.
         var recusadoSemReq = PlacarHomologacao.Montar(nossos, new Dictionary<int, PassoFeito>
         {

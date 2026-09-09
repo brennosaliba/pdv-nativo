@@ -311,6 +311,9 @@ public static class Servicos
                 var pg = new ProvedorPGWebLib(new PGWebLibNativa(), ConfigPGWebLib.Diretorio(Cfg), ConfigPGWebLib.Opcoes(Cfg, versao))
                 {
                     Guardar = t => GuardarTef(t, "pgweblib"),
+                    // A lista de redes deixa de ser chute: o terminal diz quais tem, no
+                    // menu de rede, e a Configuracao passa a oferecer essas.
+                    RedesDoTerminal = redes => RedesPayGo.GuardarVistas(redes),
                     CnpjDaRede = rede =>
                     {
                         using var c2 = Banco.Abrir();

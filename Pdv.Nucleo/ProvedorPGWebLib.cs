@@ -110,6 +110,24 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
 
     public Action<string>? Auditar { get; init; }
 
+    /// <summary>
+    /// AS REDES QUE ESTE TERMINAL OFERECE, do jeito que a biblioteca as escreve.
+    ///
+    /// ⚠️ EXISTE POR UMA PERGUNTA DO DONO (09/09/2026): "pra que colocar C6PAY e
+    /// C6 PAY? nao eh melhor colocar um q aceite ambos?".
+    ///
+    /// Nao da para aceitar os dois: o nome da rede nao e rotulo nosso, e sim
+    /// identificador que o terminal compara letra por letra. `C6 PAY` aprovou quatro
+    /// vezes hoje e `C6PAY` devolveu A116 nas duas tentativas. "Um que aceite ambos"
+    /// seria o PDV escolhendo um, e escolher errado e a recusa garantida.
+    ///
+    /// Mas ele esta certo no fundo: ninguem deveria precisar saber a grafia. Quem
+    /// sabe e o TERMINAL, e ele diz, no menu de rede que a biblioteca abre. Aqui esse
+    /// menu deixa de passar em branco: as opcoes sao anunciadas e viram a lista da
+    /// Configuracao, no lugar da lista escrita a mao.
+    /// </summary>
+    public Action<IReadOnlyList<string>>? RedesDoTerminal { get; init; }
+
     /// <summary>Imprime as vias ANTES da confirmação; false = desfaz (PWCNF_REV_PRN_AUT). Null = terminal sem impressão de TEF.</summary>
     public Func<TransacaoPayGo, Task<bool>>? ImprimirComprovante { get; init; }
 
@@ -1091,6 +1109,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     // tela — assim os botões e o valor devolvido saem da MESMA lista, e não tem
                     // como o operador tocar em C6PAY e a biblioteca receber CIELO. O menu nunca
                     // fica vazio: ver FiltroRedes.
+                    // O menu de rede e a UNICA hora em que o terminal diz, com todas as
+                    // letras, quais redes ele tem. Anuncia ANTES do filtro da loja: o
+                    // que interessa guardar e o que o TERMINAL oferece, e nao o que a
+                    // configuracao deixou passar.
+                    if (p.Identificador == PW.PWINFO_AUTHSYST && p.Opcoes is { Count: > 0 })
+                        try { RedesDoTerminal?.Invoke(p.Opcoes.Select(o => o.Valor).ToList()); } catch { }
                     var resposta = await PerguntarSeguroAsync(ctx, FiltroRedes.Aplicar(p, _op.RedesPermitidas, Auditar)).ConfigureAwait(false);
                     // A tela pode devolver o texto da opção ("RELATORIO") ou o valor em outra caixa
                     // ("cielo"): o que vai para a biblioteca é sempre o VALOR da opção.

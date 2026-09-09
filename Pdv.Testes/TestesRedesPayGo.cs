@@ -119,6 +119,31 @@ public static class TestesRedesPayGo
         checar(RedesPayGo.ParaEnvioCartao("C6 PAY") == "C6 PAY",
             "e vai para o TEF com o espaço, não vira C6PAY sozinho");
 
+        // ── O TERMINAL MANDA MAIS QUE A LISTA ESCRITA A MAO ────────────────
+        // 09/09/2026, pergunta do dono: "pra que colocar C6PAY e C6 PAY? nao eh melhor
+        // colocar um q aceite ambos?". Nao da: o nome e identificador que o terminal
+        // compara letra por letra. O que da e parar de adivinhar, e oferecer o que ele
+        // proprio mostrou no menu de rede.
+        var comVistas = RedesPayGo.OpcoesCartao(null, new[] { "C6 PAY", "REDE" });
+        checar(comVistas[0].Valor == "C6 PAY" && comVistas[1].Valor == "REDE",
+            "o que o terminal ofereceu vem primeiro, na ordem em que ele mostrou");
+        checar(comVistas[0].Rotulo.Contains("este terminal oferece"),
+            "e dito como tal, para nao parecer preferencia nossa");
+        checar(comVistas.Count == cartao.Count,
+            $"sem duplicar quem ja estava na lista ({comVistas.Count} x {cartao.Count})");
+        checar(comVistas.Any(o => o.Valor == "C6PAY"),
+            "e a lista oficial continua inteira embaixo");
+
+        // Rede que o terminal mostra e a lista nao conhece ENTRA, e como conhecida:
+        // quem manda sobre o que existe naquele terminal e ele, nao esta lista.
+        var inedita = RedesPayGo.OpcoesCartao(null, new[] { "ADQUIRENTE NOVA" });
+        checar(inedita.Any(o => o.Valor == "ADQUIRENTE NOVA" && o.Conhecida),
+            "rede inedita do terminal entra sem aviso de config estranha");
+
+        // Terminal recem instalado nunca abriu menu: a lista escrita a mao segue valendo.
+        checar(RedesPayGo.OpcoesCartao(null, Array.Empty<string>()).Count == cartao.Count,
+            "sem nada visto, nada muda");
+
         // ── caixa, acento e espaço sobrando não criam rede nova ─────────────
         foreach (var digitado in new[] { "cielo", " CIELO ", "Cielo" })
         {
