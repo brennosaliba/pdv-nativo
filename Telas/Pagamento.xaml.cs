@@ -568,7 +568,13 @@ public partial class Pagamento : UserControl
     private int PerguntarParcelas()
     {
         using var cx = Banco.Abrir();
-        if (Vendas.Config(cx, "tef_perguntar_parcelas", "0") != "1") return 1;
+        // NO CAIXA DE HOMOLOGACAO, SEMPRE PERGUNTA (09/09/2026). O dono travou no passo
+        // 8, que e "credito parcelado pela loja em 99x": a chave estava em 0 e a tela
+        // nem oferecia a pergunta, entao nao havia como cumprir o passo. Roteiro que
+        // exige parcelamento com o parcelamento desligado e um beco sem saida, e a
+        // chave e de LOJA (donut nao se parcela), nao de homologacao.
+        if (!ModoHomologacao.Ligado(cx)
+            && Vendas.Config(cx, "tef_perguntar_parcelas", "0") != "1") return 1;
         var dono = Window.GetWindow(this)!;
         while (true)
         {

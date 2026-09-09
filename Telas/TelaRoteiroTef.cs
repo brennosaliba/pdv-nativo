@@ -181,6 +181,23 @@ public static class TelaRoteiroTef
         return escolhido;
     }
 
+    /// <summary>
+    /// Este passo se cumpre fazendo uma VENDA no caixa?
+    ///
+    /// O roteiro tem passos de venda (com ou sem valor definido), passos de menu
+    /// administrativo, de relatorio e de instalacao. So os de venda ganham o botao que
+    /// abre a comanda: botao que nao leva a lugar nenhum ensina a ignorar botao.
+    /// </summary>
+    private static bool EhDeVenda(PassoTef p)
+    {
+        if (RoteiroTef.ValorCent(p) is not null) return true;
+        var t = (p.Titulo + " " + p.OQueFazer).ToLowerInvariant();
+        if (t.Contains("menu administrativo") || t.Contains("relatório") || t.Contains("relatorio")
+            || t.Contains("instalação") || t.Contains("instalacao") || t.Contains("manutenção")
+            || t.Contains("manutencao") || t.Contains("teste de comunicação")) return false;
+        return t.Contains("venda") || t.Contains("cancelamento") || t.Contains("abre a venda");
+    }
+
     /// <summary>Um passo na lista: o que é, quanto vale, e o que já foi anotado.</summary>
     private static Border Cartao(LinhaDoPlacar l, Window janela, Action<PassoTef> escolher, Action? redesenhar)
     {
@@ -218,11 +235,19 @@ public static class TelaRoteiroTef
 
         var botoes = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
 
-        if (RoteiroTef.ValorCent(p) is not null)
+        // TODO PASSO DE VENDA GANHA O BOTAO (09/09/2026, pedido do dono: "nao tem como
+        // criar cada venda ao lado do passo a passo?"). Antes so apareciam os que o
+        // roteiro traz com valor exato, e passo de venda SEM valor definido (o 3, por
+        // exemplo, e "venda de qualquer valor") ficava sem botao. Ai o dono vendia pelo
+        // caminho normal e o numero nao vinha amarrado ao passo, que foi como o REQNUM
+        // do passo 3 acabou carimbado no passo 2.
+        if (EhDeVenda(p))
         {
+            var temValor = RoteiroTef.ValorCent(p) is not null;
             var executar = new Button
             {
-                Content = "Cobrar este valor", Style = (Style)Application.Current.Resources["BotaoBase"],
+                Content = temValor ? "Cobrar este valor" : "Criar a venda deste passo",
+                Style = (Style)Application.Current.Resources["BotaoBase"],
                 MinHeight = 40, FontSize = 14, MinWidth = 170, Margin = new Thickness(0, 0, 8, 0),
             };
             executar.Click += (_, _) => { escolher(p); janela.Close(); };

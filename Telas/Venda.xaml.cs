@@ -1708,9 +1708,21 @@ public partial class Venda : UserControl
         if (!_homologacao) return;
         var dono = Window.GetWindow(this)!;
         if (TelaRoteiroTef.Mostrar(dono) is not { } passo) return;
-        if (Nucleo.RoteiroTef.ValorCent(passo) is not { } cent) return;
+
+        // Passo COM valor no roteiro entra sem digitar nada. Passo de venda SEM valor
+        // definido (o 3 e "venda de qualquer valor") pergunta, mas ja sai amarrado ao
+        // passo: e a amarracao que faltava, e nao o valor.
+        Dinheiro quanto;
+        if (Nucleo.RoteiroTef.ValorCent(passo) is { } cent) quanto = new Dinheiro(cent);
+        else
+        {
+            var digitado = PedirValor.Mostrar(dono, $"Passo {passo.Numero}",
+                "O roteiro não fixa o valor deste passo. Quanto cobrar?");
+            if (digitado is not { } v || !v.Positivo) return;
+            quanto = v;
+        }
         _passoEmExecucao = passo.Numero;
-        AdicionarValorDeTeste(new Dinheiro(cent));
+        AdicionarValorDeTeste(quanto);
     }
 
     /// <summary>
