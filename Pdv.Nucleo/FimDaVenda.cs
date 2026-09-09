@@ -24,21 +24,41 @@ namespace Pdv.Nucleo;
 public static class FimDaVenda
 {
     /// <summary>
-    /// Quanto tempo a tela de sucesso fica antes de sair sozinha.
+    /// Segundos na tela de sucesso quando nao ha nada exigindo atencao.
     ///
-    /// Três segundos: dá para ler "Venda concluída" e o número da venda sem ter que
-    /// correr, e não segura a fila. Menos que isso pisca; mais que isso, o operador
-    /// toca no botão antes e o automático não serve para nada.
+    /// Tres segundos: da para ler "Venda concluida" e o numero da venda sem correr,
+    /// e nao segura a fila. Menos que isso pisca.
     /// </summary>
-    public const int SegundosAteVoltar = 3;
+    public const int SegundosNormal = 3;
 
     /// <summary>
-    /// A tela pode sair sozinha depois da venda concluída?
+    /// Segundos quando ha troco a devolver ou papel que nao saiu.
+    ///
+    /// Quinze, escolha do dono em 09/09/2026: "troco voltar pra tela e papel tb, ou
+    /// time de 15 segundos q eh suficiente". E o tempo de contar uma nota e conferir
+    /// a impressora sem a tela sumir na mao, e sem prender o caixa esperando clique.
+    ///
+    /// A diferenca de tres para quinze e o unico lugar onde o sistema decide que
+    /// alguma coisa precisa ser LIDA antes de seguir.
     /// </summary>
-    /// <param name="trocoCent">Troco a devolver, em centavos. Maior que zero segura.</param>
-    /// <param name="problemaNaImpressao">Recibo ou cupom que não saiu. Segura.</param>
+    public const int SegundosComPendencia = 15;
+
+    /// <summary>
+    /// A venda terminou limpa, sem nada que precise ser lido antes de seguir?
+    ///
+    /// ⚠️ Isto NÃO decide mais se a tela sai: ela sempre sai. Decide se sai rápido ou
+    /// se dá tempo de ler. Prender o caixa esperando clique era o que o dono não
+    /// queria, e ele tem razão: a tela pode sumir, a informação é que não pode sumir
+    /// antes de ser vista.
+    /// </summary>
+    /// <param name="trocoCent">Troco a devolver, em centavos.</param>
+    /// <param name="problemaNaImpressao">Recibo ou cupom que não saiu.</param>
     public static bool VoltaSozinho(long trocoCent, bool problemaNaImpressao)
         => trocoCent <= 0 && !problemaNaImpressao;
+
+    /// <summary>Quanto tempo esta tela fica antes de sair sozinha.</summary>
+    public static int SegundosAteVoltar(long trocoCent, bool problemaNaImpressao)
+        => VoltaSozinho(trocoCent, problemaNaImpressao) ? SegundosNormal : SegundosComPendencia;
 
     /// <summary>
     /// O rótulo do botão de fechar. Quando a tela vai sair sozinha, o botão continua
@@ -46,6 +66,16 @@ public static class FimDaVenda
     /// </summary>
     public static string RotuloDoBotao(bool voltaSozinho)
         => voltaSozinho ? "Continuar" : "Nova venda";
+
+    /// <summary>O aviso do rodape, com o tempo, para o operador saber que a tela vai sair.</summary>
+    public static string AvisoDeSaida(long trocoCent, bool problemaNaImpressao)
+    {
+        var s = SegundosAteVoltar(trocoCent, problemaNaImpressao);
+        var motivo = PorQueEsperando(trocoCent, problemaNaImpressao);
+        return motivo is null
+            ? $"Volto para a venda em {s} segundos."
+            : $"{motivo} Volto para a venda em {s} segundos.";
+    }
 
     /// <summary>
     /// O motivo de a tela estar esperando, para o operador saber que a bola está com

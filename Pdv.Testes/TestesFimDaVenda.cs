@@ -57,8 +57,25 @@ public static class TestesFimDaVenda
         checar(FimDaVenda.VoltaSozinho(-1, false), "troco negativo não segura a tela");
 
         // ── O TEMPO ─────────────────────────────────────────────────────────
-        checar(FimDaVenda.SegundosAteVoltar is >= 2 and <= 5,
-            $"a espera dá para ler sem segurar a fila ({FimDaVenda.SegundosAteVoltar}s)");
+        // 09/09/2026, escolha do dono: "troco voltar pra tela e papel tb, ou time de
+        // 15 segundos q eh suficiente". A tela SEMPRE sai; o que muda e o tempo.
+        checar(FimDaVenda.SegundosAteVoltar(0, false) == 3,
+            "venda limpa: tres segundos, so para ler o numero da venda");
+        checar(FimDaVenda.SegundosAteVoltar(1550, false) == 15,
+            "com troco: quinze, que da para contar a nota");
+        checar(FimDaVenda.SegundosAteVoltar(0, true) == 15,
+            "com papel entalado: quinze, que da para olhar a impressora");
+        checar(FimDaVenda.SegundosAteVoltar(1550, true) == 15, "os dois juntos tambem");
+        checar(FimDaVenda.SegundosNormal < FimDaVenda.SegundosComPendencia,
+            "e o caso que pede atencao nunca tem menos tempo que o normal");
+
+        // O aviso diz o motivo E o tempo: some sozinha sem avisar assusta.
+        var avisoLimpo = FimDaVenda.AvisoDeSaida(0, false);
+        checar(avisoLimpo.Contains("3 segundos"), $"o rodape diz em quanto tempo volta ({avisoLimpo})");
+        var avisoTroco = FimDaVenda.AvisoDeSaida(1550, false);
+        checar(avisoTroco.Contains("troco") && avisoTroco.Contains("15 segundos"),
+            $"e com troco diz o motivo junto ({avisoTroco})");
+        checar(!avisoTroco.Contains('—'), "sem travessao");
 
         // ── SEM TRAVESSÃO ───────────────────────────────────────────────────
         foreach (var t in new[] { FimDaVenda.PorQueEsperando(100, false)!,

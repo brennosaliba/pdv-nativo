@@ -32,6 +32,38 @@ public partial class Pagamento : UserControl
     /// </summary>
     public int? PassoDoRoteiro { get; set; }
 
+    private System.Windows.Threading.DispatcherTimer? _voltaSozinha;
+
+    /// <summary>
+    /// A TELA DE SUCESSO SAI DA FRENTE SOZINHA (09/09/2026).
+    ///
+    /// Pedido do dono: "apos venda concluida acho q pode voltar pro dash principal ao
+    /// inves de colocar botao de nova venda". No caso comum era um toque por venda que
+    /// nao decidia nada.
+    ///
+    /// O tempo muda conforme o que ficou na tela, e a regra mora em FimDaVenda, com
+    /// teste: tres segundos na venda limpa, quinze quando ha troco a devolver ou papel
+    /// que nao saiu. Nesses dois a tela e o unico lugar onde o valor e o aviso
+    /// aparecem, e quinze segundos foi a escolha dele: "da para contar a nota".
+    ///
+    /// O botao continua ali para quem tem pressa. O que some e a espera, nao a saida.
+    /// </summary>
+    private void AgendarVolta(long trocoCent, bool problemaNaImpressao)
+    {
+        _voltaSozinha?.Stop();
+        _voltaSozinha = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(FimDaVenda.SegundosAteVoltar(trocoCent, problemaNaImpressao)),
+        };
+        _voltaSozinha.Tick += (_, _) =>
+        {
+            _voltaSozinha?.Stop();
+            _voltaSozinha = null;
+            Encerrou?.Invoke(DesfechoVenda.Concluida);
+        };
+        _voltaSozinha.Start();
+    }
+
     /// <summary>Este caixa esta rodando o roteiro? Le do banco, sem derrubar a venda.</summary>
     private static bool EhHomologacao()
     {
@@ -916,8 +948,10 @@ public partial class Pagamento : UserControl
         // em cima do texto que avisa que o papel não saiu.
         Estado(erro is null ? "✅" : "⚠️", "Venda concluída", detalhe,
             acaoImpressao,
-            ("Nova venda", () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
+            (FimDaVenda.RotuloDoBotao(FimDaVenda.VoltaSozinho(troco.Centavos, erro is not null)),
+             () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
         Ir(Fase.Sucesso);
+        AgendarVolta(troco.Centavos, problemaNaImpressao: erro is not null);
 
         if (troco.Positivo)
         {
@@ -1104,8 +1138,10 @@ public partial class Pagamento : UserControl
         // ícone honesto: cupom entalado na impressora não é ✅, mesmo com a nota autorizada.
         Estado(r.Sucesso && erro is null ? "✅" : "⚠️", titulo, detalhe,
             acaoImpressao,
-            ("Nova venda", () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
+            (FimDaVenda.RotuloDoBotao(FimDaVenda.VoltaSozinho(troco.Centavos, erro is not null)),
+             () => Encerrou?.Invoke(DesfechoVenda.Concluida)));
         Ir(Fase.Sucesso);
+        AgendarVolta(troco.Centavos, problemaNaImpressao: erro is not null);
 
         if (troco.Positivo)
         {
