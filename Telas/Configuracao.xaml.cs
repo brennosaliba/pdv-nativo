@@ -1753,8 +1753,14 @@ public partial class Configuracao : UserControl
                     // A frase da REDE entra junto ("TRANSACAO APROVADA"): é o que os passos 01 e 18
                     // do roteiro mandam o operador ler na instalação. O ramo administrativo, logo
                     // abaixo, já fazia isso; aqui a resposta da rede estava sendo jogada fora.
+                    // O PAPEL DA INSTALACAO E NOSSO (09/09/2026). Medido no log: a
+                    // biblioteca nao devolve via nenhuma nesta operacao, so o REQNUM e
+                    // uma mensagem vazia. O passo 1 do roteiro exige o recibo saindo na
+                    // impressora, entao a automacao compoe com o que sabe.
+                    var papel = di.Pago ? await ImprimirInstalacaoAsync(di) : null;
                     StatusTef(di.Pago
                         ? "✓ Ponto de captura instalado." + (di.Motivo is { Length: > 0 } mi ? " " + mi + "." : "")
+                          + (papel is null ? " Comprovante impresso." : " ⚠ O comprovante não saiu: " + papel + ".")
                           + " Toque em Testar a maquininha e depois em Salvar."
                         : "✗ Instalação não concluída: " + (di.Motivo ?? "sem detalhe"),
                         di.Pago ? "Ok" : "Erro");
@@ -1770,6 +1776,38 @@ public partial class Configuracao : UserControl
         }
         catch (Exception ex) { StatusTef("✗ Não consegui falar com a biblioteca do PayGo. Detalhe: " + ex.Message, "Erro"); }
         finally { TravarTef(false); }
+    }
+
+    /// <summary>
+    /// Imprime o comprovante da instalacao. Devolve `null` quando saiu, ou o motivo.
+    ///
+    /// Nao derruba a instalacao: o ponto de captura JA foi instalado quando isto roda,
+    /// e falhar no papel nao desfaz o que a rede ja aceitou. O que nao pode e sair
+    /// calado, porque o passo 1 do roteiro e conferido pelo papel.
+    /// </summary>
+    private async Task<string?> ImprimirInstalacaoAsync(Nucleo.DesfechoTef di)
+    {
+        try
+        {
+            string? loja, cnpj, pdc, terminal, impressora;
+            bool homolog;
+            using (var cx = Banco.Abrir())
+            {
+                var t = cx.QueryFirstOrDefault("SELECT loja_nome, cnpj, terminal_uuid FROM terminal LIMIT 1");
+                loja = t?.loja_nome as string;
+                cnpj = t?.cnpj as string;
+                terminal = t?.terminal_uuid as string;
+                pdc = Vendas.Config(cx, "tef_pgweb_ponto_captura");
+                impressora = Vendas.Config(cx, "impressora");
+                homolog = ModoHomologacao.Ligado(cx);
+            }
+            var linhas = ComprovanteDeInstalacao.Linhas(
+                loja, cnpj, pdc, terminal, di.Reqnum,
+                Servicos.PGWebLib()?.Opcoes.VersaoAutomacao, homolog, DateTime.Now);
+            return await Impressao.ImprimirTextoAsync("comprovante de instalação",
+                new[] { linhas, new[] { ComprovanteDeInstalacao.Rodape } }, impressora);
+        }
+        catch (Exception ex) { return ex.Message; }
     }
 
     private void StatusTef(string texto, string? tom)

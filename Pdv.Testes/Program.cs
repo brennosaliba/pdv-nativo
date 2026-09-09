@@ -1339,6 +1339,11 @@ Console.WriteLine();
 Console.WriteLine("--- Fim da venda (voltar sozinho) ---");
 TestesFimDaVenda.Rodar((cond, nome) => Check("fim-venda: " + nome, cond));
 
+// -- O PAPEL DA INSTALACAO, que a biblioteca nao manda ----------------------
+Console.WriteLine();
+Console.WriteLine("--- Comprovante de instalacao ---");
+TestesComprovanteDeInstalacao.Rodar((cond, nome) => Check("comprov-inst: " + nome, cond));
+
 // -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
 // Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
 // religamento. Dinheiro que entra sem passar pela gaveta — de novo.
