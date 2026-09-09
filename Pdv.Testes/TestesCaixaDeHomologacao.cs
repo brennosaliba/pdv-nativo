@@ -494,6 +494,9 @@ public static class TestesCaixaDeHomologacao
             INSERT INTO terminal (id, terminal_uuid, loja_id, loja_nome, cnpj, serie_nfce, ambiente, api_base, criado_em)
             VALUES (1, 'term-homolog', 'loja-1', 'Loja Teste', '00000000000000', 1, 2, 'http://127.0.0.1:9', @a)
             """, new { a = agora });
+            // Sem isto o teste pergunta a versao a PRODUCAO com o uuid de teste,
+            // e nasce um terminal fantasma na frota do dono. Ver Isolamento.cs.
+            Isolamento.SemNuvem(cx);
         var (h, s) = Operadores.GerarHash("4321");
         cx.Execute("INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado) VALUES ('op-real','Maria',@H,@S,'gerente',1,@a)",
             new { H = h, S = s, a = agora });

@@ -259,11 +259,14 @@ public static class TestesAtualizacao
         var d = Atualizacao.Decidir(livre, "0.9.0", nova);
         checar(d.Situacao == Atualizacao.Situacao.Disponivel,
             "decisão: 0.9.0 instalado + 0.10.0 no servidor = TEM atualização (aqui o bug de string mataria)");
-        checar(d.Mensagem.Contains("0.9.0") && d.Mensagem.Contains("0.10.0"),
-            "decisão: o texto diz de onde para onde");
+        // 09/09/2026: o TITULO passou a fazer a pergunta ("Atualizar para a 0.10.0?") e o
+        // corpo parou de repeti-la. O dono reprovou a caixa antiga em bloco: "sem
+        // formatacao, muito texto, confuso". A versao de ORIGEM saiu: quem esta de pe
+        // com fila na frente decide para onde vai, nao de onde veio. Ver TestesAvisoAtualizacao.
+        checar(d.Titulo.Contains("0.10.0"), $"decisão: o título diz para onde vai ({d.Titulo})");
         checar(d.Mensagem.Contains("conserta o troco"), "decisão: as notas da versão chegam ao operador");
         checar(d.Mensagem.Contains("reinicia"), "decisão: o operador fica sabendo que o caixa vai reiniciar");
-        checar(d.Mensagem.Contains("ficam guardad"), "decisão: e que as vendas não se perdem");
+        checar(d.Mensagem.Contains("Nada se perde"), "decisão: e que nada se perde no reinício");
 
         checar(Atualizacao.Decidir(livre, "0.10.0", nova).Situacao == Atualizacao.Situacao.EmDia,
             "decisão: mesma versão = em dia");
@@ -275,9 +278,17 @@ public static class TestesAtualizacao
         checar(comTurno.Situacao == Atualizacao.Situacao.Disponivel && comTurno.Mensagem.Contains("PIN"),
             "decisão: caixa aberto libera a atualização e avisa que vai precisar do PIN de novo");
 
+        // Venda na fila continua sendo DITA, com o número: é dinheiro que o painel
+        // ainda não viu. O que mudou em 09/09/2026 é que ela cabe na mesma linha do
+        // reinício, em vez de virar um parágrafo só dela.
         var comFila = Atualizacao.Decidir(livre with { VendasPorSubir = 3 }, "0.9.0", nova);
-        checar(comFila.Mensagem.Contains("3 vendas ainda não subiram"),
-            "decisão: venda pendente é dita e explicada, não escondida");
+        checar(comFila.Mensagem.Contains("3 vendas na fila ficam guardadas"),
+            $"decisão: venda pendente é dita e explicada, não escondida ({comFila.Mensagem})");
+        checar(comFila.Mensagem.Split('\n').Length <= 3,
+            "decisão: e dizer isso não estica a caixa");
+        var umaSo = Atualizacao.Decidir(livre with { VendasPorSubir = 1 }, "0.9.0", nova);
+        checar(umaSo.Mensagem.Contains("A venda na fila fica guardada"),
+            $"decisão: uma venda só fala no singular ({umaSo.Mensagem})");
 
         // "obrigatoria": true muda a CONVERSA — e não muda quem decide.
         var obr = Atualizacao.LerManifesto("""

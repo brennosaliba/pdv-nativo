@@ -482,30 +482,72 @@ public static class Atualizacao
                 $"Versão {Mostrar(versaoInstalada)} é a mais nova.",
                 m2, TextoSim: "Entendi", TextoNao: "");
 
-        var linhas = new List<string>
-        {
-            $"Versão {m2.Versao} disponível (atual: {Mostrar(versaoInstalada)}).",
-        };
-        if (m2.Notas is { Length: > 0 } notas) linhas.Add("\n" + notas.Trim());
+        // ⚠️ TETO DE 3 LINHAS, e o motivo tem data: 09/09/2026. O dono leu esta
+        // caixa e escreveu "continuamos com UX horrível de mensagem de atualização.
+        // Sem formatação, muito texto, confuso". O que ele viu tinha seis parágrafos:
+        // o título dizia "Atualização disponível", a primeira linha repetia "Versão
+        // 0.6.5 disponível", as notas de versão vinham inteiras (quatro frases), e
+        // depois "o caixa reinicia / vendas ficam guardadas / o turno continua aberto
+        // / entre com o PIN" diziam a mesma coisa de três jeitos.
+        //
+        // Quem lê isto está de pé, com fila na frente. A pergunta dele é uma só:
+        // atualizo agora ou não? O título faz a pergunta, uma linha diz o que muda,
+        // outra diz o que ele vai viver. Acabou.
+        var linhas = new List<string>();
+        if (ResumoDasNotas(m2.Notas) is { Length: > 0 } resumo) linhas.Add(resumo);
 
         if (m2.Obrigatoria)
-            linhas.Add("\nAtualização obrigatória. Se não puder agora, avise o gerente.");
-        linhas.Add("\nO caixa reinicia. Vendas e caixa aberto ficam guardados.");
-
+            linhas.Add("Atualização obrigatória. Se não puder agora, avise o gerente.");
 
         // Caixa aberto é AVISO, não bloqueio — o motivo está em Impede(). O que o
         // operador precisa saber é a única coisa que ele vai viver: o login de novo.
-        if (estado.CaixaAberto)
-            linhas.Add("\nO turno continua aberto. Entre com o PIN de novo.");
-
-        if (estado.VendasPorSubir > 0)
-            linhas.Add($"\n{Plural(estado.VendasPorSubir, "venda ainda não subiu", "vendas ainda não subiram")} para o painel. Ficam guardadas.");
+        //
+        // A venda na fila continua sendo DITA, com o número, porque venda que ainda
+        // não subiu é dinheiro que o painel não viu. O que mudou é que ela cabe na
+        // mesma linha em vez de virar um parágrafo só dela.
+        linhas.Add(
+            (estado.CaixaAberto ? "O caixa reinicia e pede o PIN de novo. " : "O caixa reinicia. ")
+            + (estado.VendasPorSubir switch
+            {
+                <= 0 => "Nada se perde.",
+                1    => "A venda na fila fica guardada.",
+                var n => $"As {n} vendas na fila ficam guardadas.",
+            }));
 
         return new Veredito(Situacao.Disponivel,
-            m2.Obrigatoria ? "Atualização obrigatória" : "Atualização disponível",
+            m2.Obrigatoria ? $"Atualizar para a {m2.Versao} (obrigatória)" : $"Atualizar para a {m2.Versao}?",
             string.Join("\n", linhas), m2, m2.Obrigatoria,
             TextoSim: "Atualizar",
             TextoNao: m2.Obrigatoria ? "Não posso agora" : "Agora não");
+    }
+
+    /// <summary>
+    /// O que mudou, em UMA linha, para a caixa de diálogo do caixa.
+    ///
+    /// As notas vêm do painel e quem as escreve está sentado, sem fila na frente.
+    /// A de 0.6.5 chegou com quatro frases e 380 caracteres. A tela do caixa não é
+    /// lugar de nota de versão: pega a primeira frase e para por aí.
+    ///
+    /// A defesa mora AQUI e não em quem escreve a nota, de propósito: nota comprida
+    /// vai ser escrita de novo, e quando for, quem paga não pode ser o operador.
+    /// </summary>
+    public static string? ResumoDasNotas(string? notas, int teto = 90)
+    {
+        var t = notas?.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        if (string.IsNullOrEmpty(t)) return null;
+        while (t.Contains("  ")) t = t.Replace("  ", " ");
+
+        // Primeira frase. O ponto tem que ter espaço depois para "0.6.5" não virar
+        // fim de frase.
+        for (var i = 0; i < t.Length - 1; i++)
+        {
+            if (t[i] is '.' or '!' or '?' && t[i + 1] == ' ') { t = t[..(i + 1)]; break; }
+        }
+
+        if (t.Length <= teto) return t;
+        var corte = t.LastIndexOf(' ', Math.Min(teto, t.Length - 1));
+        if (corte <= 0) corte = teto;
+        return t[..corte].TrimEnd('.', ',', ' ', ';', ':') + "...";
     }
 
     /// <summary>A versão como o operador deve LER. O Windows guarda FileVersion com

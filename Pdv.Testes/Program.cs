@@ -1311,6 +1311,18 @@ Console.WriteLine();
 Console.WriteLine("--- Reprecificacao (preco novo em comanda aberta) ---");
 TestesReprecificacao.Rodar((cond, nome) => Check("repreco: " + nome, cond));
 
+// -- ISOLAMENTO: teste nao pode criar terminal na frota de verdade ------------
+// Tres terminais fantasma apareceram no painel do dono em 09/09/2026.
+Console.WriteLine();
+Console.WriteLine("--- Isolamento (nenhum teste fala com a nuvem real) ---");
+TestesIsolamento.Rodar((cond, nome) => Check("isolamento: " + nome, cond));
+
+// -- A CAIXA QUE PERGUNTA SE PODE ATUALIZAR ----------------------------------
+// "UX horrivel, sem formatacao, muito texto, confuso" (dono, 09/09/2026).
+Console.WriteLine();
+Console.WriteLine("--- Aviso de atualizacao (cabe na tela e na cabeca) ---");
+TestesAvisoAtualizacao.Rodar((cond, nome) => Check("aviso-atu: " + nome, cond));
+
 // -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
 // Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
 // religamento. Dinheiro que entra sem passar pela gaveta — de novo.

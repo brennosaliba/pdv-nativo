@@ -63,6 +63,9 @@ public static class Simulador
             INSERT INTO terminal (id, terminal_uuid, loja_id, loja_nome, cnpj, serie_nfce, ambiente, criado_em)
             VALUES (1, @U, 'sim-loja-1', 'SIM Loja', '00000000000191', 90, 2, @Em)
             """, new { U = Guid.NewGuid().ToString(), Em = DateTime.Now.ToString("o") });
+            // Sem isto o teste pergunta a versao a PRODUCAO com o uuid de teste,
+            // e nasce um terminal fantasma na frota do dono. Ver Isolamento.cs.
+            Isolamento.SemNuvem(cx);
 
         // ── elenco ──────────────────────────────────────────────────────────
         var ana = new Operador("sim-ana", "Ana Souza", "operador");

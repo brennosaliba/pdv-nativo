@@ -113,6 +113,9 @@ public static class TestesNotaNaHomologacao
             INSERT INTO terminal (id, terminal_uuid, loja_id, loja_nome, cnpj, serie_nfce, ambiente, api_base, criado_em)
             VALUES (1, 'term-h30', 'loja-1', 'American Day Savassi', '62177839000238', 3, 1, 'http://127.0.0.1:9', @a)
             """, new { a = DateTime.Now.ToString("o") });
+            // Sem isto o teste pergunta a versao a PRODUCAO com o uuid de teste,
+            // e nasce um terminal fantasma na frota do dono. Ver Isolamento.cs.
+            Isolamento.SemNuvem(cx);
         Vendas.GravarConfig(cx, "modo_fiscal", "nfce");
         Vendas.GravarConfig(cx, "homologacao", "1");
 
