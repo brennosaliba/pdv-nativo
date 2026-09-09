@@ -737,7 +737,16 @@ public partial class Pagamento : UserControl
                 SituacaoTef.Timeout => "Sem resposta da maquininha",
                 _ => "Cobrança não concluída",
             },
-            recado.Length == 0 ? d.MensagemParaTela : $"{d.MensagemParaTela}\n\n{recado}",
+            // O REQNUM TAMBÉM NA RECUSA (09/09/2026). O dono, no passo 4: "como foi
+            // cancelado não mostrou o reqnum na tela, e agora? assim vai ser com o
+            // passo 5 e todas as outras que forem canceladas".
+            //
+            // Ele está certo, e eu tinha posto o número só na tela de SUCESSO. Vários
+            // passos do roteiro são NEGADA de propósito (o 4 é R$ 1.000,01, que a rede
+            // recusa) e o cancelamento tem quatro passos só para ele. Esses também
+            // precisam do número na planilha: o que se prova ali é a recusa ter
+            // funcionado, e ela tem REQNUM como qualquer outra.
+            ComReqnum(recado.Length == 0 ? d.MensagemParaTela : $"{d.MensagemParaTela}\n\n{recado}"),
             acoes.ToArray());
         Ir(Fase.Falha);
     }

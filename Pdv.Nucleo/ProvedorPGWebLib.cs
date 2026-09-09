@@ -502,8 +502,13 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     };
                     Guardar(new TransacaoPayGo(chargeId, id, tipo, valor.Centavos, parc, sit, r, fim.Motivo));
                 }
+                // O REQNUM SOBE TAMBEM NA RECUSA (09/09/2026). Varios passos do roteiro
+                // sao negada de proposito (o 4 e R$ 1.000,01, que a rede recusa), e o
+                // cancelamento tem quatro passos so para ele. A planilha exige o
+                // PWINFO_REQNUM neles do mesmo jeito: o que se prova ali e a recusa ter
+                // funcionado, e ela tem numero como qualquer outra transacao.
                 return new DesfechoTef(fim.Situacao, id, chargeId, null, fim.Motivo, fim.PosOcupado)
-                { Codigo = fim.Codigo, Desfeita = fim.Desfeita };
+                { Codigo = fim.Codigo, Desfeita = fim.Desfeita, Reqnum = r.CodigoControle };
             }
 
             var tx = new TransacaoPayGo(chargeId, id, tipo, valor.Centavos, parc, "aprovada", r);
