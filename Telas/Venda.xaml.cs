@@ -715,6 +715,80 @@ public partial class Venda : UserControl
             + (m.Notas is { Length: > 0 } n ? "\n\n" + n : "");
     }
 
+    /// <summary>
+    /// A COMANDA ABERTA ACOMPANHA A TABELA DE PREÇOS (09/09/2026).
+    ///
+    /// O dono trocou PRODUTO TESTE de R$ 0,25 para R$ 0,10 no painel, sincronizou,
+    /// e contou: "ele grava, atualiza o preço do produto no menu, mas caso o
+    /// produto esteja na comanda com preço antigo ele permanece com preço antigo".
+    ///
+    /// A linha da comanda não guarda preço: guarda uma REFERÊNCIA ao objeto do
+    /// produto, e o total sai de `Produto.Preco`. `RecarregarCatalogo` monta
+    /// objetos NOVOS para a grade e a linha continua apontando para o VELHO. Por
+    /// isso grade e comanda discordavam.
+    ///
+    /// E no religamento a comanda voltava com o preço NOVO, porque a restauração
+    /// do rascunho lê o catálogo atual (ver OferecerRascunho). O mesmo item valendo
+    /// um preço depois de sincronizar e outro depois de reiniciar não é regra de
+    /// negócio: é acidente de referência. Aqui a referência é refeita.
+    ///
+    /// ⚠️ NUNCA em silêncio. O operador que acabou de dizer o total em voz alta
+    /// precisa saber. Preço que sobe PARA a tela; preço que cai vai na faixa, para
+    /// respeitar a regra de não travar o caminho de alta frequência.
+    /// </summary>
+    private void ReprecificarComanda()
+    {
+        if (_comanda.Count == 0) return;
+
+        var precos = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var p in _catalogo) precos[p.Id] = p.Preco.Centavos;
+
+        var trocas = Nucleo.Reprecificacao.Trocas(
+            _comanda.Select(i => new Nucleo.Reprecificacao.Linha(
+                i.Produto.Id, i.Produto.Nome, i.Produto.Preco.Centavos)),
+            precos);
+        if (trocas.Count == 0) return;
+
+        for (var k = 0; k < _comanda.Count; k++)
+        {
+            var item = _comanda[k];
+            var novo = _catalogo.FirstOrDefault(c => c.Id == item.Produto.Id);
+            // Produto desativado no painel no meio do atendimento mantém o preço:
+            // a linha já foi pedida pelo cliente e não pode mudar sozinha.
+            if (novo is null || novo.Preco.Centavos == item.Produto.Preco.Centavos) continue;
+            // Desconto, brinde e nome da promoção são reescritos por PintarComanda.
+            _comanda[k] = new ItemComanda
+            {
+                Produto = novo,
+                Qtd = item.Qtd,
+                Escolhas = item.Escolhas,
+            };
+        }
+
+        // A contagem de itens não muda, então a liberação de promoção com 2FA que
+        // o gerente já deu para ESTA comanda continua valendo (ver PortaoPromocao).
+        PintarComanda();
+
+        try
+        {
+            if (Nucleo.Reprecificacao.PrecisaParar(trocas))
+            {
+                Dialogo.Relatorio(Window.GetWindow(this)!, "Preço mudou na comanda",
+                    Nucleo.Reprecificacao.Aviso(trocas)!, null);
+            }
+            else if (Nucleo.Reprecificacao.Faixa(trocas) is string faixa)
+            {
+                TxtToastKds.Text = faixa;
+                ToastKds.Visibility = Visibility.Visible;
+                _toastSome?.Stop();
+                _toastSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+                _toastSome.Tick += (_, _) => { ToastKds.Visibility = Visibility.Collapsed; _toastSome?.Stop(); };
+                _toastSome.Start();
+            }
+        }
+        catch { /* o preço já foi corrigido; o aviso é conforto, nunca derruba a venda */ }
+    }
+
     /// <summary>Recarrega a grade depois de baixar catálogo novo, mantendo a categoria aberta.</summary>
     private void RecarregarCatalogo()
     {
@@ -729,6 +803,9 @@ public partial class Venda : UserControl
             RepintarCategorias();
             PintarProdutos();
         }
+        // A grade acabou de ganhar objetos novos. A comanda aberta ainda segura os
+        // antigos, e é isso que mantinha o preço velho na conta do cliente.
+        ReprecificarComanda();
     }
 
     private int _quantasCategorias;

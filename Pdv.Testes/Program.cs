@@ -1305,6 +1305,12 @@ Console.WriteLine();
 Console.WriteLine("--- Promocoes (motor de preco) ---");
 TestesPromocoes.Rodar((cond, nome) => Check("promo: " + nome, cond));
 
+// -- REPRECIFICACAO: preco novo em comanda ja aberta -------------------------
+// O dono trocou 0,25 por 0,10, sincronizou, e a linha da comanda continuou 0,25.
+Console.WriteLine();
+Console.WriteLine("--- Reprecificacao (preco novo em comanda aberta) ---");
+TestesReprecificacao.Rodar((cond, nome) => Check("repreco: " + nome, cond));
+
 // -- TEF PayGo: troca de arquivos contra um PayGo de mentira ------------------
 // Two-phase commit (CRT -> CNF/NCN), sem timeout apos o .sts, .tmp+rename,
 // religamento. Dinheiro que entra sem passar pela gaveta — de novo.
