@@ -249,9 +249,32 @@ public static class TestesCasaPGWebLib
             checar(xaml.Contains("x:Name=\"TxtPgwebDll\"", StringComparison.Ordinal) && xaml.Contains("Pasta da PGWebLib.dll", StringComparison.Ordinal)
                    && cfg.Contains("TxtPgwebDll.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveDll", StringComparison.Ordinal)
                    && cfg.Contains("Chave(ConfigPGWebLib.ChaveDll, TxtPgwebDll.Text)", StringComparison.Ordinal)
-                   && cfg.Contains("\"tef_pgweb_capacidades\", ConfigPGWebLib.ChaveDll,", StringComparison.Ordinal)
+                   // Presenca na lista de restauro, e nao vizinhanca: travar a ORDEM
+                   // fazia o teste quebrar quando um campo novo entrava no meio, o que
+                   // e mudanca legitima. O que importa e a chave estar la.
+                   && cfg.Contains("ConfigPGWebLib.ChaveDll, ConfigPGWebLib.ChaveRedes", StringComparison.Ordinal)
                    && cfg.Contains("PgwebDll = TxtPgwebDll.Text", StringComparison.Ordinal),
                 "campo 'Pasta da PGWebLib.dll' (tef_pgweb_dll): lido, gravado, restaurado no Sair sem salvar e levado ao resumo");
+
+            // O PONTO DE CAPTURA E O CNPJ DA INSTALACAO (09/09/2026). Sao os dois dados
+            // que a PayGo confere no comprovante de instalacao, e nao existiam em lugar
+            // nenhum do caixa: o papel saia sem eles. O CNPJ e o da INSTALACAO, que pode
+            // ser outra filial do cadastro da loja (medido: 0002-38 no cadastro, 0001-57
+            // na instalacao).
+            foreach (var (campo, chave, rotulo) in new[]
+            {
+                ("TxtPgwebPdc", "tef_pgweb_ponto_captura", "Ponto de captura"),
+                ("TxtPgwebCnpj", "tef_pgweb_cnpj", "CNPJ da instalação"),
+            })
+            {
+                checar(xaml.Contains($"x:Name=\"{campo}\"", StringComparison.Ordinal)
+                       && xaml.Contains(rotulo, StringComparison.Ordinal),
+                    $"o campo '{rotulo}' existe na Configuração");
+                checar(cfg.Contains($"{campo}.Text = Vendas.Config(cx, \"{chave}\"", StringComparison.Ordinal)
+                       && cfg.Contains($"Chave(\"{chave}\", {campo}.Text)", StringComparison.Ordinal)
+                       && cfg.Contains($"\"{chave}\"", StringComparison.Ordinal),
+                    $"e {chave} e lido, gravado e restaurado no Sair sem salvar");
+            }
             checar(cfg.Contains("SelecaoTef.Codigo(", StringComparison.Ordinal) && cfg.Contains("SelecaoTef.Modo(", StringComparison.Ordinal),
                 "TefModo e tef_provedor passam pela SelecaoTef (a mesma regra do Servicos.Tef())");
             checar(cfg.Contains("InstalarAsync(", StringComparison.Ordinal) && cfg.Contains("AdministrativaAsync(", StringComparison.Ordinal),

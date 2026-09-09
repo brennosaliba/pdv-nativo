@@ -178,6 +178,8 @@ public partial class Configuracao : UserControl
         // (empresa e redes são da LOJA, não do caminho até o PayGo).
         TxtPgwebDir.Text = Vendas.Config(cx, "tef_pgweb_dir", "");
         TxtPgwebDll.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveDll, "");
+        TxtPgwebPdc.Text = Vendas.Config(cx, "tef_pgweb_ponto_captura", "");
+        TxtPgwebCnpj.Text = Vendas.Config(cx, "tef_pgweb_cnpj", "");
         TxtPgwebPorta.Text = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
         TxtPgwebCapacidades.Text = Vendas.Config(cx, "tef_pgweb_capacidades", "");
         TxtPgwebRedes.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveRedes, "");
@@ -1446,7 +1448,7 @@ public partial class Configuracao : UserControl
         // As redes também: o Testar grava o que está na tela, e sair sem salvar tem que
         // devolver a rede que estava valendo — rede trocada é cobrança recusada.
         "tef_cpay_adquirente", "tef_cpay_adquirente_pix",
-        "tef_pgweb_dir", "tef_pgweb_porta_pinpad", "tef_pgweb_capacidades", ConfigPGWebLib.ChaveDll, ConfigPGWebLib.ChaveRedes,
+        "tef_pgweb_dir", "tef_pgweb_porta_pinpad", "tef_pgweb_capacidades", "tef_pgweb_ponto_captura", "tef_pgweb_cnpj", ConfigPGWebLib.ChaveDll, ConfigPGWebLib.ChaveRedes,
     };
     private readonly Dictionary<string, string?> _tefOriginal = new();
     private bool _tefGravadoPeloTeste;   // Testar/ADM gravaram sem Salvar
@@ -1540,7 +1542,9 @@ public partial class Configuracao : UserControl
         Chave("tef_paygo_rede", RedeEscolhida(pgweb ? CboPgwebRede : CboPayGoRede));
         Chave("tef_paygo_rede_pix", RedeEscolhida(pgweb ? CboPgwebRedePix : CboPayGoRedePix));
         Chave("tef_pgweb_dir", TxtPgwebDir.Text);
-        Chave(ConfigPGWebLib.ChaveDll, TxtPgwebDll.Text);   // em branco: o Windows procura a PGWebLib.dll sozinho
+        Chave(ConfigPGWebLib.ChaveDll, TxtPgwebDll.Text);
+        Chave("tef_pgweb_ponto_captura", TxtPgwebPdc.Text);
+        Chave("tef_pgweb_cnpj", TxtPgwebCnpj.Text);   // em branco: o Windows procura a PGWebLib.dll sozinho
         Chave("tef_pgweb_porta_pinpad", TxtPgwebPorta.Text);
         Chave("tef_pgweb_capacidades", TxtPgwebCapacidades.Text);
         // Em branco APAGA a chave, e chave apagada é o menu inteiro: a loja volta a ver todas as
@@ -1798,6 +1802,11 @@ public partial class Configuracao : UserControl
                 cnpj = t?.cnpj as string;
                 terminal = t?.terminal_uuid as string;
                 pdc = Vendas.Config(cx, "tef_pgweb_ponto_captura");
+                // O CNPJ da INSTALACAO manda no papel, e nao o do cadastro da loja.
+                // 09/09/2026: o comprovante saiu com 62177839000238 (filial 0002, do
+                // cadastro) e a instalacao foi feita no 62177839000157 (filial 0001).
+                // Sao filiais diferentes, e quem confere e a PayGo.
+                cnpj = Vendas.Config(cx, "tef_pgweb_cnpj") is { Length: > 0 } ci ? ci : cnpj;
                 impressora = Vendas.Config(cx, "impressora");
                 homolog = ModoHomologacao.Ligado(cx);
             }

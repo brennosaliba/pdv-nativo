@@ -366,6 +366,25 @@
                                 <TextBox x:Name="TxtPayGoEmpresa" Margin="0,4,0,0" Tag="AMERICAN DAY"/>
                             </StackPanel>
                         </Grid>
+                        <!-- O PONTO DE CAPTURA E O CNPJ DA INSTALACAO. Sao os dois dados que
+                             a PayGo confere no comprovante de instalacao, e nao existiam em
+                             lugar nenhum do caixa: o papel saia sem eles. O CNPJ aqui e o da
+                             INSTALACAO, que pode ser outra filial do cadastro da loja. -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Ponto de captura" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtPgwebPdc" Margin="0,4,0,0" Tag="número que a PayGo liberou" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="CNPJ da instalação" Style="{StaticResource Rotulo}"/>
+                                <TextBox x:Name="TxtPgwebCnpj" Margin="0,4,0,0" Tag="em branco: usa o CNPJ da loja" TextChanged="CampoMudou"/>
+                            </StackPanel>
+                        </Grid>
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
