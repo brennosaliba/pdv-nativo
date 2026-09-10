@@ -94,6 +94,27 @@ public static class TestesPendenciaManual
                 "a auditoria diz que foi na recusa, manual, e de qual REQNUM");
         }
 
+        // ── a DLL de verdade ainda mostra a pendência resolvida até o PW_iNewTransac
+        //    seguinte (medido 10/09 17:53: o mesmo CNF saiu duas vezes). Não se resolve
+        //    duas vezes o que já foi resolvido neste processo. ─────────────────────
+        {
+            var f = new FakePGWebLib
+            {
+                RecusarComPendencia = new FakePGWebLib.Pendencia("890", "LOC890", "700890", "VM1", "C6 PAY"),
+                PendenciaFicaAteNovaTransacao = true,
+            };
+            var aud = new List<string>();
+            var p = Provedor(f, conhecida: r => r == "890", aud);
+            var d = Cobrar(p);
+            checar(!d.Pago && f.Confirmadas.Count == 1 && f.Confirmadas[0] == (PW.PWCNF_CNF_MANU_AUT, "890"), "recusa com pendente conhecida: um CNF manual na hora");
+            var d2 = Cobrar(p);
+            checar(d2.Pago && f.Confirmadas.Count(c => c.ReqNum == "890") == 1 && f.Confirmadas.Count == 2,
+                "a venda seguinte NÃO confirma a 890 de novo, mesmo com a biblioteca ainda mostrando ela: "
+                + string.Join(",", f.Confirmadas.Select(c => c.Resultado + "/" + c.ReqNum)));
+            checar(aud.Any(a => a.Contains("já resolvida na recusa") && a.Contains("890")),
+                "e a auditoria explica que foi ignorada por já estar resolvida");
+        }
+
         // ── a venda comum, sem pendência, continua com o automático (289) ─────
         {
             var f = new FakePGWebLib();

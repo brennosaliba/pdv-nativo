@@ -130,6 +130,13 @@ public sealed class FakePGWebLib : IPGWebLib
     /// PWINFO_PND*, os dados de outra transação. Consumido na primeira venda; a seguinte aprova.
     /// </summary>
     public Pendencia? RecusarComPendencia { get; set; }
+
+    /// <summary>
+    /// A DLL de verdade (medido em 10/09/2026 17:53) continua devolvendo os PWINFO_PND* da
+    /// pendência JÁ confirmada até o PW_iNewTransac seguinte. Com isto ligado o fake faz igual.
+    /// </summary>
+    public bool PendenciaFicaAteNovaTransacao { get; set; }
+    private Pendencia? _pendenteFantasma;
     /// <summary>Aprova com CNFREQ=1 mas NÃO guarda a pendência: o PW_iConfirmation seguinte devolve PWRET_INVALIDTRN.</summary>
     public bool EsquecerPendencia { get; set; }
 
@@ -280,6 +287,7 @@ public sealed class FakePGWebLib : IPGWebLib
         if (!_iniciada) return PW.PWRET_DLLNOTINIT;
         if (!Instalado && operacao != PW.PWOPER_INSTALL) return PW.PWRET_NOTINST;
         _oper = operacao;
+        _pendenteFantasma = null;                 // a DLL só esquece a pendência resolvida aqui
         _params = new Dictionary<ushort, string>();
         _etapa = 0;
         _pediuRede = _pediuQr = _cancelada = _abortada = false;
@@ -657,9 +665,8 @@ public sealed class FakePGWebLib : IPGWebLib
         if (info == PW.PWINFO_CARDFULLPAN) Interlocked.Increment(ref LeiturasDePan);
         valor = "";
         if (InfosRecusados.Contains(info)) return PW.PWRET_INVPARAM;
-        if (_pendente is not null)
+        if ((_pendente ?? _pendenteFantasma) is { } p)
         {
-            var p = _pendente;
             var pnd = info switch
             {
                 PW.PWINFO_PNDREQNUM => p.ReqNum,
@@ -683,6 +690,7 @@ public sealed class FakePGWebLib : IPGWebLib
         if (_pendente is null || _pendente.ReqNum != reqNum) return PW.PWRET_INVALIDTRN;
         if (FalharConfirmacao) { FalharConfirmacao = false; return PW.PWRET_WRITERR; }
         Confirmadas.Add((resultado, reqNum));
+        if (PendenciaFicaAteNovaTransacao) _pendenteFantasma = _pendente;   // a DLL ainda a mostra
         _pendente = null;
         return PW.PWRET_OK;
     }

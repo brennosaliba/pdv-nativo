@@ -1074,11 +1074,15 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// que este caixa nunca viu) pede PWCNF_REV_MANU_AUT. E o roteiro manda resolver "com
     /// os dados recebidos", na hora da recusa, sem imprimir nada.
     /// </summary>
+    /// <summary>O REQNUM da última pendência resolvida neste processo (ver PrepararAsync).</summary>
+    private string? _pendenciaResolvida;
+
     private void ResolverPendenciaManual(Pendencia pnd, string quando)
     {
         var conhecida = ConhecidaSegura(pnd.ReqNum);
         var ret = ConfirmacaoCrua(conhecida ? PW.PWCNF_CNF_MANU_AUT : PW.PWCNF_REV_MANU_AUT,
             pnd.ReqNum, pnd.LocRef, pnd.ExtRef, pnd.VirtMerch, pnd.AuthSyst);
+        if (ret == PW.PWRET_OK) _pendenciaResolvida = pnd.ReqNum;
         Auditar?.Invoke($"pgweblib: pendência REQNUM {pnd.ReqNum} {quando}: " +
             $"{(conhecida ? $"CNF manual (PWCNF_CNF_MANU_AUT {PW.PWCNF_CNF_MANU_AUT})" : $"REV manual (PWCNF_REV_MANU_AUT {PW.PWCNF_REV_MANU_AUT})")} {PW.Nome(ret)}");
     }
@@ -1093,7 +1097,15 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             // Pendência bloqueia o ponto de captura: resolver antes, pelo que o caixa sabe.
             // (O caso normal é a recusa "transação pendente" já ter resolvido na hora; isto
             // pega o que sobrou de um caixa que fechou no meio.)
-            ResolverPendenciaManual(pnd, "antes de " + chargeId);
+            //
+            // Medido em 10/09/2026 17:53: depois de resolver na recusa, a biblioteca AINDA
+            // devolve os mesmos PWINFO_PND* até o PW_iNewTransac seguinte, e o caixa mandou
+            // o mesmo CNF duas vezes (283345 às 17:53:03 e 17:53:20). O que já foi
+            // resolvido neste processo não se resolve de novo.
+            if (pnd.ReqNum == _pendenciaResolvida)
+                Auditar?.Invoke($"pgweblib: pendência REQNUM {pnd.ReqNum} já resolvida na recusa; a biblioteca ainda a mostra, ignorada antes de {chargeId}");
+            else
+                ResolverPendenciaManual(pnd, "antes de " + chargeId);
         }
         short nt;
         try { nt = _lib.NewTransac(oper); }
