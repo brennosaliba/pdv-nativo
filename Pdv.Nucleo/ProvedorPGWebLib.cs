@@ -1065,6 +1065,24 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
 
     private sealed record Pendencia(string ReqNum, string LocRef, string ExtRef, string VirtMerch, string AuthSyst);
 
+    /// <summary>
+    /// Resolve a pendência que a biblioteca descreve (PWINFO_PND*) pelo que ESTE caixa sabe,
+    /// com os códigos MANUAIS: quem está decidindo é a automação, a partir do próprio
+    /// registro, e não o fluxo automático de logo depois da venda (289) nem uma queda de
+    /// energia (536881, que fica só para o religamento). Retorno da PayGo em 10/09/2026:
+    /// passo 34 (pendente conhecida como paga) pede PWCNF_CNF_MANU_AUT; passo 36 (pendente
+    /// que este caixa nunca viu) pede PWCNF_REV_MANU_AUT. E o roteiro manda resolver "com
+    /// os dados recebidos", na hora da recusa, sem imprimir nada.
+    /// </summary>
+    private void ResolverPendenciaManual(Pendencia pnd, string quando)
+    {
+        var conhecida = ConhecidaSegura(pnd.ReqNum);
+        var ret = ConfirmacaoCrua(conhecida ? PW.PWCNF_CNF_MANU_AUT : PW.PWCNF_REV_MANU_AUT,
+            pnd.ReqNum, pnd.LocRef, pnd.ExtRef, pnd.VirtMerch, pnd.AuthSyst);
+        Auditar?.Invoke($"pgweblib: pendência REQNUM {pnd.ReqNum} {quando}: " +
+            $"{(conhecida ? $"CNF manual (PWCNF_CNF_MANU_AUT {PW.PWCNF_CNF_MANU_AUT})" : $"REV manual (PWCNF_REV_MANU_AUT {PW.PWCNF_REV_MANU_AUT})")} {PW.Nome(ret)}");
+    }
+
     /// <summary>Init + reenvios + pendência da biblioteca + PW_iNewTransac. Null = pode seguir; senão o desfecho que impede.</summary>
     private async Task<DesfechoTef?> PrepararAsync(byte oper, string chargeId)
     {
@@ -1073,16 +1091,9 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         if (oper != PW.PWOPER_INSTALL && LerPendenciaDaLib() is { } pnd)
         {
             // Pendência bloqueia o ponto de captura: resolver antes, pelo que o caixa sabe.
-            //
-            // Os códigos são os MANUAIS: quem está decidindo é a automação, a partir do
-            // próprio registro, e não o fluxo automático de logo depois da venda (289) nem
-            // uma queda de energia (536881, que fica só para o religamento). Retorno da
-            // PayGo em 10/09/2026: passo 34 (pendente conhecida) pede PWCNF_CNF_MANU_AUT e
-            // passo 36 (pendente que este caixa nunca viu) pede PWCNF_REV_MANU_AUT.
-            var conhecida = ConhecidaSegura(pnd.ReqNum);
-            var ret = ConfirmacaoCrua(conhecida ? PW.PWCNF_CNF_MANU_AUT : PW.PWCNF_REV_MANU_AUT, pnd.ReqNum, pnd.LocRef, pnd.ExtRef, pnd.VirtMerch, pnd.AuthSyst);
-            Auditar?.Invoke($"pgweblib: pendência REQNUM {pnd.ReqNum} antes de {chargeId}: " +
-                $"{(conhecida ? $"CNF manual (PWCNF_CNF_MANU_AUT {PW.PWCNF_CNF_MANU_AUT})" : $"REV manual (PWCNF_REV_MANU_AUT {PW.PWCNF_REV_MANU_AUT})")} {PW.Nome(ret)}");
+            // (O caso normal é a recusa "transação pendente" já ter resolvido na hora; isto
+            // pega o que sobrou de um caixa que fechou no meio.)
+            ResolverPendenciaManual(pnd, "antes de " + chargeId);
         }
         short nt;
         try { nt = _lib.NewTransac(oper); }
@@ -1204,7 +1215,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 default:
                     LerResultados(fim);
                     if (PW.EhRecusaDoHost(ret))
+                    {
+                        // "TRANSACAO PENDENTE": o host negou ESTA venda e devolveu os dados de
+                        // outra, que ficou sem confirmação. O roteiro (passos 34 e 36) manda
+                        // resolver com os dados recebidos, na hora, sem imprimir nada. Até
+                        // 10/09/2026 isso só acontecia na venda seguinte (52 min depois, no
+                        // teste do dono); a venda recusada segue recusada do mesmo jeito.
+                        if (LerPendenciaDaLib() is { } pnd)
+                            ResolverPendenciaManual(pnd, "na recusa do host");
                         return Encerrar(fim, SituacaoTef.Recusado, CodigoTef.Recusado, Mensagem(fim, "transação não autorizada"));
+                    }
                     return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, Mensagem(fim, "TEF devolveu " + PW.Nome(ret)));
             }
         }

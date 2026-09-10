@@ -64,6 +64,36 @@ public static class TestesPendenciaManual
             checar(d.Pago, "e a venda nova segue normal");
         }
 
+        // ── NA HORA DA RECUSA: o roteiro manda resolver "com os dados recebidos". No
+        //    teste do dono em 10/09 a resolução só saiu na venda seguinte, 52 min depois.
+        //    Agora sai dentro da própria recusa, sem recibo, e a venda segue recusada. ──
+        {
+            var f = new FakePGWebLib { RecusarComPendencia = new FakePGWebLib.Pendencia("888", "LOC888", "700888", "VM1", "C6 PAY") };
+            var aud = new List<string>();
+            var p = Provedor(f, conhecida: r => r == "888", aud);
+            var d = Cobrar(p);
+            checar(!d.Pago && d.Situacao == SituacaoTef.Recusado, "a venda negada com TRANSACAO PENDENTE segue recusada: " + d.Motivo);
+            checar(f.Confirmadas.Count == 1 && f.Confirmadas[0] == (PW.PWCNF_CNF_MANU_AUT, "888"),
+                "passo 34 NA HORA: a pendente conhecida é confirmada com 12833 dentro da própria recusa: "
+                + string.Join(",", f.Confirmadas.Select(c => c.Resultado + "/" + c.ReqNum)));
+            checar(aud.Any(a => a.Contains("na recusa do host") && a.Contains("12833") && a.Contains("888")),
+                "a auditoria diz que foi na recusa, manual, e de qual REQNUM");
+            var d2 = Cobrar(p);
+            checar(d2.Pago && f.Confirmadas.Count == 2 && f.Confirmadas[1].Resultado == PW.PWCNF_CNF_AUTO,
+                "a venda seguinte não repete a resolução (a pendência já foi) e confirma a si mesma com 289");
+        }
+        {
+            var f = new FakePGWebLib { RecusarComPendencia = new FakePGWebLib.Pendencia("889", "LOC889", "700889", "VM1", "C6 PAY") };
+            var aud = new List<string>();
+            var p = Provedor(f, conhecida: null, aud);
+            var d = Cobrar(p);
+            checar(!d.Pago && d.Situacao == SituacaoTef.Recusado && f.Confirmadas.Count == 1 && f.Confirmadas[0] == (PW.PWCNF_REV_MANU_AUT, "889"),
+                "passo 36 NA HORA: a pendente desconhecida é desfeita com 12849 dentro da própria recusa: "
+                + string.Join(",", f.Confirmadas.Select(c => c.Resultado + "/" + c.ReqNum)));
+            checar(aud.Any(a => a.Contains("na recusa do host") && a.Contains("12849") && a.Contains("889")),
+                "a auditoria diz que foi na recusa, manual, e de qual REQNUM");
+        }
+
         // ── a venda comum, sem pendência, continua com o automático (289) ─────
         {
             var f = new FakePGWebLib();

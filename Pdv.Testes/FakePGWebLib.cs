@@ -124,6 +124,12 @@ public sealed class FakePGWebLib : IPGWebLib
     public bool ConfirmacaoLanca { get; set; }
     /// <summary>Pendência que a biblioteca descreve logo após PW_iInit (PWINFO_PND*).</summary>
     public Pendencia? PendenciaNoInit { get; set; }
+
+    /// <summary>
+    /// Passos 34 e 36 do roteiro: o host NEGA a venda com "TRANSACAO PENDENTE" e devolve, nos
+    /// PWINFO_PND*, os dados de outra transação. Consumido na primeira venda; a seguinte aprova.
+    /// </summary>
+    public Pendencia? RecusarComPendencia { get; set; }
     /// <summary>Aprova com CNFREQ=1 mas NÃO guarda a pendência: o PW_iConfirmation seguinte devolve PWRET_INVALIDTRN.</summary>
     public bool EsquecerPendencia { get; set; }
 
@@ -365,6 +371,19 @@ public sealed class FakePGWebLib : IPGWebLib
         pedidos = Array.Empty<PwGetData>();
         foreach (var obrig in new[] { PW.PWINFO_TOTAMNT, PW.PWINFO_CURRENCY, PW.PWINFO_AUTNAME, PW.PWINFO_AUTVER })
             if (!_params.ContainsKey(obrig)) { _res[PW.PWINFO_RESULTMSG] = "PARAMETRO OBRIGATORIO AUSENTE " + obrig; return PW.PWRET_NOMANDATORY; }
+
+        // Host nega com "transação pendente" e entrega os dados dela (como o C6PAY do
+        // sandbox fez em 10/09/2026, -2599 e [NA A002]). A pendência nasce AGORA, durante a
+        // venda, por isso não cai na trava de "pendência de outra transação" acima.
+        if (RecusarComPendencia is { } rp)
+        {
+            RecusarComPendencia = null;
+            _pendente = rp;
+            NovoReqNum();
+            _res[PW.PWINFO_RESULTMSG] = "[NA A002] TRANSACAO PENDENTE";
+            _res[PW.PWINFO_AUTRESPCODE] = "A002";
+            return PW.PWRET_FROMHOST_INICIO;
+        }
 
         switch (_etapa)
         {
