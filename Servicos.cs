@@ -564,9 +564,18 @@ public static class Servicos
             if (!ConfirmacaoManualTef || ct.IsCancellationRequested) return null;
             var dono = JanelaAtiva();
             var valor = new Dinheiro(tx.ValorCent).Formatado();
-            return Dialogo.Confirmar(dono, "Rede aprovou",
-                $"Venda de {valor} aprovada na maquininha. Confirmar a venda ou desfazer?",
-                "Confirmar venda", "Desfazer venda");
+            // ESC NAO DECIDE (revisao de 09/09/2026). Num Dialogo.Confirmar o Esc vale "nao", e
+            // aqui "nao" seria desfazer na rede uma venda aprovada e impressa. A pergunta volta
+            // ate o operador tocar num dos dois botoes; so o cancelamento da cobranca sai sem resposta.
+            while (true)
+            {
+                var i = Dialogo.Escolher(dono, "Rede aprovou",
+                    $"Venda de {valor} aprovada na maquininha. Confirmar a venda ou desfazer?",
+                    "Confirmar venda", "Desfazer venda");
+                if (i == 0) return true;
+                if (i == 1) return false;
+                if (ct.IsCancellationRequested) return null;
+            }
         });
 
     private static Action? _fecharExibicaoTef;

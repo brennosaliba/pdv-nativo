@@ -137,6 +137,12 @@ RODAPE = '''    };
     /// passo) e false.
     /// </summary>
     public static bool ConfirmacaoManual(int? passo) => passo is 37 or 38 or 39 or 40;
+
+    /// <summary>
+    /// Os passos em que o resultado ESPERADO e a venda desfeita na mao (PWCNF_REV_MANU_AUT):
+    /// 39 e 40. So neles "desfeito" conta como feito no placar; no 37 e 38 desfazer e engano.
+    /// </summary>
+    public static bool DesfazimentoEsperado(int? passo) => passo is 39 or 40;
 }
 '''
 

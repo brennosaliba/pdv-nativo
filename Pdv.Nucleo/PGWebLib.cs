@@ -137,6 +137,12 @@ public static class PW
     /// Sem um dos dois o estorno fica sem data e a biblioteca pergunta ao operador.
     /// </summary>
     public const ushort PWINFO_DATETIME = 49;
+    /// <summary>
+    /// A mensagem que a biblioteca manda o caixa mostrar enquanto espera o host (PWDAT_DSPCHECKOUT
+    /// com este identificador). O cabecalho escreve PWINFO_DPSCHECKOUT1, 0x7F17. Medido em
+    /// 09/09/2026 no Pix: um pedido a cada 0,7 s, "AGUARDANDO PAGAMENTO nn", ate o host responder.
+    /// </summary>
+    public const ushort PWINFO_DSPCHECKOUT1 = 0x7F17;
     public const ushort PWINFO_TRNORIGDATE = 87;
     public const ushort PWINFO_TRNORIGNSU = 88;
     public const ushort PWINFO_TRNORIGAMNT = 96;

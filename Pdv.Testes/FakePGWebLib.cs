@@ -188,6 +188,32 @@ public sealed class FakePGWebLib : IPGWebLib
     /// de mandar o cliente ler no pinpad. É o que o passo 55 do roteiro exercita.
     /// </summary>
     public bool PedirQrNaTela { get; set; }
+
+    /// <summary>
+    /// Enquanto espera o host (Desfecho.NuncaTermina), a biblioteca pede a cada volta que o caixa
+    /// MOSTRE uma mensagem (PWDAT_DSPCHECKOUT, 0x7F17), como a PGWebLib faz no Pix: medido em
+    /// 09/09/2026, um pedido a cada 0,7 s ("AGUARDANDO PAGAMENTO nn"), alternando com PWRET_NOTHING.
+    /// </summary>
+    public bool ExibirEnquantoEspera { get; set; }
+
+    /// <summary>O que a biblioteca faz com um PW_iPPAbort recebido enquanto espera o host.</summary>
+    public enum ReacaoAoAbort { Cancela, ContinuaEsperando, TipoZero }
+
+    /// <summary>
+    /// Medido em 09/09/2026 (passo 55): a PGWebLib de verdade NAO encerra a espera do host com o
+    /// abort. Ou segue consultando o host por 20 a 40 s (ContinuaEsperando, REQNUM 283151), ou
+    /// devolve PWRET_MOREDATA com nove pedidos zerados (TipoZero, REQNUM 283068). Cancela e o que
+    /// o cabecalho promete e o que o fake sempre fez.
+    /// </summary>
+    public ReacaoAoAbort AbortNaEspera { get; set; } = ReacaoAoAbort.Cancela;
+
+    /// <summary>
+    /// O que PW_iPPEventLoop devolve depois de um PW_iPPAbort. Null = PWRET_CANCEL (cabecalho).
+    /// Medido em 09/09/2026: PWRET_TRNNOTINIT (-2488) quando a transacao ja tinha encerrado.
+    /// </summary>
+    public short? EventLoopAposAbort { get; set; }
+
+    private int _voltasNaEspera;
     /// <summary>O conteúdo do QR que a biblioteca devolve em PWINFO_AUTHPOSQRCODE.</summary>
     public string QrCode { get; set; } = "00020126580014BR.GOV.BCB.PIX0136teste-pix-american-day-0000000000005204000053039865802BR5913AMERICAN DAY6009BELO HORIZ62070503***6304ABCD";
     /// <summary>A biblioteca manda o QR mas esquece o conteúdo: o caixa não pode mostrar QR vazio.</summary>
@@ -280,7 +306,18 @@ public sealed class FakePGWebLib : IPGWebLib
         pedidos = Array.Empty<PwGetData>();
         if (!_iniciada) return PW.PWRET_DLLNOTINIT;
         if (_ppEsperado is not null) return PW.PWRET_INVCALL;          // pediu captura e a automação não capturou
-        if (_cancelada || _abortada)
+        if (_abortada && !_cancelada && AbortNaEspera != ReacaoAoAbort.Cancela && _oper == PW.PWOPER_SALE && _etapa == 3)
+        {
+            // A DLL de verdade, abortada no meio da espera do host (09/09/2026, passo 55).
+            if (AbortNaEspera == ReacaoAoAbort.TipoZero)
+            {
+                _cancelada = true;   // a chamada seguinte encerra cancelada, como a DLL depois do erro -9
+                pedidos = Enumerable.Repeat(new PwGetData(0, 0, ""), 9).ToList();
+                return PW.PWRET_MOREDATA;
+            }
+            // ContinuaEsperando: ignora o abort e segue a espera normal (etapa 3, NuncaTermina).
+        }
+        else if (_cancelada || _abortada)
         {
             // Encerrar por PW_iPPAbort é o passo 55 do roteiro (Esc na tela do QR). Se a biblioteca
             // escreve alguma coisa em PWINFO_RESULTMSG ao encerrar assim, ela é da REDE e tem que
@@ -409,15 +446,22 @@ public sealed class FakePGWebLib : IPGWebLib
                 }
                 goto case 3;
             case 3:
+                _etapa = 3;   // tambem quando chega por goto (sem senha): e aqui que a espera do host mora
                 // Host
                 switch (_d)
                 {
                     case Desfecho.NuncaTermina:
+                        if (ExibirEnquantoEspera && ++_voltasNaEspera % 2 == 0)
+                        {
+                            pedidos = new[] { new PwGetData(PW.PWDAT_DSPCHECKOUT, PW.PWINFO_DSPCHECKOUT1, $"AGUARDANDO PAGAMENTO {_voltasNaEspera / 2:00}") };
+                            return PW.PWRET_MOREDATA;
+                        }
                         return PW.PWRET_NOTHING;
                     case Desfecho.HostFora:
                         _res[PW.PWINFO_RESULTMSG] = "SEM COMUNICACAO COM O HOST";
                         return PW.PWRET_HOSTCONNERR;
                     case Desfecho.Recusar:
+                        NovoReqNum();
                         _res[PW.PWINFO_RESULTMSG] = "TRANSACAO NAO AUTORIZADA";
                         _res[PW.PWINFO_AUTRESPCODE] = "51";
                         return PW.PWRET_FROMHOST_FIM;
@@ -458,6 +502,19 @@ public sealed class FakePGWebLib : IPGWebLib
 
     private PwGetData MenuRede()
         => new(PW.PWDAT_MENU, PW.PWINFO_AUTHSYST, "REDE", RedesDoMenu.Select(r => new PwOpcaoMenu(r, r)).ToList());
+
+    /// <summary>
+    /// A DLL de verdade da REQNUM a toda transacao, aprovada ou nao (log de 09/09/2026: a venda
+    /// negada de R$ 1.000,01 saiu com 0x32=0000279791; o estorno negado do Pix, com 0000283283).
+    /// A planilha da homologacao cobra o numero tambem nesses passos.
+    /// </summary>
+    private string NovoReqNum()
+    {
+        var n = Interlocked.Increment(ref _seq);
+        UltimoReqNum = n.ToString(CultureInfo.InvariantCulture);
+        _res[PW.PWINFO_REQNUM] = UltimoReqNum;
+        return UltimoReqNum;
+    }
 
     private void Aprovar()
     {
@@ -508,7 +565,7 @@ public sealed class FakePGWebLib : IPGWebLib
                 return PW.PWRET_MOREDATA;
             case 1:
                 if (!_params.ContainsKey(IdSenhaLojista)) return PW.PWRET_NOMANDATORY;
-                if (_d == Desfecho.Recusar) { _res[PW.PWINFO_RESULTMSG] = "CANCELAMENTO NAO AUTORIZADO"; _res[PW.PWINFO_AUTRESPCODE] = "57"; return PW.PWRET_FROMHOST_FIM; }
+                if (_d == Desfecho.Recusar) { NovoReqNum(); _res[PW.PWINFO_RESULTMSG] = "CANCELAMENTO NAO AUTORIZADO"; _res[PW.PWINFO_AUTRESPCODE] = "57"; return PW.PWRET_FROMHOST_FIM; }
                 Aprovar();
                 _res[PW.PWINFO_RESULTMSG] = "CANCELAMENTO AUTORIZADO";
                 _etapa = 2;
@@ -669,7 +726,7 @@ public sealed class FakePGWebLib : IPGWebLib
     {
         Log("PPEventLoop");
         display = "";
-        if (_abortada) { _cancelada = true; return PW.PWRET_CANCEL; }
+        if (_abortada) { _cancelada = true; return EventLoopAposAbort ?? PW.PWRET_CANCEL; }
         if (_eventos.Count == 0) return PW.PWRET_NOTHING;
         var (ret, disp) = _eventos.Dequeue();
         display = disp;

@@ -99,6 +99,13 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public int TempoPerguntaMs { get; init; } = 120_000;
 
     /// <summary>
+    /// Quanto o caixa espera a biblioteca encerrar depois de um PW_iPPAbort pedido pelo operador.
+    /// Passado isso, a cobranca encerra cancelada e desfeita por conta do caixa. Medido em
+    /// 09/09/2026 (passo 55): a PGWebLib levava de 20 a 40 s para sair da espera do host do Pix.
+    /// </summary>
+    public int TempoMaxCancelamentoMs { get; init; } = 5_000;
+
+    /// <summary>
     /// Cadência de segurança do PW_iIdleProc: vale quando a biblioteca não informa
     /// PWINFO_IDLEPROCTIME (vazio ou inválido). <see cref="IniciarIdle"/> grava o intervalo do timer aqui.
     /// </summary>
@@ -698,7 +705,9 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             if (!fim.Aprovada)
             {
                 await DesfazerSeRequeridoAsync(ctx, fim, r).ConfigureAwait(false);
-                return new DesfechoTef(fim.Situacao, id, chargeId, null, fim.Motivo, fim.PosOcupado) { Codigo = fim.Codigo, Desfeita = fim.Desfeita };
+                // O REQNUM sobe tambem na recusa (09/09/2026): o passo 57 e um estorno NEGADO
+                // pelo host, e a planilha cobra o numero dele como o de qualquer transacao.
+                return new DesfechoTef(fim.Situacao, id, chargeId, null, fim.Motivo, fim.PosOcupado) { Codigo = fim.Codigo, Desfeita = fim.Desfeita, Reqnum = r.CodigoControle };
             }
 
             var tx = new TransacaoPayGo(chargeId, id, original.Tipo, original.ValorCent, original.Parcelas, "aprovada", r, "cancelamento de " + original.ChargeId);
@@ -809,7 +818,9 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             if (!fim.Aprovada)
             {
                 await DesfazerSeRequeridoAsync(ctx, fim, r).ConfigureAwait(false);
-                return new DesfechoTef(fim.Situacao, id, chargeId, null, fim.Motivo, fim.PosOcupado) { Codigo = fim.Codigo, Desfeita = fim.Desfeita };
+                // O REQNUM sobe tambem na recusa (09/09/2026): o passo 57 e um estorno NEGADO
+                // pelo host, e a planilha cobra o numero dele como o de qualquer transacao.
+                return new DesfechoTef(fim.Situacao, id, chargeId, null, fim.Motivo, fim.PosOcupado) { Codigo = fim.Codigo, Desfeita = fim.Desfeita, Reqnum = r.CodigoControle };
             }
             // 'adm', nunca 'pago': o valor de uma administrativa (ex.: cancelamento pelo menu) não é venda.
             var tx = new TransacaoPayGo(chargeId, id, TipoTef.Credito, r.ValorCent ?? 0, 1, "aprovada", r, rotulo);
@@ -1000,6 +1011,8 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         public CancellationToken Ct { get; }
         /// <summary>Alguma tela de exibicao (QR, mensagem) foi aberta e precisa ser fechada no fim.</summary>
         public bool Exibiu { get; set; }
+        /// <summary>A biblioteca ja pediu RETIRE O CARTAO: esta terminando, e abortar agora so atrapalha (09/09/2026).</summary>
+        public bool Encerrando { get; set; }
 
         /// <summary>
         /// O que ja esta na tela, para nao redesenhar o mesmo QR a cada segundo.
@@ -1099,15 +1112,26 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         var fim = new Fim();
         var relogio = Stopwatch.StartNew();
         var abortado = false;
+        Stopwatch? cancelamento = null;
         while (true)
         {
             if (ctx.Ct.IsCancellationRequested && !abortado)
             {
                 abortado = true;
-                try { _lib.PPAbort(); } catch { }
+                cancelamento = Stopwatch.StartNew();
+                // Com RETIRE O CARTAO ja pedido a biblioteca esta terminando por conta propria;
+                // o abort aqui virava PWRET_TRNNOTINIT no passo seguinte (09/09/2026).
+                if (!ctx.Encerrando) { try { _lib.PPAbort(); } catch { } }
                 ctx.Andamento?.Report(new AndamentoTef(FaseTef.Recado, ctx.ChargeId, ctx.Id, "Cancelamento pedido: aguardando o pinpad…"));
                 relogio.Restart();
             }
+            // O CANCELAMENTO TEM PRAZO PROPRIO (09/09/2026, passo 55). Depois do PW_iPPAbort a
+            // PGWebLib de verdade nao encerra a espera do host do Pix: segue pedindo exibicao a
+            // cada 0,7 s por 20 a 40 s (REQNUM 283108 e 283151), e cada pedido reiniciava o
+            // relogio de execucao la embaixo. Este relogio nao reinicia: passado o prazo, a
+            // cobranca encerra cancelada e desfeita (REV), como nos outros caminhos de desistencia.
+            if (abortado && cancelamento!.ElapsedMilliseconds >= TempoMaxCancelamentoMs)
+                return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, "cobrança cancelada pelo operador", desfeita: true, ler: true);
             short ret;
             IReadOnlyList<PwGetData> pedidos;
             try { ret = _lib.ExecTransac(out pedidos); }
@@ -1227,7 +1251,10 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 // E a tela de pagamento fica sabendo que a rede ja decidiu: e ela que tira o
                 // botao de cancelar do Pix (e o mantem no cartao, por causa dos passos 39 e 40).
                 if (p.Tipo == PW.PWDAT_PPREMCRD)
+                {
+                    ctx.Encerrando = true;
                     ctx.Andamento?.Report(new AndamentoTef(FaseTef.Encerrando, ctx.ChargeId, ctx.Id, ""));
+                }
                 var r = await CapturarNoPinpadAsync(ctx, (ushort)i, p, fim).ConfigureAwait(false);
                 if (r is not null) return r;
                 continue;
@@ -1238,6 +1265,11 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 if (r is not null) return r;
                 continue;
             }
+            // Depois de um PW_iPPAbort a PGWebLib devolveu nove pedidos ZERADOS (tipo 0) em
+            // 09/09/2026 (REQNUM 283068): nao e captura que o caixa nao suporta, e a biblioteca
+            // encerrando torto o que o operador acabou de cancelar.
+            if (ctx.Ct.IsCancellationRequested)
+                return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, "cobrança cancelada pelo operador", desfeita: true, ler: true);
             return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, $"TEF pediu captura que o caixa não suporta (tipo {p.Tipo})", ler: true);
         }
         return null;
@@ -1308,6 +1340,13 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         var qr = p.EhQrCode ? Ler(PW.PWINFO_AUTHPOSQRCODE) : null;
         Auditar?.Invoke($"pgweblib: exibir tipo={p.Tipo} id={p.Identificador} prompt=\"{p.Prompt}\" qr={(string.IsNullOrWhiteSpace(qr) ? "vazio" : qr!.Length + " caracteres")}");
+
+        // O OPERADOR JA DESISTIU (09/09/2026, passo 55). A biblioteca segue pedindo exibicao
+        // enquanto consulta o host, e a "mesma tela" logo abaixo respondia sem olhar o
+        // cancelamento: o Esc so surtia efeito 20 a 40 s depois, quando a biblioteca pedia
+        // RETIRE O CARTAO. Aqui encerra no primeiro pedido depois do Esc: cancelada e desfeita.
+        if (ctx.Ct.IsCancellationRequested)
+            return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, "cobrança cancelada pelo operador", desfeita: true, ler: true);
 
         if (p.EhQrCode && string.IsNullOrWhiteSpace(qr))
             return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma,
@@ -1421,7 +1460,10 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             if (ctx.Ct.IsCancellationRequested && !abortado)
             {
                 abortado = true;
-                try { _lib.PPAbort(); } catch { }
+                // RETIRE O CARTAO nao se aborta (09/09/2026, passo 55): e a biblioteca terminando.
+                // Abortar de novo aqui fazia PW_iPPEventLoop devolver PWRET_TRNNOTINIT (REQNUM
+                // 283108 e 283151). Deixa tirar o cartao; o prazo curto de abortado continua valendo.
+                if (p.Tipo != PW.PWDAT_PPREMCRD) { try { _lib.PPAbort(); } catch { } }
                 relogio.Restart();
             }
             short ev;
@@ -1451,6 +1493,10 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 case PW.PWRET_TIMEOUT:
                     return Encerrar(fim, SituacaoTef.Timeout, CodigoTef.Timeout, "tempo esgotado no pinpad", ler: true);
                 default:
+                    // Depois do abort a biblioteca ja encerrou: o erro que o pinpad devolve entao
+                    // (PWRET_TRNNOTINIT) e consequencia do cancelamento, nao um defeito.
+                    if (abortado || ctx.Ct.IsCancellationRequested)
+                        return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, "cobrança cancelada pelo operador", desfeita: true, ler: true);
                     return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, "pinpad devolveu " + PW.Nome(ev), ler: true);
             }
             var teto = abortado ? Math.Min(TempoMaxCapturaMs, 5_000) : TempoMaxCapturaMs;

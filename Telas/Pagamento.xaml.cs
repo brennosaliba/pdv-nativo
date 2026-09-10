@@ -669,9 +669,13 @@ public partial class Pagamento : UserControl
         // Guardado tambem na instancia: as telas de sucesso sao outros metodos e nao
         // tem o desfecho em maos, e e la que o operador consegue ler e anotar.
         if (!string.IsNullOrWhiteSpace(d.Reqnum)) _reqnumDaVenda = d.Reqnum;
+        // "desfeito" e um resultado proprio (09/09/2026): aprovada e desfeita na mao pelo
+        // operador. E o que os passos 39 e 40 pedem; o placar sabe em quais passos isso conta.
+        var desfeitaNaMao = d.Situacao == SituacaoTef.Cancelado && d.Desfeita;
         PlacarHomologacao.GuardarUltimo(d.Reqnum, valor.Centavos,
             d.Situacao == SituacaoTef.Pago ? "aprovada"
             : d.Situacao == SituacaoTef.Recusado ? "negada"
+            : desfeitaNaMao ? "desfeita"
             : d.Situacao.ToString().ToLowerInvariant(),
             PassoDoRoteiro);
 
@@ -682,6 +686,7 @@ public partial class Pagamento : UserControl
             PlacarHomologacao.Anotar(passoRoteiro,
                 d.Situacao == SituacaoTef.Pago ? PlacarHomologacao.Aprovado
                 : d.Situacao == SituacaoTef.Recusado ? PlacarHomologacao.Recusado
+                : desfeitaNaMao ? PlacarHomologacao.Desfeito
                 : PlacarHomologacao.Erro,
                 d.Reqnum);
         }

@@ -7,7 +7,13 @@ public sealed record PassoFeito(int Numero, string Resultado, string? Reqnum, Da
 /// <summary>Um passo com o que ja foi feito nele, do jeito que a tela lista.</summary>
 public sealed record LinhaDoPlacar(PassoTef Passo, PassoFeito? Feito)
 {
-    public bool Ok => Feito is not null && Feito.Resultado == PlacarHomologacao.Aprovado;
+    /// <summary>
+    /// Feito como o roteiro manda. Aprovado sempre conta; "desfeito" conta so nos passos cujo
+    /// resultado esperado E o desfazimento manual (39 e 40). Fora deles, desfazer e engano.
+    /// </summary>
+    public bool Ok => Feito is not null
+        && (Feito.Resultado == PlacarHomologacao.Aprovado
+            || (Feito.Resultado == PlacarHomologacao.Desfeito && RoteiroTef.DesfazimentoEsperado(Passo.Numero)));
     public bool Tentado => Feito is not null;
 }
 
@@ -34,6 +40,11 @@ public static class PlacarHomologacao
     public const string Aprovado = "aprovado";
     public const string Recusado = "recusado";
     public const string Erro = "erro";
+    /// <summary>
+    /// A venda foi aprovada e o operador a desfez na mao (PWCNF_REV_MANU_AUT). E o resultado
+    /// certo dos passos 39 e 40; a revisao de 09/09/2026 pegou o placar chamando isso de "erro".
+    /// </summary>
+    public const string Desfeito = "desfeito";
 
     /// <summary>
     /// A tabela onde o caixa anota o roteiro. Criada na hora: ela so existe na

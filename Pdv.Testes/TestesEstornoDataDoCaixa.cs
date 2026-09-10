@@ -70,6 +70,17 @@ public static class TestesEstornoDataDoCaixa
             checar(pr is not null && pr.GetValueOrDefault(PW.PWINFO_TOTAMNT) == "200" && pr.GetValueOrDefault(PW.PWINFO_CARDTYPE) == PW.CARDTYPE_CREDITO,
                 "e o que o caixa ja sabe foi junto: valor em centavos e tipo do cartao");
             checar(e.Reqnum is { Length: > 0 }, "o estorno tem REQNUM para a tela");
+
+            // Estorno NEGADO pelo host (passo 57, revisao de 09/09/2026): o REQNUM sobe do mesmo jeito.
+            f.Roteiro.Enqueue(FakePGWebLib.Desfecho.Aprovar);
+            f.Roteiro.Enqueue(FakePGWebLib.Desfecho.Recusar);
+            var d2 = p.CobrarAsync(TipoTef.Credito, Dinheiro.DeReais(3m), null, 1, null, CancellationToken.None).GetAwaiter().GetResult();
+            checar(d2.Pago, "outra venda aprovada (" + d2.Motivo + ")");
+            var paga2 = guardadas.Last(g => g.Situacao == "pago");
+            var neg = p.CancelarAsync(paga2, CancellationToken.None).GetAwaiter().GetResult();
+            checar(!neg.Pago && neg.Situacao == SituacaoTef.Recusado, "o host negou o estorno (" + neg.Motivo + ")");
+            checar(neg.Reqnum is { Length: > 0 } && neg.Reqnum == f.UltimoReqNum,
+                "e mesmo negado o estorno traz o REQNUM (passo 57): " + (neg.Reqnum ?? "null") + " / " + f.UltimoReqNum);
         }
 
         // ── 3. a tela do estorno usa a data do caixa e mostra o REQNUM ──────────

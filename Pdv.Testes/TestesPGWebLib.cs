@@ -392,8 +392,12 @@ public static class TestesPGWebLib
             checar(d2.Pago && d2.PaymentStatus == "pago" && !d2.Desfeita && d2.Cartao?.Nsu == f2.UltimoNsu && d2.Cartao?.CAut == "A" + f2.UltimoReqNum,
                 "cancelar em PPREMCRD com CNFREQ=0: Pago com o cartão (jamais 'cancelado'): " + d2.Situacao + " " + d2.Motivo);
             checar(guardadas2.Select(g => g.Situacao).SequenceEqual(new[] { "aguardando", "aprovada", "pago" }), "gravada aguardando -> aprovada -> pago: " + string.Join(",", guardadas2.Select(g => g.Situacao)));
-            checar(f2.Confirmadas.Count == 0 && f2.Abortos >= 1, "PPAbort saiu, mas sem PW_iConfirmation (nada a desfazer)");
-            checar(aud2.Any(a => a.Contains("definitiva")), "auditoria explica que a saída depois da aprovação definitiva foi ignorada");
+            // 09/09/2026: RETIRE O CARTAO nao se aborta (e a biblioteca terminando; abortar ali
+            // devolvia PWRET_TRNNOTINIT no passo 55). Sem abort e sem confirmacao: nada a desfazer.
+            checar(f2.Confirmadas.Count == 0 && f2.Abortos == 0, "sem PW_iPPAbort em RETIRE O CARTAO e sem PW_iConfirmation (nada a desfazer)");
+            // 09/09/2026: sem abort em RETIRE O CARTAO nao ha "saida depois da aprovacao" a ignorar;
+            // a biblioteca termina sozinha e a venda sai paga sem nota nenhuma na auditoria.
+            checar(!aud2.Any(a => a.Contains("definitiva")), "sem abort em RETIRE O CARTAO a auditoria nao precisa explicar saida nenhuma");
 
             // Cancelamento (SALEVOID) aprovado com CNFREQ=0 e Guardar falhou: idem, nunca "desfeito".
             var f3 = new FakePGWebLib { Cnfreq = false };

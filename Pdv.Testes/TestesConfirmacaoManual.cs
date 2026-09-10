@@ -163,6 +163,45 @@ public static class TestesConfirmacaoManual
         }
     }
 
+    /// <summary>
+    /// O placar (revisao adversarial de 09/09/2026): o desfazimento manual dos passos 39 e 40 e
+    /// o resultado ESPERADO, e o placar chamava isso de "erro" (✗ na tela, "erro em ..." na
+    /// planilha). Agora e "desfeito", e conta como feito so nesses dois passos.
+    /// </summary>
+    public static void RodarPlacar(Action<bool, string> checar)
+    {
+        var p39 = RoteiroTef.Passos.First(p => p.Numero == 39);
+        var p37 = RoteiroTef.Passos.First(p => p.Numero == 37);
+        var agora = DateTime.Now;
+        var l39 = new LinhaDoPlacar(p39, new PassoFeito(39, PlacarHomologacao.Desfeito, "0000283005", agora));
+        var l37 = new LinhaDoPlacar(p37, new PassoFeito(37, PlacarHomologacao.Desfeito, "0000283006", agora));
+        checar(l39.Ok, "passo 39 desfeito na mao e FEITO (✓)");
+        checar(!l37.Ok && l37.Tentado, "passo 37 desfeito e engano: tentado, nao feito");
+        checar(RoteiroTef.DesfazimentoEsperado(39) && RoteiroTef.DesfazimentoEsperado(40) && !RoteiroTef.DesfazimentoEsperado(37) && !RoteiroTef.DesfazimentoEsperado(null),
+            "39 e 40 esperam desfazimento; 37 e venda sem passo nao");
+        var csv = PlacarHomologacao.Csv(new[] { l39 });
+        checar(csv.Contains("0000283005", StringComparison.Ordinal) && csv.Contains("desfeito em", StringComparison.Ordinal) && !csv.Contains("erro em", StringComparison.Ordinal),
+            "a planilha diz 'desfeito', com o REQNUM, e nunca 'erro' no 39");
+        var (feitos, _) = PlacarHomologacao.Progresso(new[] { l39, l37 });
+        checar(feitos == 1, "o progresso conta o 39 e nao o 37: " + feitos);
+
+        var raiz = AcharRaiz();
+        if (raiz is not null)
+        {
+            var pagamento = File.ReadAllText(Path.Combine(raiz, "Telas", "Pagamento.xaml.cs"));
+            checar(pagamento.Contains("desfeitaNaMao ? PlacarHomologacao.Desfeito", StringComparison.Ordinal),
+                "a tela de pagamento anota 'desfeito' quando a venda foi aprovada e desfeita na mao");
+            var servicos = File.ReadAllText(Path.Combine(raiz, "Servicos.cs"));
+            var i = servicos.IndexOf("DecidirConfirmacaoNaTelaAsync(TransacaoPayGo tx", StringComparison.Ordinal);
+            var fimMetodo = i < 0 ? -1 : servicos.IndexOf("});", i, StringComparison.Ordinal);
+            var corpo = i < 0 || fimMetodo < 0 ? "" : servicos[i..fimMetodo];
+            checar(corpo.Contains("Dialogo.Escolher(", StringComparison.Ordinal) && !corpo.Contains("Dialogo.Confirmar(", StringComparison.Ordinal),
+                "o dialogo 'Rede aprovou' e um Escolher: Esc (-1) nao vira 'Desfazer venda'");
+            checar(corpo.Contains("if (i == 0) return true;", StringComparison.Ordinal) && corpo.Contains("if (i == 1) return false;", StringComparison.Ordinal),
+                "so os dois botoes decidem; o resto repete a pergunta");
+        }
+    }
+
     private static string? AcharRaiz()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

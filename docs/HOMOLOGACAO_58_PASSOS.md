@@ -313,7 +313,7 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **Situação:** pronto
 
-**O que você faz:** Abre o passo 37 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. Depois que a rede aprova e o comprovante sai, a tela pergunta "Rede aprovou: confirmar a venda ou desfazer?". Toque em Confirmar venda. Essa é a confirmação manual: o caixa manda PW_iConfirmation com PWCNF_CNF_MANU_AUT (12833) em vez do automático (289). Fora dos passos 37 a 40 a pergunta não existe e o caixa confirma sozinho. A venda tem que NASCER do roteiro: pelo caminho normal de loja não há pergunta.
+**O que você faz:** Abre o passo 37 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. Depois que a rede aprova e o comprovante sai, a tela pergunta "Rede aprovou: confirmar a venda ou desfazer?". Toque em Confirmar venda. Essa é a confirmação manual: o caixa manda PW_iConfirmation com PWCNF_CNF_MANU_AUT (12833) em vez do automático (289). Fora dos passos 37 a 40 a pergunta não existe e o caixa confirma sozinho. A venda tem que NASCER do roteiro: pelo caminho normal de loja não há pergunta. Esc nesse diálogo não decide nada: a pergunta volta até você tocar num dos dois botões.
 
 **O que conferir:** Venda aprovada, vias impressas, REQNUM na tela, linha 'pago' em tef_transacao e a auditoria (tef_pgweblib) com 'CNF ... PWRET_OK -> pago (manual pelo operador, PWCNF_CNF_MANU_AUT 12833)'. A venda de R$ 1.012,00 feita em 09/09 às 20:29 saiu com 289, o automático, porque a pergunta ainda não existia: refazer no caixa 0.8.9 ou mais novo.
 
@@ -331,7 +331,7 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **O que você faz:** Abre o passo 39 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. Depois que a rede aprova e o comprovante sai, a tela pergunta "Rede aprovou: confirmar a venda ou desfazer?". Toque em Desfazer venda. O caixa manda PW_iConfirmation com PWCNF_REV_MANU_AUT (12849): a transação é desfeita na rede, o cliente não é cobrado e a venda volta para as formas de pagamento (aí é Cancelar venda). ATENÇÃO: estornar depois, em TEF e Estornar, NÃO é desfazimento, é cancelamento (CNC), e vale para os passos 43 a 46. Em 09/09 às 20:33 o que saiu para a venda de R$ 1.011,00 foi um estorno; refazer o passo no caixa 0.8.9 ou mais novo.
 
-**O que conferir:** Tela 'Cobrança cancelada' com 'venda desfeita pelo operador' e 'A cobrança foi desfeita: o cliente não pagou nada', mais o REQNUM. Linha 'desfeita' em tef_transacao e a auditoria com 'desfeita pelo operador (PWCNF_REV_MANU_AUT 12849) REQNUM ...'.
+**O que conferir:** Tela 'Cobrança cancelada' com 'venda desfeita pelo operador' e 'A cobrança foi desfeita: o cliente não pagou nada', mais o REQNUM. Linha 'desfeita' em tef_transacao e a auditoria com 'desfeita pelo operador (PWCNF_REV_MANU_AUT 12849) REQNUM ...'. No roteiro o passo fica com ✓ e a etiqueta 'desfeito · REQNUM' (é o resultado esperado aqui e no 40; nos outros passos 'desfeito' conta como engano).
 
 ### Passo 40. Desfazimento manual #2 (venda de R$ 333,00 na REDE e desfazimento manual) (opcional)
 
@@ -339,7 +339,7 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **O que você faz:** O mesmo do passo 39, com R$ 333,00, escolhendo REDE no menu de redes. No fim, Desfazer venda.
 
-**O que conferir:** Mesma coisa do 39: linha 'desfeita' em tef_transacao, 12849 na auditoria e AUTHSYST igual a REDE.
+**O que conferir:** Mesma coisa do 39: linha 'desfeita' em tef_transacao, 12849 na auditoria, AUTHSYST igual a REDE, e no roteiro ✓ com a etiqueta 'desfeito · REQNUM'.
 
 ### Passo 41. Desfazimento por falha na liberação da mercadoria #1 (venda de R$ 1.013,00)
 
@@ -455,11 +455,11 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 ### Passo 55. Operacao cancelada durante venda PIX (Esc na tela do QRCode)
 
-**Situação:** pronto
+**Situação:** pronto (consertado em 09/09/2026 à noite, caixa 0.8.10)
 
-**O que você faz:** Abre a venda, escolhe PIX na tela de pagamento e confirma o valor. Quando o QR aparecer grande na tela do caixa, aperta Esc (ou toca em "Cancelar cobranca").
+**O que você faz:** Abre o passo 55 no roteiro, escolhe PIX na tela de pagamento e confirma o valor. Com o QR na maquininha (ou na tela do caixa, se tef_pgweb_qr_onde=tela), aperta Esc ou toca em Cancelar cobrança.
 
-**O que conferir:** Na tela: titulo "Cobranca cancelada", texto "cobranca cancelada pelo operador" e o recado "O cliente NAO foi cobrado." (Telas/Pagamento.xaml.cs:636-651). A janela do QR fecha sozinha. Nada gravado como pago: a linha da tef_transacao fica em cancelado e nenhuma parte entra na venda. Para casar com a frase que o roteiro cobra ("OPERACAO CANCELADA"), a evidencia e a auditoria e o campo 030-000 da…
+**O que conferir:** Em até 5 segundos a tela mostra "Cobrança cancelada", "cobrança cancelada pelo operador", "A cobrança foi desfeita: o cliente não pagou nada" e o REQNUM. A janela do QR fecha sozinha. A linha em tef_transacao fica 'desfeita' e a auditoria mostra o REV; nenhuma parte entra na venda. Antes do conserto (REQNUM 283068, 283108 e 283151, das 20:56 às 20:58) o cancelamento levava de 20 a 40 segundos, porque a biblioteca seguia consultando o host depois do PW_iPPAbort e cada pedido de exibição dela reiniciava o relógio do caixa, e terminava como ERRO ("pinpad devolveu PWRET_TRNNOTINIT"): refazer o passo no caixa 0.8.10 ou mais novo. A frase "OPERAÇÃO CANCELADA" que o roteiro cita é a da biblioteca quando ela mesma encerra; aqui quem encerra é o caixa, e a evidência é a linha desfeita e o REV no log da PayGo.
 
 ### Passo 56. Venda por QRCode para PIX e carteiras digitais (R$ 500,00, PIX C6 BANK)
 
@@ -471,9 +471,9 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 ### Passo 57. Cancelamento PIX (tem que ser negado pelo host)
 
-**Situação:** depende de voce
+**Situação:** feito em 09/09/2026 às 21:05 (REQNUM 0000283283; a rede respondeu "TRANSACAO CANCELADA")
 
-**O que você faz:** Com a venda de Pix do passo anterior ja finalizada e a comanda vazia, toca no botao Cancelar da tela de venda, escolhe Estornar, escolhe a linha do Pix pelo NSU do comprovante, escreve o motivo, confirma, e entao digita o codigo do autenticador do dono. So depois disso o PDV manda o cancelamento para a maquininha, e a rede nega.
+**O que você faz:** Com a venda de Pix do passo anterior ja finalizada e a comanda vazia, toca no botao Cancelar da tela de venda, escolhe Estornar, escolhe a linha do Pix pelo NSU do comprovante, escreve o motivo, confirma, e entao digita o codigo do autenticador do dono. So depois disso o PDV manda o cancelamento para a maquininha, e a rede nega. O REQNUM do estorno negado aparece no aviso a partir do caixa 0.8.10 (antes ele so existia no log).
 
 **O que conferir:** Na tela: titulo "Estorno negado" e o texto "A maquininha nao aprovou o estorno: <mensagem da rede>. O dinheiro nao voltou para o cliente. Tente de novo." A mensagem da rede e o PWINFO_RESULTMSG cru, entao e ali que deve aparecer "TRANSACAO NEGADA PELO HOST". Na base: NENHUMA linha nova em situacao estornado, a venda de Pix continua finalizada e a linha original continua em pago (nao pode virar…
 
