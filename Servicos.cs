@@ -554,6 +554,13 @@ public static class Servicos
     internal static bool ConfirmacaoManualTef { get; set; }
 
     /// <summary>
+    /// O passo do roteiro de homologacao que a cobranca em curso esta executando (null fora do
+    /// roteiro). So muda o TEXTO da pergunta de confirmacao: no passo 54 ela avisa que e a hora
+    /// de desligar o caixa (10/09/2026).
+    /// </summary>
+    internal static int? PassoTefEmExecucao { get; set; }
+
+    /// <summary>
     /// Depois da aprovacao, com o comprovante impresso: confirmar ou desfazer na mao. Null = a
     /// venda nao e de um passo de confirmacao manual, e o provedor segue com o CNF automatico.
     /// True vira PWCNF_CNF_MANU_AUT (passos 37 e 38); false vira PWCNF_REV_MANU_AUT (39 e 40).
@@ -570,7 +577,9 @@ public static class Servicos
             while (true)
             {
                 var i = Dialogo.Escolher(dono, "Rede aprovou",
-                    $"Venda de {valor} aprovada na maquininha. Confirmar a venda ou desfazer?",
+                    PassoTefEmExecucao == 54
+                        ? $"Venda de {valor} aprovada. Passo 54: desligue o caixa AGORA, antes de confirmar."
+                        : $"Venda de {valor} aprovada na maquininha. Confirmar a venda ou desfazer?",
                     "Confirmar venda", "Desfazer venda");
                 if (i == 0) return true;
                 if (i == 1) return false;

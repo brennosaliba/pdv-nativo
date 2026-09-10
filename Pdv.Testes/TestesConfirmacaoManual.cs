@@ -134,6 +134,14 @@ public static class TestesConfirmacaoManual
                 "37, 38, 39 e 40 sao os passos de confirmacao/desfazimento manual");
             checar(!RoteiroTef.ConfirmacaoManual(36) && !RoteiroTef.ConfirmacaoManual(41) && !RoteiroTef.ConfirmacaoManual(2) && !RoteiroTef.ConfirmacaoManual(null),
                 "vizinhos, venda comum e venda sem passo (null) nao perguntam");
+            // 10/09/2026: o passo 54 (queda de energia depois da aprovacao) tambem segura a
+            // confirmacao, para a pergunta na tela ser a janela de desligar o caixa. Nao e
+            // confirmacao manual: quem responde a pergunta no 54 e a tomada.
+            checar(RoteiroTef.SeguraAntesDeConfirmar(54) && !RoteiroTef.ConfirmacaoManual(54),
+                "o 54 segura a confirmacao sem ser confirmacao manual");
+            checar(RoteiroTef.SeguraAntesDeConfirmar(37) && RoteiroTef.SeguraAntesDeConfirmar(40)
+                   && !RoteiroTef.SeguraAntesDeConfirmar(53) && !RoteiroTef.SeguraAntesDeConfirmar(55) && !RoteiroTef.SeguraAntesDeConfirmar(null),
+                "e os de confirmacao manual seguram; vizinhos do 54 e venda sem passo nao");
             checar(RoteiroTef.Passos.Where(p => RoteiroTef.ConfirmacaoManual(p.Numero)).All(p => p.Titulo.Contains("manual", StringComparison.OrdinalIgnoreCase)),
                 "e todos os quatro tem 'manual' no titulo do roteiro");
             checar(RoteiroTef.Passos.Where(p => RoteiroTef.ConfirmacaoManual(p.Numero)).All(p => p.Situacao == "pronto"),
@@ -154,7 +162,8 @@ public static class TestesConfirmacaoManual
                     "e devolve null (automatico) fora dos passos de confirmacao manual");
                 checar(servicos.Contains("\"Confirmar venda\", \"Desfazer venda\"", StringComparison.Ordinal),
                     "o dialogo tem os dois botoes, Confirmar venda e Desfazer venda");
-                checar(pagamento.Contains("Servicos.ConfirmacaoManualTef = RoteiroTef.ConfirmacaoManual(PassoDoRoteiro);", StringComparison.Ordinal),
+                checar(pagamento.Contains("Servicos.ConfirmacaoManualTef = RoteiroTef.SeguraAntesDeConfirmar(PassoDoRoteiro);", StringComparison.Ordinal)
+                       && pagamento.Contains("Servicos.PassoTefEmExecucao = PassoDoRoteiro;", StringComparison.Ordinal),
                     "a tela de pagamento decide pelo passo do roteiro, a cada cobranca");
                 var i = servicos.IndexOf("DecidirConfirmacaoNaTelaAsync(TransacaoPayGo tx", StringComparison.Ordinal);
                 var trecho = i < 0 ? "" : servicos.Substring(i, Math.Min(900, servicos.Length - i));

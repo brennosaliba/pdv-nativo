@@ -607,7 +607,8 @@ public partial class Pagamento : UserControl
         // Passos 37 a 40 do roteiro: a rede aprova e o operador confirma ou desfaz NA MAO
         // (PWCNF_CNF_MANU_AUT / PWCNF_REV_MANU_AUT). Venda de loja, sem passo, nao pergunta
         // nada: o caixa confirma sozinho. Refeito a cada cobranca, para passo velho nao sobrar.
-        Servicos.ConfirmacaoManualTef = RoteiroTef.ConfirmacaoManual(PassoDoRoteiro);
+        Servicos.ConfirmacaoManualTef = RoteiroTef.SeguraAntesDeConfirmar(PassoDoRoteiro);
+        Servicos.PassoTefEmExecucao = PassoDoRoteiro;
 
         // A frase da rede é sempre da cobrança ATUAL: começou outra, a de antes sai da tela.
         RecadoDoTef("");

@@ -449,7 +449,7 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **Situação:** pronto
 
-**O que você faz:** Faz uma venda normal no cartao. No segundo em que o pinpad mostra aprovado e o comprovante comeca a sair, desliga o caixa na tomada (ou segura o botao de forca). Liga de novo, abre o PDV e nao mexe em mais nada: o proprio PDV desfaz a transacao sozinha.
+**O que você faz:** Abre o passo 54 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. Depois que a rede aprova e o comprovante sai, o caixa segura a confirmação e mostra "Rede aprovou. Passo 54: desligue o caixa agora". NÃO toque em nada: com essa pergunta na tela, desliga o caixa na tomada (ou segura o botão de força). Liga de novo, abre o PDV e não mexe em mais nada: o próprio PDV desfaz a transação pendente sozinho. A venda tem que nascer do roteiro; pela venda normal o caixa confirma logo depois de imprimir e a janela é de um ou dois segundos (em 10/09/2026 as duas tentativas cortaram cedo demais, ainda no pedido do cartão).
 
 **O que conferir:** Depois de religar: na tabela tef_transacao a linha do pgweb- tem que estar em situacao desfeita (nunca pago e nunca orfa). Na tabela auditoria, acao tef_pgweblib, tem que aparecer a linha "pgweblib: pendencia da biblioteca REQNUM ... desfeita (REV_PWR)" ou o registro do Desfazer. Na tela: a venda nao existe, nenhum numero de nota foi queimado, e o cliente nao foi cobrado. No relatorio do PayGo a…
 

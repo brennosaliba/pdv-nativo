@@ -139,6 +139,14 @@ RODAPE = '''    };
     public static bool ConfirmacaoManual(int? passo) => passo is 37 or 38 or 39 or 40;
 
     /// <summary>
+    /// Os passos em que o caixa SEGURA a confirmacao e espera o operador: os de confirmacao
+    /// manual e o 54 (queda de energia depois da aprovacao, antes da confirmacao). No 54 a
+    /// pergunta na tela e a janela para desligar o caixa: em 10/09/2026 o dono tentou pegar o
+    /// instante entre a impressao e o CNF e cortou cedo demais duas vezes (12:13, R$ 9,00).
+    /// </summary>
+    public static bool SeguraAntesDeConfirmar(int? passo) => ConfirmacaoManual(passo) || passo == 54;
+
+    /// <summary>
     /// Os passos em que o resultado ESPERADO e a venda desfeita na mao (PWCNF_REV_MANU_AUT):
     /// 39 e 40. So neles "desfeito" conta como feito no placar; no 37 e 38 desfazer e engano.
     /// </summary>

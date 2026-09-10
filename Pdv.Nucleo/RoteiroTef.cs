@@ -193,7 +193,7 @@ public static class RoteiroTef
             "Nao se aplica a esta homologacao: o operador nao faz nada. Marcar N/A na planilha.",
             "Nada a conferir nesta homologacao. Marcar N/A na planilha."),
         new(54, "Queda de energia apos a aprovacao, antes da confirmacao", "SIM", "", "pronto",
-            "Faz uma venda normal no cartao. No segundo em que o pinpad mostra aprovado e o comprovante comeca a sair, desliga o caixa na tomada (ou segura o botao de forca). Liga de novo, abre o PDV e nao mexe em mais nada: o proprio PDV desfaz a transacao sozinha.",
+            "Abre o passo 54 no roteiro (Cobrar este valor), Crédito, C6PAY, cartão. Depois que a rede aprova e o comprovante sai, o caixa segura a confirmação e mostra \"Rede aprovou. Passo 54: desligue o caixa agora\". NÃO toque em nada: com essa pergunta na tela, desliga o caixa na tomada (ou segura o botão de força). Liga de novo, abre o PDV e não mexe em mais nada: o próprio PDV desfaz a transação pendente sozinho. A venda tem que nascer do roteiro; pela venda normal o caixa confirma logo depois de imprimir e a janela é de um ou dois segundos (em 10/09/2026 as duas tentativas cortaram cedo demais, ainda no pedido do cartão).",
             "Depois de religar: na tabela tef_transacao a linha do pgweb- tem que estar em situacao desfeita (nunca pago e nunca orfa). Na tabela auditoria, acao tef_pgweblib, tem que aparecer a linha \"pgweblib: pendencia da biblioteca REQNUM ... desfeita (REV_PWR)\" ou o registro do Desfazer. Na tela: a venda nao existe, nenhum numero de nota foi queimado, e o cliente nao foi cobrado. No relatorio do PayGo a…"),
         new(55, "Operacao cancelada durante venda PIX (Esc na tela do QRCode)", "SIM", "", "pronto (consertado em 09/09/2026 à noite, caixa 0.8.10)",
             "Abre o passo 55 no roteiro, escolhe PIX na tela de pagamento e confirma o valor. Com o QR na maquininha (ou na tela do caixa, se tef_pgweb_qr_onde=tela), aperta Esc ou toca em Cancelar cobrança.",
@@ -261,6 +261,14 @@ public static class RoteiroTef
     /// passo) e false.
     /// </summary>
     public static bool ConfirmacaoManual(int? passo) => passo is 37 or 38 or 39 or 40;
+
+    /// <summary>
+    /// Os passos em que o caixa SEGURA a confirmacao e espera o operador: os de confirmacao
+    /// manual e o 54 (queda de energia depois da aprovacao, antes da confirmacao). No 54 a
+    /// pergunta na tela e a janela para desligar o caixa: em 10/09/2026 o dono tentou pegar o
+    /// instante entre a impressao e o CNF e cortou cedo demais duas vezes (12:13, R$ 9,00).
+    /// </summary>
+    public static bool SeguraAntesDeConfirmar(int? passo) => ConfirmacaoManual(passo) || passo == 54;
 
     /// <summary>
     /// Os passos em que o resultado ESPERADO e a venda desfeita na mao (PWCNF_REV_MANU_AUT):
