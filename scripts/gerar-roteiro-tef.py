@@ -7,7 +7,8 @@ doc = io.open(DOC, encoding="utf-8").read()
 blocos = re.split(r"\n### Passo ", doc)[1:]
 
 OBR = {n: "SIM" for n in range(1, 59)}
-for n in [9, 13, 14, 15, 19, 20, 22, 24, 25, 38, 40]:
+# 24 saiu da lista em 10/09/2026: a PayGo cobrou o cancelamento da venda de R$ 12.345,67.
+for n in [9, 13, 14, 15, 19, 20, 22, 25, 38, 40]:
     OBR[n] = "OPCIONAL"
 for n in [41, 42]:
     OBR[n] = "AUTOATENDIMENTO"

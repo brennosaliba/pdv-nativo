@@ -132,7 +132,8 @@ public partial class AberturaCaixa : UserControl
         // declara. O roteiro sai do Núcleo (Caixa.PlanoDeConferencia) para as duas telas
         // perguntarem exatamente a mesma coisa.
         var contagem = new Dictionary<string, Dinheiro>();
-        foreach (var p in Caixa.PlanoDeConferencia(cx, antiga).Where(p => p.Conta))
+        var plano = Caixa.PlanoDeConferencia(cx, antiga);
+        foreach (var p in plano.Where(p => p.Conta))
         {
             var pergunta = p.Forma == "dinheiro"
                 ? "Quanto tem em dinheiro na gaveta agora? O dinheiro daquele dia continua lá."
@@ -143,6 +144,10 @@ public partial class AberturaCaixa : UserControl
             if (v is null) return;                 // desistiu: nada fechado
             contagem[p.Forma] = v.Value;
         }
+        // A maquininha avulsa (POS) daquele dia: mesma pergunta da tela de venda.
+        if (!Venda.PerguntarMaquininhaAvulsa(dono, plano, contagem, $"Fechamento de {DataBr(antiga.BusinessDate)}",
+                "Teve venda na maquininha avulsa (POS) naquele dia?", FormaBr))
+            return;
 
         var tolerancia = new Dinheiro(200);
         try
@@ -153,7 +158,7 @@ public partial class AberturaCaixa : UserControl
         {
             // O texto do Núcleo já termina pedindo a descrição — repetir
             // "O que aconteceu?" aqui só fazia o operador ler a mesma coisa duas vezes.
-            var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message, "");
+            var just = PedirTexto.Justificativa(dono, "Diferença no caixa", ex.Message);
             if (string.IsNullOrWhiteSpace(just)) return;
             try { Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia, just), antiga, just); }
             catch (Exception e2) { NaoFechou(dono, e2); }

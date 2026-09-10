@@ -1073,9 +1073,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         if (oper != PW.PWOPER_INSTALL && LerPendenciaDaLib() is { } pnd)
         {
             // Pendência bloqueia o ponto de captura: resolver antes, pelo que o caixa sabe.
+            //
+            // Os códigos são os MANUAIS: quem está decidindo é a automação, a partir do
+            // próprio registro, e não o fluxo automático de logo depois da venda (289) nem
+            // uma queda de energia (536881, que fica só para o religamento). Retorno da
+            // PayGo em 10/09/2026: passo 34 (pendente conhecida) pede PWCNF_CNF_MANU_AUT e
+            // passo 36 (pendente que este caixa nunca viu) pede PWCNF_REV_MANU_AUT.
             var conhecida = ConhecidaSegura(pnd.ReqNum);
-            var ret = ConfirmacaoCrua(conhecida ? PW.PWCNF_CNF_AUTO : PW.PWCNF_REV_PWR_AUT, pnd.ReqNum, pnd.LocRef, pnd.ExtRef, pnd.VirtMerch, pnd.AuthSyst);
-            Auditar?.Invoke($"pgweblib: pendência REQNUM {pnd.ReqNum} antes de {chargeId}: {(conhecida ? "CNF" : "REV_PWR")} {PW.Nome(ret)}");
+            var ret = ConfirmacaoCrua(conhecida ? PW.PWCNF_CNF_MANU_AUT : PW.PWCNF_REV_MANU_AUT, pnd.ReqNum, pnd.LocRef, pnd.ExtRef, pnd.VirtMerch, pnd.AuthSyst);
+            Auditar?.Invoke($"pgweblib: pendência REQNUM {pnd.ReqNum} antes de {chargeId}: " +
+                $"{(conhecida ? $"CNF manual (PWCNF_CNF_MANU_AUT {PW.PWCNF_CNF_MANU_AUT})" : $"REV manual (PWCNF_REV_MANU_AUT {PW.PWCNF_REV_MANU_AUT})")} {PW.Nome(ret)}");
         }
         short nt;
         try { nt = _lib.NewTransac(oper); }

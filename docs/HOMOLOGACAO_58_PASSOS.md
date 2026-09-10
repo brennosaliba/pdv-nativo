@@ -205,13 +205,13 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 **O que conferir:** Recibo do cancelamento, linha 'estornado' em tef_transacao, original em 'estornada' e a venda cancelada no PDV. Auditoria: evento tef_estorno com o NSU e quem autorizou.
 
-### Passo 24. Cancelamento bem-sucedido #3 (da venda de R$ 12.345,67) (opcional)
+### Passo 24. Cancelamento bem-sucedido #3 (da venda de R$ 12.345,67)
 
 **Situação:** depende de voce
 
 **O que você faz:** Mesmo caminho do passo 22, escolhendo o pagamento de R$ 12.345,67 pelo NSU, com o código do autenticador do dono.
 
-**O que conferir:** Igual ao passo 23. Só existe se o passo 21 tiver acontecido.
+**O que conferir:** Igual ao passo 23. A PayGo avisou em 10/09/2026 que este cancelamento é OBRIGATÓRIO (o roteiro impresso dizia opcional): sem o CNC da venda de R$ 12.345,67 a planilha volta.
 
 ### Passo 25. Cancelamento bem-sucedido #4, pelo menu administrativo (opcional)
 
@@ -287,9 +287,9 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 ### Passo 34. Transação pendente #2 (nova venda de R$ 1.005,51, negada trazendo a pendente)
 
-**Situação:** AINDA FALTA
+**Situação:** consertado hoje
 
-**O que você faz:** Logo depois do passo 33, abre outra venda de R$ 1.005,51, escolhe Credito e passa o cartao. A venda volta negada, e o caixa tem que mandar sozinho a confirmação da transação do passo 33, sem imprimir nada.
+**O que você faz:** Logo depois do passo 33, abre outra venda de R$ 1.005,51, escolhe Credito e passa o cartao. A venda volta negada, e o caixa tem que mandar sozinho a confirmação da transação do passo 33, sem imprimir nada. Essa confirmação é a MANUAL (PWCNF_CNF_MANU_AUT, 12833): a PayGo devolveu a planilha em 10/09/2026 porque o caixa mandava a automática (289). Refazer 33 e 34 no caixa 0.8.12 ou mais novo.
 
 **O que conferir:** Hoje o operador ve 'Pagamento não aprovado' com o texto da rede e 'O cliente NÃO foi cobrado' (Telas\Pagamento.xaml.cs:640-649), e NADA sai para a PayGo. O esperado do roteiro e: nenhum recibo impresso (isso ja esta certo, ImprimirSeguroAsync so roda no caminho aprovado), venda atual nao realizada (ja esta certo, situacao 'recusado'), e um PW_iConfirmation(PWCNF_CNF_AUTO) com o REQNUM, LOCREF,…
 
@@ -303,9 +303,9 @@ deles impede começar a gravação: todos vêm depois do passo 32.
 
 ### Passo 36. Transação pendente não encontrada #2 (venda de R$ 1.005,61, negada com pendente desconhecida)
 
-**Situação:** AINDA FALTA
+**Situação:** consertado hoje
 
-**O que você faz:** Abre outra venda, de R$ 1.005,61, e passa o cartao. Volta negada trazendo uma transação que este caixa nunca viu, e o PDV tem que mandar sozinho o desfazimento dela, sem imprimir nada.
+**O que você faz:** Abre outra venda, de R$ 1.005,61, e passa o cartao. Volta negada trazendo uma transação que este caixa nunca viu, e o PDV tem que mandar sozinho o desfazimento dela, sem imprimir nada. Esse desfazimento é o MANUAL (PWCNF_REV_MANU_AUT, 12849), não o de queda de energia (536881): foi o segundo ponto que a PayGo devolveu em 10/09/2026. Refazer 35 e 36 no caixa 0.8.12 ou mais novo.
 
 **O que conferir:** O esperado e um PW_iConfirmation de DESFAZIMENTO com o REQNUM que veio da rede, na hora, sem recibo, e a venda atual como nao realizada. Conferir na auditoria (evento tef_pgweblib) e no log da biblioteca. Hoje nao sai nada ate a proxima operacao.
 

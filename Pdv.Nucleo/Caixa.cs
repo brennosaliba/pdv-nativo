@@ -534,6 +534,32 @@ public static class Caixa
     }
 
     /// <summary>
+    /// Mínimo de letras numa justificativa de diferença (10/09/2026, pedido do dono:
+    /// "evitar justificativa a, b ou c"). É o mesmo número que a SEFAZ exige no
+    /// cancelamento (<see cref="CancelamentoFiscal.JustificativaMinima"/>).
+    /// </summary>
+    public const int JustificativaMinima = 15;
+
+    /// <summary>
+    /// A frase que a tela mostra quando a justificativa não serve. Termina com
+    /// "Justifique" de propósito: é a palavra que faz a tela abrir o campo de novo.
+    /// </summary>
+    public const string MsgJustificativaCurta =
+        "Justificativa curta demais. Conte o que aconteceu com pelo menos 15 letras e mais de uma palavra. Justifique para fechar.";
+
+    /// <summary>
+    /// 15 letras ou mais E pelo menos duas palavras: "aaaaaaaaaaaaaaaaaaaa" não passa,
+    /// "troco errado no pix" passa. Uma régua só, usada pela tela (antes de fechar) e
+    /// pelo fechamento (para ninguém fechar por fora dela).
+    /// </summary>
+    public static bool JustificativaAceitavel(string? justificativa)
+    {
+        var t = (justificativa ?? "").Trim();
+        if (t.Length < JustificativaMinima) return false;
+        return t.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length >= 2;
+    }
+
+    /// <summary>
     /// Fecha o turno com a contagem DECLARADA pelo operador. A diferença só é
     /// calculada aqui — depois de ele declarar. Fechar é irreversível.
     ///
@@ -562,7 +588,13 @@ public static class Caixa
             // O operador contou: o declarado é a parte do TEF (que não se declara) MAIS o
             // que ele contou. É aqui que a falta inventada morre — a parcela do TEF entra
             // dos dois lados da subtração e some.
-            if (contadas.Contains(f) && contagem.TryGetValue(f, out var contadoAMao))
+            //
+            // O que está em `contagem` é o que a tela perguntou e o operador respondeu. Desde
+            // 10/09/2026 a tela também pergunta pela maquininha avulsa quando o roteiro não
+            // pediu cartão nenhum (o operador diz "teve venda no POS" e digita pix, crédito,
+            // débito e voucher): essas formas chegam aqui SEM estar em `contadas`, e valem
+            // do mesmo jeito. A parte do TEF continua entrando dos dois lados da subtração.
+            if (contagem.TryGetValue(f, out var contadoAMao))
             {
                 // O operador contou a parte de FORA do TEF. A parte da maquininha só se
                 // dá por conferida se ela respondeu: com o TEF mudo a tela avisa que o
@@ -585,7 +617,7 @@ public static class Caixa
         //
         // E soma SÓ o que foi conferido: linha sem conferência não vira sobra nem falta.
         var desvio = new Dinheiro(linhas.Sum(l => l.DiferencaConferida.Abs.Centavos));
-        if (desvio > tolerancia && string.IsNullOrWhiteSpace(justificativa))
+        if (desvio > tolerancia)
         {
             var detalhe = string.Join("; ", linhas.Where(l => l.DiferencaConferida.Centavos != 0)
                 .Select(l => $"{l.Forma}: {l.Situacao} de {l.Diferenca.Abs.Formatado()}"));
@@ -594,9 +626,14 @@ public static class Caixa
             // 03/09: a tolerancia NAO vai na mensagem. Ela e regra do gestor, nao
             // informacao do operador — "tolerancia R$ 2,00" na tela do caixa ensina
             // que R$ 2,00 por dia passam sem pergunta.
-            throw new InvalidOperationException(
-                $"A conferência encontrou {desvio.Formatado()} de diferença ({detalhe}). " +
-                "Diferença acontece em qualquer operação; descreva o que houve. Justifique para fechar.");
+            if (string.IsNullOrWhiteSpace(justificativa))
+                throw new InvalidOperationException(
+                    $"A conferência encontrou {desvio.Formatado()} de diferença ({detalhe}). " +
+                    "Diferença acontece em qualquer operação; descreva o que houve. Justifique para fechar.");
+            // 10/09/2026: o painel do dono estava cheio de "a", "s", "gh". Uma letra não
+            // explica diferença nenhuma; a régua é a mesma que a SEFAZ usa no cancelamento.
+            if (!JustificativaAceitavel(justificativa))
+                throw new InvalidOperationException(MsgJustificativaCurta);
         }
 
         using var tx = cx.BeginTransaction();

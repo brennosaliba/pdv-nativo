@@ -243,6 +243,23 @@ public static class PedirDocumento
 /// </summary>
 public static class PedirTexto
 {
+    /// <summary>
+    /// Pede a justificativa de uma diferença no caixa e só devolve quando ela serve
+    /// (<see cref="Caixa.JustificativaAceitavel"/>): "a", "gh", "ok" voltam com a régua
+    /// na tela, em vez de fechar o caixa com uma letra de explicação. Null = desistiu.
+    /// </summary>
+    public static string? Justificativa(Window dono, string titulo, string mensagem)
+    {
+        var texto = mensagem;
+        while (true)
+        {
+            var j = Mostrar(dono, titulo, texto, "");
+            if (string.IsNullOrWhiteSpace(j)) return null;
+            if (Caixa.JustificativaAceitavel(j)) return j.Trim();
+            texto = Caixa.MsgJustificativaCurta;
+        }
+    }
+
     public static string? Mostrar(Window dono, string titulo, string rotulo, string sugestao)
     {
         string? resultado = null;

@@ -355,7 +355,10 @@ public static class TestesPGWebLib
             var f5 = new FakePGWebLib { PendenciaNoInit = new FakePGWebLib.Pendencia("555", "LOC555", "700555", "VM1", "REDE") };
             var p5 = Provedor(f5, conhecida: r => r == "555");
             var d5 = Cobrar(p5, TipoTef.Credito, 10m);
-            checar(d5.Pago && f5.Confirmadas.Count == 2 && f5.Confirmadas[0] == (PW.PWCNF_CNF_AUTO, "555"), "pendência conhecida como paga é confirmada ANTES da venda nova (que sai normal)");
+            // 10/09/2026, retorno da PayGo (passo 34): a pendência resolvida antes de uma venda
+            // nova leva o código MANUAL (12833), porque quem decidiu foi a automação pelo
+            // próprio registro; o 289 é só da confirmação de logo depois da venda.
+            checar(d5.Pago && f5.Confirmadas.Count == 2 && f5.Confirmadas[0] == (PW.PWCNF_CNF_MANU_AUT, "555"), "pendência conhecida como paga é confirmada ANTES da venda nova com PWCNF_CNF_MANU_AUT (que sai normal)");
 
             // sem 027 não dá para confirmar às cegas
             var f6 = new FakePGWebLib();

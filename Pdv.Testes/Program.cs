@@ -1533,7 +1533,7 @@ var cxT = Banco.Abrir(arquivoT);
     catch (InvalidOperationException e) { msg = e.Message; }
     Check("fechamento com diferenca ainda pede justificativa", msg is not null && msg.Contains("Justifique"));
     Check("a mensagem NAO revela a tolerancia", msg is not null && !msg.Contains("toler", StringComparison.OrdinalIgnoreCase));
-    Caixa.Fechar(cxT, sT, contagem, opT, Dinheiro.DeReais(2), "teste");
+    Caixa.Fechar(cxT, sT, contagem, opT, Dinheiro.DeReais(2), "diferenca de teste da bateria");
 }
 // (b) pix do TEF com NSU e sem codigo de autorizacao NAO e contado no fechamento
 {
@@ -1664,6 +1664,8 @@ TestesFechamentoCartao.Rodar((cond, nome) => Check("fechamento-cartao: " + nome,
 
 Console.WriteLine("--- Fechamento com a maquininha muda (parte avulsa contada) ---");
 TestesFechamentoTefMudo.Rodar((cond, nome) => Check("tef-mudo: " + nome, cond));
+TestesFechamentoPos.Rodar((cond, nome) => Check("fechamento-pos: " + nome, cond));
+TestesPendenciaManual.Rodar((cond, nome) => Check("pendencia-manual: " + nome, cond));
 
 Console.WriteLine();
 Console.WriteLine("--- CETICO: fechamento (forma sem venda, mesma maquininha, fechar duas vezes) ---");

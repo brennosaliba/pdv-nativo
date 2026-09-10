@@ -3579,6 +3579,10 @@ public partial class Venda : UserControl
                 if (v is null) return;                 // desistiu no meio: não fecha nada
                 contagem[p.Forma] = v.Value;
             }
+            // A maquininha avulsa (POS): só se pergunta quando o roteiro não pediu cartão.
+            if (!PerguntarMaquininhaAvulsa(dono, plano, contagem, "Fechamento de caixa",
+                    "Teve venda na maquininha avulsa (POS) hoje?", Rotulo))
+                return;                                // desistiu no meio: não fecha nada
 
             var tolerancia = new Dinheiro(200);        // R$ 2,00
             try
@@ -3593,7 +3597,7 @@ public partial class Venda : UserControl
             {
                 // A mensagem do Núcleo já termina pedindo a descrição; repetir
                 // "O que aconteceu?" só fazia ler a mesma pergunta duas vezes.
-                var just = PedirTexto.Mostrar(dono, "Diferença no caixa", ex.Message, "");
+                var just = PedirTexto.Justificativa(dono, "Diferença no caixa", ex.Message);
                 if (string.IsNullOrWhiteSpace(just)) return;
                 try
                 {
@@ -3708,6 +3712,35 @@ public partial class Venda : UserControl
 
         Dialogo.Relatorio(dono, "Caixa fechado", corpo,
             justificativa is null ? null : $"Justificativa: {justificativa}");
+    }
+
+    /// <summary>As formas que uma maquininha avulsa recebe, na ordem em que a tela pergunta.</summary>
+    internal static readonly string[] FormasDaMaquininha = { "pix", "credito", "debito", "voucher" };
+
+    /// <summary>
+    /// A pergunta da maquininha avulsa (POS). 10/09/2026, pedido do dono: "no fechamento
+    /// perguntar se teve venda POS; se sim, abrir campo pra preencher pix, crédito, débito,
+    /// voucher". Só cabe quando o roteiro NÃO pediu cartão nenhum: se pediu, o PDV já sabe
+    /// que houve cartão fora do TEF e a pergunta forma a forma acabou de ser feita.
+    ///
+    /// "Sim" abre os quatro campos. O que o operador digita entra como a parte de FORA do
+    /// TEF daquela forma (Caixa.Fechar soma a parte do TEF sozinho), então uma venda que só
+    /// a maquininha viu aparece como sobra com apurado zero, que é o jeito de enxergá-la.
+    /// Devolve false se o operador desistiu no meio (a tela não fecha nada).
+    /// </summary>
+    internal static bool PerguntarMaquininhaAvulsa(Window dono, List<ConferenciaForma> plano,
+        Dictionary<string, Dinheiro> contagem, string titulo, string pergunta, Func<string, string> rotulo)
+    {
+        if (plano.Any(p => p.Conta && p.Forma != "dinheiro")) return true;
+        if (!Dialogo.Confirmar(dono, "Maquininha avulsa", pergunta, "Sim", "Não")) return true;
+        foreach (var forma in FormasDaMaquininha)
+        {
+            var v = PedirValor.Mostrar(dono, titulo,
+                $"Quanto deu em {rotulo(forma)} no fechamento da maquininha avulsa? Zero se não teve.");
+            if (v is null) return false;
+            contagem[forma] = v.Value;
+        }
+        return true;
     }
 
     private static string Rotulo(string forma) => forma switch
