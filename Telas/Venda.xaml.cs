@@ -3625,17 +3625,19 @@ public partial class Venda : UserControl
             }
 
             var contagem = new Dictionary<string, Dinheiro>();
-            foreach (var p in plano.Where(p => p.Conta))
+            // Uma pergunta por forma, com "Voltar" (11/09/2026, pedido do dono: valor
+            // digitado errado obrigava a cancelar e recomeçar o fechamento).
+            var perguntas = plano.Where(p => p.Conta).ToList();
+            for (var i = 0; i < perguntas.Count;)
             {
-                var pergunta = p.Forma == "dinheiro"
-                    ? "Quanto você contou em dinheiro? Conte a gaveta inteira, com o fundo de troco."
-                    : p.PeloTef.Centavos == 0
-                        ? $"Quanto deu em {Rotulo(p.Forma)} no fechamento da maquininha?"
-                        // parte do turno passou pelo TEF e parte não: só a de fora se conta
-                        : $"Quanto deu em {Rotulo(p.Forma)} na outra maquininha? O cartão do caixa já entrou sozinho.";
-                var v = PedirValor.Mostrar(dono, "Fechamento de caixa", pergunta);
-                if (v is null) return;                 // desistiu no meio: não fecha nada
-                contagem[p.Forma] = v.Value;
+                var p = perguntas[i];
+                var pergunta = PerguntaDoFechamento(p);
+                var r = i == 0 ? new PedirValor.Resposta(PedirValor.Mostrar(dono, "Fechamento de caixa", pergunta), false)
+                               : PedirValor.MostrarComVoltar(dono, "Fechamento de caixa", pergunta);
+                if (r.Voltou) { i--; continue; }
+                if (r.Valor is null) return;           // desistiu no meio: não fecha nada
+                contagem[p.Forma] = r.Valor.Value;
+                i++;
             }
             // A maquininha avulsa (POS): só se pergunta quando o roteiro não pediu cartão.
             if (!PerguntarMaquininhaAvulsa(dono, plano, contagem, "Fechamento de caixa",
@@ -3772,6 +3774,24 @@ public partial class Venda : UserControl
             justificativa is null ? null : $"Justificativa: {justificativa}");
     }
 
+    /// <summary>
+    /// A pergunta de cada forma no fechamento. O PIX é dito com todas as letras: o que o
+    /// caixa registrou como PIX fora do TEF inclui o QR do banco, que nunca sai no cupom da
+    /// maquininha (11/09/2026: o dono digitou só o cupom e viu "falta" de R$ 112,99).
+    /// </summary>
+    public static string PerguntaDoFechamento(ConferenciaForma p)
+    {
+        if (p.Forma == "dinheiro") return "Quanto você contou em dinheiro? Conte a gaveta inteira, com o fundo de troco.";
+        if (p.Forma == "pix")
+            return p.PeloTef.Centavos == 0
+                ? "Quanto deu em PIX fora do caixa? Some o PIX da maquininha avulsa e o PIX do QR do banco."
+                : "Quanto deu em PIX fora do caixa (maquininha avulsa e QR do banco)? O PIX da maquininha do caixa já entrou sozinho.";
+        return p.PeloTef.Centavos == 0
+            ? $"Quanto deu em {Rotulo(p.Forma)} no fechamento da maquininha?"
+            // parte do turno passou pelo TEF e parte não: só a de fora se conta
+            : $"Quanto deu em {Rotulo(p.Forma)} na outra maquininha? O cartão do caixa já entrou sozinho.";
+    }
+
     /// <summary>As formas que uma maquininha avulsa recebe, na ordem em que a tela pergunta.</summary>
     internal static readonly string[] FormasDaMaquininha = { "pix", "credito", "debito", "voucher" };
 
@@ -3790,15 +3810,26 @@ public partial class Venda : UserControl
         Dictionary<string, Dinheiro> contagem, string titulo, string pergunta, Func<string, string> rotulo)
     {
         if (plano.Any(p => p.Conta && p.Forma != "dinheiro")) return true;
-        if (!Dialogo.Confirmar(dono, "Maquininha avulsa", pergunta, "Sim", "Não")) return true;
-        foreach (var forma in FormasDaMaquininha)
+        while (true)
         {
-            var v = PedirValor.Mostrar(dono, titulo,
-                $"Quanto deu em {rotulo(forma)} no fechamento da maquininha avulsa? Zero se não teve.");
-            if (v is null) return false;
-            contagem[forma] = v.Value;
+            if (!Dialogo.Confirmar(dono, "Maquininha avulsa", pergunta, "Sim", "Não")) return true;
+            var voltouAoInicio = false;
+            for (var i = 0; i < FormasDaMaquininha.Length;)
+            {
+                var forma = FormasDaMaquininha[i];
+                var texto = forma == "pix"
+                    ? "Quanto deu em PIX fora do caixa? Some o PIX da maquininha avulsa e o PIX do QR do banco. Zero se não teve."
+                    : $"Quanto deu em {rotulo(forma)} no fechamento da maquininha avulsa? Zero se não teve.";
+                var r = PedirValor.MostrarComVoltar(dono, titulo, texto);
+                if (r.Voltou) { if (i == 0) { voltouAoInicio = true; break; } i--; continue; }
+                if (r.Valor is null) return false;
+                contagem[forma] = r.Valor.Value;
+                i++;
+            }
+            if (!voltouAoInicio) return true;
+            // "Voltar" na primeira pergunta: volta ao "teve venda no POS?"
+            foreach (var f in FormasDaMaquininha) contagem.Remove(f);
         }
-        return true;
     }
 
     private static string Rotulo(string forma) => forma switch

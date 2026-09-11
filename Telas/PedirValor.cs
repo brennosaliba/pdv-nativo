@@ -18,10 +18,23 @@ namespace Pdv.Telas;
 /// </summary>
 public static class PedirValor
 {
-    public static Dinheiro? Mostrar(Window dono, string titulo, string rotulo)
+    /// <summary>O que a pergunta com "Voltar" devolve: o valor, ou Voltou, ou nada (desistiu).</summary>
+    public readonly record struct Resposta(Dinheiro? Valor, bool Voltou);
+
+    public static Dinheiro? Mostrar(Window dono, string titulo, string rotulo) => Nucleo(dono, titulo, rotulo, comVoltar: false).Valor;
+
+    /// <summary>
+    /// A mesma pergunta com um terceiro botão, "Voltar" (11/09/2026, pedido do dono: "no
+    /// fechamento digitei o PIX errado e tive que cancelar tudo, não tem botão voltar").
+    /// Quem pergunta em sequência usa isto e volta uma pergunta em vez de recomeçar.
+    /// </summary>
+    public static Resposta MostrarComVoltar(Window dono, string titulo, string rotulo) => Nucleo(dono, titulo, rotulo, comVoltar: true);
+
+    private static Resposta Nucleo(Window dono, string titulo, string rotulo, bool comVoltar)
     {
         long centavos = 0;
         Dinheiro? resultado = null;
+        var voltou = false;
 
         var janela = Dialogo.Base(dono, 440);
         var painel = new StackPanel();
@@ -54,6 +67,7 @@ public static class PedirValor
 
         var linha = new Grid { Margin = new Thickness(0, 14, 0, 0) };
         linha.ColumnDefinitions.Add(new ColumnDefinition());
+        if (comVoltar) linha.ColumnDefinitions.Add(new ColumnDefinition());
         linha.ColumnDefinitions.Add(new ColumnDefinition());
         var cancelar = Botao("Cancelar", false);
         var ok = Botao("Confirmar", true);
@@ -61,8 +75,18 @@ public static class PedirValor
         ok.Margin = new Thickness(6, 0, 0, 0);
         cancelar.Click += (_, _) => janela.Close();
         ok.Click += (_, _) => { resultado = new Dinheiro(centavos); janela.Close(); };
-        Grid.SetColumn(cancelar, 0); Grid.SetColumn(ok, 1);
-        linha.Children.Add(cancelar); linha.Children.Add(ok);
+        Grid.SetColumn(cancelar, 0);
+        linha.Children.Add(cancelar);
+        if (comVoltar)
+        {
+            var voltar = Botao("Voltar", false);
+            voltar.Margin = new Thickness(6, 0, 6, 0);
+            voltar.Click += (_, _) => { voltou = true; janela.Close(); };
+            Grid.SetColumn(voltar, 1);
+            linha.Children.Add(voltar);
+        }
+        Grid.SetColumn(ok, comVoltar ? 2 : 1);
+        linha.Children.Add(ok);
         painel.Children.Add(linha);
 
         janela.KeyDown += (_, e) =>
@@ -77,7 +101,7 @@ public static class PedirValor
 
         janela.Content = Dialogo.Moldura(painel);
         janela.ShowDialog();
-        return resultado;
+        return new Resposta(resultado, voltou);
     }
 
     /// <summary>Título dentro da moldura + ✕ grande — substitui a barra de título do Windows.</summary>

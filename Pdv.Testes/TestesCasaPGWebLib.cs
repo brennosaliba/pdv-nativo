@@ -79,12 +79,25 @@ public static class TestesCasaPGWebLib
                 File.WriteAllText(Path.Combine(comDll, ConfigPGWebLib.SubpastaDllEmbarcada, "PGWebLib.dll"), "fake");
                 try
                 {
-                    checar(ConfigPGWebLib.PastaDll(Cfg(), semNada) is null && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", "  ")), semNada) is null
-                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @" D:\pg\dll ")), semNada) == @"D:\pg\dll",
-                        "tef_pgweb_dll em branco e sem pasta pgweb = null (o Windows procura); preenchido manda, sem espaços nas pontas");
-                    checar(ConfigPGWebLib.PastaDll(Cfg(), comDll) == Path.Combine(comDll, "pgweb")
-                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @"D:\pg\dll")), comDll) == @"D:\pg\dll",
-                        "com a DLL embarcada em <exe>\\pgweb ela vale sem configurar nada, e a configuração continua mandando quando existe");
+                    // a existência é injetada: a máquina de quem compila pode ter o PayGo Windows
+                    var oficial = @"C:\Program Files (x86)\PayGo\PGWebLib\x64";
+                    Func<string, bool> soEmbarcada = p => !p.StartsWith(oficial, StringComparison.OrdinalIgnoreCase) && File.Exists(p);
+                    Func<string, bool> comOficial = p => soEmbarcada(p) || p == Path.Combine(oficial, "PGWebLib.dll");
+                    checar(ConfigPGWebLib.PastaDll(Cfg(), semNada, soEmbarcada, oficial) is null
+                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", "  ")), semNada, soEmbarcada, oficial) is null
+                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @" D:\pg\dll ")), semNada, soEmbarcada, oficial) == @"D:\pg\dll",
+                        "tef_pgweb_dll em branco, sem PayGo Windows e sem pasta pgweb = null (o Windows procura); preenchido manda, sem espaços nas pontas");
+                    checar(ConfigPGWebLib.PastaDll(Cfg(), comDll, soEmbarcada, oficial) == Path.Combine(comDll, "pgweb")
+                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @"D:\pg\dll")), comDll, soEmbarcada, oficial) == @"D:\pg\dll",
+                        "sem PayGo Windows, a DLL embarcada em <exe>\\pgweb vale sem configurar nada, e a configuração continua mandando");
+                    // 11/09/2026 (Savassi): a embarcada é o kit avulso (sem Warsaw, carrega de qualquer
+                    // pasta) e vence; a pasta do PayGo Windows é só o último recurso, sem a embarcada
+                    checar(ConfigPGWebLib.PastaDll(Cfg(), comDll, comOficial, oficial) == Path.Combine(comDll, "pgweb")
+                           && ConfigPGWebLib.PastaDll(Cfg(), semNada, comOficial, oficial) == oficial
+                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @"D:\pg\dll")), comDll, comOficial, oficial) == @"D:\pg\dll",
+                        "a embarcada (kit avulso) vence; sem ela vale a pasta do PayGo Windows; a configuração explícita ainda manda");
+                    checar(ConfigPGWebLib.PastaOficialPayGo.EndsWith(Path.Combine("PayGo", "PGWebLib", "x64"), StringComparison.OrdinalIgnoreCase),
+                        "a pasta oficial é Program Files (x86)\\PayGo\\PGWebLib\\x64");
                 }
                 finally
                 {

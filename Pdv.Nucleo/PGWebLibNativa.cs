@@ -32,6 +32,9 @@ public sealed class PGWebLibNativa : IPGWebLib
     private static string? _pasta;
     private static bool _resolverLigado;
 
+    /// <summary>De onde a DLL está sendo carregada (null = o Windows procura sozinho).</summary>
+    public static string? PastaAtual => _pasta;
+
     /// <summary>
     /// Pasta onde o PayGo Windows deixou a PGWebLib.dll. Chamar ANTES do primeiro uso.
     /// Vazio = deixa o Windows procurar (pasta do exe e PATH).

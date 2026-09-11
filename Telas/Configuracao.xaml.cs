@@ -1786,8 +1786,9 @@ public partial class Configuracao : UserControl
                         BtnInstalarPgweb.Visibility = Visibility.Visible;
                     }
                     StatusTef(ok
-                        ? $"✓ A biblioteca do PayGo respondeu (pasta de trabalho {pg.PastaTrabalho}). Salve para manter."
-                        : $"✗ {pg.MotivoIndisponivel ?? ProvedorPGWebLib.MsgTefNaoResponde}.",
+                        ? $"✓ A biblioteca do PayGo respondeu (biblioteca em {ProvedorPGWebLib.PastaDaBiblioteca ?? "pasta do sistema"}; pasta de trabalho {pg.PastaTrabalho}). Salve para manter."
+                        : $"✗ {pg.MotivoIndisponivel ?? ProvedorPGWebLib.MsgTefNaoResponde}."
+                          + (pg.DetalheIndisponivel is { Length: > 0 } det ? " " + det + "." : ""),
                         ok ? "Ok" : "Erro");
                     break;
                 case "instalar":

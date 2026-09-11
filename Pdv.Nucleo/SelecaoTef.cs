@@ -196,18 +196,34 @@ public static class ConfigPGWebLib
     /// <summary>Subpasta, ao lado do exe, em que o instalador deixa a PGWebLib.dll (11/09/2026).</summary>
     public const string SubpastaDllEmbarcada = "pgweb";
 
+    /// <summary>A pasta em que o PayGo Windows instala a biblioteca de 64 bits.</summary>
+    public static string PastaOficialPayGo =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "PayGo", "PGWebLib", "x64");
+
     /// <summary>
-    /// Pasta da PGWebLib.dll. Ordem: a configurada (tef_pgweb_dll); senão a que vem
-    /// embarcada no caixa (pasta pgweb ao lado do exe, desde a 1.0.0, quando a
-    /// biblioteca foi homologada e o PayGo Windows deixou de ser instalado na loja);
-    /// senão null, e o Windows procura sozinho.
+    /// Pasta da PGWebLib.dll. Ordem: a configurada (tef_pgweb_dll); senão a cópia embarcada
+    /// no caixa (pasta pgweb ao lado do exe); senão a do PayGo Windows, se ele estiver na
+    /// máquina; senão null, e o Windows procura sozinho.
+    ///
+    /// QUAL DLL VAI EMBARCADA, E POR QUÊ (11/09/2026, noite, Savassi): a distribuição
+    /// PROTEGIDA da biblioteca (a que vem dentro do PayGo Windows, com Topaz/Warsaw) só
+    /// aceita rodar da pasta em que o PayGo Windows a instalou; cópia em outra pasta carrega,
+    /// mas PW_iInit devolve -2414 e o caixa diz "não iniciou". A 1.0.0 embarcou essa por
+    /// engano e a loja viu exatamente isso. O que vai embarcado é o KIT AVULSO (4.1.50.924,
+    /// sem Warsaw), que carrega de qualquer pasta e não depende do PayGo Windows: foi o que
+    /// o dono colocou na loja à mão e funcionou. A pasta do PayGo Windows fica só como
+    /// último recurso, para máquina em que alguém apagou a embarcada.
     /// </summary>
-    public static string? PastaDll(Func<string, string?> config, string? pastaDoExe = null)
+    public static string? PastaDll(Func<string, string?> config, string? pastaDoExe = null,
+        Func<string, bool>? existeArquivo = null, string? pastaOficial = null)
     {
+        var existe = existeArquivo ?? File.Exists;
         var v = config(ChaveDll)?.Trim();
         if (!string.IsNullOrEmpty(v)) return v;
         var embarcada = Path.Combine(pastaDoExe ?? AppContext.BaseDirectory, SubpastaDllEmbarcada);
-        return File.Exists(Path.Combine(embarcada, "PGWebLib.dll")) ? embarcada : null;
+        if (existe(Path.Combine(embarcada, "PGWebLib.dll"))) return embarcada;
+        var oficial = pastaOficial ?? PastaOficialPayGo;
+        return existe(Path.Combine(oficial, "PGWebLib.dll")) ? oficial : null;
     }
 
     /// <summary>

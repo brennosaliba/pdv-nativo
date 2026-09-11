@@ -193,6 +193,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// <summary>Por que o último PW_iInit não deu (a frase que a tela mostra). Null = iniciada.</summary>
     public string? MotivoIndisponivel { get; private set; }
 
+    /// <summary>
+    /// O DETALHE por trás do motivo (o código que PW_iInit devolveu, a exceção ao carregar a
+    /// DLL, a pasta que não abriu). "Não iniciou" sozinho deixou a Savassi no escuro em
+    /// 11/09/2026; com o número na tela, o suporte sabe o que fazer sem pedir o log.
+    /// </summary>
+    public string? DetalheIndisponivel { get; private set; }
+
+    /// <summary>De onde a DLL está sendo carregada (null = o Windows procura sozinho).</summary>
+    public static string? PastaDaBiblioteca => PGWebLibNativa.PastaAtual;
+
     /// <summary>CNF/REV que a biblioteca não acusou: reenviados antes do próximo comando e no religamento.</summary>
     private readonly List<(TransacaoPayGo Tx, uint Resultado, string Depois)> _reenvios = new();
 
@@ -261,6 +271,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         catch (Exception ex)
         {
             MotivoIndisponivel = MsgPastaInacessivel;
+            DetalheIndisponivel = $"{_pasta}: {ex.Message}";
             Auditar?.Invoke($"pgweblib: pasta de trabalho inacessível ({_pasta}): {ex.Message}");
             return false;
         }
@@ -270,12 +281,23 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         {
             // DllNotFoundException, BadImageFormatException (bitness), AccessViolation da convenção errada…
             MotivoIndisponivel = MsgTefNaoResponde;
+            DetalheIndisponivel = ex is DllNotFoundException
+                ? "PGWebLib.dll não foi encontrada" + (PGWebLibNativa.PastaAtual is { } pd ? " em " + pd : "")
+                : ex.GetType().Name + ": " + ex.Message;
             Auditar?.Invoke("pgweblib: PW_iInit lançou: " + ex.GetType().Name + " " + ex.Message);
             return false;
         }
         _iniciada = ret is PW.PWRET_OK or PW.PWRET_INVCALL;
-        if (!_iniciada) { MotivoIndisponivel = MsgTefNaoResponde; Auditar?.Invoke("pgweblib: PW_iInit devolveu " + PW.Nome(ret)); return false; }
-        MotivoIndisponivel = null;
+        if (!_iniciada)
+        {
+            MotivoIndisponivel = MsgTefNaoResponde;
+            DetalheIndisponivel = $"PW_iInit devolveu {PW.Nome(ret)} ({ret})"
+                + (ret == PW.PWRET_TPNPIXERROR ? ". Esse código é o da biblioteca protegida rodando fora da pasta do PayGo Windows" : "")
+                + (PGWebLibNativa.PastaAtual is { } pr ? $". Biblioteca em {pr}" : "");
+            Auditar?.Invoke("pgweblib: PW_iInit devolveu " + PW.Nome(ret));
+            return false;
+        }
+        MotivoIndisponivel = null; DetalheIndisponivel = null;
 
         // A PROTECAO, logo depois do PW_iInit e antes de qualquer transacao.
         //
