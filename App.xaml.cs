@@ -188,6 +188,9 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // Fechou (para atualizar, ou pelo botão): a última atividade é agora, e a retomada
+        // sem login vale nos 15 min seguintes.
+        try { using var cx = Banco.Abrir(); Caixa.MarcarAtividade(cx); } catch { }
         Agente.Encerrar();
         _trava?.Dispose();
         base.OnExit(e);

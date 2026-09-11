@@ -109,6 +109,31 @@ public static class Caixa
         return (m.Hour < 5 ? m.Date.AddDays(-1) : m.Date).ToString("yyyy-MM-dd");
     }
 
+    // ── RETOMADA DO TURNO SEM LOGIN (11/09/2026, pedido do dono) ─────────────────────
+    // "Ao fechar, atualizar o exe ou algo assim, não precisa ir para a tela de login de
+    // novo: já que não fechou o caixa, pode entrar na sessão aberta." A regra: o turno
+    // continua aberto, é de hoje, e o caixa estava em uso há pouco (o relógio da venda
+    // e o fechamento do app gravam a última atividade). Passou da janela, o PIN volta:
+    // um caixa parado meia hora no balcão é um caixa que qualquer um abre.
+
+    /// <summary>Config: quando o caixa esteve em uso pela última vez (ISO).</summary>
+    public const string ChaveUltimaAtividade = "ultima_atividade";
+    public static readonly TimeSpan JanelaRetomada = TimeSpan.FromMinutes(15);
+
+    public static void MarcarAtividade(SqliteConnection cx)
+        => Vendas.GravarConfig(cx, ChaveUltimaAtividade, DateTime.Now.ToString("o"));
+
+    public static DateTime? UltimaAtividade(SqliteConnection cx)
+        => DateTime.TryParse(Vendas.Config(cx, ChaveUltimaAtividade), null,
+               System.Globalization.DateTimeStyles.RoundtripKind, out var d) ? d : null;
+
+    /// <summary>Entra direto na venda (sem PIN)? Turno de gente, de hoje, em uso há menos de 15 min.</summary>
+    public static bool PodeRetomar(Sessao? sessao, DateTime? ultimaAtividade, DateTime agora)
+        => sessao is { Teste: false }
+           && sessao.BusinessDate == DiaOperacional(agora)
+           && ultimaAtividade is { } u
+           && agora - u <= JanelaRetomada && agora >= u;
+
     public static Sessao? SessaoAberta(SqliteConnection cx)
     {
         var r = cx.QueryFirstOrDefault(

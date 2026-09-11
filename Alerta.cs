@@ -48,9 +48,15 @@ public static class Alerta
             try
             {
                 if (TocarDaLoja(Pdv.Nucleo.SomDaLoja.PedidoNovo)) return;
+                // 11/09/2026 (dono): "duração de 1 a 2 segundos". Era 0,7 s e se perdia no
+                // barulho do balcão. O padrão de três toques repete uma vez: 1,6 s.
                 Console.Beep(880, 180);
                 Console.Beep(660, 180);
-                Console.Beep(880, 350);
+                Console.Beep(880, 360);
+                Thread.Sleep(120);
+                Console.Beep(880, 180);
+                Console.Beep(660, 180);
+                Console.Beep(880, 400);
             }
             catch { /* sem som na máquina: o toast e o badge continuam avisando */ }
         });
@@ -79,9 +85,9 @@ public static class Alerta
     }
 
     /// <summary>
-    /// Mensagem nova no WhatsApp, a RESERVA: só toca quando a própria página do WhatsApp
-    /// ficou calada (ver ServicoWhatsApp.TocarSeAPaginaCalar). Ordem: sons\whatsapp.wav
-    /// da loja, senão o toque embarcado (Recursos\sons\whatsapp.wav, gerado por nós).
+    /// Mensagem nova no WhatsApp. Toca SEMPRE (11/09/2026, dono: "aumentar o som, temos som
+    /// ambiente"): o toque embarcado é alto e duplo (Recursos\sons\whatsapp.wav, gerado por
+    /// nós, 1 s), e sons\whatsapp.wav da loja vale por cima. O da página, quando toca, soma.
     /// </summary>
     public static void MensagemWhatsApp()
     {

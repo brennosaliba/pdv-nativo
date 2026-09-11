@@ -441,6 +441,13 @@ public static class Operadores
              LIMIT 1
             """);
 
+    /// <summary>O operador ATIVO com este id (null se saiu do cadastro): é quem retoma o turno sem login.</summary>
+    public static Operador? PorId(SqliteConnection cx, string id)
+        => cx.QueryFirstOrDefault<Operador>("""
+            SELECT id AS Id, nome AS Nome, perfil AS Perfil FROM operador
+             WHERE ativo = 1 AND id <> '_admin_' AND id = @Id
+            """, new { Id = id });
+
     /// <summary>Idem, só supervisor/gerente (autorização sem PIN no modo de homologação).</summary>
     public static Operador? PrimeiroSupervisor(SqliteConnection cx)
         => cx.QueryFirstOrDefault<Operador>("""

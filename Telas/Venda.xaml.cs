@@ -362,8 +362,11 @@ public partial class Venda : UserControl
     {
         TxtToastWhatsApp.Text = total == 1 ? "Mensagem nova no WhatsApp" : $"{total} mensagens no WhatsApp";
         ToastWhatsApp.Visibility = Visibility.Visible;
-        // O toque ORIGINAL é o da página do WhatsApp; o nosso só entra se ela calar.
-        ServicoWhatsApp.TocarSeAPaginaCalar(Alerta.MensagemWhatsApp);
+        // 11/09/2026 (noite), dono: "aumentar o som de notificação do WhatsApp, porque temos
+        // som ambiente". O toque do caixa (alto, dois toques duplos, ou o .wav da loja) passa
+        // a tocar SEMPRE; o da página, quando tocar, soma. Antes o caixa só tocava a reserva
+        // se a página calasse, e a página toca baixo demais para o balcão.
+        Alerta.MensagemWhatsApp();
 
         _toastWhatsAppSome?.Stop();
         _toastWhatsAppSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
@@ -602,7 +605,14 @@ public partial class Venda : UserControl
         }
         Bater();
         _relogio = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
-        _relogio.Tick += (_, _) => Bater();
+        var batidas = 0;
+        _relogio.Tick += (_, _) =>
+        {
+            Bater();
+            // a cada minuto: "o caixa está em uso" (é o que deixa retomar o turno sem login
+            // depois de uma atualização ou queda; ver Caixa.PodeRetomar)
+            if (++batidas % 4 == 0) { try { using var cxA = Banco.Abrir(); Caixa.MarcarAtividade(cxA); } catch { } }
+        };
         _relogio.Start();
     }
 

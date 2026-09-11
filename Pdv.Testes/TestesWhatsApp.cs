@@ -98,8 +98,8 @@ public static class TestesWhatsApp
                    && venda.Contains("x:Name=\"ToastWhatsApp\"") && venda.Contains("AbrirWhatsAppPeloToast"),
                 "a venda tem o botão WhatsApp com selo, e o aviso que abre a aba");
             checar(vendaCs.Contains("ServicoWhatsApp.Mudou += AtualizarSeloWhatsApp") && vendaCs.Contains("ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp")
-                   && vendaCs.Contains("ServicoWhatsApp.TocarSeAPaginaCalar(Alerta.MensagemWhatsApp)"),
-                "a venda escuta o serviço ao entrar, solta ao sair, e na subida toca a reserva só se a página calar");
+                   && vendaCs.Contains("Alerta.MensagemWhatsApp();"),
+                "a venda escuta o serviço ao entrar, solta ao sair, e na subida toca o toque do caixa (alto, por causa do som ambiente)");
             checar(main.Contains("x:Name=\"CamadaWhatsApp\"") && mainCs.Contains("t.PediuWhatsApp += MostrarWhatsApp")
                    && mainCs.Contains("CamadaWhatsApp.PreAquecerAsync()"),
                 "o MainWindow hospeda a camada viva e a pré-aquece (selo antes de abrir a aba)");

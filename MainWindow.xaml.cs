@@ -109,6 +109,19 @@ public partial class MainWindow : Window
         // da loja sairia assinado por um operador que não é gente. Volta para o login.
         if (ModoHomologacao.EhOperadorDeTeste(_operador?.Id)) _operador = null;
 
+        // RETOMADA SEM LOGIN (11/09/2026, pedido do dono): o caixa fechou para atualizar (ou
+        // caiu) com o turno aberto e em uso há pouco. Quem abriu o turno continua nele sem
+        // digitar o PIN de novo. A regra e a janela moram em Caixa.PodeRetomar.
+        if (_operador is null && Caixa.SessaoAberta(cx) is { } aberta
+            && Caixa.PodeRetomar(aberta, Caixa.UltimaAtividade(cx), DateTime.Now)
+            && Operadores.PorId(cx, aberta.OperadorId) is { } dono)
+        {
+            _operador = dono; _sessao = aberta;
+            Caixa.Auditar(cx, null, "sessao_retomada", dono.Id, null,
+                $"turno de {aberta.OperadorNome} retomado sem login: última atividade {Caixa.UltimaAtividade(cx):HH:mm}");
+            MostrarVenda(); return;
+        }
+
         if (_operador is null) { MostrarLogin(cx); return; }
 
         _sessao = Caixa.SessaoAberta(cx);
