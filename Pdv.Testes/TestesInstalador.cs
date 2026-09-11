@@ -320,6 +320,18 @@ public static class TestesInstalador
     /// diferentes — é o que obriga a migração a existir; iguais, ela viraria um
     /// apagar-a-si-mesmo silencioso.
     /// </summary>
+    /// <summary>Sobe do binário do teste até achar o arquivo pedido no repositório.</summary>
+    private static string? FonteDoRepo(string relativo)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+        {
+            var candidato = Path.Combine(dir.FullName, relativo);
+            if (File.Exists(candidato)) return File.ReadAllText(candidato);
+        }
+        return null;
+    }
+
     private static void Marca(Action<bool, string> checar)
     {
         checar(!Instalacao.NomePrograma.Contains("American Day", StringComparison.OrdinalIgnoreCase),
@@ -334,6 +346,21 @@ public static class TestesInstalador
         checar(!Instalacao.PastaDados.StartsWith(Instalacao.PastaDestinoPadrao,
                    StringComparison.OrdinalIgnoreCase),
             "os dados NÃO ficam dentro da pasta do programa (desinstalar apagaria as vendas)");
+
+        // 11/09/2026: o produto virou MMFood, e a Savassi está instalada como "PDV MMTech"
+        // (nome de 29/08). Se o nome antigo sumir desta lista, a atualização da loja procura
+        // Program Files\MMFood, não acha e morre com "o caixa não está instalado".
+        checar(Instalacao.NomesAntigos.Contains("PDV MMTech") && Instalacao.NomesAntigos.Contains(Instalacao.NomeAntigo),
+            "todos os nomes antigos continuam na lista (PDV MMTech e PDV American Day): "
+            + string.Join(", ", Instalacao.NomesAntigos));
+        checar(!Instalacao.NomesAntigos.Contains(Instalacao.NomePrograma),
+            "e o nome de hoje não está entre os antigos (a migração apagaria a pasta recém-copiada)");
+
+        var app = FonteDoRepo(Path.Combine("Pdv.Instalador", "App.xaml.cs")) ?? "";
+        checar(app.Contains("Instalacao.PastaInstalada()", StringComparison.Ordinal)
+               && app.Contains("PastaDestino: pastaAtual", StringComparison.Ordinal)
+               && !app.Contains("PastaDestino: Instalacao.PastaDestinoPadrao", StringComparison.Ordinal),
+            "a atualização silenciosa instala ONDE O CAIXA JÁ ESTÁ, não na pasta do nome novo");
     }
 
     // ---------------------------------------------------------------- PayGo

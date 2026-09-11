@@ -45,6 +45,45 @@ public static class Instalacao
     /// entradas no Adicionar/Remover Programas nem com dois atalhos.</summary>
     public const string NomeAntigo = "PDV American Day";
 
+    /// <summary>
+    /// TODOS os nomes que o produto já teve, do mais recente para o mais antigo.
+    ///
+    /// Não é enfeite: a loja da Savassi foi instalada como "PDV MMTech" (nome de
+    /// 29/08/2026) e o programa mora em `Program Files\PDV MMTech`. Sem esta lista, a
+    /// atualização para a 1.0 procurava `Program Files\MMFood`, não achava e morria com
+    /// "o caixa não está instalado nesta máquina" — numa loja a 800 km, a 10 minutos de
+    /// abrir. Nome novo vai NA FRENTE; nenhum sai daqui.
+    /// </summary>
+    public static readonly string[] NomesAntigos = { "PDV MMTech", NomeAntigo };
+
+    /// <summary>
+    /// Onde o caixa está instalado NESTA máquina, ou null se não está. Procura, nesta
+    /// ordem: a pasta do nome de hoje, as pastas dos nomes antigos e o InstallLocation
+    /// que o próprio instalador gravou no registro (a rede de segurança para quem
+    /// instalou em outro lugar).
+    /// </summary>
+    public static string? PastaInstalada()
+    {
+        if (File.Exists(Path.Combine(PastaDestinoPadrao, "Pdv.exe"))) return PastaDestinoPadrao;
+        foreach (var nome in NomesAntigos)
+        {
+            var p = EmProgramFiles(nome);
+            if (File.Exists(Path.Combine(p, "Pdv.exe"))) return p;
+        }
+        foreach (var chave in new[] { ChaveUninstall, ChaveUninstallAntiga })
+        {
+            try
+            {
+                using var k = Registry.LocalMachine.OpenSubKey(chave);
+                if (k?.GetValue("InstallLocation") as string is { Length: > 0 } loc
+                    && File.Exists(Path.Combine(loc, "Pdv.exe")))
+                    return loc;
+            }
+            catch { /* sem permissão de leitura no registro: segue para a próxima */ }
+        }
+        return null;
+    }
+
     private const string ChaveRun = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
     private const string ChaveUninstall = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PdvMMTech";
     private const string ChaveUninstallAntiga = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PdvAmericanDay";
@@ -517,18 +556,28 @@ public static class Instalacao
         try
         {
             using (var run = Registry.LocalMachine.CreateSubKey(ChaveRun))
-                run.DeleteValue(NomeAntigo, throwOnMissingValue: false);
+                foreach (var nome in NomesAntigos)
+                    run.DeleteValue(nome, throwOnMissingValue: false);
             Registry.LocalMachine.DeleteSubKeyTree(ChaveUninstallAntiga, throwOnMissingSubKey: false);
         }
         catch { /* sem permissão no registro: o resto da migração ainda vale */ }
 
-        var atalhoAntigo = Path.Combine(AreaDeTrabalho, NomeAntigo + ".lnk");
-        try { if (File.Exists(atalhoAntigo)) File.Delete(atalhoAntigo); } catch { }
+        foreach (var nome in NomesAntigos)
+        {
+            var atalhoAntigo = Path.Combine(AreaDeTrabalho, nome + ".lnk");
+            try { if (File.Exists(atalhoAntigo)) File.Delete(atalhoAntigo); } catch { }
+        }
 
-        var antiga = PastaDestinoAntiga;
-        if (Directory.Exists(antiga) &&
-            !antiga.Equals(pastaNova, StringComparison.OrdinalIgnoreCase))
-            try { Directory.Delete(antiga, recursive: true); } catch { /* em uso: fica o esqueleto */ }
+        // Só apaga a pasta antiga quando a instalação FOI para outra: atualizar no
+        // lugar (loja que já tem o caixa em PDV MMTech) passa por aqui, e apagar
+        // seria apagar o programa que acabou de ser copiado.
+        foreach (var nome in NomesAntigos)
+        {
+            var antiga = EmProgramFiles(nome);
+            if (Directory.Exists(antiga) &&
+                !antiga.Equals(pastaNova, StringComparison.OrdinalIgnoreCase))
+                try { Directory.Delete(antiga, recursive: true); } catch { /* em uso: fica o esqueleto */ }
+        }
     }
 
     private static string AreaDeTrabalho =>
@@ -540,20 +589,18 @@ public static class Instalacao
         try
         {
             using (var run = Registry.LocalMachine.CreateSubKey(ChaveRun))
-            {
-                run.DeleteValue(NomePrograma, throwOnMissingValue: false);
-                run.DeleteValue(NomeAntigo, throwOnMissingValue: false);
-            }
+                foreach (var nome in new[] { NomePrograma }.Concat(NomesAntigos))
+                    run.DeleteValue(nome, throwOnMissingValue: false);
             Registry.LocalMachine.DeleteSubKeyTree(ChaveUninstall, throwOnMissingSubKey: false);
             Registry.LocalMachine.DeleteSubKeyTree(ChaveUninstallAntiga, throwOnMissingSubKey: false);
 
-            foreach (var nome in new[] { NomePrograma, NomeAntigo })
+            foreach (var nome in new[] { NomePrograma }.Concat(NomesAntigos))
             {
                 var atalho = Path.Combine(AreaDeTrabalho, nome + ".lnk");
                 if (File.Exists(atalho)) File.Delete(atalho);
             }
 
-            foreach (var pasta in new[] { PastaDestinoPadrao, PastaDestinoAntiga })
+            foreach (var pasta in new[] { PastaDestinoPadrao }.Concat(NomesAntigos.Select(EmProgramFiles)))
                 if (Directory.Exists(pasta))
                     // o próprio desinstalador mora aí: apaga o que der agora; o que
                     // estiver em uso fica como esqueleto — os dados seguem intactos

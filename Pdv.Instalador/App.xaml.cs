@@ -57,7 +57,11 @@ public partial class App : Application
     /// </summary>
     private static string? AtualizarSilencioso()
     {
-        if (!File.Exists(Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe")))
+        // ATUALIZA ONDE O CAIXA ESTÁ, não onde ele nasceria hoje. A loja instalada como
+        // "PDV MMTech" tem o programa em Program Files\PDV MMTech; procurar só a pasta do
+        // nome novo (MMFood) faria a atualização morrer com "não está instalado".
+        var pastaAtual = Instalacao.PastaInstalada();
+        if (pastaAtual is null)
             return "o caixa não está instalado nesta máquina";
         // O caixa se fecha logo depois de nos chamar; sem o assistente no meio, a
         // cópia podia começar antes de ele sair. Espera até 30 s pelo processo.
@@ -76,7 +80,7 @@ public partial class App : Application
             }
             var erro = Instalacao.Instalar(new Instalacao.Opcoes(
                 OrigemPasta: origem ?? "",
-                PastaDestino: Instalacao.PastaDestinoPadrao,
+                PastaDestino: pastaAtual,
                 IniciarComWindows: true,
                 AtalhoAreaTrabalho: true), null);
             if (erro is not null) return erro;
