@@ -175,7 +175,14 @@ public static class ConfigPGWebLib
     public static int CapacidadesCom(int capacidades, bool qrNaTela)
         => qrNaTela ? capacidades | PW.CAP_QR | PW.CAP_MSG_CHECKOUT : capacidades;
 
-    public const string NomeAutomacao = "Pdv.AmericanDay";
+    /// <summary>
+    /// AUTNAME: o nome que vai no Certificado de Conformidade da PayGo. A homologacao
+    /// (PdC 115998) foi aprovada pela SETIS em 11/09/2026 como "Pdv.AmericanDay 0.8.13";
+    /// o dono pediu o nome do produto no certificado: MMTech, versao 1.0. A versao
+    /// (AUTVER) sai da versao do exe (Pdv.csproj), por isso o exe virou 1.0.0.
+    /// Mudar isto de novo = venda de conferencia + logs para a PayGo.
+    /// </summary>
+    public const string NomeAutomacao = "MMTech";
 
     /// <summary>AUTDEV em branco: a mesma razão social que o 716 do PayGo por arquivos usa.</summary>
     public const string DesenvolvedorPadrao = "American Day";

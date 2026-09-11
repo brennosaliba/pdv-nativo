@@ -261,7 +261,7 @@ public static class Servicos
                         SenhaTecnica: seg.GetValueOrDefault("cpaySenhaTecnica", "314159"),
                         TerminalId: Vendas.Config(cx, "tef_cpay_terminal") ?? "",
                         PessoaId: Vendas.Config(cx, "tef_cpay_pessoa") ?? "",
-                        UserAgent: "Pdv.AmericanDay/" + versao,
+                        UserAgent: ConfigPGWebLib.NomeAutomacao + "/" + versao,
                         // Autorizador fixo (homologação): sem isso o PayGo abre o menu de redes e
                         // a venda pode cair na rede errada. Vazio = roteamento da PayGo decide.
                         Adquirente: Vendas.Config(cx, "tef_cpay_adquirente"),
@@ -374,7 +374,7 @@ public static class Servicos
                         // este default por loja_nome muda o que vai para a rede e nao e
                         // reescrita de texto.
                         Empresa: Vendas.Config(cx, "tef_paygo_empresa") ?? "American Day",
-                        NomeAutomacao: "Pdv.AmericanDay",
+                        NomeAutomacao: ConfigPGWebLib.NomeAutomacao,   // um nome so, o do certificado
                         VersaoAutomacao: versao,
                         // 738-000: a PayGo entrega na certificação. Vazio no sandbox do kit
                         // é aceito; em produção sem ele a transação é negada — erro de config.
