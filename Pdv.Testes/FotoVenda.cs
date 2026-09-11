@@ -55,6 +55,10 @@ public static class FotoVenda
         // "tef" = maquininha integrada de mentira (o tile POS só existe com TEF);
         // "tef+pos" = também toca no POS e fotografa o diálogo aberto.
         // "semtef" = desliga o TEF na cópia (máquina de desenvolvimento costuma ter TEF ligado).
+        // "loja" = a copia como a LOJA ve (homologacao desligada: sem Menu do TEF,
+        // sem Valor do teste, sem Roteiro): e assim que a barra tem que caber.
+        var loja = args.Any(a => a.Equals("loja", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("loja", StringComparison.OrdinalIgnoreCase)).ToArray();
         var modo = args.FirstOrDefault(a => a.Equals("tef", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("tef+pos", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("semtef", StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant();
@@ -114,6 +118,7 @@ public static class FotoVenda
                 Vendas.GravarConfig(cx, "tef_paygo_pasta", Path.Combine(Path.GetTempPath(), "foto-venda-paygo"));
             }
             if (semTef) Vendas.GravarConfig(cx, "tef_habilitado", "0");
+            if (loja) Vendas.GravarConfig(cx, "homologacao", "0");
         }
         var operador = new Operador(opId, opNome, "operador");
         var sessao = new Sessao("sessao-foto", Caixa.DiaOperacional(), opId, opNome,
