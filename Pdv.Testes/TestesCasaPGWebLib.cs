@@ -70,8 +70,27 @@ public static class TestesCasaPGWebLib
             checar(ConfigPGWebLib.ChaveDir == "tef_pgweb_dir" && ConfigPGWebLib.ChavePortaPinpad == "tef_pgweb_porta_pinpad" && ConfigPGWebLib.ChaveCapacidades == "tef_pgweb_capacidades"
                    && ConfigPGWebLib.ChaveDll == "tef_pgweb_dll",
                 "nomes das chaves novas");
-            checar(ConfigPGWebLib.PastaDll(Cfg()) is null && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", "  "))) is null && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @" D:\pg\dll "))) == @"D:\pg\dll",
-                "tef_pgweb_dll em branco = null (o Windows procura); preenchido manda, sem espaços nas pontas");
+            {
+                // 11/09/2026: a DLL viaja embarcada em <exe>\pgweb; sem configuração, é ela que vale.
+                var semNada = Path.Combine(Path.GetTempPath(), "pdv-casa-pgweb-vazio-" + Guid.NewGuid().ToString("N"));
+                var comDll = Path.Combine(Path.GetTempPath(), "pdv-casa-pgweb-com-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(semNada);
+                Directory.CreateDirectory(Path.Combine(comDll, ConfigPGWebLib.SubpastaDllEmbarcada));
+                File.WriteAllText(Path.Combine(comDll, ConfigPGWebLib.SubpastaDllEmbarcada, "PGWebLib.dll"), "fake");
+                try
+                {
+                    checar(ConfigPGWebLib.PastaDll(Cfg(), semNada) is null && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", "  ")), semNada) is null
+                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @" D:\pg\dll ")), semNada) == @"D:\pg\dll",
+                        "tef_pgweb_dll em branco e sem pasta pgweb = null (o Windows procura); preenchido manda, sem espaços nas pontas");
+                    checar(ConfigPGWebLib.PastaDll(Cfg(), comDll) == Path.Combine(comDll, "pgweb")
+                           && ConfigPGWebLib.PastaDll(Cfg(("tef_pgweb_dll", @"D:\pg\dll")), comDll) == @"D:\pg\dll",
+                        "com a DLL embarcada em <exe>\\pgweb ela vale sem configurar nada, e a configuração continua mandando quando existe");
+                }
+                finally
+                {
+                    try { Directory.Delete(semNada, true); Directory.Delete(comDll, true); } catch { }
+                }
+            }
 
             var vazio = ConfigPGWebLib.Opcoes(Cfg(), "0.5.9");
             // 11/09/2026: a SETIS aprovou a homologacao e o dono escolheu o nome do certificado.

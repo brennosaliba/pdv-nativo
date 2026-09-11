@@ -193,11 +193,21 @@ public static class ConfigPGWebLib
         return string.IsNullOrEmpty(v) ? DirPadrao : v;
     }
 
-    /// <summary>Pasta da PGWebLib.dll, ou null para deixar o Windows procurar.</summary>
-    public static string? PastaDll(Func<string, string?> config)
+    /// <summary>Subpasta, ao lado do exe, em que o instalador deixa a PGWebLib.dll (11/09/2026).</summary>
+    public const string SubpastaDllEmbarcada = "pgweb";
+
+    /// <summary>
+    /// Pasta da PGWebLib.dll. Ordem: a configurada (tef_pgweb_dll); senão a que vem
+    /// embarcada no caixa (pasta pgweb ao lado do exe, desde a 1.0.0, quando a
+    /// biblioteca foi homologada e o PayGo Windows deixou de ser instalado na loja);
+    /// senão null, e o Windows procura sozinho.
+    /// </summary>
+    public static string? PastaDll(Func<string, string?> config, string? pastaDoExe = null)
     {
         var v = config(ChaveDll)?.Trim();
-        return string.IsNullOrEmpty(v) ? null : v;
+        if (!string.IsNullOrEmpty(v)) return v;
+        var embarcada = Path.Combine(pastaDoExe ?? AppContext.BaseDirectory, SubpastaDllEmbarcada);
+        return File.Exists(Path.Combine(embarcada, "PGWebLib.dll")) ? embarcada : null;
     }
 
     /// <summary>

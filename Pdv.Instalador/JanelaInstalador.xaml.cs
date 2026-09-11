@@ -51,7 +51,7 @@ public partial class JanelaInstalador : Window
 
         _paygoExe = AcharPayGoAoLado();
         if (!noPacote && _paygoExe is null)
-            TxtItemPayGo.Text = "2.  (O PayGo, que fala com a maquininha, não veio junto. Dá para instalar depois.)";
+            TxtItemPayGo.Text = "2.  Cartão pela maquininha: a biblioteca da PayGo já vem dentro do caixa.";
 
         var versao = aoLado is not null && File.Exists(Path.Combine(aoLado, "Pdv.exe"))
             ? FileVersionInfo.GetVersionInfo(Path.Combine(aoLado, "Pdv.exe")).FileVersion

@@ -50,10 +50,12 @@ if (-not (Test-Path $PastaPdv)) { Morre "pasta do PDV nao existe: $PastaPdv" }
 $PastaPdv = (Resolve-Path $PastaPdv).Path
 Passo "PDV: $PastaPdv"
 
-if (-not $PayGo -and -not $SemPayGo) { $PayGo = Join-Path $raiz 'publish\paygo.exe' }
-if ($SemPayGo) {
+# 11/09/2026: a biblioteca PayGo (PGWebLib.dll) foi homologada e viaja DENTRO do caixa
+# (pasta pgweb ao lado do Pdv.exe, copiada pelo Pdv.csproj). O PayGo Windows nao e
+# mais instalado na loja; so entra no pacote se alguem pedir -PayGo de proposito.
+if (-not $PayGo) {
     $PayGo = $null
-    Write-Host "    (sem PayGo: o caixa instala, o cartao fica para depois)" -ForegroundColor Yellow
+    Write-Host "    (sem PayGo Windows: o cartao vai pela biblioteca embarcada em pgweb\)" -ForegroundColor Yellow
 } elseif (-not (Test-Path $PayGo)) {
     Morre "nao achei o paygo em $PayGo. Use -SemPayGo se for de proposito."
 } else {

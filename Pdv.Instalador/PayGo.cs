@@ -86,8 +86,11 @@ public static class PayGo
         Acao.JaInstalado => "O PayGo já está instalado nesta máquina. Vou deixar como está.",
         Acao.FecharTefPrimeiro => "Feche o PayGo antes de continuar: a instalação dele fecha o programa "
                                 + "à força, e se houver uma venda no pinpad ela se perde.",
-        Acao.SemArquivo => "O PayGo não veio junto neste instalador. O caixa funciona; "
-                         + "o cartão é que só depois de instalar o PayGo.",
+        // 11/09/2026: a biblioteca da PayGo ja vem dentro do caixa (pasta pgweb). Sem o
+        // PayGo Windows no pacote, este e o caminho NORMAL, nao uma falta.
+        Acao.SemArquivo => "A biblioteca da PayGo já vem dentro do caixa. Para o cartão funcionar, "
+                         + "conecte a maquininha no USB e, no caixa, em TEF, instale o ponto de captura "
+                         + "com os dados que a PayGo enviou.",
         _ => "",
     };
 

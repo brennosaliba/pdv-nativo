@@ -46,4 +46,14 @@
     <ApplicationDefinition Remove="Pdv.Nucleo\**;Pdv.Testes\**;Pdv.Instalador\**;Pdv.SmokePGWebLib\**" />
   </ItemGroup>
 
+  <!-- A biblioteca da PayGo (PGWebLib.dll 4.1.50.24, homologada em 11/09/2026 como MMFood 1.0.0)
+       viaja ao lado do exe, na pasta pgweb. Fica fora do arquivo unico de proposito: e uma
+       DLL nativa carregada por caminho (PGWebLibNativa.UsarPasta / ConfigPGWebLib.PastaDll).
+       Com ela dentro do caixa, a loja nao instala mais o PayGo Windows. -->
+  <ItemGroup>
+    <None Update="Recursos\pgweb\PGWebLib.dll" Link="pgweb\PGWebLib.dll"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
 </Project>
