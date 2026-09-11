@@ -166,7 +166,7 @@ Para reproduzir os valores mágicos do roteiro, garanta que a transação saia p
 
 - **167511** e **167515** (R$ 2,00 cada) continuam aprovadas sem venda, marcadas para estorno.
   Estornar pelo menu do PayGo.
-- Produtos de teste na categoria **TESTE PAYGO**. Um "Sincronizar" desativa todos eles.
+- Produtos de teste na categoria **TESTE PAYGO**. Um toque em "Atualizar" desativa todos eles.
 - Reforçar a evidência dos passos 04, 07 e 08 salvando o JSON do `IntencaoVenda/GetById`
   (ou `GetByFiltros`) de 167523, 167509 e 167563 em `docs/evidencias-controlpay/`, no mesmo
   padrão dos arquivos `p48-*` e `p49-*` que já existem.

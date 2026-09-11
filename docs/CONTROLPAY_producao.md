@@ -64,7 +64,7 @@ liberação pode ser o PdC, não o `terminalId`. Como resolver sem chutar:
       autoriza **sem PIN**. Reiniciar o PDV depois.
 - [ ] **Religar o FISCAL** (Configuração → FISCAL). O PDV está em **modo recibo** desde
       21/08 — nenhuma NFC-e é emitida enquanto isso.
-- [ ] Desativar os produtos da categoria **TESTE PAYGO** (um "Sincronizar" resolve).
+- [ ] Desativar os produtos da categoria **TESTE PAYGO** (um toque em "Atualizar" resolve).
 - [ ] Estornar pelo menu do PayGo as intenções **167511** e **167515** (R$ 2,00 cada,
       aprovadas sem venda no religamento de 21/08).
 - [ ] Tratamento contábil das **2 NFC-e** que não puderam ser canceladas
