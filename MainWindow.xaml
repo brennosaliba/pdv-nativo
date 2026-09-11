@@ -37,6 +37,9 @@
              operador na venda. Some por Visibility (Collapsed), porque o WebView2
              é HWND e pintaria por cima de tudo se ficasse só atrás. -->
         <telas:ChatIfood Grid.Row="1" x:Name="CamadaChat" Visibility="Collapsed"/>
+        <!-- WhatsApp da loja: outra camada viva, pelo mesmo motivo (o WebView2 fica
+             observando as nao lidas em segundo plano e o login sobrevive). -->
+        <telas:ChatWhatsApp Grid.Row="1" x:Name="CamadaWhatsApp" Visibility="Collapsed"/>
 
         <!-- Janela sem moldura (quiosque) precisa dos próprios botões de janela.
              Discretos de propósito: existem pro dono/suporte, não pro operador. -->

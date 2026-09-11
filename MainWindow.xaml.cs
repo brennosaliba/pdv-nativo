@@ -173,6 +173,7 @@ public partial class MainWindow : Window
         t.FechouCaixa += () => { _operador = null; _sessao = null; _telaVenda = null; Roteia(); };
         t.PediuKds += MostrarKds;
         t.PediuChat += MostrarChat;
+        t.PediuWhatsApp += MostrarWhatsApp;
         t.PediuConfig += AbrirConfigProtegida;
         _telaVenda = t;
         Conteudo.Content = t;
@@ -182,6 +183,8 @@ public partial class MainWindow : Window
         // antes de alguém abrir o chat (idempotente; a própria tela se protege
         // de inicializar duas vezes).
         _ = CamadaChat.PreAquecerAsync();
+        // O WhatsApp da loja idem: observa as não lidas em segundo plano desde a abertura.
+        _ = CamadaWhatsApp.PreAquecerAsync();
     }
 
     private bool _chatLigado;
@@ -203,8 +206,24 @@ public partial class MainWindow : Window
             _chatLigado = true;
             CamadaChat.Voltou += () => CamadaChat.Visibility = Visibility.Collapsed;
         }
+        CamadaWhatsApp.Visibility = Visibility.Collapsed;   // uma camada de cada vez
         CamadaChat.Visibility = Visibility.Visible;
         _ = CamadaChat.PreAquecerAsync();
+    }
+
+    private bool _whatsAppLigado;
+
+    /// <summary>O WhatsApp da loja: mesma regra do chat (camada viva, some por Visibility).</summary>
+    private void MostrarWhatsApp()
+    {
+        if (!_whatsAppLigado)
+        {
+            _whatsAppLigado = true;
+            CamadaWhatsApp.Voltou += () => CamadaWhatsApp.Visibility = Visibility.Collapsed;
+        }
+        CamadaChat.Visibility = Visibility.Collapsed;       // uma camada de cada vez
+        CamadaWhatsApp.Visibility = Visibility.Visible;
+        _ = CamadaWhatsApp.PreAquecerAsync();
     }
 
     /// <summary>

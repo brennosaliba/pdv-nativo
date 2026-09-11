@@ -1299,6 +1299,7 @@ TestesTema.Rodar((cond, nome) => Check("tema: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Chat do iFood (nao lidas, aviso, captura) ---");
 TestesChat.Rodar((cond, nome) => Check("chat: " + nome, cond));
+TestesWhatsApp.Rodar((cond, nome) => Check("whatsapp: " + nome, cond));
 
 // -- PROMOCOES: o motor que faltava (a promocao de quinta invisivel no caixa) --
 Console.WriteLine();

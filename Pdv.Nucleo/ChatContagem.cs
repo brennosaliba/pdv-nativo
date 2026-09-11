@@ -45,6 +45,25 @@ public static class ChatContagem
 /// enquanto o número não sobe de novo. A primeira leitura só estabelece a linha
 /// de base: abrir o caixa com 3 não lidas não pode tocar sozinho.
 /// </summary>
+/// <summary>
+/// Não lidas do WhatsApp Web, lidas do TÍTULO da aba: "(3) WhatsApp" = 3, "WhatsApp" = 0.
+/// O título é o que menos muda naquela página (o DOM muda toda semana), por isso é a
+/// fonte principal; a tela ainda tem um plano B pelos selos das conversas.
+/// </summary>
+public static class WhatsAppContagem
+{
+    private static readonly Regex Titulo = new(@"^\s*\((\d+)\)", RegexOptions.Compiled);
+
+    /// <summary>Nunca lança; sem número no começo do título devolve 0.</summary>
+    public static int LerTitulo(string? titulo)
+    {
+        if (string.IsNullOrWhiteSpace(titulo)) return 0;
+        var m = Titulo.Match(titulo);
+        if (!m.Success) return 0;
+        return long.TryParse(m.Groups[1].Value, out var n) ? (int)Math.Clamp(n, 0, 9999) : 0;
+    }
+}
+
 public sealed class ChatAviso
 {
     private int _ultimo = -1;   // -1 = ainda sem leitura (linha de base)

@@ -81,6 +81,8 @@ public partial class Venda : UserControl
     public event Action? FechouCaixa;
     public event Action? PediuKds;
     public event Action? PediuChat;
+    /// <summary>O operador quer o WhatsApp da loja (camada viva no MainWindow, como o chat).</summary>
+    public event Action? PediuWhatsApp;
     public event Action? PediuConfig;
 
     /// <summary>
@@ -182,6 +184,10 @@ public partial class Venda : UserControl
             ServicoChat.Mudou -= AtualizarSeloChat; ServicoChat.Mudou += AtualizarSeloChat;
             ServicoChat.MensagemNova -= ChatMensagemNova; ServicoChat.MensagemNova += ChatMensagemNova;
             AtualizarSeloChat(ServicoChat.NaoLidas);
+            // O WhatsApp da loja segue o mesmo desenho do chat (selo ao vivo + aviso na subida).
+            ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp; ServicoWhatsApp.Mudou += AtualizarSeloWhatsApp;
+            ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova; ServicoWhatsApp.MensagemNova += WhatsAppMensagemNova;
+            AtualizarSeloWhatsApp(ServicoWhatsApp.NaoLidas);
         };
         Unloaded += (_, _) =>
         {
@@ -191,6 +197,8 @@ public partial class Venda : UserControl
             Servicos.Sino(_loja ?? "").CatalogoMudou -= CatalogoTocou;
             ServicoChat.Mudou -= AtualizarSeloChat;
             ServicoChat.MensagemNova -= ChatMensagemNova;
+            ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp;
+            ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova;
         };
     }
 
@@ -328,6 +336,37 @@ public partial class Venda : UserControl
     {
         ToastChat.Visibility = Visibility.Collapsed;
         PediuChat?.Invoke();
+    }
+
+    // ── WhatsApp da loja: selo, aviso e som, no mesmo desenho do chat ────────
+    private DispatcherTimer? _toastWhatsAppSome;
+
+    private void AbrirWhatsApp(object sender, RoutedEventArgs e) => PediuWhatsApp?.Invoke();
+
+    /// <summary>Selo de nao lidas no botao WhatsApp. Ao vivo pelo ServicoWhatsApp.</summary>
+    private void AtualizarSeloWhatsApp(int total) => Dispatcher.Invoke(() =>
+    {
+        TxtBadgeWhatsApp.Text = total > 99 ? "99+" : total.ToString();
+        BadgeWhatsApp.Visibility = total > 0 ? Visibility.Visible : Visibility.Collapsed;
+    });
+
+    /// <summary>Mensagem nova (so na subida): aviso na tela + o toque do WhatsApp.</summary>
+    private void WhatsAppMensagemNova(int total) => Dispatcher.Invoke(() =>
+    {
+        TxtToastWhatsApp.Text = total == 1 ? "Mensagem nova no WhatsApp" : $"{total} mensagens no WhatsApp";
+        ToastWhatsApp.Visibility = Visibility.Visible;
+        Alerta.MensagemWhatsApp();
+
+        _toastWhatsAppSome?.Stop();
+        _toastWhatsAppSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _toastWhatsAppSome.Tick += (_, _) => { ToastWhatsApp.Visibility = Visibility.Collapsed; _toastWhatsAppSome?.Stop(); };
+        _toastWhatsAppSome.Start();
+    });
+
+    private void AbrirWhatsAppPeloToast(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        ToastWhatsApp.Visibility = Visibility.Collapsed;
+        PediuWhatsApp?.Invoke();
     }
 
     // ── aviso leve (uma linha, sem modal) ────────────────────────────────────

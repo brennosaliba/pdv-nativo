@@ -50,6 +50,13 @@
        viaja ao lado do exe, na pasta pgweb. Fica fora do arquivo unico de proposito: e uma
        DLL nativa carregada por caminho (PGWebLibNativa.UsarPasta / ConfigPGWebLib.PastaDll).
        Com ela dentro do caixa, a loja nao instala mais o PayGo Windows. -->
+  <!-- O aviso do WhatsApp no caixa (11/09/2026): um toque curto gerado por nos
+       (Recursos\sons\whatsapp.wav). A loja pode trocar deixando um whatsapp.wav em
+       C:\ProgramData\PdvNativo\sons; ver Alerta.MensagemWhatsApp. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Recursos\sons\whatsapp.wav" LogicalName="Pdv.sons.whatsapp.wav" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Update="Recursos\pgweb\PGWebLib.dll" Link="pgweb\PGWebLib.dll"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"
