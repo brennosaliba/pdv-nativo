@@ -29,6 +29,13 @@ public static class TestesBuscaKds
         var cs = Fonte(Path.Combine("Telas", "Kds.xaml.cs")) ?? "";
         checar(xaml.Contains("x:Name=\"TxtBusca\"") && xaml.Contains("TextChanged=\"BuscaMudou\"") && xaml.Contains("x:Name=\"BtnLimparBusca\""),
             "o quadro tem a caixa de busca com o X de limpar");
+        // Recurso que so existe nos Resources da Venda (BotaoTexto) nao se alcanca do KDS: a
+        // 1.0.4 caiu ao abrir o Delivery por isso. Todo StaticResource do KDS tem que ser global.
+        var estilos = Fonte("Estilos.xaml") ?? "";
+        var app = Fonte("App.xaml") ?? "";
+        var recursos = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{StaticResource (\w+)\}").Select(m => m.Groups[1].Value).Distinct().ToList();
+        var faltando = recursos.Where(r => !estilos.Contains($"x:Key=\"{r}\"") && !app.Contains($"x:Key=\"{r}\"")).ToList();
+        checar(recursos.Count > 0 && faltando.Count == 0, "todo StaticResource do Kds.xaml existe em Estilos.xaml ou App.xaml" + (faltando.Count == 0 ? "" : ": faltam " + string.Join(", ", faltando)));
         checar(cs.Contains("Nucleo.Kds.FiltrarPorNumero(todos, _busca)") && cs.Contains("private void BuscaMudou(") && cs.Contains("PedirTexto.AbrirTecladoVirtualSeTouch()"),
             "digitar filtra as três colunas pela regra do núcleo, e o toque no campo abre o teclado do Windows no caixa touch");
     }

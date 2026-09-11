@@ -57,9 +57,11 @@
                                      Background="Transparent" VerticalContentAlignment="Center"
                                      Tag="nº do pedido" ToolTip="Procurar um pedido pelo número"
                                      TextChanged="BuscaMudou" GotFocus="BuscaFocou"/>
+                            <!-- BotaoBase, e nao BotaoTexto: esse mora nos Resources da Venda e daqui nao se alcanca
+                                 (a 1.0.4 caiu ao abrir o Delivery por causa disso). -->
                             <Button x:Name="BtnLimparBusca" Content="✕" Click="LimparBusca" Visibility="Collapsed"
-                                    Style="{StaticResource BotaoTexto}" Padding="6,0" FontSize="14" VerticalAlignment="Center"
-                                    ToolTip="Limpar a busca"/>
+                                    Style="{StaticResource BotaoBase}" MinHeight="28" MinWidth="28" Padding="6,0" FontSize="13"
+                                    VerticalAlignment="Center" ToolTip="Limpar a busca"/>
                         </StackPanel>
                     </Border>
                     <!-- ONDE A COMANDA SAI — no cabeçalho, e não só no assistente (29/08).
