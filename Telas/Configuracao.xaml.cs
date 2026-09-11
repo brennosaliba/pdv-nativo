@@ -184,8 +184,14 @@ public partial class Configuracao : UserControl
         TxtPgwebPdc.Text = Vendas.Config(cx, "tef_pgweb_ponto_captura", "");
         TxtPgwebCnpj.Text = Vendas.Config(cx, "tef_pgweb_cnpj", "");
         TxtPgwebPorta.Text = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
-        TxtPgwebCapacidades.Text = Vendas.Config(cx, "tef_pgweb_capacidades", "");
+        // AUTCAP (tef_pgweb_capacidades) e detalhe de protocolo: saiu da tela (11/09/2026), o
+        // padrao serve e a chave, se alguem gravou, continua valendo.
+        _pgwebCap = Vendas.Config(cx, "tef_pgweb_capacidades", "");
         TxtPgwebEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
+        // O botao de instalar o ponto de captura some depois da instalacao (pedido do dono,
+        // 11/09/2026). Volta sozinho se o teste da maquininha disser "nao instalado".
+        BtnInstalarPgweb.Visibility = string.IsNullOrEmpty(Vendas.Config(cx, ChaveInstaladoEm, ""))
+            ? Visibility.Visible : Visibility.Collapsed;
         ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
         ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "1") == "1";
         TxtTefSerial.Text = Vendas.Config(cx, "tef_serial_pos", "");
@@ -375,7 +381,7 @@ public partial class Configuracao : UserControl
         PgwebDir = _pgwebDir,
         PgwebDll = _pgwebDll,
         PgwebRedes = "",
-        PgwebCapacidades = TxtPgwebCapacidades.Text,
+        PgwebCapacidades = _pgwebCap,
         CpayChave = PwdCpayChave.Password,
         CpayPessoa = TxtCpayPessoa.Text,
         CpayTerminal = TxtCpayTerminal.Text,
@@ -743,6 +749,10 @@ public partial class Configuracao : UserControl
     /// </summary>
     private string _pgwebDir = "";
     private string _pgwebDll = "";
+    private string _pgwebCap = "";
+
+    /// <summary>Quando o ponto de captura foi instalado por este caixa (ISO). Vazio = o botao Instalar aparece.</summary>
+    private const string ChaveInstaladoEm = "tef_pgweb_instalado_em";
 
     private void DispensarFilaMorta(object sender, RoutedEventArgs e)
     {
@@ -1553,7 +1563,7 @@ public partial class Configuracao : UserControl
         Chave("tef_pgweb_ponto_captura", TxtPgwebPdc.Text);
         Chave("tef_pgweb_cnpj", TxtPgwebCnpj.Text);   // em branco: o Windows procura a PGWebLib.dll sozinho
         Chave("tef_pgweb_porta_pinpad", TxtPgwebPorta.Text);
-        Chave("tef_pgweb_capacidades", TxtPgwebCapacidades.Text);
+        // tef_pgweb_capacidades nao passa mais pela tela: fica como esta no banco.
         // 11/09/2026: o campo "redes que aparecem para o caixa escolher" saiu da tela (rede do
         // cartão e do PIX bastam). Salvar APAGA a chave: filtro que ninguém vê não pode ficar.
         Chave(ConfigPGWebLib.ChaveRedes, "");
@@ -1756,6 +1766,12 @@ public partial class Configuracao : UserControl
             {
                 case "testar":
                     var ok = await pg.AtivoAsync(CancellationToken.None);
+                    if (!ok && pg.MotivoIndisponivel == ProvedorPGWebLib.MsgNaoInstalado)
+                    {
+                        // O terminal diz que nao esta instalado: o botao de instalar volta.
+                        using (var c2 = Banco.Abrir()) Vendas.GravarConfig(c2, ChaveInstaladoEm, "");
+                        BtnInstalarPgweb.Visibility = Visibility.Visible;
+                    }
                     StatusTef(ok
                         ? $"✓ A biblioteca do PayGo respondeu (pasta de trabalho {pg.PastaTrabalho}). Salve para manter."
                         : $"✗ {pg.MotivoIndisponivel ?? ProvedorPGWebLib.MsgTefNaoResponde}.",
@@ -1776,6 +1792,11 @@ public partial class Configuracao : UserControl
                     Nucleo.PlacarHomologacao.GuardarUltimo(di.Reqnum, 0,
                         di.Pago ? "instalacao" : "nao concluida", passo: 1);
                     var papel = di.Pago ? await ImprimirInstalacaoAsync(di) : null;
+                    if (di.Pago)
+                    {
+                        using (var c1 = Banco.Abrir()) Vendas.GravarConfig(c1, ChaveInstaladoEm, DateTime.Now.ToString("o"));
+                        BtnInstalarPgweb.Visibility = Visibility.Collapsed;   // instalado: o botao sai da tela
+                    }
                     StatusTef(di.Pago
                         ? "✓ Ponto de captura instalado." + (di.Motivo is { Length: > 0 } mi ? " " + mi + "." : "")
                           + (papel is null ? " Comprovante impresso." : " ⚠ O comprovante não saiu: " + papel + ".")

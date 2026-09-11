@@ -256,8 +256,13 @@ public static class TestesCasaPGWebLib
                 checar(System.Text.RegularExpressions.Regex.IsMatch(xaml, "x:Name=\"" + escondido.TrimEnd('"') + "\"[^>]*Visibility=\"Collapsed\""),
                     escondido.TrimEnd('"') + " continua no código, mas escondido");
             checar(xaml.Contains("BlocoPGWebLib", StringComparison.Ordinal)
-                   && xaml.Contains("TxtPgwebPorta", StringComparison.Ordinal) && xaml.Contains("TxtPgwebCapacidades", StringComparison.Ordinal),
-                "com os campos: porta do pinpad, capacidades");
+                   && xaml.Contains("TxtPgwebPorta", StringComparison.Ordinal) && !xaml.Contains("TxtPgwebCapacidades", StringComparison.Ordinal),
+                "com o campo da porta do pinpad; AUTCAP saiu da tela (11/09: detalhe de protocolo, o padrão serve)");
+            var cfgInst = Fonte("Telas", "Configuracao.xaml.cs") ?? "";
+            checar(cfgInst.Contains("tef_pgweb_instalado_em", StringComparison.Ordinal)
+                   && cfgInst.Contains("BtnInstalarPgweb.Visibility = Visibility.Collapsed", StringComparison.Ordinal)
+                   && cfgInst.Contains("BtnInstalarPgweb.Visibility = Visibility.Visible", StringComparison.Ordinal),
+                "o botão Instalar ponto de captura some depois da instalação e volta quando o teste diz 'não instalado'");
             checar(xaml.Contains("Instalar ponto de captura", StringComparison.Ordinal) && xaml.Contains("Click=\"InstalarPGWebLib\"", StringComparison.Ordinal)
                    && xaml.Contains("Click=\"AdmPGWebLib\"", StringComparison.Ordinal),
                 "e os botões 'Instalar ponto de captura' e 'ADM'");

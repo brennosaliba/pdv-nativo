@@ -209,6 +209,21 @@
                     <TextBlock x:Name="TxtStatusImpressao" Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
 
+                    <!-- COMPROVANTE DO CARTÃO: as duas vias, separadas (pedido do dono, 03/09).
+                         Vem logo depois do cupom (11/09/2026): o cupom fiscal e o cartão
+                         saem no mesmo papel e na mesma venda; a comanda de delivery é outro
+                         assunto e fica por último. -->
+                    <TextBlock Text="COMPROVANTE DO CARTÃO: AS DUAS VIAS" Foreground="{DynamicResource Marca}"
+                               FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
+                    <TextBlock Text="Vale para a maquininha ligada no caixa por cabo. As duas vias saem na impressora do cupom."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <TextBlock Text="Via do cliente (cartão)" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolViaCliente" Margin="0,4,0,8"/>
+                    <TextBlock Text="Via do estabelecimento (cartão)" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolViaLoja" Margin="0,4,0,4"/>
+                    <TextBlock Text="Em Perguntar na tela a via não sai sozinha: tire no menu TEF, em Reimprimir o último comprovante."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
                     <!-- COMANDA DO DELIVERY — configuração INDIVIDUAL (pedido do dono,
                          29/08): a comanda pode sair na bobina da expedição e o cupom na
                          do balcão. A regra de ouro do desenho está na caixinha
@@ -252,21 +267,6 @@
                                Text="Isto também se troca na tela Delivery, no botão 🖨 do cabeçalho: é lá que a cozinha procura. E cada pedido tem o seu 🖨 para reimprimir a comanda."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
-
-                    <!-- COMPROVANTE DO CARTÃO — as duas vias, separadas (pedido do dono,
-                         03/09). Antes era UMA caixinha para as duas, e ela morava no passo
-                         da maquininha. Aqui é onde quem instala procura: é escolha de
-                         PAPEL, e o papel sai na impressora do cupom. -->
-                    <TextBlock Text="COMPROVANTE DO CARTÃO: AS DUAS VIAS" Foreground="{DynamicResource Marca}"
-                               FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
-                    <TextBlock Text="Vale para a maquininha ligada no caixa por cabo. As duas vias saem na impressora do cupom."
-                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                    <TextBlock Text="Via do cliente (cartão)" Style="{StaticResource Rotulo}"/>
-                    <ComboBox x:Name="CboPolViaCliente" Margin="0,4,0,8"/>
-                    <TextBlock Text="Via do estabelecimento (cartão)" Style="{StaticResource Rotulo}"/>
-                    <ComboBox x:Name="CboPolViaLoja" Margin="0,4,0,4"/>
-                    <TextBlock Text="Em Perguntar na tela a via não sai sozinha: tire no menu TEF, em Reimprimir o último comprovante."
-                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                     <!-- Tema mora aqui porque é a outra coisa desta MÁQUINA (a luz do
                          balcão, como a bobina), e porque grava na hora: não passa pelo
@@ -472,8 +472,6 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="12"/>
                                 <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="12"/>
-                                <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0">
                                 <TextBlock Text="Razão social da automação" Style="{StaticResource Rotulo}"/>
@@ -482,10 +480,6 @@
                             <StackPanel Grid.Column="2">
                                 <TextBlock Text="Porta do pinpad" Style="{StaticResource Rotulo}"/>
                                 <TextBox x:Name="TxtPgwebPorta" Margin="0,4,0,0" Tag="0 = automática" TextChanged="CampoMudou"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="4">
-                                <TextBlock Text="Capacidades (AUTCAP)" Style="{StaticResource Rotulo}"/>
-                                <TextBox x:Name="TxtPgwebCapacidades" Margin="0,4,0,0" Tag="em branco: 28" TextChanged="CampoMudou"/>
                             </StackPanel>
                         </Grid>
                         <Grid Margin="0,0,0,8">
