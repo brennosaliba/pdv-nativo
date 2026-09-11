@@ -562,6 +562,19 @@
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     </StackPanel>
 
+                    <StackPanel x:Name="BlocoRespostasChat">
+                        <!-- RESPOSTAS PRONTAS DO CHAT DO IFOOD (11/09/2026, pedido do dono): os cartoes
+                             que aparecem no espaco vazio ao lado do chat. Um bloco por resposta,
+                             separados por linha em branco; a primeira linha e o titulo do cartao.
+                             Vazio = as cinco de fabrica (Pdv.Nucleo/RespostasProntas). -->
+                        <TextBlock Text="RESPOSTAS PRONTAS DO CHAT DO IFOOD" Foreground="{DynamicResource Marca}"
+                                   FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
+                        <TextBox x:Name="TxtRespostasChat" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="180" MaxHeight="300"
+                                 VerticalScrollBarVisibility="Auto" FontSize="13" Margin="0,0,0,6"/>
+                        <TextBlock Text="Um bloco por resposta, separados por uma linha em branco. A primeira linha é o título do cartão; o resto é a mensagem que o atendente copia com um toque. Até 8 respostas. Apague tudo para voltar às de fábrica."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    </StackPanel>
+
                 </StackPanel>
 
                 <!-- FIM · RESUMO ─────────────────────────────────────────── -->

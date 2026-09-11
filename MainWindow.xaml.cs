@@ -32,6 +32,15 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Banco.Migrar();
+        // A vigia do WhatsApp lembra "este caixa já esteve conectado" no banco do caixa.
+        // Injetado aqui (e não Banco.Abrir() dentro do serviço) para a bateria de testes
+        // exercitar o serviço sem tocar no pdv.db de quem compila.
+        ServicoWhatsApp.Ligar(
+            chave => { using var c = Banco.Abrir(); return Vendas.Config(c, chave); },
+            (chave, valor) => { using var c = Banco.Abrir(); Vendas.GravarConfig(c, chave, valor); });
+        // O WebView2 do WhatsApp nasce fora da tela segundos depois do login e costuma
+        // levar o foco do teclado ao nascer: o leitor de código de barras bipava no vazio.
+        CamadaWhatsApp.Iniciou += () => { if (!CamadaWhatsApp.IsHitTestVisible) DevolverTecladoAoCaixa(); };
         // NO CAIXA DE HOMOLOGACAO, JANELA COMUM (09/09/2026, pedido do dono: "tem como
         // tirar full screen desse modo de homologacao?"). Quem homologa tem o log da
         // biblioteca, a planilha e o PayGo abertos do lado; quiosque em tela cheia e o
@@ -206,7 +215,7 @@ public partial class MainWindow : Window
             _chatLigado = true;
             CamadaChat.Voltou += () => CamadaChat.Visibility = Visibility.Collapsed;
         }
-        CamadaWhatsApp.Visibility = Visibility.Collapsed;   // uma camada de cada vez
+        EsconderWhatsApp();                                 // uma camada de cada vez
         CamadaChat.Visibility = Visibility.Visible;
         _ = CamadaChat.PreAquecerAsync();
     }
@@ -219,11 +228,34 @@ public partial class MainWindow : Window
         if (!_whatsAppLigado)
         {
             _whatsAppLigado = true;
-            CamadaWhatsApp.Voltou += () => CamadaWhatsApp.Visibility = Visibility.Collapsed;
+            CamadaWhatsApp.Voltou += EsconderWhatsApp;
         }
         CamadaChat.Visibility = Visibility.Collapsed;       // uma camada de cada vez
-        CamadaWhatsApp.Visibility = Visibility.Visible;
+        CamadaWhatsApp.RenderTransform = System.Windows.Media.Transform.Identity;
+        CamadaWhatsApp.IsHitTestVisible = true;
         _ = CamadaWhatsApp.PreAquecerAsync();
+    }
+
+    /// <summary>
+    /// Empurra a camada do WhatsApp para fora da janela em vez de recolhê-la: para o
+    /// Chromium a página segue VISÍVEL (é assim que o WhatsApp Web toca o toque original
+    /// dele quando chega mensagem). E devolve o teclado ao caixa: o HWND do WebView2 fora
+    /// da tela seguraria as teclas do leitor de código de barras e do PIN.
+    /// </summary>
+    private void EsconderWhatsApp()
+    {
+        CamadaWhatsApp.RenderTransform = new System.Windows.Media.TranslateTransform(30000, 0);
+        CamadaWhatsApp.IsHitTestVisible = false;
+        DevolverTecladoAoCaixa();
+    }
+
+    /// <summary>O teclado (leitor de código de barras, PIN) volta para a tela que está na frente.</summary>
+    private void DevolverTecladoAoCaixa()
+    {
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            try { Keyboard.ClearFocus(); (Conteudo.Content as UIElement)?.Focus(); Focus(); } catch { }
+        });
     }
 
     /// <summary>

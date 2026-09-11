@@ -86,7 +86,11 @@ public partial class ChatIfood : UserControl
             core.Settings.IsStatusBarEnabled = false;
 
             core.NavigationCompleted += (_, e) =>
+            {
                 TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: toque em Recarregar";
+                // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
+                if (e.IsSuccess) _ = DefinirRespostasAsync(core);
+            };
 
             // mensagens do DOM (não lidas + modo do painel)
             core.WebMessageReceived += OnWebMessage;
@@ -320,6 +324,24 @@ public partial class ChatIfood : UserControl
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
 
+    /// <summary>
+    /// RESPOSTAS PRONTAS (11/09/2026, pedido do dono): entrega à página a lista de
+    /// cartões do espaço vazio ao lado do chat. Lida do banco a cada carga, então editar
+    /// na Configuração e tocar em Recarregar basta. Sem respostas não é sem chat.
+    /// </summary>
+    private static async Task DefinirRespostasAsync(CoreWebView2 core)
+    {
+        try
+        {
+            string json;
+            using (var cx = Pdv.Nucleo.Banco.Abrir())
+                json = Pdv.Nucleo.RespostasProntas.Json(
+                    Pdv.Nucleo.RespostasProntas.Ler(Pdv.Nucleo.Vendas.Config(cx, Pdv.Nucleo.RespostasProntas.Chave)));
+            await core.ExecuteScriptAsync("window.pdvDefinirRespostas && window.pdvDefinirRespostas(" + json + ")");
+        }
+        catch { /* sem respostas prontas o chat continua inteiro */ }
+    }
+
     // ── o script injetado (roda dentro do WebView2, a cada carga) ────────────
     // Observa o DOM para: (1) contar não lidas e mandar o TEXTO cru para o C#;
     // (2) abrir a conversa; (3) isolar o painel do chat com SEGURANÇA (se não
@@ -501,6 +523,99 @@ public partial class ChatIfood : UserControl
           ev.stopImmediatePropagation(); ev.preventDefault();
         } catch (e) {}
       }, true);
+      // RESPOSTAS PRONTAS (11/09/2026, pedido do dono): cartoes no espaco vazio a
+      // ESQUERDA do chat (e espaco da propria pagina: o Gestor escondido). Toque =
+      // copia o texto e tenta colar direto na caixa de mensagem da conversa aberta
+      // (o menu de contexto esta desligado no quiosque, entao "colar" tem que ser
+      // nosso). A lista vem do C# (pdvDefinirRespostas), lida do banco a cada carga.
+      window.__pdvRespostas = window.__pdvRespostas || [];
+      function respostasCss(){
+        if (document.getElementById('pdv-css-resp')) return;
+        var s = document.createElement('style'); s.id = 'pdv-css-resp';
+        s.textContent = '#pdv-respostas{position:fixed;left:18px;top:18px;bottom:18px;width:340px;max-width:calc(100vw - 560px);overflow:auto;z-index:2147483000;font:14px system-ui,Segoe UI,sans-serif;display:none}' +
+          'body.pdv-so-chat #pdv-respostas{display:block}' +
+          '#pdv-respostas h4{margin:0 0 10px 2px;font-size:12px;letter-spacing:.08em;color:#8a8580;font-weight:700}' +
+          '.pdv-resp{background:#fff;border:1px solid #e6e1d8;border-radius:14px;padding:12px 14px;margin:0 0 10px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.04)}' +
+          '.pdv-resp:active{transform:scale(.99)}' +
+          '.pdv-resp b{display:block;color:#2b2724;font-size:15px;margin-bottom:4px}' +
+          '.pdv-resp span{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;color:#6b655e;font-size:13px;line-height:1.35}' +
+          '.pdv-resp.ok{border-color:#F276A5;background:#fff4f8}' +
+          '.pdv-resp .pdv-ok{display:none;color:#c9407a;font-weight:700;font-size:12px;margin-top:6px}' +
+          '.pdv-resp.ok .pdv-ok{display:block}';
+        (document.head || document.documentElement).appendChild(s);
+      }
+      function respVisivel(el){ if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+      function respComposer(){
+        var cs = document.querySelectorAll('textarea, [contenteditable="true"]');
+        for (var i = 0; i < cs.length; i++) { if (respVisivel(cs[i]) && !cs[i].closest('#pdv-respostas')) return cs[i]; }
+        return null;
+      }
+      function respCopiar(texto){
+        // o caminho SINCRONO primeiro (funciona dentro do gesto, mesmo sem foco no documento);
+        // a Promise do clipboard so como plano B, com o erro engolido
+        try {
+          var ta = document.createElement('textarea'); ta.value = texto; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+          document.body.appendChild(ta); ta.select(); var ok = document.execCommand('copy'); ta.remove();
+          if (ok) return true;
+        } catch (e) {}
+        try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(texto).catch(function(){}); return true; } } catch (e) {}
+        return false;
+      }
+      function ajustarLarguraRespostas(){
+        // a caixa vai ate a borda esquerda REAL da gaveta (que o codigo nao mede de outro jeito)
+        try {
+          var box = document.getElementById('pdv-respostas'); var alvo = candidato();
+          if (!box || !alvo) return;
+          var l = alvo.getBoundingClientRect().left - 36;
+          box.style.width = Math.max(0, Math.min(340, l)) + 'px';
+          box.style.display = l < 160 ? 'none' : '';
+        } catch (e) {}
+      }
+      function respColar(texto){
+        try {
+          var c = respComposer(); if (!c) return false;
+          c.focus();
+          if (c.tagName === 'TEXTAREA' || c.tagName === 'INPUT') {
+            var proto = c.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            var set = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            set.call(c, texto);
+            c.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+          }
+          document.execCommand('selectAll', false, null);
+          return document.execCommand('insertText', false, texto);
+        } catch (e) { return false; }
+      }
+      window.pdvDefinirRespostas = function (lista) {
+        try {
+          window.__pdvRespostas = Array.isArray(lista) ? lista : [];
+          respostasCss();
+          var box = document.getElementById('pdv-respostas');
+          if (!box) {
+            box = document.createElement('div'); box.id = 'pdv-respostas'; document.body.appendChild(box);
+            // o toque no cartao nao pode virar "clique fora" da gaveta (ela fecharia)
+            ['pointerdown','mousedown','touchstart','click'].forEach(function (tp) { box.addEventListener(tp, function (ev) { ev.stopPropagation(); }); });
+          }
+          box.innerHTML = '';
+          ajustarLarguraRespostas();
+          if (!window.__pdvRespostas.length) return;
+          var h = document.createElement('h4'); h.textContent = 'RESPOSTAS PRONTAS'; box.appendChild(h);
+          window.__pdvRespostas.forEach(function (r) {
+            var d = document.createElement('div'); d.className = 'pdv-resp';
+            var b = document.createElement('b'); b.textContent = r.titulo || ''; d.appendChild(b);
+            var s = document.createElement('span'); s.textContent = r.texto || ''; d.appendChild(s);
+            var ok = document.createElement('div'); ok.className = 'pdv-ok'; d.appendChild(ok);
+            d.addEventListener('click', function () {
+              var copiou = respCopiar(r.texto || ''); var colou = respColar(r.texto || '');
+              ok.textContent = colou ? 'Colado na conversa. É só enviar.' : (copiou ? 'Copiado. Abra a conversa, toque na caixa de mensagem e aperte Ctrl+V.' : 'Não consegui copiar.');
+              d.classList.add('ok'); setTimeout(function(){ d.classList.remove('ok'); }, 3000);
+              envia({ tipo: 'resposta', titulo: r.titulo || '', colou: colou, copiou: copiou });
+            });
+            box.appendChild(d);
+          });
+        } catch (e) {}
+      };
+
       window.pdvIsolar = function () {
         try {
           var alvo = candidato();
@@ -510,12 +625,14 @@ public partial class ChatIfood : UserControl
           var el = alvo;
           while (el && el !== document.body){
             var p = el.parentElement; if (!p) break;
-            for (var i=0;i<p.children.length;i++){ if (p.children[i] !== el) p.children[i].setAttribute('data-pdv-hide',''); }
+            for (var i=0;i<p.children.length;i++){ if (p.children[i] !== el && !/^pdv-/.test(p.children[i].id || '')) p.children[i].setAttribute('data-pdv-hide',''); }
             el = p;
           }
           var titulo = tituloDoPainel();
           if (titulo) esconderFecharDaGaveta(alvo, titulo);
           document.body.classList.add('pdv-so-chat');
+          window.pdvDefinirRespostas(window.__pdvRespostas);
+          ajustarLarguraRespostas();
           envia({tipo:'modo', modo:'chat'});
           return true;
         } catch (e) { envia({tipo:'modo', modo:'gestor'}); return false; }

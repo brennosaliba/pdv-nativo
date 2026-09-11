@@ -115,6 +115,10 @@ public partial class Configuracao : UserControl
         _ = CarregarImpressorasAsync(Vendas.Config(cx, "impressora"));
         var impComandaGravada = Vendas.Config(cx, "kds_comanda_impressora");
         _ = CarregarImpressorasComandaAsync(impComandaGravada);
+        // Respostas prontas do chat: mostra o que vale hoje (as de fábrica, se nunca editou).
+        TxtRespostasChat.Text = RespostasProntas.Escrever(RespostasProntas.Ler(Vendas.Config(cx, RespostasProntas.Chave)));
+        // Na primeira instalação o bloco não aparece (não é assunto de parear); fica para a reconfiguração.
+        BlocoRespostasChat.Visibility = Se(_jaConfigurado);
         // As quatro políticas de impressão, carregadas SEMPRE (inclusive em caixa novo):
         // com três estados, deixar o combo no valor do XAML gravaria uma escolha que
         // ninguém fez na primeira instalação. O padrão de cada papel vem de Impressoes,
@@ -1421,6 +1425,15 @@ public partial class Configuracao : UserControl
             // devolve a bobina que o dono já tinha escolhido.
             Vendas.GravarConfig(cx, "kds_comanda_separada", ChkComandaSeparada.IsChecked == true ? "1" : "0");
             Vendas.GravarConfig(cx, "kds_comanda_papel_mm", AssistenteConfig.TextoPapel(PapelComandaEscolhido()));
+            // Respostas prontas do chat do iFood: gravadas já normalizadas (o que a tela do
+            // chat vai ler); tudo apagado volta às de fábrica (a chave sai).
+            var respostas = TxtRespostasChat.Text.Trim();
+            var normalizadas = respostas.Length == 0 ? "" : RespostasProntas.Escrever(RespostasProntas.Ler(respostas));
+            // vazio OU igual às de fábrica = sem chave: quando o exe melhorar os textos
+            // padrão, a loja que nunca editou acompanha
+            if (normalizadas.Length == 0 || normalizadas == RespostasProntas.Escrever(RespostasProntas.Padrao))
+                cx.Execute("DELETE FROM config WHERE chave=@C", new { C = RespostasProntas.Chave });
+            else Vendas.GravarConfig(cx, RespostasProntas.Chave, normalizadas);
             GravarTef(cx);
             _tefSalvo = true;
 

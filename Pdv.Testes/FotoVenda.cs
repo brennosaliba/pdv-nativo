@@ -59,6 +59,10 @@ public static class FotoVenda
         // sem Valor do teste, sem Roteiro): e assim que a barra tem que caber.
         var loja = args.Any(a => a.Equals("loja", StringComparison.OrdinalIgnoreCase));
         args = args.Where(a => !a.Equals("loja", StringComparison.OrdinalIgnoreCase)).ToArray();
+        // "wa-caido" = fotografa a venda com o WhatsApp caido (selo QR + aviso fixo),
+        // do jeito que a vigia pinta; a vigia de verdade precisa de 60 s de tela de QR.
+        var waCaido = args.Any(a => a.Equals("wa-caido", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("wa-caido", StringComparison.OrdinalIgnoreCase)).ToArray();
         var modo = args.FirstOrDefault(a => a.Equals("tef", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("tef+pos", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("semtef", StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant();
@@ -130,7 +134,7 @@ public static class FotoVenda
             try
             {
                 codigo = Fotografar(saida, w, h, categoria, tema, itens, operador, sessao, pagar, menu, comTef, abrirPos,
-                                    combo, comboAberto);
+                                    combo, comboAberto, waCaido);
             }
             catch (Exception ex)
             {
@@ -192,7 +196,8 @@ public static class FotoVenda
     private static int Fotografar(string saida, int w, int h, string categoria, string tema,
                                   string[] itens, Operador operador, Sessao sessao, decimal? pagar,
                                   string? menu = null, bool abrirPagamento = false, bool abrirPos = false,
-                                  (string ComboId, List<Escolha> Escolhas)? combo = null, bool comboAberto = false)
+                                  (string ComboId, List<Escolha> Escolhas)? combo = null, bool comboAberto = false,
+                                  bool waCaido = false)
     {
         // a tela de pagamento abre com "pagar:" (lança uma parte) ou com tef/tef+pos (só abre)
         abrirPagamento |= pagar is not null;
@@ -254,6 +259,14 @@ public static class FotoVenda
                         tipo.GetField("_categoriaAtual", P)!.SetValue(tela, real ?? categoria);
                         tipo.GetMethod("RepintarCategorias", P)!.Invoke(tela, null);
                         tipo.GetMethod("PintarProdutos", P)!.Invoke(tela, null);
+                    }
+                    if (waCaido)
+                    {
+                        var (titulo, acao) = Pdv.Nucleo.SessaoWhatsApp.Aviso(Pdv.Nucleo.EstadoWa.PedindoQr);
+                        ((System.Windows.Controls.Border)tipo.GetField("SeloWhatsAppCaido", P)!.GetValue(tela)!).Visibility = Visibility.Visible;
+                        ((System.Windows.Controls.Border)tipo.GetField("AvisoWhatsAppCaido", P)!.GetValue(tela)!).Visibility = Visibility.Visible;
+                        ((System.Windows.Controls.TextBlock)tipo.GetField("TxtAvisoWhatsAppCaido", P)!.GetValue(tela)!).Text = $"{titulo} (09:14)";
+                        ((System.Windows.Controls.TextBlock)tipo.GetField("TxtAvisoWhatsAppCaidoAcao", P)!.GetValue(tela)!).Text = acao;
                     }
                     if (combo is { } cb)
                     {

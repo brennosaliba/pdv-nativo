@@ -187,6 +187,11 @@ public partial class Venda : UserControl
             ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp; ServicoWhatsApp.Mudou += AtualizarSeloWhatsApp;
             ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova; ServicoWhatsApp.MensagemNova += WhatsAppMensagemNova;
             AtualizarSeloWhatsApp(ServicoWhatsApp.NaoLidas);
+            // A vigia da sessão: selo QR, aviso fixo e som quando o WhatsApp cai.
+            ServicoWhatsApp.SessaoMudou -= WhatsAppSessaoMudou; ServicoWhatsApp.SessaoMudou += WhatsAppSessaoMudou;
+            ServicoWhatsApp.Caiu -= WhatsAppCaiu; ServicoWhatsApp.Caiu += WhatsAppCaiu;
+            ServicoWhatsApp.Voltou -= WhatsAppVoltou; ServicoWhatsApp.Voltou += WhatsAppVoltou;
+            WhatsAppSessaoMudou(ServicoWhatsApp.Sessao);
         };
         Unloaded += (_, _) =>
         {
@@ -198,6 +203,9 @@ public partial class Venda : UserControl
             ServicoChat.MensagemNova -= ChatMensagemNova;
             ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp;
             ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova;
+            ServicoWhatsApp.SessaoMudou -= WhatsAppSessaoMudou;
+            ServicoWhatsApp.Caiu -= WhatsAppCaiu;
+            ServicoWhatsApp.Voltou -= WhatsAppVoltou;
         };
     }
 
@@ -354,7 +362,8 @@ public partial class Venda : UserControl
     {
         TxtToastWhatsApp.Text = total == 1 ? "Mensagem nova no WhatsApp" : $"{total} mensagens no WhatsApp";
         ToastWhatsApp.Visibility = Visibility.Visible;
-        Alerta.MensagemWhatsApp();
+        // O toque ORIGINAL é o da página do WhatsApp; o nosso só entra se ela calar.
+        ServicoWhatsApp.TocarSeAPaginaCalar(Alerta.MensagemWhatsApp);
 
         _toastWhatsAppSome?.Stop();
         _toastWhatsAppSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
@@ -366,6 +375,48 @@ public partial class Venda : UserControl
     {
         ToastWhatsApp.Visibility = Visibility.Collapsed;
         PediuWhatsApp?.Invoke();
+    }
+
+    // ── a vigia da sessão do WhatsApp (o QR caiu) ────────────────────────────
+
+    /// <summary>Selo vermelho "QR" no botão: só enquanto a vigia diz que caiu, e só num caixa armado.</summary>
+    private void WhatsAppSessaoMudou(EstadoWa e) => Dispatcher.Invoke(() =>
+    {
+        // "Caído" é ter uma queda ABERTA (CaidoDesde), não o estado do instante: carregando,
+        // sem leitura e Wi-Fi piscando no meio da queda não apagam o selo. O aviso só se
+        // recolhe quando conecta de novo (ou quando a vigia desarma).
+        var caido = ServicoWhatsApp.Armada && (ServicoWhatsApp.CaidoDesde is not null || e == EstadoWa.SemComponente);
+        SeloWhatsAppCaido.Visibility = caido ? Visibility.Visible : Visibility.Collapsed;
+        if (e == EstadoWa.Conectado || !ServicoWhatsApp.Armada) AvisoWhatsAppCaido.Visibility = Visibility.Collapsed;
+    });
+
+    /// <summary>
+    /// Hora de avisar (1ª vez ou repetição a cada 15 min): aviso fixo + selo + som. Com
+    /// comanda aberta o som espera a próxima repetição: WhatsApp caído não interrompe venda.
+    /// </summary>
+    private void WhatsAppCaiu(EstadoWa e, DateTime? desde) => Dispatcher.Invoke(() =>
+    {
+        var (titulo, acao) = SessaoWhatsApp.Aviso(e);
+        TxtAvisoWhatsAppCaido.Text = desde is { } d ? $"{titulo} ({d:HH:mm})" : titulo;
+        TxtAvisoWhatsAppCaidoAcao.Text = acao;
+        AvisoWhatsAppCaido.Visibility = Visibility.Visible;
+        SeloWhatsAppCaido.Visibility = Visibility.Visible;
+        if (_comanda.Count == 0) Alerta.WhatsAppCaiu();
+    });
+
+    private void WhatsAppVoltou() => Dispatcher.Invoke(() =>
+    {
+        AvisoWhatsAppCaido.Visibility = Visibility.Collapsed;
+        SeloWhatsAppCaido.Visibility = Visibility.Collapsed;
+    });
+
+    private void AbrirWhatsAppPeloAviso(object sender, System.Windows.Input.MouseButtonEventArgs e) => PediuWhatsApp?.Invoke();
+
+    /// <summary>"Depois": cala o aviso por 2 h. O selo QR continua no botão.</summary>
+    private void AdiarAvisoWhatsApp(object sender, RoutedEventArgs e)
+    {
+        ServicoWhatsApp.Adiar();
+        AvisoWhatsAppCaido.Visibility = Visibility.Collapsed;
     }
 
     // ── aviso leve (uma linha, sem modal) ────────────────────────────────────

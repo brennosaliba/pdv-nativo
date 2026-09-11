@@ -37,9 +37,19 @@
              operador na venda. Some por Visibility (Collapsed), porque o WebView2
              é HWND e pintaria por cima de tudo se ficasse só atrás. -->
         <telas:ChatIfood Grid.Row="1" x:Name="CamadaChat" Visibility="Collapsed"/>
-        <!-- WhatsApp da loja: outra camada viva, pelo mesmo motivo (o WebView2 fica
-             observando as nao lidas em segundo plano e o login sobrevive). -->
-        <telas:ChatWhatsApp Grid.Row="1" x:Name="CamadaWhatsApp" Visibility="Collapsed"/>
+        <!-- WhatsApp da loja: outra camada viva, pelo mesmo motivo. Mas ela NAO se
+             recolhe (Collapsed): e EMPURRADA para fora da janela (TranslateTransform).
+             Para o Chromium a pagina continua VISIVEL, e e so assim que o WhatsApp Web
+             toca o toque ORIGINAL dele quando chega mensagem, como toca com a aba
+             aberta (11/09/2026, pedido do dono). Fora da janela o HWND nao pinta nada;
+             IsHitTestVisible=False tira o toque; o foco volta para o caixa ao esconder
+             (MainWindow.EsconderWhatsApp). -->
+        <telas:ChatWhatsApp Grid.Row="1" x:Name="CamadaWhatsApp" IsHitTestVisible="False"
+                            KeyboardNavigation.TabNavigation="None" Focusable="False">
+            <telas:ChatWhatsApp.RenderTransform>
+                <TranslateTransform X="30000"/>
+            </telas:ChatWhatsApp.RenderTransform>
+        </telas:ChatWhatsApp>
 
         <!-- Janela sem moldura (quiosque) precisa dos próprios botões de janela.
              Discretos de propósito: existem pro dono/suporte, não pro operador. -->

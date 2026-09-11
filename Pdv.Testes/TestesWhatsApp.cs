@@ -68,7 +68,12 @@ public static class TestesWhatsApp
                 File.WriteAllBytes(SomWhatsApp.Caminho(dados), new byte[10]);
                 checar(SomWhatsApp.ArquivoDaLoja(dados) is null, "arquivo vazio/quebrado não vale (só cabeçalho)");
                 File.WriteAllBytes(SomWhatsApp.Caminho(dados), new byte[1000]);
-                checar(SomWhatsApp.ArquivoDaLoja(dados) == SomWhatsApp.Caminho(dados), "com um .wav de verdade, é ele que toca");
+                checar(SomWhatsApp.ArquivoDaLoja(dados) is null, "mil bytes de nada não são um .wav (MP3 renomeado não vale)");
+                var wav = new byte[1000];
+                System.Text.Encoding.ASCII.GetBytes("RIFF").CopyTo(wav, 0);
+                System.Text.Encoding.ASCII.GetBytes("WAVE").CopyTo(wav, 8);
+                File.WriteAllBytes(SomWhatsApp.Caminho(dados), wav);
+                checar(SomWhatsApp.ArquivoDaLoja(dados) == SomWhatsApp.Caminho(dados), "com um .wav de verdade (RIFF/WAVE), é ele que toca");
             }
             finally { try { Directory.Delete(dados, true); } catch { } }
 
@@ -93,8 +98,8 @@ public static class TestesWhatsApp
                    && venda.Contains("x:Name=\"ToastWhatsApp\"") && venda.Contains("AbrirWhatsAppPeloToast"),
                 "a venda tem o botão WhatsApp com selo, e o aviso que abre a aba");
             checar(vendaCs.Contains("ServicoWhatsApp.Mudou += AtualizarSeloWhatsApp") && vendaCs.Contains("ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp")
-                   && vendaCs.Contains("Alerta.MensagemWhatsApp()"),
-                "a venda escuta o serviço ao entrar, solta ao sair, e toca o som do WhatsApp na subida");
+                   && vendaCs.Contains("ServicoWhatsApp.TocarSeAPaginaCalar(Alerta.MensagemWhatsApp)"),
+                "a venda escuta o serviço ao entrar, solta ao sair, e na subida toca a reserva só se a página calar");
             checar(main.Contains("x:Name=\"CamadaWhatsApp\"") && mainCs.Contains("t.PediuWhatsApp += MostrarWhatsApp")
                    && mainCs.Contains("CamadaWhatsApp.PreAquecerAsync()"),
                 "o MainWindow hospeda a camada viva e a pré-aquece (selo antes de abrir a aba)");
