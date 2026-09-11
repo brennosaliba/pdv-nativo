@@ -76,7 +76,7 @@ public static class TestesRespostasProntas
         var cfgXaml = Fonte(Path.Combine("Telas", "Configuracao.xaml")) ?? "";
         var cfgCs = Fonte(Path.Combine("Telas", "Configuracao.xaml.cs")) ?? "";
         checar(chat.Contains("window.pdvDefinirRespostas = function") && chat.Contains("box.id = 'pdv-respostas'")
-               && chat.Contains("body.pdv-so-chat #pdv-respostas{display:block}"),
+               && chat.Contains("body.pdv-so-chat #pdv-respostas.pdv-inline{display:block}"),
             "o script monta os cartões na página e só os mostra com o chat isolado (nunca por cima do login do Gestor)");
         checar(chat.Contains("navigator.clipboard") && chat.Contains("execCommand('copy')") && chat.Contains("execCommand('insertText'"),
             "o toque copia (com plano B) e tenta colar direto na caixa de mensagem");
@@ -96,6 +96,12 @@ public static class TestesRespostasProntas
             "na primeira instalação o bloco não aparece (não é assunto de parear)");
         checar(chat.Contains("ev.stopPropagation()", StringComparison.Ordinal) && chat.Contains("function ajustarLarguraRespostas()", StringComparison.Ordinal),
             "o toque no cartão não vira clique fora da gaveta, e a caixa mede a borda da gaveta");
+        checar(chat.Contains("function areaLivre(alvo)", StringComparison.Ordinal) && chat.Contains("document.elementFromPoint(", StringComparison.Ordinal)
+               && chat.Contains("pill.id = 'pdv-respostas-pill'", StringComparison.Ordinal) && chat.Contains("box.classList.add('pdv-compacto')", StringComparison.Ordinal),
+            "com a conversa aberta por cima do espaço, o painel vira a pilula 'Respostas prontas' e só aparece quando chamado (nunca em cima da conversa sem pedir)");
+        checar(chat.Contains("if (window.pdvAjustarRespostas) window.pdvAjustarRespostas();", StringComparison.Ordinal)
+               && chat.Contains("window.addEventListener('resize', function () { window.pdvAjustarRespostas(); });", StringComparison.Ordinal),
+            "o modo é reavaliado a cada mexida no DOM e ao redimensionar (a conversa abre sem navegação)");
         checar(chat.IndexOf("execCommand('copy')", StringComparison.Ordinal) < chat.IndexOf("navigator.clipboard.writeText(texto).catch", StringComparison.Ordinal),
             "copiar: o caminho síncrono primeiro; a Promise só como plano B, com o erro engolido");
         checar(chat.Contains("aperte Ctrl+V", StringComparison.Ordinal), "sem conversa aberta, o cartão diz o caminho que existe (Ctrl+V)");

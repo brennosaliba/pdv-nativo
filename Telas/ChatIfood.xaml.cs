@@ -533,7 +533,15 @@ public partial class ChatIfood : UserControl
         if (document.getElementById('pdv-css-resp')) return;
         var s = document.createElement('style'); s.id = 'pdv-css-resp';
         s.textContent = '#pdv-respostas{position:fixed;left:18px;top:18px;bottom:18px;width:340px;max-width:calc(100vw - 560px);overflow:auto;z-index:2147483000;font:14px system-ui,Segoe UI,sans-serif;display:none}' +
-          'body.pdv-so-chat #pdv-respostas{display:block}' +
+          'body.pdv-so-chat #pdv-respostas.pdv-inline{display:block}' +
+          // COMPACTO: a conversa aberta ocupa a esquerda; o painel vira uma pilula e so aparece
+          // por cima (com fundo e X) quando o atendente pede. Nunca fica em cima da conversa
+          // sem ser chamado (11/09/2026, dono: "ele coloca o frame em cima").
+          'body.pdv-so-chat #pdv-respostas.pdv-compacto.pdv-aberto{display:block;top:18px;bottom:auto;max-height:calc(100vh - 36px);width:340px;max-width:calc(100vw - 36px);background:#f7f4ee;border:1px solid #e6e1d8;border-radius:16px;padding:12px;box-shadow:0 12px 40px rgba(0,0,0,.18)}' +
+          '#pdv-respostas .pdv-fechar{display:none;position:absolute;right:10px;top:8px;width:34px;height:34px;border:0;border-radius:17px;background:#e6e1d8;color:#2b2724;font-size:18px;cursor:pointer}' +
+          '#pdv-respostas.pdv-aberto .pdv-fechar{display:block}' +
+          '#pdv-respostas-pill{position:fixed;left:18px;bottom:18px;z-index:2147483000;display:none;background:#F276A5;color:#fff;border:0;border-radius:24px;padding:12px 18px;font:700 14px system-ui,Segoe UI,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.18)}' +
+          'body.pdv-so-chat #pdv-respostas-pill.pdv-visivel{display:block}' +
           '#pdv-respostas h4{margin:0 0 10px 2px;font-size:12px;letter-spacing:.08em;color:#8a8580;font-weight:700}' +
           '.pdv-resp{background:#fff;border:1px solid #e6e1d8;border-radius:14px;padding:12px 14px;margin:0 0 10px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.04)}' +
           '.pdv-resp:active{transform:scale(.99)}' +
@@ -561,16 +569,48 @@ public partial class ChatIfood : UserControl
         try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(texto).catch(function(){}); return true; } } catch (e) {}
         return false;
       }
-      function ajustarLarguraRespostas(){
-        // a caixa vai ate a borda esquerda REAL da gaveta (que o codigo nao mede de outro jeito)
+      // O ESPACO A ESQUERDA ESTA LIVRE? Mede o que esta EMBAIXO do painel (elementFromPoint com
+      // o painel escondido): so os ancestrais da gaveta sao "fundo"; qualquer outra coisa
+      // visivel ali (a conversa aberta, um modal) e ocupacao. Sem isso o painel ficava em
+      // cima da conversa assim que ela abria.
+      function areaLivre(alvo){
+        var box = document.getElementById('pdv-respostas'); var pill = document.getElementById('pdv-respostas-pill');
+        if (!box) return true;
+        var w = Math.min(340, window.innerWidth - 36), h = window.innerHeight - 36;
+        var pts = [[38, 40], [18 + w - 20, 40], [38, 18 + h / 2], [18 + w - 20, 18 + h / 2], [38, h - 30], [18 + w - 20, h - 30]];
+        var vb = box.style.visibility, vp = pill ? pill.style.visibility : '';
+        box.style.visibility = 'hidden'; if (pill) pill.style.visibility = 'hidden';
         try {
-          var box = document.getElementById('pdv-respostas'); var alvo = candidato();
-          if (!box || !alvo) return;
-          var l = alvo.getBoundingClientRect().left - 36;
-          box.style.width = Math.max(0, Math.min(340, l)) + 'px';
-          box.style.display = l < 160 ? 'none' : '';
-        } catch (e) {}
+          for (var i = 0; i < pts.length; i++) {
+            var el = document.elementFromPoint(pts[i][0], pts[i][1]);
+            if (!el || el === document.body || el === document.documentElement) continue;
+            if (alvo && (el === alvo || el.contains(alvo))) continue;   // fundo: a cadeia da gaveta
+            return false;                                              // algo visivel ali: ocupado
+          }
+          return true;
+        } catch (e) { return true; }
+        finally { box.style.visibility = vb; if (pill) pill.style.visibility = vp; }
       }
+      window.pdvAjustarRespostas = function () {
+        try {
+          var box = document.getElementById('pdv-respostas'); var pill = document.getElementById('pdv-respostas-pill');
+          var alvo = candidato();
+          if (!box || !pill) return;
+          if (!document.body.classList.contains('pdv-so-chat') || !window.__pdvRespostas.length) { box.classList.remove('pdv-inline'); pill.classList.remove('pdv-visivel'); return; }
+          var l = alvo ? alvo.getBoundingClientRect().left - 36 : window.innerWidth - 36;
+          var cabe = l >= 160 && areaLivre(alvo);
+          if (cabe) {
+            box.classList.add('pdv-inline'); box.classList.remove('pdv-compacto', 'pdv-aberto');
+            box.style.width = Math.max(0, Math.min(340, l)) + 'px';
+            pill.classList.remove('pdv-visivel');
+          } else {
+            box.classList.remove('pdv-inline'); box.classList.add('pdv-compacto');
+            box.style.width = '';
+            pill.classList.add('pdv-visivel');
+          }
+        } catch (e) {}
+      };
+      function ajustarLarguraRespostas(){ window.pdvAjustarRespostas(); }
       function respColar(texto){
         try {
           var c = respComposer(); if (!c) return false;
@@ -591,14 +631,24 @@ public partial class ChatIfood : UserControl
           window.__pdvRespostas = Array.isArray(lista) ? lista : [];
           respostasCss();
           var box = document.getElementById('pdv-respostas');
+          var pill = document.getElementById('pdv-respostas-pill');
           if (!box) {
             box = document.createElement('div'); box.id = 'pdv-respostas'; document.body.appendChild(box);
             // o toque no cartao nao pode virar "clique fora" da gaveta (ela fecharia)
             ['pointerdown','mousedown','touchstart','click'].forEach(function (tp) { box.addEventListener(tp, function (ev) { ev.stopPropagation(); }); });
           }
+          if (!pill) {
+            pill = document.createElement('button'); pill.id = 'pdv-respostas-pill'; pill.type = 'button'; pill.textContent = 'Respostas prontas';
+            ['pointerdown','mousedown','touchstart','click'].forEach(function (tp) { pill.addEventListener(tp, function (ev) { ev.stopPropagation(); }); });
+            pill.addEventListener('click', function () { var b = document.getElementById('pdv-respostas'); if (b) b.classList.toggle('pdv-aberto'); });
+            document.body.appendChild(pill);
+            window.addEventListener('resize', function () { window.pdvAjustarRespostas(); });
+          }
           box.innerHTML = '';
-          ajustarLarguraRespostas();
-          if (!window.__pdvRespostas.length) return;
+          if (!window.__pdvRespostas.length) { ajustarLarguraRespostas(); return; }
+          var x = document.createElement('button'); x.type = 'button'; x.className = 'pdv-fechar'; x.textContent = '\u00d7';
+          x.addEventListener('click', function () { box.classList.remove('pdv-aberto'); });
+          box.appendChild(x);
           var h = document.createElement('h4'); h.textContent = 'RESPOSTAS PRONTAS'; box.appendChild(h);
           window.__pdvRespostas.forEach(function (r) {
             var d = document.createElement('div'); d.className = 'pdv-resp';
@@ -609,10 +659,13 @@ public partial class ChatIfood : UserControl
               var copiou = respCopiar(r.texto || ''); var colou = respColar(r.texto || '');
               ok.textContent = colou ? 'Colado na conversa. É só enviar.' : (copiou ? 'Copiado. Abra a conversa, toque na caixa de mensagem e aperte Ctrl+V.' : 'Não consegui copiar.');
               d.classList.add('ok'); setTimeout(function(){ d.classList.remove('ok'); }, 3000);
+              // na sobreposicao, o toque fecha o painel: a conversa volta a ficar inteira na tela
+              if (box.classList.contains('pdv-compacto')) setTimeout(function(){ box.classList.remove('pdv-aberto'); }, 900);
               envia({ tipo: 'resposta', titulo: r.titulo || '', colou: colou, copiou: copiou });
             });
             box.appendChild(d);
           });
+          ajustarLarguraRespostas();
         } catch (e) {}
       };
 
@@ -640,7 +693,7 @@ public partial class ChatIfood : UserControl
 
       // observador: qualquer mexida no DOM reconta (com folga) e tenta abrir/isolar.
       var pend = null;
-      function agenda(){ if (pend) return; pend = setTimeout(function(){ pend=null; window.pdvContar(); }, 400); }
+      function agenda(){ if (pend) return; pend = setTimeout(function(){ pend=null; window.pdvContar(); if (window.pdvAjustarRespostas) window.pdvAjustarRespostas(); }, 400); }
       // CORTINA: o dono nao quer ver o painel do Gestor nem por 3 segundos depois
       // de recarregar. Cobre a pagina desde a carga e so sai quando o chat esta
       // isolado. Nunca fica para sempre: cai sozinha em 25 s (tela morta e pior
