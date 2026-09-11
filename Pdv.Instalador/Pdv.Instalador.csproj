@@ -7,8 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>InstalarPdv</AssemblyName>
-    <AssemblyTitle>Instalador do PDV MMTech</AssemblyTitle>
-    <Product>PDV MMTech</Product>
+    <AssemblyTitle>Instalador do MMFood</AssemblyTitle>
+    <Product>MMFood</Product>
     <Company>MMTech</Company>
     <Version>2.0.0</Version>
     <!-- Mesmo icone do app: o instalador e a primeira coisa que a loja ve. -->

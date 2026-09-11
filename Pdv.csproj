@@ -7,12 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>Pdv</AssemblyName>
-    <AssemblyTitle>PDV - Frente de Caixa</AssemblyTitle>
+    <AssemblyTitle>MMFood - Frente de Caixa</AssemblyTitle>
     <Version>1.0.0</Version>
     <!-- Nome e empresa do Certificado de Conformidade PayGo (SETIS, 25/08/2026).
          Tem que bater com o 735-000 do protocolo e com o User-Agent do ControlPay. -->
-    <Product>Pdv.AmericanDay</Product>
-    <Company>American Day</Company>
+    <Product>MMFood</Product>
+    <Company>MMTech</Company>
     <!-- Icone do exe (conceito "mm" grafite aprovado 04/09). Sem ele o atalho fica
          generico ("cara de virus"). Gerado pelo modo gerar-icone do Pdv.Testes. -->
     <ApplicationIcon>Recursos\mmtech.ico</ApplicationIcon>

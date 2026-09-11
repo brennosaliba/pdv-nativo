@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Pdv"
         xmlns:telas="clr-namespace:Pdv.Telas"
-        Title="PDV" WindowState="Maximized" WindowStyle="None"
+        Title="MMFood" WindowState="Maximized" WindowStyle="None"
         Background="{DynamicResource Fundo}"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
     <Grid>

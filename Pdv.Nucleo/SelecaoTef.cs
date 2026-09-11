@@ -178,11 +178,11 @@ public static class ConfigPGWebLib
     /// <summary>
     /// AUTNAME: o nome que vai no Certificado de Conformidade da PayGo. A homologacao
     /// (PdC 115998) foi aprovada pela SETIS em 11/09/2026 como "Pdv.AmericanDay 0.8.13";
-    /// o dono pediu o nome do produto no certificado: MMTech, versao 1.0. A versao
-    /// (AUTVER) sai da versao do exe (Pdv.csproj), por isso o exe virou 1.0.0.
-    /// Mudar isto de novo = venda de conferencia + logs para a PayGo.
+    /// o dono escolheu o nome do produto para o certificado: MMFood, versao 1.0
+    /// (MMTech e a empresa). A versao (AUTVER) sai da versao do exe (Pdv.csproj),
+    /// por isso o exe virou 1.0.0. Mudar isto de novo = venda de conferencia + logs.
     /// </summary>
-    public const string NomeAutomacao = "MMTech";
+    public const string NomeAutomacao = "MMFood";
 
     /// <summary>AUTDEV em branco: a mesma razão social que o 716 do PayGo por arquivos usa.</summary>
     public const string DesenvolvedorPadrao = "American Day";

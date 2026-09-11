@@ -75,7 +75,7 @@ public static class TestesCasaPGWebLib
 
             var vazio = ConfigPGWebLib.Opcoes(Cfg(), "0.5.9");
             // 11/09/2026: a SETIS aprovou a homologacao e o dono escolheu o nome do certificado.
-            checar(vazio.NomeAutomacao == "MMTech" && vazio.VersaoAutomacao == "0.5.9", "AUTNAME/AUTVER: nome do certificado (MMTech) e a versão do exe");
+            checar(vazio.NomeAutomacao == "MMFood" && vazio.VersaoAutomacao == "0.5.9", "AUTNAME/AUTVER: nome do certificado (MMFood) e a versão do exe");
             checar(vazio.Desenvolvedor == "American Day", "AUTDEV em branco: American Day (mesmo default do 716 do PayGo por arquivos)");
             checar(vazio.Capacidades == ProvedorPGWebLib.CapacidadesPadrao && vazio.PortaPinpad == "0" && vazio.Moeda == "986", "AUTCAP padrão, porta automática, moeda 986");
             checar(vazio.RedeCartao is null && vazio.RedePix is null, "sem rede gravada: null (a biblioteca abre o menu, a tela responde)");

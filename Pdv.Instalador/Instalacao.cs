@@ -35,7 +35,9 @@ public static class Instalacao
     // assina o servico nao pode ver a marca de outro cliente no Adicionar/Remover
     // Programas. O nome DA LOJA aparece onde importa (tela, cupom, comprovante) e
     // vem da configuracao, nao daqui.
-    public const string NomePrograma = "PDV MMTech";
+    // 11/09/2026: o produto se chama MMFood; MMTech e a empresa. A chave de
+    // desinstalacao (PdvMMTech) fica como esta para nao orfanar quem ja instalou.
+    public const string NomePrograma = "MMFood";
     public const string Fabricante = "MMTech";
 
     /// <summary>Como o produto se chamava antes. Existe só para a migração: uma
