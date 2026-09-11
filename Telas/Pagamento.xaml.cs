@@ -789,6 +789,15 @@ public partial class Pagamento : UserControl
     /// </summary>
     private void CancelarCobrancaNoTef()
     {
+        // PELA BIBLIOTECA (11/09/2026, Savassi): não existe janela do PayGo; quem aborta é o
+        // provedor (PW_iPPAbort, disparado pelo cancelamento do token). Mandar "aperte Esc na
+        // janela do PayGo" aqui era instrução para um programa que a loja não usa mais.
+        if (Servicos.PGWebLib() is not null)
+        {
+            TxtDetalheEstado.Text = "Pedi o cancelamento na maquininha. Espere ela confirmar…";
+            _cobranca?.Cancel();
+            return;
+        }
         int janelas;
         try { janelas = JanelaPayGo.EnviarEsc(); } catch { janelas = 0; }
         TxtDetalheEstado.Text = janelas > 0

@@ -328,6 +328,12 @@ public static class TestesCasaPGWebLib
             checar(cfg.Contains("InstalarAsync(", StringComparison.Ordinal) && cfg.Contains("AdministrativaAsync(", StringComparison.Ordinal),
                 "Instalar e ADM chamam o provedor pelo mesmo laço (PWOPER_INSTALL / PWOPER_ADMIN)");
             checar(!cfg.Contains("PGWebLibNativa", StringComparison.Ordinal), "a Configuração não constrói a DLL nativa: pede a instância ao Servicos");
+            var pag = Fonte(Path.Combine("Telas", "Pagamento.xaml.cs")) ?? "";
+            var cancelar = pag.Contains("private void CancelarCobrancaNoTef()") ? pag[pag.IndexOf("private void CancelarCobrancaNoTef()", StringComparison.Ordinal)..] : "";
+            cancelar = cancelar.Length > 0 ? cancelar[..Math.Min(cancelar.Length, 1400)] : "";
+            checar(cancelar.IndexOf("Servicos.PGWebLib() is not null", StringComparison.Ordinal) >= 0
+                   && cancelar.IndexOf("Servicos.PGWebLib() is not null", StringComparison.Ordinal) < cancelar.IndexOf("JanelaPayGo.EnviarEsc()", StringComparison.Ordinal),
+                "cancelar cobrança pela biblioteca não procura a janela do PayGo (PPAbort pelo token); a janela é só do PayGo Windows/ControlPay");
 
             // Achados da DLL de verdade (07/09/2026) ligados na casa: PW_End no fechamento e o aviso da pasta da DLL.
             checar(s.Contains("public static void EncerrarTef()", StringComparison.Ordinal) && s.Contains("pg.Encerrar()", StringComparison.Ordinal),
