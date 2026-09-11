@@ -180,7 +180,9 @@ public static class TestesRedesDoMenu
 
         ProvedorPGWebLib Provedor(IPGWebLib lib, Func<PwGetData, CancellationToken, Task<string?>> perguntar,
             string[]? permitidas = null, Action<string>? auditar = null, Func<TransacaoPayGo, bool>? guardar = null)
-            => new(lib, pasta, new OpcoesPGWebLib("Pdv.AmericanDay", "0.5.9", "American Day", RedesPermitidas: permitidas))
+            // Ambiente de HOMOLOGAÇÃO: este arquivo modela o roteiro (passo 05 precisa do menu
+            // mesmo com uma rede só). Em produção a rede única é respondida sozinha (ver 7c).
+            => new(lib, pasta, new OpcoesPGWebLib("Pdv.AmericanDay", "0.5.9", "American Day", RedesPermitidas: permitidas, Ambiente: PW.ENVRMNT_TEST))
             {
                 IntervaloPollMs = 5,
                 TempoMaxExecMs = 2000,
@@ -210,6 +212,24 @@ public static class TestesRedesDoMenu
                 "na venda, o menu que chega à tela tem só as redes da loja: " + (vistos.Count > 0 ? Textos(vistos[0]) : "nenhum menu"));
             checar(d.Pago && f.Ultima?.Params.GetValueOrDefault(PW.PWINFO_AUTHSYST) == "C6PAY",
                 "e a rede que foi para a biblioteca é a que o operador tocou: " + f.Ultima?.Params.GetValueOrDefault(PW.PWINFO_AUTHSYST));
+        }
+
+        // 7c. EM PRODUÇÃO (11/09/2026, homologação aprovada): loja com uma credenciadora só
+        // não vê menu de um item. A rede única é respondida sozinha e a venda segue.
+        {
+            var f = new FakePGWebLib { RedesDoMenu = new[] { "C6PAY" } };
+            var vistos = new List<PwGetData>();
+            var p = new ProvedorPGWebLib(f, pasta, new OpcoesPGWebLib("Pdv.AmericanDay", "0.5.9", "American Day", Ambiente: PW.ENVRMNT_PROD))
+            {
+                IntervaloPollMs = 5, TempoMaxExecMs = 2000, TempoMaxCapturaMs = 2000, TempoPerguntaMs = 500,
+                Perguntar = (g, _) => { vistos.Add(g); return Task.FromResult<string?>(null); },
+                Guardar = _ => true,
+            };
+            var d = p.CobrarAsync(TipoTef.Credito, Dinheiro.DeReais(10m), null, 1, null, CancellationToken.None)
+                     .GetAwaiter().GetResult();
+            checar(d.Pago && vistos.Count == 0 && f.Ultima?.Params.GetValueOrDefault(PW.PWINFO_AUTHSYST) == "C6PAY",
+                "em produção, uma rede só não vira pergunta: o caixa responde C6PAY e a venda aprova: "
+                + (vistos.Count > 0 ? "perguntou " + Textos(vistos[0]) : d.Situacao.ToString()));
         }
 
         // 7b. PASSO 05 com o filtro ligado: o menu APARECE e o Esc nega a venda
@@ -274,16 +294,17 @@ public static class TestesRedesDoMenu
             var xaml = Fonte("Telas", "Configuracao.xaml") ?? "";
             var cfg = Fonte("Telas", "Configuracao.xaml.cs") ?? "";
             checar(xaml.Length > 0 && cfg.Length > 0, "achei a Configuração (xaml e xaml.cs)");
-            checar(xaml.Contains("x:Name=\"TxtPgwebRedes\"", StringComparison.Ordinal)
-                   && xaml.Contains("Redes que aparecem para o caixa escolher", StringComparison.Ordinal),
-                "o bloco da biblioteca tem o campo das redes, com rótulo que se lê sem manual");
-            checar(xaml.Contains("Em branco aparecem todas as redes do terminal", StringComparison.Ordinal),
-                "e a frase curta diz o que acontece deixando em branco");
-            checar(cfg.Contains("TxtPgwebRedes.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveRedes", StringComparison.Ordinal)
-                   && cfg.Contains("Chave(ConfigPGWebLib.ChaveRedes,", StringComparison.Ordinal)
+            // 11/09/2026, pedido do dono: "redes que aparecem para o caixa escolher é redundante;
+            // escolhido quem processa cartão e quem processa PIX, a lista não precisa aparecer".
+            // O campo saiu da tela; a chave continua existindo para o motor (e para o roteiro),
+            // mas salvar a Configuração a APAGA: filtro que ninguém vê não pode ficar.
+            checar(!xaml.Contains("x:Name=\"TxtPgwebRedes\"", StringComparison.Ordinal)
+                   && !xaml.Contains("Redes que aparecem para o caixa escolher", StringComparison.Ordinal),
+                "o campo das redes saiu da tela (rede do cartão e do PIX bastam)");
+            checar(cfg.Contains("Chave(ConfigPGWebLib.ChaveRedes, \"\")", StringComparison.Ordinal)
                    && cfg.Contains("ConfigPGWebLib.ChaveDll, ConfigPGWebLib.ChaveRedes,", StringComparison.Ordinal),
-                "a chave é lida, gravada e restaurada no Sair sem salvar");
-            checar(cfg.Contains("PgwebRedes = TxtPgwebRedes.Text", StringComparison.Ordinal), "e vai para o resumo do fim");
+                "salvar limpa a chave, e o Sair sem salvar ainda a restaura");
+            checar(cfg.Contains("PgwebRedes = \"\"", StringComparison.Ordinal), "e o resumo do fim não mostra lista encurtada");
 
             var comFiltro = AssistenteConfig.Resumo(new DadosAssistente { Tef = 4, PgwebRedes = " c6pay, rede , PIX C6 BANK " })
                 .First(l => l.Titulo == "Maquininha").Valor;

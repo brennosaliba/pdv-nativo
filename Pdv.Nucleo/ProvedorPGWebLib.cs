@@ -1554,12 +1554,15 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         if (!ctx.Conhecidos.TryGetValue(p.Identificador, out var v) || string.IsNullOrWhiteSpace(v))
         {
-            // Menu com uma opção só não precisa de operador. MENOS o menu de redes: o passo 05 do
-            // roteiro manda o operador apertar Esc nele, e numa loja com uma credenciadora só o
-            // caixa respondia sozinho — o menu nunca aparecia e não havia onde apertar Esc. Rede
-            // gravada na Configuração continua sendo respondida sem perguntar, mas pela linha de
-            // cima (Conhecidos), que é onde essa decisão é do lojista e não nossa.
-            if (p.EhMenu && p.Opcoes is { Count: 1 } && p.Identificador != PW.PWINFO_AUTHSYST) return p.Opcoes[0].Valor;
+            // Menu com uma opção só não precisa de operador. O menu de redes é a exceção EM
+            // HOMOLOGAÇÃO: o passo 05 do roteiro manda o operador apertar Esc nele, e numa loja com
+            // uma credenciadora só o caixa respondia sozinho, o menu nunca aparecia e não havia onde
+            // apertar Esc. Em produção (11/09/2026, homologação aprovada) uma rede só é respondida
+            // sem perguntar: lista de um item não é escolha. Rede gravada na Configuração continua
+            // sendo respondida pela linha de cima (Conhecidos), que é a decisão do lojista.
+            if (p.EhMenu && p.Opcoes is { Count: 1 }
+                && (p.Identificador != PW.PWINFO_AUTHSYST || _op.Ambiente == PW.ENVRMNT_PROD))
+                return p.Opcoes[0].Valor;
             return null;
         }
         if (!p.EhMenu || p.Opcoes is null || p.Opcoes.Count == 0) return v;

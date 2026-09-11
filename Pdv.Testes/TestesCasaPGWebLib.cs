@@ -249,7 +249,7 @@ public static class TestesCasaPGWebLib
             var xaml = Fonte("Telas", "Configuracao.xaml") ?? "";
             checar(xaml.Contains("x:Name=\"OpTefPGWebLib\"", StringComparison.Ordinal) && xaml.Contains("PayGo (biblioteca)", StringComparison.Ordinal),
                 "a Configuração tem o cartão 'PayGo (biblioteca)'");
-            checar(xaml.Contains("BlocoPGWebLib", StringComparison.Ordinal) && xaml.Contains("TxtPgwebDir", StringComparison.Ordinal)
+            checar(xaml.Contains("BlocoPGWebLib", StringComparison.Ordinal) && xaml.Contains("TxtPgwebBiblioteca", StringComparison.Ordinal)
                    && xaml.Contains("TxtPgwebPorta", StringComparison.Ordinal) && xaml.Contains("TxtPgwebCapacidades", StringComparison.Ordinal),
                 "com os campos novos: diretório, porta do pinpad, capacidades");
             checar(xaml.Contains("Instalar ponto de captura", StringComparison.Ordinal) && xaml.Contains("Click=\"InstalarPGWebLib\"", StringComparison.Ordinal)
@@ -266,15 +266,19 @@ public static class TestesCasaPGWebLib
             var cfg = Fonte("Telas", "Configuracao.xaml.cs") ?? "";
             checar(cfg.Contains("\"tef_pgweb_dir\"", StringComparison.Ordinal) && cfg.Contains("\"tef_pgweb_porta_pinpad\"", StringComparison.Ordinal) && cfg.Contains("\"tef_pgweb_capacidades\"", StringComparison.Ordinal),
                 "a Configuração grava/restaura as chaves novas");
-            checar(xaml.Contains("x:Name=\"TxtPgwebDll\"", StringComparison.Ordinal) && xaml.Contains("Pasta da PGWebLib.dll", StringComparison.Ordinal)
-                   && cfg.Contains("TxtPgwebDll.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveDll", StringComparison.Ordinal)
-                   && cfg.Contains("Chave(ConfigPGWebLib.ChaveDll, TxtPgwebDll.Text)", StringComparison.Ordinal)
-                   // Presenca na lista de restauro, e nao vizinhanca: travar a ORDEM
-                   // fazia o teste quebrar quando um campo novo entrava no meio, o que
-                   // e mudanca legitima. O que importa e a chave estar la.
+            // 11/09/2026: as pastas da biblioteca saíram da tela. A DLL vem embarcada em <exe>\pgweb;
+            // a tela mostra a pasta EM USO (TxtPgwebBiblioteca), não grava mais a chave, e o Sair
+            // sem salvar continua restaurando o que estiver no banco.
+            checar(!xaml.Contains("x:Name=\"TxtPgwebDll\"", StringComparison.Ordinal) && !xaml.Contains("x:Name=\"TxtPgwebDir\"", StringComparison.Ordinal)
+                   && xaml.Contains("x:Name=\"TxtPgwebBiblioteca\"", StringComparison.Ordinal)
+                   && cfg.Contains("ConfigPGWebLib.PastaDll(k => Vendas.Config(cx, k))", StringComparison.Ordinal)
+                   && !cfg.Contains("Chave(ConfigPGWebLib.ChaveDll,", StringComparison.Ordinal)
                    && cfg.Contains("ConfigPGWebLib.ChaveDll, ConfigPGWebLib.ChaveRedes", StringComparison.Ordinal)
-                   && cfg.Contains("PgwebDll = TxtPgwebDll.Text", StringComparison.Ordinal),
-                "campo 'Pasta da PGWebLib.dll' (tef_pgweb_dll): lido, gravado, restaurado no Sair sem salvar e levado ao resumo");
+                   && cfg.Contains("PgwebDll = _pgwebDll", StringComparison.Ordinal),
+                "pasta da PGWebLib.dll: sem campo na tela, mostrada como em uso, não gravada, restaurada no Sair sem salvar e levada ao resumo");
+            checar(xaml.Contains("A biblioteca da PayGo já vem com o caixa", StringComparison.Ordinal)
+                   && !xaml.Contains("Precisa do PayGo Windows instalado", StringComparison.Ordinal),
+                "a tela não manda mais instalar o PayGo Windows");
 
             // O PONTO DE CAPTURA E O CNPJ DA INSTALACAO (09/09/2026). Sao os dois dados
             // que a PayGo confere no comprovante de instalacao, e nao existiam em lugar

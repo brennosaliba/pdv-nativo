@@ -40,7 +40,9 @@ public static class TestesEscNaRede
         Directory.CreateDirectory(pasta);
 
         static OpcoesPGWebLib Op(string? rede = null)
-            => new("Pdv.AmericanDay", "0.5.9", "American Day", RedeCartao: rede);
+            // Passo 05 do roteiro = ambiente de HOMOLOGAÇÃO: só nele o menu de uma rede só ainda
+            // aparece (em produção, desde 11/09/2026, o caixa responde a rede única sozinho).
+            => new("Pdv.AmericanDay", "0.5.9", "American Day", RedeCartao: rede, Ambiente: PW.ENVRMNT_TEST);
 
         ProvedorPGWebLib Provedor(IPGWebLib f, Func<PwGetData, CancellationToken, Task<string?>> perguntar,
             Func<TransacaoPayGo, bool>? guardar = null, string? rede = null)

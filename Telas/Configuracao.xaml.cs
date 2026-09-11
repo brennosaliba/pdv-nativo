@@ -176,13 +176,16 @@ public partial class Configuracao : UserControl
         TxtPayGoEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
         // PayGo pela biblioteca: chaves próprias + as reaproveitadas do PayGo por arquivos
         // (empresa e redes são da LOJA, não do caminho até o PayGo).
-        TxtPgwebDir.Text = Vendas.Config(cx, "tef_pgweb_dir", "");
-        TxtPgwebDll.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveDll, "");
+        // As pastas da biblioteca não são mais campos (11/09/2026): a DLL vem embarcada em
+        // <exe>\pgweb e a pasta de trabalho tem padrão. As chaves continuam valendo se
+        // alguém as gravou (máquina de homologação); a tela só mostra o que está em uso.
+        _pgwebDir = Vendas.Config(cx, "tef_pgweb_dir", "");
+        _pgwebDll = ConfigPGWebLib.PastaDll(k => Vendas.Config(cx, k)) ?? "";
+        PintarBiblioteca();
         TxtPgwebPdc.Text = Vendas.Config(cx, "tef_pgweb_ponto_captura", "");
         TxtPgwebCnpj.Text = Vendas.Config(cx, "tef_pgweb_cnpj", "");
         TxtPgwebPorta.Text = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
         TxtPgwebCapacidades.Text = Vendas.Config(cx, "tef_pgweb_capacidades", "");
-        TxtPgwebRedes.Text = Vendas.Config(cx, ConfigPGWebLib.ChaveRedes, "");
         TxtPgwebEmpresa.Text = Vendas.Config(cx, "tef_paygo_empresa", "");
         ChkTefParcelas.IsChecked = Vendas.Config(cx, "tef_perguntar_parcelas", "0") == "1";
         ChkTefVoucher.IsChecked = Vendas.Config(cx, "forma_voucher", "1") == "1";
@@ -271,7 +274,7 @@ public partial class Configuracao : UserControl
         PassoMaquininha.Visibility = Se(p == PassoConfig.Maquininha);
         PassoPareamento.Visibility = Se(p == PassoConfig.Pareamento);
         PassoResumo.Visibility = Se(p == PassoConfig.Resumo);
-        if (p == PassoConfig.Pareamento) PintarFilaMorta();
+        if (p == PassoConfig.Resumo) PintarFilaMorta();
 
         _navegando = true;
         var indice = (int)p;
@@ -370,9 +373,9 @@ public partial class Configuracao : UserControl
         // As redes são as mesmas chaves nos dois PayGo; quem vale é a caixa do modo escolhido.
         PayGoRedeCartao = RedeEscolhida(TefModo == 4 ? CboPgwebRede : CboPayGoRede),
         PayGoRedePix = RedeEscolhida(TefModo == 4 ? CboPgwebRedePix : CboPayGoRedePix),
-        PgwebDir = TxtPgwebDir.Text,
-        PgwebDll = TxtPgwebDll.Text,
-        PgwebRedes = TxtPgwebRedes.Text,
+        PgwebDir = _pgwebDir,
+        PgwebDll = _pgwebDll,
+        PgwebRedes = "",
         PgwebCapacidades = TxtPgwebCapacidades.Text,
         CpayChave = PwdCpayChave.Password,
         CpayPessoa = TxtCpayPessoa.Text,
@@ -721,19 +724,37 @@ public partial class Configuracao : UserControl
         // Aqui pode ser detalhado: quem abre esta tela tem a senha e quer saber QUAL
         // venda e QUAL produto. Foram as duas perguntas do dono sobre a versão antiga,
         // que dizia "o código de produto" sem nomear nada.
+        // Três linhas, sem explicação de motor (11/09/2026: a versão longa "não dava para entender").
         var linhas = new List<string>
         {
-            $"{t.Quantas} {(t.Quantas == 1 ? "venda não subiu" : "vendas não subiram")} "
-                + $"e o painel não vai aceitar do jeito que {(t.Quantas == 1 ? "ela está gravada" : "elas estão gravadas")} "
-                + $"({t.Valor.Formatado()}).",
-            "Quais: " + string.Join(", ", t.Vendas) + ".",
+            $"{t.Quantas} {(t.Quantas == 1 ? "venda não sobe" : "vendas não sobem")} para o painel ({t.Valor.Formatado()}): "
+                + (t.Produtos.Count > 0
+                    ? "produto que o painel não conhece (" + string.Join(", ", t.Produtos) + ")."
+                    : "registro que o painel recusa."),
+            "Vendas: " + string.Join(", ", t.Vendas) + ".",
+            "Tirar da fila só para o aviso; nada é apagado no caixa.",
         };
-        if (t.Produtos.Count > 0)
-            linhas.Add("O que o painel recusa é o código do produto gravado nelas: "
-                       + string.Join(", ", t.Produtos) + ".");
-        linhas.Add("Tirar da fila não apaga nada. A venda, o valor e o registro continuam no caixa, "
-                   + "e param de contar como pendência.");
         TxtFilaMorta.Text = string.Join("\n", linhas);
+    }
+
+    private string _pgwebDir = "";
+    private string _pgwebDll = "";
+
+    /// <summary>A linha que substitui os campos de pasta da biblioteca: diz o que está em uso.</summary>
+    private void PintarBiblioteca()
+    {
+        var dir = _pgwebDir.Trim().Length == 0 ? ConfigPGWebLib.DirPadrao : _pgwebDir.Trim();
+        if (_pgwebDll.Length == 0)
+        {
+            TxtPgwebBiblioteca.Text = "Biblioteca: não encontrada. Reinstale o caixa (ela vem na pasta pgweb ao lado do programa).";
+            return;
+        }
+        string versao;
+        try { versao = System.Diagnostics.FileVersionInfo.GetVersionInfo(Path.Combine(_pgwebDll, "PGWebLib.dll")).FileVersion ?? "?"; }
+        catch { versao = "?"; }
+        var embarcada = string.Equals(_pgwebDll.TrimEnd('\\'),
+            Path.Combine(AppContext.BaseDirectory, ConfigPGWebLib.SubpastaDllEmbarcada).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+        TxtPgwebBiblioteca.Text = $"Biblioteca: PGWebLib {versao}{(embarcada ? ", a que veio com o caixa" : ", em " + _pgwebDll)} · dados em {dir}";
     }
 
     private void DispensarFilaMorta(object sender, RoutedEventArgs e)
@@ -1541,15 +1562,14 @@ public partial class Configuracao : UserControl
         Chave("tef_paygo_empresa", pgweb ? TxtPgwebEmpresa.Text : TxtPayGoEmpresa.Text);
         Chave("tef_paygo_rede", RedeEscolhida(pgweb ? CboPgwebRede : CboPayGoRede));
         Chave("tef_paygo_rede_pix", RedeEscolhida(pgweb ? CboPgwebRedePix : CboPayGoRedePix));
-        Chave("tef_pgweb_dir", TxtPgwebDir.Text);
-        Chave(ConfigPGWebLib.ChaveDll, TxtPgwebDll.Text);
+        // tef_pgweb_dir e tef_pgweb_dll não passam mais pela tela: ficam como estão no banco.
         Chave("tef_pgweb_ponto_captura", TxtPgwebPdc.Text);
         Chave("tef_pgweb_cnpj", TxtPgwebCnpj.Text);   // em branco: o Windows procura a PGWebLib.dll sozinho
         Chave("tef_pgweb_porta_pinpad", TxtPgwebPorta.Text);
         Chave("tef_pgweb_capacidades", TxtPgwebCapacidades.Text);
-        // Em branco APAGA a chave, e chave apagada é o menu inteiro: a loja volta a ver todas as
-        // redes do terminal, que é o padrão.
-        Chave(ConfigPGWebLib.ChaveRedes, FiltroRedes.Texto(new[] { TxtPgwebRedes.Text }));
+        // 11/09/2026: o campo "redes que aparecem para o caixa escolher" saiu da tela (rede do
+        // cartão e do PIX bastam). Salvar APAGA a chave: filtro que ninguém vê não pode ficar.
+        Chave(ConfigPGWebLib.ChaveRedes, "");
         // `tef_paygo_imprimir_vias` NÃO é gravada aqui: quem manda nela agora são as duas
         // políticas de via do passo Impressora (Impressoes.Gravar a mantém em sincronia).
         // Ela continua em ChavesTef porque o Sair sem salvar tem que devolvê-la.
@@ -1739,7 +1759,9 @@ public partial class Configuracao : UserControl
             if (TefModo != 4) { StatusTef("Escolha \"PayGo (biblioteca)\" aqui em cima para usar este botão.", "Erro"); return; }
             // Pasta apontada sem a DLL não adianta tentar. (Com o kit avulso, sem Warsaw, a
             // biblioteca carrega de qualquer pasta: medido em 07/09/2026 rodando de C:\PGWebLibd.)
-            if (ConfigPGWebLib.AvisoPastaDll(TxtPgwebDll.Text) is { } avisoDll) { StatusTef("✗ " + avisoDll, "Erro"); return; }
+            string? avisoDll;
+            using (var cx0 = Banco.Abrir()) avisoDll = ConfigPGWebLib.AvisoPastaDll(ConfigPGWebLib.PastaDll(k => Vendas.Config(cx0, k)));
+            if (avisoDll is { } a) { StatusTef("✗ " + a, "Erro"); return; }
             using (var cx = Banco.Abrir()) GravarTef(cx);
             _tefGravadoPeloTeste = true;
             if (Servicos.PGWebLib() is not { } pg) { StatusTef("A biblioteca não está ligada nesta tela. Escolha o PayGo (biblioteca) aqui em cima e tente de novo.", "Erro"); return; }
