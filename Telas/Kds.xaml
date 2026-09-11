@@ -46,6 +46,22 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <!-- BUSCA POR NUMERO (11/09/2026, pedido do dono). Digitou, o quadro mostra
+                         so os pedidos cujo numero contem os digitos; apagou, volta tudo. No
+                         caixa touch o toque no campo abre o teclado do Windows. -->
+                    <Border CornerRadius="10" BorderThickness="1" Padding="8,0" Margin="0,0,8,0"
+                            Background="{DynamicResource Painel}" BorderBrush="{DynamicResource Borda}" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="🔍" FontSize="14" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBox x:Name="TxtBusca" Width="120" MinHeight="34" FontSize="15" BorderThickness="0"
+                                     Background="Transparent" VerticalContentAlignment="Center"
+                                     Tag="nº do pedido" ToolTip="Procurar um pedido pelo número"
+                                     TextChanged="BuscaMudou" GotFocus="BuscaFocou"/>
+                            <Button x:Name="BtnLimparBusca" Content="✕" Click="LimparBusca" Visibility="Collapsed"
+                                    Style="{StaticResource BotaoTexto}" Padding="6,0" FontSize="14" VerticalAlignment="Center"
+                                    ToolTip="Limpar a busca"/>
+                        </StackPanel>
+                    </Border>
                     <!-- ONDE A COMANDA SAI — no cabeçalho, e não só no assistente (29/08).
                          Relato do dono, com o PDV já instalado na loja: "apos instalado,
                          nao mostra a impressora no PDV na aba de delivery, somente no dash

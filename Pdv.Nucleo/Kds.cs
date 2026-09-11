@@ -216,6 +216,28 @@ public static class Kds
     /// O quadro inteiro: a preparar, em preparo e pronto aguardando coleta.
     /// Entregue e cancelado saem — quadro é presente, não histórico.
     /// </summary>
+    /// <summary>
+    /// A BUSCA POR NÚMERO (11/09/2026, pedido do dono: "barra de procura para procurar um
+    /// pedido pelo número", no KDS do caixa e no da cozinha). Compara só os DÍGITOS dos dois
+    /// lados: "#4719", "4719" e "47 19" são o mesmo pedido, e digitar "47" acha o 4719 e o
+    /// 1470 (é assim que se procura com um pedaço do número na cabeça). Busca vazia = tudo.
+    /// </summary>
+    public static bool CasaBusca(string? numero, string? busca)
+    {
+        var b = SoDigitos(busca);
+        if (b.Length == 0) return true;
+        return SoDigitos(numero).Contains(b, StringComparison.Ordinal);
+    }
+
+    /// <summary>Os tickets que casam com a busca (todos, quando ela está vazia).</summary>
+    public static IEnumerable<Ticket> FiltrarPorNumero(IEnumerable<Ticket> tickets, string? busca)
+    {
+        var b = SoDigitos(busca);
+        return b.Length == 0 ? tickets : tickets.Where(t => SoDigitos(t.Numero).Contains(b, StringComparison.Ordinal));
+    }
+
+    private static string SoDigitos(string? s) => new string((s ?? "").Where(char.IsDigit).ToArray());
+
     public static List<Ticket> Abertos()
     {
         using var cx = Banco.Abrir();

@@ -1304,6 +1304,7 @@ TestesBotaoAtualizar.Rodar((cond, nome) => Check("atualizar: " + nome, cond));
 TestesSessaoWhatsApp.Rodar((cond, nome) => Check("whatsapp-sessao: " + nome, cond));
 TestesRespostasProntas.Rodar((cond, nome) => Check("respostas: " + nome, cond));
 TestesFechamentoVoltar.Rodar((cond, nome) => Check("fechamento-voltar: " + nome, cond));
+TestesBuscaKds.Rodar((cond, nome) => Check("busca-kds: " + nome, cond));
 
 // -- PROMOCOES: o motor que faltava (a promocao de quinta invisivel no caixa) --
 Console.WriteLine();

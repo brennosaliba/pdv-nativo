@@ -28,6 +28,8 @@ public partial class Kds : UserControl
     private readonly string _loja;
     private DispatcherTimer? _timer;
     private bool _puxando;
+    /// <summary>O que está na caixa de busca (só os dígitos importam; ver Nucleo.Kds.CasaBusca).</summary>
+    private string _busca = "";
 
     public Kds(string loja)
     {
@@ -286,7 +288,13 @@ public partial class Kds : UserControl
         using (var cxp = Banco.Abrir()) _politicaComanda = Impressoes.Politica(cxp, Impressoes.Comanda);
         _porLinha = CabemPorLinha();
 
-        var abertos = Nucleo.Kds.Abertos();
+        var todos = Nucleo.Kds.Abertos();
+        // A busca por número filtra as três colunas de uma vez; o rodapé diz quantos ficaram de fora.
+        var abertos = Nucleo.Kds.FiltrarPorNumero(todos, _busca).ToList();
+        if (abertos.Count != todos.Count || (_busca.Length > 0 && todos.Count > 0))
+            TxtStatus.Text = abertos.Count == 0
+                ? $"Nenhum pedido com \"{_busca}\" no quadro"
+                : $"Busca \"{_busca}\": {abertos.Count} de {todos.Count} pedidos";
 
         // A PREPARAR: agendados no topo (por hora marcada), depois a fila de chegada.
         var fila = Nucleo.Kds.OrdenarFila(abertos.Where(t => t.Status == Nucleo.Kds.Recebido));
@@ -299,6 +307,19 @@ public partial class Kds : UserControl
         TxtQtdPreparo.Text  = abertos.Count(t => t.Status == Nucleo.Kds.Preparando).ToString();
         TxtQtdPronto.Text   = abertos.Count(t => t.Status == Nucleo.Kds.Pronto).ToString();
     }
+
+    private void BuscaMudou(object sender, TextChangedEventArgs e)
+    {
+        _busca = TxtBusca.Text.Trim();
+        BtnLimparBusca.Visibility = _busca.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (_busca.Length == 0) TxtStatus.Text = "";
+        Pintar();
+    }
+
+    private void LimparBusca(object sender, RoutedEventArgs e) { TxtBusca.Text = ""; TxtBusca.Focus(); }
+
+    /// <summary>Caixa touch: o toque no campo abre o teclado do Windows, como na justificativa.</summary>
+    private void BuscaFocou(object sender, RoutedEventArgs e) => PedirTexto.AbrirTecladoVirtualSeTouch();
 
     /// <summary>
     /// Quantas colunas de card cabem DENTRO de cada coluna de status AGORA.

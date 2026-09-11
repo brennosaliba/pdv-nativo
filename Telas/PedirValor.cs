@@ -346,6 +346,12 @@ public static class PedirTexto
     /// Um teste de "ja esta aberto" por processo mataria o teclado do caixa touch na segunda
     /// vez, e a revisao de 09/09/2026 pegou isso antes de sair.
     /// </summary>
+    /// <summary>Para outras telas (busca do KDS): o mesmo teclado, só quando não há teclado físico à mão.</summary>
+    internal static void AbrirTecladoVirtualSeTouch()
+    {
+        try { if (System.Windows.Input.Tablet.TabletDevices.Count > 0) AbrirTecladoVirtual(); } catch { }
+    }
+
     private static void AbrirTecladoVirtual()
     {
         _ = System.Threading.Tasks.Task.Run(() =>
