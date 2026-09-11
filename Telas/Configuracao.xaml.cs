@@ -181,7 +181,6 @@ public partial class Configuracao : UserControl
         // alguém as gravou (máquina de homologação); a tela só mostra o que está em uso.
         _pgwebDir = Vendas.Config(cx, "tef_pgweb_dir", "");
         _pgwebDll = ConfigPGWebLib.PastaDll(k => Vendas.Config(cx, k)) ?? "";
-        PintarBiblioteca();
         TxtPgwebPdc.Text = Vendas.Config(cx, "tef_pgweb_ponto_captura", "");
         TxtPgwebCnpj.Text = Vendas.Config(cx, "tef_pgweb_cnpj", "");
         TxtPgwebPorta.Text = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
@@ -737,25 +736,13 @@ public partial class Configuracao : UserControl
         TxtFilaMorta.Text = string.Join("\n", linhas);
     }
 
+    /// <summary>
+    /// Pastas da biblioteca (tef_pgweb_dir / tef_pgweb_dll) lidas do banco: não são campos
+    /// nem aparecem na tela (11/09/2026); só o teste da maquininha as usa, e a DLL vem
+    /// embarcada em pgweb ao lado do exe.
+    /// </summary>
     private string _pgwebDir = "";
     private string _pgwebDll = "";
-
-    /// <summary>A linha que substitui os campos de pasta da biblioteca: diz o que está em uso.</summary>
-    private void PintarBiblioteca()
-    {
-        var dir = _pgwebDir.Trim().Length == 0 ? ConfigPGWebLib.DirPadrao : _pgwebDir.Trim();
-        if (_pgwebDll.Length == 0)
-        {
-            TxtPgwebBiblioteca.Text = "Biblioteca: não encontrada. Reinstale o caixa (ela vem na pasta pgweb ao lado do programa).";
-            return;
-        }
-        string versao;
-        try { versao = System.Diagnostics.FileVersionInfo.GetVersionInfo(Path.Combine(_pgwebDll, "PGWebLib.dll")).FileVersion ?? "?"; }
-        catch { versao = "?"; }
-        var embarcada = string.Equals(_pgwebDll.TrimEnd('\\'),
-            Path.Combine(AppContext.BaseDirectory, ConfigPGWebLib.SubpastaDllEmbarcada).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
-        TxtPgwebBiblioteca.Text = $"Biblioteca: PGWebLib {versao}{(embarcada ? ", a que veio com o caixa" : ", em " + _pgwebDll)} · dados em {dir}";
-    }
 
     private void DispensarFilaMorta(object sender, RoutedEventArgs e)
     {
@@ -2451,14 +2438,13 @@ public static class AssistenteConfig
             3 => $"ControlPay (pinpad no cabo) · terminal {d.CpayTerminal.Trim()} · "
                  + Rede(d.CpayRedeCartao, "cartão") + " · " + Rede(d.CpayRedePix, "PIX")
                  + (d.CpaySandbox ? " · AMBIENTE DE TESTE (sandbox): nenhuma cobrança é de verdade" : ""),
-            4 => $"PayGo (biblioteca) · pasta de trabalho {(d.PgwebDir.Trim().Length == 0 ? ConfigPGWebLib.DirPadrao : d.PgwebDir.Trim())} · "
-                 + (d.PgwebDll.Trim().Length > 0 ? $"DLL em {d.PgwebDll.Trim()} · " : "")
-                 + Rede(d.PayGoRedeCartao, "cartão") + " · " + Rede(d.PayGoRedePix, "PIX")
+            // 11/09/2026: "TEF PayGo", sem pasta nenhuma (a biblioteca vem embarcada).
+            4 => "TEF PayGo · " + Rede(d.PayGoRedeCartao, "cartão") + " · " + Rede(d.PayGoRedePix, "PIX")
                  // Lista encurtada é escolha que o caixa VÊ na hora da venda: some do menu a rede
                  // que ficou de fora, e ninguém procura o motivo numa tela de configuração.
                  + (FiltroRedes.Ler(d.PgwebRedes) is { Count: > 0 } redes
                     ? $" · o caixa só escolhe entre {string.Join(", ", redes)}" : ""),
-            _ => "Maquininha avulsa: o cliente passa o cartão na maquininha da mão. O caixa "
+            _ => "POS: o cliente passa o cartão na maquininha avulsa. O caixa "
                  + "registra que foi cartão e fecha a venda, mas não cobra nada por aqui.",
         };
     }

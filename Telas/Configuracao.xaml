@@ -296,22 +296,22 @@
                          sai daqui. O que cada opção muda vive na linha do PRÓPRIO cartão:
                          "Venda no POS" e "ControlPay" são nomes de fornecedor e não dizem
                          nada sozinhos a quem instala o caixa. -->
-                    <TextBlock Text="Escolha a maquininha deste caixa" Style="{StaticResource Rotulo}" Margin="0,0,0,2"/>
-                    <TextBlock Text="Na dúvida, é a primeira: a maquininha comum, que fica na mão e não tem cabo para o computador. As outras só servem se o caixa mandar o valor para ela sozinho."
-                               FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"
-                               Foreground="{DynamicResource TextoFraco}"/>
+                    <!-- 11/09/2026, pedido do dono: dois cartões só, POS e TEF PayGo. Cobrança pela
+                         internet, PayGo por arquivos e ControlPay continuam no código (quem já
+                         tem gravado segue funcionando), mas não são mais oferecidos. -->
+                    <TextBlock Text="Escolha a maquininha deste caixa" Style="{StaticResource Rotulo}" Margin="0,0,0,8"/>
                     <UniformGrid Columns="2" Margin="0,0,-8,6">
                         <RadioButton x:Name="OpTefNenhum" GroupName="tef" Style="{StaticResource BotaoOpcao}"
                                      MinHeight="92" Checked="TefMudou">
                             <StackPanel>
-                                <TextBlock Text="Maquininha avulsa" FontWeight="Bold" FontSize="17"/>
-                                <TextBlock Text="A da mão, que não conversa com este computador. O cliente passa o cartão nela, o caixa registra que foi cartão e fecha a venda."
+                                <TextBlock Text="POS" FontWeight="Bold" FontSize="17"/>
+                                <TextBlock Text="Maquininha avulsa: o cliente passa o cartão nela e o caixa só registra a forma."
                                            FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
                                            Foreground="{DynamicResource TextoFraco}"/>
                             </StackPanel>
                         </RadioButton>
                         <RadioButton x:Name="OpTefNuvem" GroupName="tef" Style="{StaticResource BotaoOpcao}"
-                                     MinHeight="92" Checked="TefMudou">
+                                     MinHeight="92" Checked="TefMudou" Visibility="Collapsed">
                             <StackPanel>
                                 <TextBlock Text="Cobrança pela internet" FontWeight="Bold" FontSize="17"/>
                                 <TextBlock Text="O caixa manda o valor e ele acende sozinho na maquininha da conta. Ela precisa estar conectada."
@@ -320,7 +320,7 @@
                             </StackPanel>
                         </RadioButton>
                         <RadioButton x:Name="OpTefPayGo" GroupName="tef" Style="{StaticResource BotaoOpcao}"
-                                     MinHeight="92" Checked="TefMudou">
+                                     MinHeight="92" Checked="TefMudou" Visibility="Collapsed">
                             <StackPanel>
                                 <TextBlock Text="PayGo (pinpad no cabo)" FontWeight="Bold" FontSize="17"/>
                                 <TextBlock Text="A maquininha fica ligada NESTE computador por cabo, e quem fala com ela é o PayGo Windows."
@@ -329,7 +329,7 @@
                             </StackPanel>
                         </RadioButton>
                         <RadioButton x:Name="OpTefControlPay" GroupName="tef" Style="{StaticResource BotaoOpcao}"
-                                     MinHeight="92" Checked="TefMudou">
+                                     MinHeight="92" Checked="TefMudou" Visibility="Collapsed">
                             <StackPanel>
                                 <TextBlock Text="ControlPay (pinpad no cabo)" FontWeight="Bold" FontSize="17"/>
                                 <TextBlock Text="Mesmo pinpad do PayGo, mas a cobrança passa pelo portal ControlPay."
@@ -340,8 +340,8 @@
                         <RadioButton x:Name="OpTefPGWebLib" GroupName="tef" Style="{StaticResource BotaoOpcao}"
                                      MinHeight="92" Checked="TefMudou">
                             <StackPanel>
-                                <TextBlock Text="PayGo (biblioteca)" FontWeight="Bold" FontSize="17"/>
-                                <TextBlock Text="Mesmo PayGo Windows e mesmo pinpad no cabo, mas o caixa fala com ele pela biblioteca PGWebLib, sem pasta de troca."
+                                <TextBlock Text="TEF PayGo" FontWeight="Bold" FontSize="17"/>
+                                <TextBlock Text="Maquininha no cabo: o caixa manda o valor e recebe a resposta."
                                            FontSize="12" TextWrapping="Wrap" Margin="0,5,0,0"
                                            Foreground="{DynamicResource TextoFraco}"/>
                             </StackPanel>
@@ -464,12 +464,9 @@
                     </StackPanel>
 
                     <StackPanel x:Name="BlocoPGWebLib" Visibility="Collapsed">
-                        <TextBlock Text="A biblioteca da PayGo já vem com o caixa. Falta a maquininha (pinpad) no USB e o ponto de captura ativado (CNPJ da loja e número do ponto): use o botão Instalar ponto de captura."
-                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                        <!-- 11/09/2026: as pastas da biblioteca deixaram de ser campos. A DLL vem
-                             embarcada em pgweb ao lado do exe e a pasta de trabalho tem padrão;
-                             esta linha só diz o que está em uso. -->
-                        <TextBlock x:Name="TxtPgwebBiblioteca" Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <!-- 11/09/2026: sem texto explicativo e sem campo de pasta. A DLL vem
+                             embarcada em pgweb ao lado do exe e a pasta de trabalho tem padrão. -->
+
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>

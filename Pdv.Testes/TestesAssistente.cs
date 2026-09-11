@@ -469,10 +469,10 @@ public static class TestesAssistente
         checar(Chama(Pronta() with { Tef = 2, PayGoPasta = @"C:\PAYGO", PayGoRedePix = "PIX ITAU" }, "PIX ITAU")
                && Chama(Pronta() with { Tef = 2, PayGoPasta = @"C:\PAYGO" }, "a PayGo escolhe"),
             "a rede do PIX aparece, e em branco a revisão diz que quem escolhe é a PayGo");
-        checar(Chama(Pronta() with { Tef = 4, PgwebDir = @"D:\pg" }, "PayGo (biblioteca)") && Chama(Pronta() with { Tef = 4, PgwebDir = @"D:\pg" }, @"D:\pg"),
-            "PayGo (biblioteca) aparece na revisão com o diretório de trabalho");
-        checar(Chama(Pronta() with { Tef = 4, PgwebDir = "" }, @"C:\ProgramData\PdvNativo\pgweb"),
-            "diretório em branco: a revisão mostra o padrão que vai valer");
+        // 11/09/2026: o cartão chama-se "TEF PayGo" e a revisão não fala de pasta (a biblioteca vem embarcada).
+        checar(Chama(Pronta() with { Tef = 4, PgwebDir = @"D:\pg" }, "TEF PayGo") && !Chama(Pronta() with { Tef = 4, PgwebDir = @"D:\pg" }, @"D:\pg")
+               && !Chama(Pronta() with { Tef = 4, PgwebDir = "" }, @"C:\ProgramData\PdvNativo\pgweb"),
+            "TEF PayGo aparece na revisão, sem pasta de trabalho nem DLL");
         checar(Chama(Pronta() with { Tef = 4, PayGoRedePix = "PIX ITAU" }, "PIX ITAU") && Chama(Pronta() with { Tef = 4 }, "a PayGo escolhe"),
             "as redes reaproveitadas do PayGo aparecem na revisão da biblioteca");
         checar(AssistenteConfig.Resumo(Pronta() with { Tef = 4 }).Any(l => l.Titulo.Contains("Comprovante")),

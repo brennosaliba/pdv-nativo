@@ -247,11 +247,17 @@ public static class TestesCasaPGWebLib
             }
 
             var xaml = Fonte("Telas", "Configuracao.xaml") ?? "";
-            checar(xaml.Contains("x:Name=\"OpTefPGWebLib\"", StringComparison.Ordinal) && xaml.Contains("PayGo (biblioteca)", StringComparison.Ordinal),
-                "a Configuração tem o cartão 'PayGo (biblioteca)'");
-            checar(xaml.Contains("BlocoPGWebLib", StringComparison.Ordinal) && xaml.Contains("TxtPgwebBiblioteca", StringComparison.Ordinal)
+            // 11/09/2026: dois cartões só, "POS" e "TEF PayGo"; os outros três seguem no código,
+            // escondidos, para quem já tem gravado.
+            checar(xaml.Contains("x:Name=\"OpTefPGWebLib\"", StringComparison.Ordinal) && xaml.Contains("Text=\"TEF PayGo\"", StringComparison.Ordinal)
+                   && xaml.Contains("Text=\"POS\"", StringComparison.Ordinal) && !xaml.Contains("PayGo (biblioteca)", StringComparison.Ordinal),
+                "a Configuração tem os cartões 'POS' e 'TEF PayGo'");
+            foreach (var escondido in new[] { "OpTefNuvem", "OpTefPayGo\"", "OpTefControlPay" })
+                checar(System.Text.RegularExpressions.Regex.IsMatch(xaml, "x:Name=\"" + escondido.TrimEnd('"') + "\"[^>]*Visibility=\"Collapsed\""),
+                    escondido.TrimEnd('"') + " continua no código, mas escondido");
+            checar(xaml.Contains("BlocoPGWebLib", StringComparison.Ordinal)
                    && xaml.Contains("TxtPgwebPorta", StringComparison.Ordinal) && xaml.Contains("TxtPgwebCapacidades", StringComparison.Ordinal),
-                "com os campos novos: diretório, porta do pinpad, capacidades");
+                "com os campos: porta do pinpad, capacidades");
             checar(xaml.Contains("Instalar ponto de captura", StringComparison.Ordinal) && xaml.Contains("Click=\"InstalarPGWebLib\"", StringComparison.Ordinal)
                    && xaml.Contains("Click=\"AdmPGWebLib\"", StringComparison.Ordinal),
                 "e os botões 'Instalar ponto de captura' e 'ADM'");
@@ -270,15 +276,15 @@ public static class TestesCasaPGWebLib
             // a tela mostra a pasta EM USO (TxtPgwebBiblioteca), não grava mais a chave, e o Sair
             // sem salvar continua restaurando o que estiver no banco.
             checar(!xaml.Contains("x:Name=\"TxtPgwebDll\"", StringComparison.Ordinal) && !xaml.Contains("x:Name=\"TxtPgwebDir\"", StringComparison.Ordinal)
-                   && xaml.Contains("x:Name=\"TxtPgwebBiblioteca\"", StringComparison.Ordinal)
+                   && !xaml.Contains("TxtPgwebBiblioteca", StringComparison.Ordinal)
                    && cfg.Contains("ConfigPGWebLib.PastaDll(k => Vendas.Config(cx, k))", StringComparison.Ordinal)
                    && !cfg.Contains("Chave(ConfigPGWebLib.ChaveDll,", StringComparison.Ordinal)
                    && cfg.Contains("ConfigPGWebLib.ChaveDll, ConfigPGWebLib.ChaveRedes", StringComparison.Ordinal)
                    && cfg.Contains("PgwebDll = _pgwebDll", StringComparison.Ordinal),
-                "pasta da PGWebLib.dll: sem campo na tela, mostrada como em uso, não gravada, restaurada no Sair sem salvar e levada ao resumo");
-            checar(xaml.Contains("A biblioteca da PayGo já vem com o caixa", StringComparison.Ordinal)
+                "pasta da PGWebLib.dll: sem campo nem linha na tela, não gravada, restaurada no Sair sem salvar");
+            checar(!xaml.Contains("A biblioteca da PayGo já vem com o caixa", StringComparison.Ordinal)
                    && !xaml.Contains("Precisa do PayGo Windows instalado", StringComparison.Ordinal),
-                "a tela não manda mais instalar o PayGo Windows");
+                "o bloco TEF PayGo não tem texto explicativo (11/09: 'só embutir a dll e pronto')");
 
             // O PONTO DE CAPTURA E O CNPJ DA INSTALACAO (09/09/2026). Sao os dois dados
             // que a PayGo confere no comprovante de instalacao, e nao existiam em lugar
