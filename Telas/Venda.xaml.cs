@@ -556,40 +556,62 @@ public partial class Venda : UserControl
         _relogio.Start();
     }
 
+    // ── ATUALIZAR: o painel e o programa, num toque ───────────────────────────
+
     /// <summary>
-    /// PUXA do painel para o caixa: catálogo, preço, promoções e operadores.
+    /// UM BOTÃO SÓ (11/09/2026, pedido do dono: "juntar o botão sincronizar e atualizar
+    /// em uma única função; ao mesmo tempo que puxa atualização já puxa sincronização de
+    /// preço; polui menos, menos botão, e no lugar entra o WhatsApp").
     ///
-    /// A outra direção (venda → painel) NÃO depende mais deste botão: ela sobe
-    /// sozinha assim que a venda fecha, e a fila é varrida a cada 45 s. Enquanto
-    /// dependia daqui, um dia sem ninguém apertar o botão virava um painel
-    /// mostrando R$ 0,00 de faturamento.
+    /// O toque faz as duas coisas, nesta ordem:
+    ///  1. PUXA do painel: catálogo, preço, promoções e operadores. A outra direção
+    ///     (venda → painel) não depende daqui: sobe sozinha quando a venda fecha e a
+    ///     fila é varrida a cada 45 s; aqui ela acontece de novo, de graça, e serve de
+    ///     rede: o que ficou preso aparece no número do selo. reenviarDesistidas: tocar
+    ///     no botão é o gesto "eu tratei o motivo, tenta de novo"; cada toque vale UMA
+    ///     tentativa por linha, o ciclo automático continua sem tocá-las.
+    ///  2. PERGUNTA ao servidor se tem versão nova do programa. Tem? A conversa vira a
+    ///     da troca (<see cref="AtualizarCaixa.ExecutarAsync"/>: portão, o sim do
+    ///     operador, download, entrega ao instalador, e o PDV sai de cena). Não tem?
+    ///     Uma caixa só resume o que desceu e diz que o programa está em dia. Nunca
+    ///     duas caixas para dizer "tudo em dia" duas vezes.
     ///
-    /// A subida continua acontecendo aqui também — de graça, já que é a mesma
-    /// fila — e serve de rede: se algo ficou preso, o operador vê o número.
+    /// A DECISÃO da troca mora em <see cref="Nucleo.Atualizacao"/> e a mecânica em
+    /// <see cref="AtualizarCaixa"/>; daqui vai só o que só esta tela sabe: quantos itens
+    /// tem na comanda e se a maquininha está ocupada. Nada aqui pode derrubar a frente
+    /// de caixa: o pior desfecho aceitável é "não atualizou e você continua vendendo".
     /// </summary>
-    private async void Sincronizar(object sender, RoutedEventArgs e)
+    private async void AtualizarOCaixa(object sender, RoutedEventArgs e)
     {
         var dono = Window.GetWindow(this)!;
-        BtnSync.IsEnabled = false;
+        BtnAtualizar.IsEnabled = false;
         // (na barra compacta o glifo fica escondido e o botão só escurece enquanto
         // trabalha: mostrar o ícone alargaria o botão e podia devolver a 2ª linha)
         var girando = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         var passo = 0;
         var quadros = new[] { "⟳", "⟲" };
-        girando.Tick += (_, _) => TxtIconeSync.Text = quadros[++passo % quadros.Length];
+        girando.Tick += (_, _) => TxtIconeAtualizar.Text = quadros[++passo % quadros.Length];
         girando.Start();
 
-        var etapa = "";
-        var andamento = new Progress<string>(t => etapa = t);
+        var estaFechando = false;
         try
         {
-            // reenviarDesistidas: TOCAR NO BOTÃO É O GESTO "eu tratei o motivo, tenta de
-            // novo". Sem isto o aviso de venda desistida era um beco sem saída: o gerente
-            // cadastrava o operador no painel, o operador apertava aqui, e o número não
-            // se mexia — nada no PDV sabia tirar uma linha do dead-letter. Cada toque vale
-            // UMA tentativa por linha; o ciclo automático de 45 s continua sem tocá-las.
+            // 1. O PAINEL.
+            var etapa = "";
+            var andamento = new Progress<string>(t => etapa = t);
             var r = await Sincronizacao.ExecutarAsync(Servicos.Nuvem(), Servicos.Guarda(), Servicos.Dreno(),
                 andamento, reenviarDesistidas: true);
+            // "Sem novidade" compara a NUVEM com o BANCO LOCAL, e não com o que esta
+            // tela tem na memória. Recarregar é barato (lê o SQLite local) e faz a
+            // frase "tudo em dia" ser verdade também na grade e na comanda.
+            if (r.Ok) RecarregarCatalogo();
+            PintarPendencias();
+
+            // 2. O PROGRAMA: a mesma pergunta silenciosa do relógio, agora por vontade
+            //    do operador (e o relógio ganha mais 6 h de folga).
+            var nova = await AtualizarCaixa.ProcurarNoSilencioAsync();
+            _proximaChecagemVersao = DateTime.UtcNow.AddHours(6);
+            PintarVersaoNova(nova);
 
             if (!r.Ok)
             {
@@ -598,47 +620,65 @@ public partial class Venda : UserControl
                     $"{r.Erro}\n\n{onde}As vendas deste caixa continuam guardadas aqui. " +
                     "Tente de novo em alguns minutos.", "erro");
             }
-            else if (r.SemNovidade)
+            else if (nova is null)
             {
-                // "Sem novidade" compara a NUVEM com o BANCO LOCAL, e não com o que
-                // esta tela tem na memória. Se o preço já tinha descido para o disco
-                // por outro caminho, a tela podia continuar com a tabela velha e o
-                // botão dizer "Tudo em dia" sem corrigir nada. Recarregar aqui é
-                // barato (lê o SQLite local) e faz a frase ser verdade.
-                RecarregarCatalogo();
-                // Sem novidade o relatório detalhado só confunde: parecia estar
-                // mostrando "a última sincronização" de novo.
-                Dialogo.Avisar(dono, "Tudo em dia",
-                    "O cardápio e os preços deste caixa já estão em dia. Nada novo para baixar.", "ok");
+                MostrarOQueDesceu(dono, r);
             }
-            else
-            {
-                var linhas = new List<string>
-                {
-                    $"Cardápio:  {(r.CatalogoMudou ? $"atualizado ({Conta(r.ProdutosBaixados, "produto", "produtos")})" : "sem novidade")}",
-                    $"Fotos:     {(r.FotosBaixadas == 0 ? "nenhuma nova" : Conta(r.FotosBaixadas, "nova", "novas"))}",
-                    $"Notas:     {(r.NotasSubidas == 0 ? "nenhuma para enviar" : Conta(r.NotasSubidas, "enviada", "enviadas"))}",
-                };
-                if (r.NotasPendentes > 0)
-                    linhas.Add($"\n⚠ {Conta(r.NotasPendentes, "nota", "notas")} ainda não " +
-                        (r.NotasPendentes == 1 ? "foi enviada" : "foram enviadas") +
-                        (Servicos.TemContaDeNuvem() ? ". Tente de novo mais tarde."
-                                                    : ". Este caixa ainda não foi ligado ao painel. Chame o gerente."));
-                // O valor vem junto de propósito: "3 vendas na fila" não distingue
-                // R$ 12,00 de R$ 2.493,00, e é o número em reais que faz alguém agir.
-                if (r.Vendas.Resumo is string avisoVendas) linhas.Add("⚠ " + avisoVendas);
 
-                Dialogo.Relatorio(dono, "Caixa atualizado", string.Join("\n", linhas), null);
-                RecarregarCatalogo();
+            if (nova is not null)
+            {
+                // Tem versão nova: o relatório do painel não aparece (o que importa dele
+                // já está nos selos) e a caixa que abre é a da troca do programa.
+                try
+                {
+                    estaFechando = await AtualizarCaixa.ExecutarAsync(dono, _comanda.Count, _tefOcupado);
+                }
+                catch (Exception ex)
+                {
+                    Dialogo.Avisar(dono, "A atualização não terminou",
+                        ex.Message + "\n\nO caixa NÃO foi alterado e continua funcionando.", "erro");
+                }
             }
         }
         finally
         {
             girando.Stop();
-            TxtIconeSync.Text = "⟳";
-            BtnSync.IsEnabled = true;
-            PintarPendencias();
+            TxtIconeAtualizar.Text = "⟳";
+            // Fechando: mexer na tela agora só produz exceção no caminho da saída.
+            if (!estaFechando) BtnAtualizar.IsEnabled = true;
         }
+    }
+
+    /// <summary>
+    /// A caixa de quando NÃO tem versão nova: o que desceu do painel, com a linha do
+    /// programa no fim. Sem novidade nenhuma, uma frase só; o relatório detalhado nesse
+    /// caso confundia (parecia mostrar "a última sincronização" de novo).
+    /// </summary>
+    private static void MostrarOQueDesceu(Window dono, ResultadoSync r)
+    {
+        var versao = Nucleo.Atualizacao.VersaoInstalada();
+        if (r.SemNovidade)
+        {
+            Dialogo.Avisar(dono, "Tudo em dia",
+                $"Cardápio, preços e o programa deste caixa (versão {versao}) já estão em dia. Nada novo para baixar.", "ok");
+            return;
+        }
+        var linhas = new List<string>
+        {
+            $"Cardápio:  {(r.CatalogoMudou ? $"atualizado ({Conta(r.ProdutosBaixados, "produto", "produtos")})" : "sem novidade")}",
+            $"Fotos:     {(r.FotosBaixadas == 0 ? "nenhuma nova" : Conta(r.FotosBaixadas, "nova", "novas"))}",
+            $"Notas:     {(r.NotasSubidas == 0 ? "nenhuma para enviar" : Conta(r.NotasSubidas, "enviada", "enviadas"))}",
+            $"Programa:  versão {versao}, nenhuma atualização liberada",
+        };
+        if (r.NotasPendentes > 0)
+            linhas.Add($"\n⚠ {Conta(r.NotasPendentes, "nota", "notas")} ainda não " +
+                (r.NotasPendentes == 1 ? "foi enviada" : "foram enviadas") +
+                (Servicos.TemContaDeNuvem() ? ". Tente de novo mais tarde."
+                                            : ". Este caixa ainda não foi ligado ao painel. Chame o gerente."));
+        // O valor vem junto de propósito: "3 vendas na fila" não distingue
+        // R$ 12,00 de R$ 2.493,00, e é o número em reais que faz alguém agir.
+        if (r.Vendas.Resumo is string avisoVendas) linhas.Add("⚠ " + avisoVendas);
+        Dialogo.Relatorio(dono, "Caixa atualizado", string.Join("\n", linhas), null);
     }
 
     /// <summary>
@@ -656,63 +696,19 @@ public partial class Venda : UserControl
         TxtPendencia.Text = total.ToString();
         // Só o que EXISTE entra no balão. "0 notas ainda não enviadas" em cima do aviso
         // que importa é ruído, e ruído é o que ensina o operador a não ler o balão.
-        BtnSync.ToolTip = total == 0 ? "Tudo em dia"
+        _dicaPainel = total == 0 ? "Painel: tudo em dia"
             : string.Join("\n", new[]
               {
                   notas == 0 ? null : Conta(notas, "nota ainda não enviada", "notas ainda não enviadas"),
                   vendas.Resumo,
               }.Where(l => !string.IsNullOrWhiteSpace(l)));
+        PintarDica();
     }
 
-    // ── ATUALIZAR O CAIXA ─────────────────────────────────────────────────────
-
-    /// <summary>
-    /// "Toda vez ter que desinstalar e instalar?" — não. Este botão faz o ciclo
-    /// inteiro: pergunta ao servidor se tem versão nova, baixa, PROVA que o que baixou
-    /// é o instalador certo, chama o instalador (que já sabe trocar por cima
-    /// preservando vendas e configuração) e fecha o PDV.
-    ///
-    /// A decisão toda mora em <see cref="Nucleo.Atualizacao"/> e a mecânica em
-    /// <see cref="AtualizarCaixa"/> — daqui vai só o que só esta tela sabe: quantos
-    /// itens tem na comanda e se a maquininha está ocupada. São os dois portões que
-    /// não existem em lugar nenhum do banco, e são os que mais importam: caixa que
-    /// reinicia com o cliente no balcão é pior do que caixa desatualizado.
-    /// </summary>
-    private async void AtualizarOCaixa(object sender, RoutedEventArgs e)
-    {
-        var dono = Window.GetWindow(this)!;
-        BtnAtualizar.IsEnabled = false;
-        // Mesmo vocabulário do Sincronizar: o ícone anima enquanto o botão trabalha.
-        var girando = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(160) };
-        var passo = 0;
-        var quadros = new[] { "⬆", "⇧" };
-        girando.Tick += (_, _) => TxtIconeAtualizar.Text = quadros[++passo % quadros.Length];
-        girando.Start();
-
-        var estaFechando = false;
-        try
-        {
-            estaFechando = await AtualizarCaixa.ExecutarAsync(dono, _comanda.Count, _tefOcupado);
-        }
-        catch (Exception ex)
-        {
-            // Nada aqui pode derrubar a frente de caixa: o pior desfecho aceitável é
-            // "não atualizou e você continua vendendo".
-            Dialogo.Avisar(dono, "A atualização não terminou",
-                ex.Message + "\n\nO caixa NÃO foi alterado e continua funcionando.", "erro");
-        }
-        finally
-        {
-            girando.Stop();
-            TxtIconeAtualizar.Text = "⬆";
-            // Fechando: mexer na tela agora só produz exceção no caminho da saída.
-            if (!estaFechando)
-            {
-                BtnAtualizar.IsEnabled = true;
-                ProcurarAtualizacao(forcar: true);
-            }
-        }
-    }
+    /// <summary>A dica do botão junta as duas metades: o programa em cima, o painel embaixo.</summary>
+    private string _dicaPrograma = "", _dicaPainel = "";
+    private void PintarDica() => BtnAtualizar.ToolTip =
+        string.Join("\n", new[] { _dicaPrograma, _dicaPainel }.Where(d => d.Length > 0));
 
     /// <summary>Quando perguntar ao servidor de novo. 6 h: o suficiente para a loja
     /// saber no mesmo dia, e pouco o bastante para não virar tráfego de fundo.</summary>
@@ -720,7 +716,7 @@ public partial class Venda : UserControl
 
     /// <summary>
     /// O "tem atualização" do TeamViewer: o caixa vai perguntar sozinho e acende o
-    /// selo. Silencioso por princípio — checagem automática que abre diálogo no meio
+    /// selo. Silencioso por princípio: checagem automática que abre diálogo no meio
     /// do movimento seria exatamente o tipo de interrupção que a regra 1 proíbe.
     /// Falhou (sem rede, servidor fora)? Não acende nada e ninguém fica sabendo.
     /// </summary>
@@ -743,22 +739,24 @@ public partial class Venda : UserControl
         ChipVersaoNova.Visibility = m is null ? Visibility.Collapsed : Visibility.Visible;
         if (m is null)
         {
-            BtnAtualizar.ToolTip = $"Este caixa está na versão {Nucleo.Atualizacao.VersaoInstalada()}";
+            _dicaPrograma = $"Este caixa está na versão {Nucleo.Atualizacao.VersaoInstalada()}";
+            PintarDica();
             return;
         }
         TxtVersaoNova.Text = m.Versao;
         // Obrigatória pinta de vermelho e diz por quê. É só isso que ela muda na
-        // tela — nada aqui reinicia o caixa sozinho: um campo de JSON servido pela
+        // tela: nada aqui reinicia o caixa sozinho. Um campo de JSON servido pela
         // internet não decide na frente de quem está atendendo o cliente.
         var chave = m.Obrigatoria ? "ChipErro" : "ChipAlerta";
         ChipVersaoNova.SetResourceReference(Border.BackgroundProperty, chave + "Fundo");
         ChipVersaoNova.SetResourceReference(Border.BorderBrushProperty, chave + "Borda");
         TxtVersaoNova.SetResourceReference(TextBlock.ForegroundProperty, m.Obrigatoria ? "Erro" : "Amarelo");
-        BtnAtualizar.ToolTip =
+        _dicaPrograma =
             (m.Obrigatoria ? "ATUALIZAÇÃO OBRIGATÓRIA: " : "Tem versão nova: ")
             + $"{m.Versao} (este caixa está na {Nucleo.Atualizacao.VersaoInstalada()})."
             + "\nToque para atualizar: as vendas e a configuração da loja não se perdem."
             + (m.Notas is { Length: > 0 } n ? "\n\n" + n : "");
+        PintarDica();
     }
 
     /// <summary>

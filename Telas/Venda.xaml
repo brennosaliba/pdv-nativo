@@ -92,33 +92,29 @@
 
                 <WrapPanel Grid.Column="1" x:Name="Botoes" Orientation="Horizontal" HorizontalAlignment="Right"
                            VerticalAlignment="Center">
-                    <!-- Sincronizar é ato EXPLÍCITO: o gerente mexe no painel, o caixa
-                         aperta o botão. O PDV nunca fica esperando a nuvem para vender. -->
-                    <Button x:Name="BtnSync" Click="Sincronizar" Style="{StaticResource BotaoBarra}">
+                    <!-- ATUALIZAR: um botão só para "buscar o que está no servidor" (11/09/2026,
+                         pedido do dono: "juntar sincronizar e atualizar numa função só; ao mesmo
+                         tempo que puxa atualização já puxa sincronização de preço; menos botão,
+                         e no lugar entra o WhatsApp"). Um toque faz as duas coisas, nesta ordem:
+                         puxa do painel (cardápio, preços, promoções, operadores; notas e vendas
+                         sobem) e pergunta ao servidor se tem versão nova do programa. Tem? A
+                         conversa vira a da troca (portão, o sim do operador, download).
+                         É ato EXPLÍCITO: o PDV nunca fica esperando a nuvem para vender.
+                         Os dois selos continuam: o amarelo com número é o que está preso para
+                         subir; o da versão acende sozinho (o caixa pergunta a cada 6 h), porque
+                         um botão que ninguém aperta é o mesmo que não ter. -->
+                    <Button x:Name="BtnAtualizar" Click="AtualizarOCaixa" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Buscar cardápio, preços e a versão nova do programa">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="TxtIconeSync" Text="⟳" FontSize="17" FontWeight="Bold"
+                            <TextBlock x:Name="TxtIconeAtualizar" Text="⟳" FontSize="17" FontWeight="Bold"
                                        Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Sincronizar" VerticalAlignment="Center"/>
+                            <TextBlock Text="Atualizar" VerticalAlignment="Center"/>
                             <Border x:Name="ChipPendencia" CornerRadius="9" Padding="7,1,7,2" Margin="9,0,0,0"
                                     VerticalAlignment="Center" Visibility="Collapsed"
                                     Background="{DynamicResource ChipAlertaFundo}" BorderBrush="{DynamicResource ChipAlertaBorda}" BorderThickness="1">
                                 <TextBlock x:Name="TxtPendencia" FontSize="11" FontWeight="Bold"
                                            Foreground="{DynamicResource Amarelo}"/>
                             </Border>
-                        </StackPanel>
-                    </Button>
-                    <!-- Atualizar o caixa: mesmo lugar e mesma cara do Sincronizar, porque
-                         é o mesmo gesto — o operador toca, o caixa vai buscar o que está
-                         no servidor. O SELO com o número da versão é a metade que o dono
-                         pediu ("tem atualização"): sem ele ninguém descobre que existe
-                         versão nova, e um botão que ninguém aperta é o mesmo que não ter.
-                         Ele acende sozinho: o caixa pergunta ao servidor a cada 6 h. -->
-                    <Button x:Name="BtnAtualizar" Click="AtualizarOCaixa" Style="{StaticResource BotaoBarra}"
-                            ToolTip="Trocar o programa deste caixa pela versão mais nova">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="TxtIconeAtualizar" Text="⬆" FontSize="16" FontWeight="Bold"
-                                       Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="Atualizar" VerticalAlignment="Center"/>
                             <Border x:Name="ChipVersaoNova" CornerRadius="9" Padding="7,1,7,2" Margin="9,0,0,0"
                                     VerticalAlignment="Center" Visibility="Collapsed"
                                     Background="{DynamicResource ChipAlertaFundo}" BorderBrush="{DynamicResource ChipAlertaBorda}" BorderThickness="1">
@@ -351,7 +347,7 @@
                 </ScrollViewer>
 
                 <TextBlock x:Name="TxtSemProduto" Grid.Row="1" Visibility="Collapsed"
-                           Text="Nada nesta categoria. Toque em Sincronizar para baixar o cardápio."
+                           Text="Nada nesta categoria. Toque em Atualizar para baixar o cardápio."
                            Foreground="{DynamicResource TextoFraco}" TextWrapping="Wrap" TextAlignment="Center"
                            MaxWidth="360" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Grid>

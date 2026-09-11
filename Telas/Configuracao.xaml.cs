@@ -252,7 +252,7 @@ public partial class Configuracao : UserControl
         // status do pareamento na PRÓPRIA seção (a bateria de teste não fala dele)
         if (_pareado)
         {
-            TxtStatusPareamento.Text = "✓ Este caixa já está pareado. As vendas e as notas sobem para o painel no Sincronizar.";
+            TxtStatusPareamento.Text = "✓ Este caixa já está pareado. As vendas e as notas sobem para o painel no Atualizar.";
             TxtStatusPareamento.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["Ok"];
         }
 
@@ -764,7 +764,7 @@ public partial class Configuracao : UserControl
             return;
         var tirados = Sincronizacao.Dispensar(quem: "configuração");
         Dialogo.Avisar(dono, "Pronto",
-            $"{tirados} {(tirados == 1 ? "registro saiu" : "registros saíram")} da fila. O aviso do caixa some no próximo Sincronizar.", "ok");
+            $"{tirados} {(tirados == 1 ? "registro saiu" : "registros saíram")} da fila. O aviso do caixa some no próximo Atualizar.", "ok");
         PintarFilaMorta();
     }
 
@@ -934,7 +934,7 @@ public partial class Configuracao : UserControl
         // usa o dia inteiro — o mesmo estado não pode ter dois nomes.
         if (ambiente == 2) partes.Add("MODO TESTE: as notas não valem");
         return partes.Count == 0
-            ? "As vendas e as notas passam a subir no Sincronizar."
+            ? "As vendas e as notas passam a subir no Atualizar."
             : string.Join(" · ", partes) + ". Confira e salve.";
     }
 
@@ -2391,7 +2391,7 @@ public static class AssistenteConfig
                 d.PoliticaComanda == PoliticaImpressao.Nao),
             new("Maquininha", ResumoTef(d), d.Tef == 3 && d.CpaySandbox),
             new("Pareamento", d.Pareado
-                ? "✓ Pareado com o painel. As vendas e as notas sobem no Sincronizar."
+                ? "✓ Pareado com o painel. As vendas e as notas sobem no Atualizar."
                 : "Ainda NÃO pareado: sem isso não dá para concluir.", !d.Pareado),
         };
         // As vias do cartão só entram na revisão quando a maquininha é de cabo: na avulsa

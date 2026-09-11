@@ -81,7 +81,7 @@ public static class Operadores
                         "nascer um segundo cadastro para a mesma pessoa, e o painel recusa toda venda " +
                         "assinada por alguém que ele não conhece. O QUE FAZER: quem vem do painel entra " +
                         "no caixa com o CPF e a senha dele: não precisa cadastrar. Para trocar nome, " +
-                        "perfil ou senha, mexa no cadastro do painel e toque em Sincronizar.");
+                        "perfil ou senha, mexa no cadastro do painel e toque em Atualizar.");
                 throw new InvalidOperationException($"Esse CPF já é de {(string)dono.nome}.");
             }
         }
