@@ -105,6 +105,10 @@ public static class TestesRespostasProntas
         checar(chat.IndexOf("execCommand('copy')", StringComparison.Ordinal) < chat.IndexOf("navigator.clipboard.writeText(texto).catch", StringComparison.Ordinal),
             "copiar: o caminho síncrono primeiro; a Promise só como plano B, com o erro engolido");
         checar(chat.Contains("aperte Ctrl+V", StringComparison.Ordinal), "sem conversa aberta, o cartão diz o caminho que existe (Ctrl+V)");
+        var chatXaml = Fonte(Path.Combine("Telas", "ChatIfood.xaml")) ?? "";
+        checar(chatXaml.Contains("Click=\"AlternarGestorInteiro\"") && chatXaml.Contains("Click=\"Diagnostico\"")
+               && chat.Contains("gestor-diagnostico-") && chat.Contains("replace(/\\d{4,}/g, '####')") && chat.Contains("window.__pdvSemHolofote"),
+            "a aba do chat tem 'Gestor inteiro' e 'Diagnóstico' (estrutura da tela mascarada em ProgramData) para mapear o Fale com o iFood");
         var textosCfg = Regex.Matches(cfgXaml, @"Text=""([^""]*)""").Select(x => x.Groups[1].Value).Where(x => x.Contains("resposta", StringComparison.OrdinalIgnoreCase));
         checar(textosCfg.Any() && textosCfg.All(x => !x.Contains('—') && !x.Contains('–')), "os textos novos da Configuração não têm travessão");
     }

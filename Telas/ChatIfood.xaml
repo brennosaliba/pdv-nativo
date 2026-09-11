@@ -24,6 +24,18 @@
                                Margin="14,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <!-- GESTOR INTEIRO + DIAGNOSTICO (11/09/2026): para mapear o "Fale com o iFood" e o
+                         painel de ajuda. "Gestor inteiro" tira o holofote (a pagina toda volta a
+                         aparecer, para navegar ate o pedido); "Diagnostico" grava a estrutura da tela
+                         num arquivo em ProgramData (sem telefone nem CPF) que o dono manda para mapear. -->
+                    <Button x:Name="BtnGestorInteiro" Click="AlternarGestorInteiro" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Mostrar o Gestor inteiro (ou só o chat)">
+                        <TextBlock x:Name="TxtGestorInteiro" Text="Gestor inteiro"/>
+                    </Button>
+                    <Button Click="Diagnostico" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Grava a estrutura desta tela num arquivo para o suporte">
+                        <TextBlock Text="Diagnóstico"/>
+                    </Button>
                     <Button Click="Recarregar" Style="{StaticResource BotaoBarra}">
                         <TextBlock Text="⟳ Recarregar"/>
                     </Button>

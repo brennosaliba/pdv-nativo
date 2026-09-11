@@ -324,6 +324,82 @@ public partial class ChatIfood : UserControl
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
 
+    private bool _gestorInteiro;
+
+    /// <summary>
+    /// Tira (ou devolve) o holofote: com o Gestor inteiro na tela dá para navegar até o
+    /// pedido e chegar ao "Fale com o iFood". O observador de não lidas continua. Ao
+    /// devolver, a vigia da gaveta (a cada 1,5 s) isola de novo sozinha.
+    /// </summary>
+    private async void AlternarGestorInteiro(object sender, RoutedEventArgs e)
+    {
+        if (!_pronto || Web.CoreWebView2 is null) return;
+        _gestorInteiro = !_gestorInteiro;
+        TxtGestorInteiro.Text = _gestorInteiro ? "Só o chat" : "Gestor inteiro";
+        try
+        {
+            await Web.CoreWebView2.ExecuteScriptAsync(_gestorInteiro
+                ? "window.__pdvSemHolofote = true; document.body.classList.remove('pdv-so-chat'); document.querySelectorAll('[data-pdv-hide]').forEach(function(x){ x.removeAttribute('data-pdv-hide'); });"
+                : "window.__pdvSemHolofote = false; window.pdvIsolar && window.pdvIsolar();");
+            TxtEstado.Text = _gestorInteiro ? "Gestor inteiro (toque em Só o chat para voltar)" : "painel do chat";
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// A ESTRUTURA DA TELA num arquivo (11/09/2026, para mapear o "Fale com o iFood" e o
+    /// painel de ajuda sem pedir DevTools ao dono). Uma linha por elemento visível: tag,
+    /// id, classes, papel, rótulo e um pedaço do texto, com telefone, CPF e e-mail
+    /// mascarados. Vai para ProgramData\PdvNativo\gestor-diagnostico-HHmmss.txt.
+    /// </summary>
+    private async void Diagnostico(object sender, RoutedEventArgs e)
+    {
+        if (!_pronto || Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu"; return; }
+        try
+        {
+            var bruto = await Web.CoreWebView2.ExecuteScriptAsync(ScriptDiagnostico);
+            var texto = JsonSerializer.Deserialize<string>(bruto) ?? "";
+            var caminho = Path.Combine(Pdv.Nucleo.Banco.Pasta, $"gestor-diagnostico-{DateTime.Now:HHmmss}.txt");
+            File.WriteAllText(caminho,
+                $"url: {Web.CoreWebView2.Source}\ntitulo: {Web.CoreWebView2.DocumentTitle}\nquando: {DateTime.Now:dd/MM/yyyy HH:mm:ss}\n\n{texto}");
+            TxtEstado.Text = "Diagnóstico gravado em " + caminho;
+        }
+        catch (Exception ex) { TxtEstado.Text = "Diagnóstico falhou: " + ex.Message; }
+    }
+
+    private const string ScriptDiagnostico = """
+        (function () {
+          function mascara(s){ return (s || '').replace(/\s+/g, ' ').replace(/\d{4,}/g, '####').replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, 'email@####').slice(0, 70); }
+          function visivel(el){ try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; } }
+          var linhas = [], n = 0;
+          function anda(el, prof){
+            if (n > 3000 || prof > 18) return;
+            if (!(el instanceof Element)) return;
+            if (el.id && /^pdv-/.test(el.id)) return;
+            var tag = el.tagName.toLowerCase();
+            if (tag === 'script' || tag === 'style' || tag === 'svg' || tag === 'path') return;
+            var vis = visivel(el);
+            var oculto = el.hasAttribute('data-pdv-hide') ? ' [holofote]' : '';
+            if (!vis && !oculto) return;
+            var proprio = '';
+            for (var i = 0; i < el.childNodes.length; i++) { var c = el.childNodes[i]; if (c.nodeType === 3) proprio += c.textContent; }
+            proprio = mascara(proprio.trim());
+            var cls = (typeof el.className === 'string' ? el.className : '').split(/\s+/).filter(Boolean).slice(0, 3).join('.');
+            var attrs = [];
+            ['role','aria-label','data-testid','href','type','placeholder','name'].forEach(function (a) { var v = el.getAttribute(a); if (v) attrs.push(a + '=' + mascara(v).slice(0, 50)); });
+            var r = el.getBoundingClientRect();
+            linhas.push(new Array(prof + 1).join('  ') + tag + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : '')
+              + (attrs.length ? ' [' + attrs.join(' ') + ']' : '') + oculto
+              + ' @' + Math.round(r.left) + ',' + Math.round(r.top) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)
+              + (proprio ? ' "' + proprio + '"' : ''));
+            n++;
+            for (var j = 0; j < el.children.length; j++) anda(el.children[j], prof + 1);
+          }
+          anda(document.body, 0);
+          return linhas.join('\n');
+        })();
+        """;
+
     /// <summary>
     /// RESPOSTAS PRONTAS (11/09/2026, pedido do dono): entrega à página a lista de
     /// cartões do espaço vazio ao lado do chat. Lida do banco a cada carga, então editar
@@ -737,6 +813,7 @@ public partial class ChatIfood : UserControl
         // Só age quando a gaveta NÃO está na tela, para nunca clicar no botão
         // com ela aberta (poderia fechá-la).
         setInterval(function(){
+          if (window.__pdvSemHolofote) return;   // o dono pediu o Gestor inteiro: nao reisolar
           if (!pronto) return;
           if (candidato()) return;
           pronto = false;
