@@ -137,7 +137,6 @@ public partial class Venda : UserControl
         // O botão do valor de teste só existe no caixa de homologação. Na loja ele
         // some da tela inteira — preço livre no caixa é rombo, não recurso.
         BtnValorLivre.Visibility = _homologacao ? Visibility.Visible : Visibility.Collapsed;
-        BtnRoteiroTef.Visibility = _homologacao ? Visibility.Visible : Visibility.Collapsed;
         // O menu do TEF idem: um lugar só para as operações da maquininha, para percorrer
         // os 58 passos. Na loja ele não existe (Pdv.Nucleo/MenuTef.Aparece).
         BtnMenuTef.Visibility = MenuTef.Aparece(_homologacao) ? Visibility.Visible : Visibility.Collapsed;
@@ -1732,39 +1731,10 @@ public partial class Venda : UserControl
     }
 
     /// <summary>
-    /// O ROTEIRO DE HOMOLOGACAO, COM O VALOR JA CERTO (09/09/2026).
-    ///
-    /// Porta separada do "Valor do teste" de proposito: aquele continua sendo digitar
-    /// um valor qualquer, e tem caminho de teste proprio. Este escolhe um PASSO, e o
-    /// valor vem do roteiro. Sao 39 passos obrigatorios, varios com centavo exato
-    /// (R$ 1.000,01 na venda negada): digitar isso 39 vezes e errar pelo menos uma, e
-    /// passo com centavo errado volta inteiro.
-    /// </summary>
-    private void AbrirRoteiroTef(object sender, RoutedEventArgs e)
-    {
-        if (!_homologacao) return;
-        var dono = Window.GetWindow(this)!;
-        if (TelaRoteiroTef.Mostrar(dono) is not { } passo) return;
-
-        // Passo COM valor no roteiro entra sem digitar nada. Passo de venda SEM valor
-        // definido (o 3 e "venda de qualquer valor") pergunta, mas ja sai amarrado ao
-        // passo: e a amarracao que faltava, e nao o valor.
-        Dinheiro quanto;
-        if (Nucleo.RoteiroTef.ValorCent(passo) is { } cent) quanto = new Dinheiro(cent);
-        else
-        {
-            var digitado = PedirValor.Mostrar(dono, $"Passo {passo.Numero}",
-                "O roteiro não fixa o valor deste passo. Quanto cobrar?");
-            if (digitado is not { } v || !v.Positivo) return;
-            quanto = v;
-        }
-        _passoEmExecucao = passo.Numero;
-        AdicionarValorDeTeste(quanto);
-    }
-
-    /// <summary>
-    /// O passo do roteiro que esta venda está executando, quando ela nasceu de um
-    /// toque no roteiro. É o que liga o REQNUM da transação à linha da planilha.
+    /// O passo do roteiro que esta venda está executando. Hoje é sempre null: o botão
+    /// "Roteiro do TEF" saiu da tela em 11/09/2026 (homologação aprovada, pedido do dono).
+    /// O encanamento até a tela de pagamento (confirmação manual por passo, REQNUM na
+    /// planilha) fica para o dia em que a PayGo pedir nova rodada.
     /// </summary>
     private int? _passoEmExecucao;
 

@@ -154,15 +154,19 @@ public static class TestesBotaoAtualizar
 
         // Tudo que é de homologação está atrás do interruptor, e nasce escondido no XAML
         // (antes mesmo de a tela ler o banco).
-        foreach (var nome in new[] { "BtnValorLivre", "BtnRoteiroTef", "BtnMenuTef" })
+        // 11/09 (dono, ao ver a foto): "pode remover o botão roteiro do TEF". Saiu de vez.
+        checar(!xaml.Contains("BtnRoteiroTef", StringComparison.Ordinal) && !xaml.Contains("Roteiro do TEF", StringComparison.Ordinal)
+               && !cs.Contains("AbrirRoteiroTef", StringComparison.Ordinal)
+               && !File.Exists(Path.Combine(Raiz() ?? "", "Telas", "TelaRoteiroTef.cs")),
+            "o botão e a tela Roteiro do TEF não existem mais (homologação aprovada)");
+        foreach (var nome in new[] { "BtnValorLivre", "BtnMenuTef" })
         {
             var bloco = Regex.Match(xaml, $@"<Button x:Name=""{nome}""[^>]*>").Value;
             checar(bloco.Contains("Visibility=\"Collapsed\"", StringComparison.Ordinal), $"{nome} nasce escondido no XAML");
         }
         checar(cs.Contains("BtnValorLivre.Visibility = _homologacao ?", StringComparison.Ordinal)
-               && cs.Contains("BtnRoteiroTef.Visibility = _homologacao ?", StringComparison.Ordinal)
                && cs.Contains("MenuTef.Aparece(_homologacao)", StringComparison.Ordinal),
-            "valor de teste, roteiro e Menu do TEF só aparecem com `homologacao` = 1");
+            "valor de teste e Menu do TEF só aparecem com `homologacao` = 1");
         var main = Fonte("MainWindow.xaml.cs") ?? "";
         checar(main.Contains("FaixaHomologacao.Visibility = ModoHomologacao.Ligado(cx) ? Visibility.Visible : Visibility.Collapsed", StringComparison.Ordinal),
             "a faixa MODO DE HOMOLOGAÇÃO só existe com o interruptor ligado");

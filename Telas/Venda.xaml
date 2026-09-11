@@ -457,18 +457,6 @@
                                 </StackPanel>
                             </Button>
 
-                            <!-- O ROTEIRO DOS 58 PASSOS. Porta separada do "Valor do teste":
-                                 aqui se escolhe um PASSO e o valor vem do roteiro, com o
-                                 centavo certo. Invisivel na loja, igual ao de cima. -->
-                            <Button x:Name="BtnRoteiroTef" Click="AbrirRoteiroTef" Style="{StaticResource BotaoBase}"
-                                    AutomationProperties.Name="Roteiro do TEF"
-                                    MinHeight="46" Margin="0,0,0,10" Visibility="Collapsed" HorizontalContentAlignment="Center">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="📋" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                    <TextBlock Text="Roteiro do TEF" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                </StackPanel>
-                            </Button>
-
                             <Button x:Name="BtnCortesia" Click="AplicarCortesia" Style="{StaticResource BotaoBase}"
                                     MinHeight="46" Margin="0,0,0,10" IsEnabled="False" HorizontalContentAlignment="Center">
                                 <StackPanel Orientation="Horizontal">
