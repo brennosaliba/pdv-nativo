@@ -301,6 +301,17 @@ public partial class MainWindow : Window
     /// </summary>
     private void Fechar(object sender, RoutedEventArgs e)
     {
+        if (Quiosque.Ligado)
+        {
+            // MODO QUIOSQUE (12/09/2026): o Windows abre direto no PDV. Fechar e mais nada
+            // deixaria a tela preta; o operador escolhe o que vem depois.
+            var o = Dialogo.Escolher(this, "Fechar o PDV",
+                "O Windows abre direto no PDV (modo quiosque). O turno aberto continua salvo.",
+                "Reiniciar o PDV", "Sair para o Windows", "Voltar");
+            if (o == 0) { Quiosque.ReiniciarPdv(); Application.Current.Shutdown(); }
+            else if (o == 1) { Quiosque.AbrirExplorer(); Application.Current.Shutdown(); }
+            return;
+        }
         if (Dialogo.Confirmar(this, "Fechar o PDV",
                 "O caixa vai fechar (o turno aberto continua salvo). Fechar mesmo?",
                 "Fechar o PDV", "Voltar", perigo: true))

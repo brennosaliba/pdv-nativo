@@ -119,6 +119,10 @@ public partial class Configuracao : UserControl
         TxtRespostasChat.Text = RespostasProntas.Escrever(RespostasProntas.Ler(Vendas.Config(cx, RespostasProntas.Chave)));
         // Na primeira instalação o bloco não aparece (não é assunto de parear); fica para a reconfiguração.
         BlocoRespostasChat.Visibility = Se(_jaConfigurado);
+        // Modo quiosque: o que está no Windows agora (não no banco: o registro é a verdade).
+        BlocoQuiosque.Visibility = Se(_jaConfigurado);
+        ChkQuiosque.IsChecked = Quiosque.Ligado;
+        BtnSairWindows.Visibility = Se(Quiosque.Ligado);
         // As quatro políticas de impressão, carregadas SEMPRE (inclusive em caixa novo):
         // com três estados, deixar o combo no valor do XAML gravaria uma escolha que
         // ninguém fez na primeira instalação. O padrão de cada papel vem de Impressoes,
@@ -447,6 +451,14 @@ public partial class Configuracao : UserControl
     }
 
     /// <summary>Senha de admin guardada como hash (mesmo PBKDF2 do PIN), nunca em claro.</summary>
+    /// <summary>Quiosque ligado e o dono quer a área de trabalho de volta agora: abre o Explorer (o PDV continua).</summary>
+    private void SairParaOWindows(object sender, RoutedEventArgs e)
+    {
+        Quiosque.AbrirExplorer();
+        Dialogo.Avisar(Window.GetWindow(this)!, "Área de trabalho aberta",
+            "O Windows abriu a área de trabalho por trás do PDV. Para o quiosque não voltar na próxima entrada, desmarque a opção e salve.", null);
+    }
+
     public static bool SenhaAdminConfere(SqliteConnection cx, string senha)
     {
         var r = cx.QueryFirstOrDefault("SELECT pin_hash, pin_salt FROM operador WHERE id = '_admin_'");
@@ -1434,6 +1446,18 @@ public partial class Configuracao : UserControl
             if (normalizadas.Length == 0 || normalizadas == RespostasProntas.Escrever(RespostasProntas.Padrao))
                 cx.Execute("DELETE FROM config WHERE chave=@C", new { C = RespostasProntas.Chave });
             else Vendas.GravarConfig(cx, RespostasProntas.Chave, normalizadas);
+            // Modo quiosque (12/09/2026): Shell do usuário do Windows. Só mexe se mudou.
+            var quiosqueQuer = ChkQuiosque.IsChecked == true;
+            if (quiosqueQuer != Quiosque.Ligado)
+            {
+                var erroQuiosque = quiosqueQuer ? Quiosque.Ligar() : Quiosque.Desligar();
+                Caixa.Auditar(cx, null, quiosqueQuer ? "quiosque_ligado" : "quiosque_desligado", null, null,
+                    erroQuiosque ?? "Shell do usuário do Windows: " + (quiosqueQuer ? Quiosque.ValorShell(Quiosque.ExeAtual) : "Explorer"));
+                if (erroQuiosque is not null)
+                    Dialogo.Avisar(Window.GetWindow(this)!, "Modo quiosque",
+                        "Não consegui gravar no Windows: " + erroQuiosque + ". O resto da configuração foi salvo.", "erro");
+                BtnSairWindows.Visibility = Se(Quiosque.Ligado);
+            }
             GravarTef(cx);
             _tefSalvo = true;
 

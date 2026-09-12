@@ -290,6 +290,11 @@ public static class Sincronizacao
             try { await nuvem.BaixarOperadoresAsync(cx).ConfigureAwait(false); }
             catch { /* sem identidade de escrita ainda: fica pro próximo ciclo */ }
 
+            // o que o painel definiu para este caixa: respostas do chat, senha de administrador, música
+            andamento?.Report("Lendo a configuração da loja…");
+            try { await nuvem.BaixarConfigLojaAsync(cx).ConfigureAwait(false); }
+            catch { /* idem: o próximo Atualizar tenta de novo */ }
+
             mudou = ImpressaoDigital(cx) != antes;
 
             // Fotos por último e sem prazo curto: é o que mais demora e é o que menos

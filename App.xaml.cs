@@ -57,7 +57,12 @@ public partial class App : Application
             catch { }
         }
         AppDomain.CurrentDomain.UnhandledException += (_, a) =>
+        {
             Registrar("fundo", a.ExceptionObject as Exception ?? new Exception(a.ExceptionObject?.ToString() ?? "?"));
+            // MODO QUIOSQUE: o PDV e o shell do Windows; morrendo, a tela ficaria preta.
+            // Abre o Explorer antes de cair, para o dono ter por onde mexer.
+            if (a.IsTerminating) { try { if (Quiosque.Ligado) Quiosque.AbrirExplorer(); } catch { } }
+        };
         System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, a) =>
         {
             Registrar("task", a.Exception);

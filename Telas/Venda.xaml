@@ -173,6 +173,10 @@
                             </Border>
                         </StackPanel>
                     </Button>
+                    <!-- MUSICA DA LOJA (12/09/2026): controle do Spotify (a playlist vem do painel). -->
+                    <Button Click="AbrirMusica" Style="{StaticResource BotaoBarra}" ToolTip="Música da loja (Spotify): tocar, pausar, pular, volume">
+                        <TextBlock Text="♫" FontSize="15" VerticalAlignment="Center"/>
+                    </Button>
                     <Button Click="Sangria" Style="{StaticResource BotaoBarra}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="↓" FontSize="16" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>

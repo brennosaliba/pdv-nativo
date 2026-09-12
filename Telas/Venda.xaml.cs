@@ -350,6 +350,9 @@ public partial class Venda : UserControl
 
     private void AbrirWhatsApp(object sender, RoutedEventArgs e) => PediuWhatsApp?.Invoke();
 
+    /// <summary>Música da loja (12/09/2026): janela pequena sobre o caixa, não modal.</summary>
+    private void AbrirMusica(object sender, RoutedEventArgs e) => Musica.Abrir(Window.GetWindow(this)!);
+
     /// <summary>Selo de nao lidas no botao WhatsApp. Ao vivo pelo ServicoWhatsApp.</summary>
     private void AtualizarSeloWhatsApp(int total) => Dispatcher.Invoke(() =>
     {

@@ -249,6 +249,62 @@ public sealed class Nuvem
     /// Savassi. Quando o CPF é o mesmo, os dois viram UMA identidade aqui dentro:
     /// <see cref="Operadores.ReconciliarComNuvem"/>.
     /// </summary>
+    // ── FUNÇÕES DE BORDA com a sessão do terminal ───────────────────────────────
+    /// <summary>POST /functions/v1/{nome} autenticado. Devolve status e corpo; 401 sem sessão; 0 sem rede.</summary>
+    public async Task<(int Status, string Corpo)> FuncaoAsync(string nome, string json, CancellationToken ct = default)
+    {
+        if (!await SessaoOkAsync(ct).ConfigureAwait(false)) return (401, "");
+        try
+        {
+            using var req = Montar(HttpMethod.Post, "/functions/v1/" + nome);
+            req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { return (0, ""); }
+    }
+
+    // ── SPOTIFY (12/09/2026): o access_token de 1 h vem da função `spotify` ────────
+    private string? _spotifyToken;
+    private DateTime _spotifyExpira = DateTime.MinValue;
+    public string? UltimoErroSpotify { get; private set; }
+    public void EsquecerTokenSpotify() => _spotifyToken = null;
+
+    public async Task<string?> TokenSpotifyAsync(CancellationToken ct = default)
+    {
+        if (_spotifyToken is not null && DateTime.Now < _spotifyExpira) return _spotifyToken;
+        var (st, corpo) = await FuncaoAsync("spotify", """{"acao":"token"}""", ct).ConfigureAwait(false);
+        var (token, expira, erro) = Spotify.LerToken(st, corpo);
+        if (token is null) { UltimoErroSpotify = erro; return null; }
+        UltimoErroSpotify = null;
+        _spotifyToken = token;
+        _spotifyExpira = DateTime.Now.AddSeconds(Math.Max(60, expira - 60));
+        return token;
+    }
+
+    // ── CONFIG DA LOJA definida no painel (12/09/2026) ─────────────────────────────
+    /// <summary>
+    /// Respostas prontas do chat, senha de administrador e música da loja, como o painel
+    /// definiu (RPC pdv_loja_config_caixa). As regras de aplicação moram em ConfigLojaPainel.
+    /// Devolve o que mudou ("" = nada; null = não deu para consultar).
+    /// </summary>
+    public async Task<string?> BaixarConfigLojaAsync(SqliteConnection cx)
+    {
+        if (!await SessaoOkAsync()) return null;
+        try
+        {
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_loja_config_caixa");
+            req.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) return null;
+            var linhas = ConfigLojaPainel.Ler(await resp.Content.ReadAsStringAsync());
+            var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1");
+            var linha = ConfigLojaPainel.EscolherLinha(linhas, loja);
+            return linha is null ? "" : ConfigLojaPainel.Aplicar(cx, linha, DateTime.Now);
+        }
+        catch { return null; }
+    }
+
     public async Task<int> BaixarOperadoresAsync(SqliteConnection cx)
     {
         if (!await SessaoOkAsync()) return 0;

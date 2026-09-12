@@ -573,6 +573,24 @@
                                  VerticalScrollBarVisibility="Auto" FontSize="13" Margin="0,0,0,6"/>
                         <TextBlock Text="Um bloco por resposta, separados por uma linha em branco. A primeira linha é o título do cartão; o resto é a mensagem que o atendente copia com um toque. Até 8 respostas. Apague tudo para voltar às de fábrica."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <TextBlock Text="Também dá para definir estas respostas (e a senha de administrador deste caixa) no painel, em Configurações da loja: o caixa copia ao tocar em Atualizar."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="BlocoQuiosque">
+                        <!-- SO O PDV NO WINDOWS (12/09/2026, pedido do dono): o Windows abre direto no
+                             PDV, sem area de trabalho, barra ou outros programas. E o Shell do usuario
+                             atual no registro (Quiosque.cs). -->
+                        <TextBlock Text="SÓ O PDV NO WINDOWS (QUIOSQUE)" Foreground="{DynamicResource Marca}"
+                                   FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
+                        <CheckBox x:Name="ChkQuiosque" Content="Abrir o Windows direto no PDV, sem área de trabalho, barra ou outros programas"
+                                  Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,0,0,6"/>
+                        <TextBlock Text="Vale para este usuário do Windows a partir da próxima entrada. Para o caixa ligar sozinho, o Windows precisa entrar sem pedir senha (netplwiz, desmarque 'os usuários devem digitar um nome e senha'). Nada mais carrega: nem Spotify nem outros programas. Para voltar ao normal, desmarque aqui ou use o botão abaixo."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <Button x:Name="BtnSairWindows" Click="SairParaOWindows" Style="{StaticResource BotaoBase}" HorizontalAlignment="Left"
+                                MinHeight="44" Padding="16,0" Margin="0,0,0,8" Visibility="Collapsed">
+                            <TextBlock Text="Abrir a área de trabalho do Windows agora"/>
+                        </Button>
                     </StackPanel>
 
                 </StackPanel>
