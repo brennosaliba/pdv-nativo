@@ -47,6 +47,28 @@ Nunca toca em `HKLM`, `AutoAdminLogon` ou `DefaultPassword` (a suíte vigia isso
 
 ## 2. Música da loja (Spotify)
 
+### O caixa não aparece na lista de aparelhos (1.0.10, 12/09/2026)
+
+O dono conectou a conta e viu na lista só o PC do escritório. Não é o Client ID:
+o Client ID identifica o app, a conta é uma só para a empresa, e a lista de
+aparelhos é a do Spotify: aparece quem está com o app aberto e logado naquela
+conta. O PC do escritório aparecia porque o Spotify estava aberto nele; o caixa
+não aparecia porque no quiosque nada mais carrega.
+
+A saída, sem perder o quiosque: **Configuração → bloco do quiosque → "Abrir o
+Spotify escondido atrás do PDV"**. Com a opção ligada, o PDV abre o app do Spotify
+ao iniciar (com `--minimized`) e uma vigia, a cada 30 s, minimiza a janela se ela
+aparecer e reabre o programa se ele morrer (no máximo uma vez a cada 2 minutos).
+Na tela continua só o PDV, e o caixa entra na lista com o nome deste computador
+(`DESKTOP-7AJ1OD7` na Savassi). A janela **♫ música** do caixa diz se este caixa
+está na lista de aparelhos, e o que fazer se não estiver.
+
+Pré-requisito, feito uma vez pelo dono no PC da loja: instalar o Spotify (versão
+da Loja ou instalador clássico) e entrar com a conta da empresa. O PDV nunca mexe
+em senha, nunca mata o Spotify; só abre e esconde. Por dentro: `SpotifyNoCaixa.cs`
+(raiz), `Spotify.AparelhosAsync` (GET /me/player/devices), config `spotify_escondido`.
+
+
 ### O desenho
 
 - O **painel** (ERP → PDV → **Música**) conecta a conta Premium da empresa uma vez,
