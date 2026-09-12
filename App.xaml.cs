@@ -163,6 +163,10 @@ public partial class App : Application
             // voltava para 80 mm, e uma loja de 58 mm imprimiria cortado sem
             // ninguem entender por que "estava certo ontem".
             Impressao.PapelMm = Vendas.Config(cx, "papel_mm");
+            // SPOTIFY ESCONDIDO (12/09/2026): com a opção ligada, o PDV abre o app do Spotify
+            // e o mantém minimizado, para este PC aparecer na lista de aparelhos da Música.
+            // Falha aqui não derruba nada: a janela da música diz se o caixa está na lista.
+            if (Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1") SpotifyNoCaixa.Iniciar();
         }
         catch { /* banco indisponível aqui vira erro de verdade logo adiante, com mensagem melhor */ }
 

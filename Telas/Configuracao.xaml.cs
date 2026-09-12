@@ -123,6 +123,12 @@ public partial class Configuracao : UserControl
         BlocoQuiosque.Visibility = Se(_jaConfigurado);
         ChkQuiosque.IsChecked = Quiosque.Ligado;
         BtnSairWindows.Visibility = Se(Quiosque.Ligado);
+        // Spotify escondido: a opção e o que este PC tem (instalado? aberto?).
+        ChkSpotifyEscondido.IsChecked = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
+        TxtSpotifyEstado.Text = SpotifyNoCaixa.Instalado
+            ? (SpotifyNoCaixa.Rodando ? "O Spotify está instalado e aberto neste PC." : "O Spotify está instalado neste PC (fechado agora).")
+              + " Ele precisa estar logado na conta da empresa uma vez; o PDV só abre e esconde o programa."
+            : "O Spotify não está instalado neste PC. Instale e entre com a conta da empresa; depois marque a opção.";
         // As quatro políticas de impressão, carregadas SEMPRE (inclusive em caixa novo):
         // com três estados, deixar o combo no valor do XAML gravaria uma escolha que
         // ninguém fez na primeira instalação. O padrão de cada papel vem de Impressoes,
@@ -1457,6 +1463,21 @@ public partial class Configuracao : UserControl
                     Dialogo.Avisar(Window.GetWindow(this)!, "Modo quiosque",
                         "Não consegui gravar no Windows: " + erroQuiosque + ". O resto da configuração foi salvo.", "erro");
                 BtnSairWindows.Visibility = Se(Quiosque.Ligado);
+            }
+            // Spotify escondido (12/09/2026): grava e já aplica (liga a vigia ou para).
+            var spotifyQuer = ChkSpotifyEscondido.IsChecked == true;
+            var spotifyAntes = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
+            Vendas.GravarConfig(cx, SpotifyNoCaixa.Chave, spotifyQuer ? "1" : "0");
+            if (spotifyQuer != spotifyAntes)
+            {
+                Caixa.Auditar(cx, null, spotifyQuer ? "spotify_escondido_ligado" : "spotify_escondido_desligado", null, null, null);
+                if (spotifyQuer)
+                {
+                    var erroSp = SpotifyNoCaixa.Iniciar();
+                    if (erroSp is not null)
+                        Dialogo.Avisar(Window.GetWindow(this)!, "Spotify no caixa", erroSp + " A opção ficou marcada; o PDV tenta de novo ao abrir.", "erro");
+                }
+                else SpotifyNoCaixa.Parar();
             }
             GravarTef(cx);
             _tefSalvo = true;

@@ -21,7 +21,7 @@ public sealed class Musica : Window
 
     private readonly Spotify _sp;
     private readonly string? _playlistUri, _playlistNome, _deviceId, _deviceNome;
-    private readonly TextBlock _faixa, _artista, _onde, _estado, _volumeTxt;
+    private readonly TextBlock _faixa, _artista, _onde, _estado, _volumeTxt, _esteCaixa;
     private readonly Slider _volume;
     private readonly Button _tocar, _pausar;
     private readonly DispatcherTimer _relogio;
@@ -90,6 +90,14 @@ public sealed class Musica : Window
             FontSize = 13, Foreground = R("TextoFraco"), TextWrapping = TextWrapping.Wrap,
         };
         pilha.Children.Add(_onde);
+        // ESTE CAIXA NA LISTA (12/09/2026): o dono via só o PC do escritório na lista do
+        // painel e não entendia por quê. A resposta mora aqui, no próprio caixa: ele
+        // aparece (Spotify aberto e logado neste PC) ou não, e o que fazer.
+        _esteCaixa = new TextBlock
+        {
+            Text = "", FontSize = 13, Foreground = R("TextoFraco"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0),
+        };
+        pilha.Children.Add(_esteCaixa);
 
         var agora = new Border
         {
@@ -154,8 +162,22 @@ public sealed class Musica : Window
 
     private bool _pausando;   // true = está tocando (o botão do meio vira pausar)
 
+    private int _batidas;
+
     private async Task AtualizarAsync()
     {
+        // a lista de aparelhos muda devagar: uma pergunta a cada 4 batidas (32 s), e na 1ª
+        if (_batidas++ % 4 == 0)
+        {
+            var (aps, erroAps) = await _sp.AparelhosAsync();
+            _esteCaixa.Text = erroAps is not null ? ""
+                : SpotifyNoCaixa.EsteCaixaNaLista(aps, Environment.MachineName)
+                    ? $"Este caixa ({Environment.MachineName}) está na lista de aparelhos do Spotify."
+                    : aps.Count == 0
+                        ? "Nenhum aparelho com o Spotify aberto agora. Este caixa só aparece na lista com o Spotify aberto e logado aqui (Configuração, quiosque)."
+                        : $"Este caixa ({Environment.MachineName}) não está na lista; aparecem: {string.Join(", ", aps.Select(a => a.Nome))}. " +
+                          "Para o caixa aparecer, ligue o Spotify escondido na Configuração (quiosque).";
+        }
         var (e, erro) = await _sp.EstadoAsync();
         if (erro is not null) { _estado.Text = erro; return; }
         if (e is null)

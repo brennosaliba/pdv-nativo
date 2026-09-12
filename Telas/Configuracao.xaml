@@ -591,6 +591,13 @@
                                 MinHeight="44" Padding="16,0" Margin="0,0,0,8" Visibility="Collapsed">
                             <TextBlock Text="Abrir a área de trabalho do Windows agora"/>
                         </Button>
+                        <!-- SPOTIFY ESCONDIDO (12/09/2026): o PDV abre o app do Spotify ao iniciar e o
+                             mantem minimizado, para este PC aparecer na lista de aparelhos da Musica
+                             (painel). Na tela continua so o PDV. -->
+                        <CheckBox x:Name="ChkSpotifyEscondido" Content="Abrir o Spotify escondido atrás do PDV, para este caixa aparecer na lista de aparelhos da Música"
+                                  Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,6,0,6"/>
+                        <TextBlock x:Name="TxtSpotifyEstado" Text=""
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     </StackPanel>
 
                 </StackPanel>

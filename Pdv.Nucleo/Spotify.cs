@@ -62,6 +62,34 @@ public sealed class Spotify
            : status == 0 ? "Sem internet agora." : $"A nuvem não respondeu ({status}).",
     };
 
+    /// <summary>Um aparelho com o Spotify aberto nesta conta (GET /me/player/devices).</summary>
+    public sealed record Aparelho(string Id, string Nome, string Tipo, bool Ativo);
+
+    /// <summary>GET /me/player/devices: a lista, ou vazia quando o corpo não é o esperado.</summary>
+    public static IReadOnlyList<Aparelho> LerAparelhos(int status, string? corpo)
+    {
+        if (status != 200 || string.IsNullOrWhiteSpace(corpo)) return Array.Empty<Aparelho>();
+        try
+        {
+            using var doc = JsonDocument.Parse(corpo);
+            if (!doc.RootElement.TryGetProperty("devices", out var devs) || devs.ValueKind != JsonValueKind.Array)
+                return Array.Empty<Aparelho>();
+            var lista = new List<Aparelho>();
+            foreach (var d in devs.EnumerateArray())
+            {
+                if (d.ValueKind != JsonValueKind.Object) continue;
+                var id = d.TryGetProperty("id", out var i) ? i.GetString() : null;
+                var nome = d.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (string.IsNullOrEmpty(nome)) continue;
+                lista.Add(new Aparelho(id ?? "", nome,
+                    d.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "",
+                    d.TryGetProperty("is_active", out var a) && a.ValueKind == JsonValueKind.True));
+            }
+            return lista;
+        }
+        catch { return Array.Empty<Aparelho>(); }
+    }
+
     /// <summary>GET /me/player: 204 = nada tocando (null); 200 = o estado.</summary>
     public static Estado? LerEstado(int status, string? corpo)
     {
@@ -146,6 +174,15 @@ public sealed class Spotify
         var (st, corpo) = await ChamarAsync(m, caminho, json, ct).ConfigureAwait(false);
         if (st == 0) return _erroDoToken() ?? "Sem internet agora.";
         return st is 200 or 202 or 204 ? null : MensagemErro(st, corpo);
+    }
+
+    /// <summary>Os aparelhos com o Spotify aberto nesta conta, e o erro se a pergunta falhou.</summary>
+    public async Task<(IReadOnlyList<Aparelho> Aparelhos, string? Erro)> AparelhosAsync(CancellationToken ct = default)
+    {
+        var (st, corpo) = await ChamarAsync(HttpMethod.Get, "/me/player/devices", null, ct).ConfigureAwait(false);
+        if (st == 0) return (Array.Empty<Aparelho>(), _erroDoToken() ?? "Sem internet agora.");
+        if (st != 200) return (Array.Empty<Aparelho>(), MensagemErro(st, corpo));
+        return (LerAparelhos(st, corpo), null);
     }
 
     /// <summary>O que toca agora (null = nada), e o erro se a pergunta falhou.</summary>
