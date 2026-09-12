@@ -646,6 +646,26 @@ public static class Promocoes
     public sealed record ProdutoPromo(bool AtivaAgora, string Nome, string Quando);
 
     /// <summary>
+    /// A linha embaixo do nome da promoção na vitrine do caixa.
+    ///
+    /// 12/09/2026, pedido do dono: na promoção "donut do dia" a linha dizia "Não vale
+    /// agora" e embaixo listava a semana inteira ("qua: Brigadeiro · sex: Churros · seg:
+    /// Homer, Ninho com Nutella · qui: Ovomaltine · ter: Redvelvet"). Quem está no caixa
+    /// com fila não lê agenda: a pergunta é "posso vender isto agora?". Então a resposta
+    /// virou uma linha só, direta.
+    /// </summary>
+    public static string LinhaDaPromocao(IEnumerable<string> quandoDosQueValemAgora)
+    {
+        var quando = quandoDosQueValemAgora
+            .Where(q => !string.IsNullOrWhiteSpace(q))
+            .Distinct()
+            .ToList();
+        return quando.Count == 0
+            ? "Sem item disponível hoje."
+            : "Vale hoje: " + string.Join("  ·  ", quando);
+    }
+
+    /// <summary>
     /// Os produtos que aparecem na categoria PROMOÇÃO do menu: tudo que alguma
     /// promoção DENTRO DA VIGÊNCIA menciona por id. AtivaAgora diz se o dia e
     /// a hora batem NESTE momento; Quando descreve a regra ("qui · 18:00–20:00")

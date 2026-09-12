@@ -1438,9 +1438,8 @@ public partial class Venda : UserControl
             foreach (var g in grupos)
             {
                 var ativos = g.Where(p => _promoVitrine[p.Id].AtivaAgora).ToList();
-                var outros = g.Where(p => !_promoVitrine[p.Id].AtivaAgora).ToList();
                 visiveis += ativos.Count;
-                ListaProdutos.Items.Add(SecaoPromo(g.Key, ativos, outros));
+                ListaProdutos.Items.Add(SecaoPromo(g.Key, ativos));
             }
             TxtContagem.Text = visiveis == 1 ? "1 item" : $"{visiveis} itens";
         }
@@ -1455,10 +1454,10 @@ public partial class Venda : UserControl
     /// <summary>
     /// Uma promoção = uma seção: o nome e, embaixo, o dia e o horário em que
     /// vale HOJE. Só os produtos válidos agora entram na grade e podem ser
-    /// vendidos. Quando nada vale agora, a seção fica cinza e diz o que vale
-    /// em que dia, sem card: o operador não vende o que não vale.
+    /// vendidos. Quando nada vale agora, a seção fica cinza e diz isso em uma
+    /// linha, sem card: o operador não vende o que não vale.
     /// </summary>
-    private StackPanel SecaoPromo(string nomePromo, List<Produto> ativos, List<Produto> outros)
+    private StackPanel SecaoPromo(string nomePromo, List<Produto> ativos)
     {
         var ativa = ativos.Count > 0;
         var sec = new StackPanel { Margin = new Thickness(2, 6, 2, 10) };
@@ -1477,28 +1476,17 @@ public partial class Venda : UserControl
         titulo.SetResourceReference(TextBlock.ForegroundProperty, ativa ? "Ok" : "TextoFraco");
         colunaCab.Children.Add(titulo);
         // linha de baixo: a regra dos produtos que valem agora ("qui" ou
-        // "qui · 18:00–20:00"), ou o aviso de que hoje não tem
-        var quandoHoje = string.Join("  ·  ", ativos.Select(p => _promoVitrine[p.Id].Quando).Distinct());
+        // "qui · 18:00–20:00"), ou uma linha só dizendo que hoje não tem.
+        // 12/09/2026: a agenda da semana embaixo (o "qua: X · sex: Y · seg: Z" do donut
+        // do dia) saiu a pedido do dono. Quem está no caixa quer saber se pode vender
+        // agora, não em que dia cada sabor entra.
         var detalhe = new TextBlock
         {
-            Text = ativa ? $"Vale hoje: {quandoHoje}" : "Não vale agora",
+            Text = Nucleo.Promocoes.LinhaDaPromocao(ativos.Select(p => _promoVitrine[p.Id].Quando)),
             FontSize = 13, Margin = new Thickness(0, 2, 0, 0), TextWrapping = TextWrapping.Wrap,
         };
         detalhe.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
         colunaCab.Children.Add(detalhe);
-        if (!ativa && outros.Count > 0)
-        {
-            var porDia = outros
-                .GroupBy(p => _promoVitrine[p.Id].Quando)
-                .Select(gr => $"{gr.Key}: {string.Join(", ", gr.Select(p => Capitalizar(p.Nome)))}");
-            var linhaOutros = new TextBlock
-            {
-                Text = string.Join("  ·  ", porDia),
-                FontSize = 12, Margin = new Thickness(0, 2, 0, 0), TextWrapping = TextWrapping.Wrap,
-            };
-            linhaOutros.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-            colunaCab.Children.Add(linhaOutros);
-        }
         cab.Child = colunaCab;
         sec.Children.Add(cab);
         if (ativa)
