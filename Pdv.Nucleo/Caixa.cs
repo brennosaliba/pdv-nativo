@@ -328,14 +328,25 @@ public static class Caixa
     /// </summary>
     public static Dinheiro? FundoEsperado(SqliteConnection cx)
     {
+        // Com a retirada para o cofre (12/09/2026) o que fica na gaveta é o que o operador
+        // DEIXOU (fica_cent), não o que contou. Fechamento anterior à regra não tem a
+        // coluna preenchida e cai no declarado, como sempre foi.
         var v = cx.ExecuteScalar<long?>("""
-            SELECT f.declarado_cent
+            SELECT COALESCE(s.fica_cent, f.declarado_cent)
               FROM caixa_fechamento f
               JOIN caixa_sessao s ON s.id = f.sessao_id
              WHERE f.forma = 'dinheiro' AND s.status = 'fechado'
              ORDER BY s.fechamento_em DESC LIMIT 1
             """);
         return v is null ? null : new Dinheiro(v.Value);
+    }
+
+    /// <summary>O que o último fechamento deixou e retirou (null quando o turno fechou sem a pergunta).</summary>
+    public static (Dinheiro Fica, Dinheiro Retirada)? UltimaRetirada(SqliteConnection cx, string sessaoId)
+    {
+        var r = cx.QueryFirstOrDefault<(long? fica, long? ret)>(
+            "SELECT fica_cent, retirada_cent FROM caixa_sessao WHERE id=@Id", new { Id = sessaoId });
+        return r.fica is null ? null : (new Dinheiro(r.fica.Value), new Dinheiro(r.ret ?? 0));
     }
 
     /// <summary>
@@ -597,11 +608,29 @@ public static class Caixa
     /// a linha do cartão fecha pelo apurado mas vai marcada como não conferida: o caixa
     /// fecha do mesmo jeito e o desvio não engorda com um número que ninguém checou.
     /// </summary>
+    /// <param name="ficaNoCaixa">
+    /// RETIRADA PARA O COFRE (12/09/2026, regra do dono). Quanto o operador deixa na gaveta
+    /// para o troco de amanhã; o resto do dinheiro contado sai para o cofre e vira uma
+    /// sangria com destino "cofre" na mesma transação. Null = fechamento sem a pergunta
+    /// (turno sem dinheiro, ou caminho antigo).
+    /// </param>
     public static List<LinhaFechamento> Fechar(SqliteConnection cx, Sessao sessao,
         Dictionary<string, Dinheiro> contagem, Operador quemFecha,
-        Dinheiro tolerancia, string? justificativa = null, bool tefDisponivel = true)
+        Dinheiro tolerancia, string? justificativa = null, bool tefDisponivel = true,
+        Dinheiro? ficaNoCaixa = null)
     {
         ExigirAberto(cx, sessao);
+        // A conta da retirada é conferida ANTES de qualquer gravação: não existe fechar o
+        // turno e deixar a retirada para depois, e não existe retirada maior que o contado.
+        Dinheiro retirada = Dinheiro.Zero;
+        if (ficaNoCaixa is { } fica)
+        {
+            if (!contagem.TryGetValue("dinheiro", out var contadoDinheiro))
+                throw new InvalidOperationException("A retirada para o cofre precisa da contagem do dinheiro.");
+            var (r, erroRetirada) = RetiradaCofre.Calcular(contadoDinheiro, fica);
+            if (erroRetirada is not null) throw new InvalidOperationException(erroRetirada);
+            retirada = r;
+        }
         var apurado = Apurado(cx, sessao);
         var integrado = ApuradoIntegrado(cx, sessao);
         var contadas = FormasContadas(cx, sessao);
@@ -694,6 +723,35 @@ public static class Caixa
             $"{(justificativa is null ? "" : " · " + justificativa)}");
         Enfileirar(cx, tx, "fechamento", sessao.Id, sessao.Id,
             new { sessao = sessao.Id, linhas = linhas.Select(l => new { l.Forma, l.Contada, l.Situacao, decl = l.Declarado.Centavos, apur = l.Apurado.Centavos, dif = l.Diferenca.Centavos, tef = l.PeloTef.Centavos, l.Conferida }), justificativa });
+
+        // RETIRADA PARA O COFRE (12/09/2026). É uma sangria com destino "cofre", gravada
+        // na mesma transação do fechamento. Ela NÃO passa por Movimentar de propósito: a
+        // dupla assinatura da sangria existe para dinheiro que sai NO MEIO do turno, sem
+        // conferência; aqui o operador acabou de declarar a contagem às cegas, a diferença
+        // ficou auditada, o papel vai para o cofre com o dinheiro e a abertura de amanhã
+        // confere o que ficou. A retirada também não pode passar do contado (conferido
+        // acima), que é a regra equivalente ao "sangria acima do apurado" de Movimentar.
+        if (ficaNoCaixa is { } ficou)
+        {
+            cx.Execute("UPDATE caixa_sessao SET fica_cent=@F, retirada_cent=@R WHERE id=@Id",
+                new { F = ficou.Centavos, R = retirada.Centavos, Id = sessao.Id }, tx);
+            if (retirada.Positivo)
+            {
+                var idMov = Guid.NewGuid().ToString();
+                cx.Execute("""
+                    INSERT INTO caixa_movimento (id, sessao_id, tipo, valor_cent, motivo, destino,
+                                                 operador_id, autorizado_por, criado_em)
+                    VALUES (@Id, @Ses, 'sangria', @Val, @Mot, @Dest, @Op, NULL, @Em)
+                    """,
+                    new { Id = idMov, Ses = sessao.Id, Val = retirada.Centavos, Mot = RetiradaCofre.Motivo,
+                          Dest = RetiradaCofre.Destino, Op = idFecha, Em = Agora }, tx);
+                Auditar(cx, tx, "caixa_retirada_cofre", idFecha, null,
+                    $"retirada={retirada.Formatado()} ficou={ficou.Formatado()}");
+                Enfileirar(cx, tx, "movimento", idMov, idMov,
+                    new { id = idMov, sessao = sessao.Id, tipo = "sangria", valor_cent = retirada.Centavos,
+                          motivo = RetiradaCofre.Motivo, destino = RetiradaCofre.Destino, autorizadoPor = (string?)null });
+            }
+        }
         tx.Commit();
         return linhas;
     }

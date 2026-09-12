@@ -3645,13 +3645,36 @@ public partial class Venda : UserControl
                     "Teve venda na maquininha avulsa (POS) hoje?", Rotulo))
                 return;                                // desistiu no meio: não fecha nada
 
+            // RETIRADA PARA O COFRE (12/09/2026, regra do dono): contado o dinheiro, o
+            // operador diz quanto FICA na gaveta para o troco de amanhã; o resto sai para o
+            // cofre com um papel (nome, valor, data). Voltar reabre a contagem do dinheiro.
+            Dinheiro? fica = null;
+            while (contagem.TryGetValue("dinheiro", out var contadoDinheiro))
+            {
+                var r = PedirValor.MostrarComVoltar(dono, "Fechamento de caixa", RetiradaCofre.Pergunta(contadoDinheiro));
+                if (r.Voltou)
+                {
+                    var de = PedirValor.Mostrar(dono, "Fechamento de caixa", PerguntaDoFechamento(plano.First(p => p.Forma == "dinheiro")));
+                    if (de is null) return;             // desistiu: não fecha nada
+                    contagem["dinheiro"] = de.Value;
+                    continue;
+                }
+                if (r.Valor is null) return;             // desistiu: não fecha nada
+                var (_, erroRetirada) = RetiradaCofre.Calcular(contadoDinheiro, r.Valor.Value);
+                if (erroRetirada is not null) { Dialogo.Avisar(dono, "Retirada para o cofre", erroRetirada, "erro"); continue; }
+                fica = r.Valor.Value;
+                break;
+            }
+
             var tolerancia = new Dinheiro(200);        // R$ 2,00
             try
             {
                 using var cx = Banco.Abrir();
                 var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                 var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
-                MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, null, tefDisponivel), null, divergencias, resumoTeste);
+                var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, null, tefDisponivel, fica);
+                var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
+                MostrarResultado(dono, linhasFech, null, divergencias, resumoTeste, papel);
                 FechouCaixa?.Invoke();
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
@@ -3665,7 +3688,9 @@ public partial class Venda : UserControl
                     using var cx = Banco.Abrir();
                     var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                     var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
-                    MostrarResultado(dono, Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just, tefDisponivel), just, divergencias, resumoTeste);
+                    var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just, tefDisponivel, fica);
+                    var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
+                    MostrarResultado(dono, linhasFech, just, divergencias, resumoTeste, papel);
                     FechouCaixa?.Invoke();
                 }
                 catch (Exception e2)
@@ -3719,8 +3744,38 @@ public partial class Venda : UserControl
         catch { return false; }
     }
 
+    /// <summary>
+    /// O papel da retirada para o cofre: uma via na impressora do cupom. Devolve a frase
+    /// para o resumo do fechamento (saiu, ou não saiu e por quê, com os valores para
+    /// anotar à mão). Sem retirada (nada saiu da gaveta) não imprime nada.
+    /// </summary>
+    private async Task<string?> ImprimirRetiradaAsync(Microsoft.Data.Sqlite.SqliteConnection cx,
+        Dictionary<string, Dinheiro> contagem, Dinheiro? fica)
+    {
+        if (fica is not { } ficou || !contagem.TryGetValue("dinheiro", out var contado)) return null;
+        var (retirada, erro) = RetiradaCofre.Calcular(contado, ficou);
+        if (erro is not null) return null;
+        var resumo = $"Retirado para o cofre: {retirada.Formatado()}. Fica no caixa: {ficou.Formatado()}.";
+        if (!retirada.Positivo) return resumo + " Nada saiu da gaveta, sem papel.";
+        try
+        {
+            var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
+            var destino = Impressao.DestinoCupom(Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"));
+            var linhas = RetiradaCofre.Papel(loja, DateTime.Now, _operador.Nome, _sessao.BusinessDate,
+                contado, ficou, retirada, destino.Papel.Colunas);
+            var erroImp = await Impressao.ImprimirTextoAsync("Retirada para o cofre", new[] { linhas }, destino);
+            return erroImp is null
+                ? resumo + " O papel da retirada saiu na impressora: guarde no cofre com o dinheiro."
+                : resumo + " O papel NÃO saiu (" + erroImp + "). Anote à mão: operador, valor e data, e guarde no cofre.";
+        }
+        catch (Exception ex)
+        {
+            return resumo + " O papel NÃO saiu (" + ex.Message + "). Anote à mão: operador, valor e data, e guarde no cofre.";
+        }
+    }
+
     private static void MostrarResultado(Window dono, List<LinhaFechamento> linhas, string? justificativa,
-        List<DivergenciaTef> divergencias, string? resumoTeste = null)
+        List<DivergenciaTef> divergencias, string? resumoTeste = null, string? retirada = null)
     {
         var texto = string.Join("\n", linhas.Select(l =>
         {
@@ -3762,6 +3817,10 @@ public partial class Venda : UserControl
         // precisa ler isso aqui. Número que some sem explicação é número que vira
         // desconfiança do fechamento inteiro.
         if (resumoTeste is not null) corpo += "\n\n" + resumoTeste;
+
+        // A retirada para o cofre entra no resumo do fechamento: é o que o operador leva
+        // ao cofre e o que a abertura de amanhã vai esperar na gaveta.
+        if (retirada is not null) corpo += "\n\n" + retirada;
 
         if (divergencias.Count > 0)
             corpo += "\n\nMaquininha x caixa:\n" + string.Join("\n", divergencias.Select(d =>

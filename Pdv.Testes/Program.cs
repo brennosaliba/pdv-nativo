@@ -1308,6 +1308,7 @@ TestesBuscaKds.Rodar((cond, nome) => Check("busca-kds: " + nome, cond));
 TestesRetomada.Rodar((cond, nome) => Check("retomada: " + nome, cond));
 TestesAjudaIfood.Rodar((cond, nome) => Check("ajuda-ifood: " + nome, cond));
 TestesLinhaPromocao.Rodar((cond, nome) => Check("promo-linha: " + nome, cond));
+TestesRetiradaCofre.Rodar((cond, nome) => Check("retirada-cofre: " + nome, cond));
 TestesQuiosque.Rodar((cond, nome) => Check("quiosque: " + nome, cond));
 TestesConfigLojaPainel.Rodar((cond, nome) => Check("config-painel: " + nome, cond));
 TestesMusica.Rodar((cond, nome) => Check("musica: " + nome, cond));

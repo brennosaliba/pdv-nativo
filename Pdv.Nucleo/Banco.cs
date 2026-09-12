@@ -109,6 +109,11 @@ public static class Banco
             // TEF PayGo (troca de arquivos): two-phase commit precisa do código de
             // controle (027) e da identificação (001) para CNF/NCN no religamento; as
             // vias e a resposta crua ficam para reimpressão e auditoria.
+            // RETIRADA PARA O COFRE no fechamento (12/09/2026, regra do dono): o que ficou
+            // na gaveta para o troco de amanhã e o que saiu para o cofre. NULL = fechamento
+            // anterior à regra (a abertura seguinte cai no declarado, como sempre foi).
+            "ALTER TABLE caixa_sessao ADD COLUMN fica_cent INTEGER",
+            "ALTER TABLE caixa_sessao ADD COLUMN retirada_cent INTEGER",
             "ALTER TABLE tef_transacao ADD COLUMN provedor TEXT",
             "ALTER TABLE tef_transacao ADD COLUMN identificacao TEXT",
             "ALTER TABLE tef_transacao ADD COLUMN cod_controle TEXT",
