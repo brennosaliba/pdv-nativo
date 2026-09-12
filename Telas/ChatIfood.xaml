@@ -28,6 +28,13 @@
                          painel de ajuda. "Gestor inteiro" tira o holofote (a pagina toda volta a
                          aparecer, para navegar ate o pedido); "Diagnostico" grava a estrutura da tela
                          num arquivo em ProgramData (sem telefone nem CPF) que o dono manda para mapear. -->
+                    <!-- AJUDA iFOOD (12/09/2026, pedido do dono): abre o Atendimento do iFood (o mesmo
+                         "Fale com o iFood" do Gestor) numa coluna entre as respostas prontas e as
+                         conversas. Do KDS, o botao no detalhe do pedido chega aqui ja com o pedido. -->
+                    <Button Click="AbrirAjuda" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Abre o atendimento do iFood (Fale com o iFood)">
+                        <TextBlock Text="🛟 Ajuda iFood"/>
+                    </Button>
                     <Button x:Name="BtnGestorInteiro" Click="AlternarGestorInteiro" Style="{StaticResource BotaoBarra}"
                             ToolTip="Mostrar o Gestor inteiro (ou só o chat)">
                         <TextBlock x:Name="TxtGestorInteiro" Text="Gestor inteiro"/>

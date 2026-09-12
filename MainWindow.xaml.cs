@@ -281,6 +281,8 @@ public partial class MainWindow : Window
         var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
         var k = new Telas.Kds(loja);
         k.Voltou += () => Conteudo.Content = _telaVenda;
+        // "Fale com o iFood" do detalhe: abre a aba do chat já procurando o pedido
+        k.PediuAjudaIfood += numero => { MostrarChat(); _ = CamadaChat.FaleComIfoodAsync(numero); };
         Conteudo.Content = k;
     }
 

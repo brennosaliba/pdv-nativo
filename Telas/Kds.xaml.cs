@@ -24,6 +24,8 @@ namespace Pdv.Telas;
 public partial class Kds : UserControl
 {
     public event Action? Voltou;
+    /// <summary>"Fale com o iFood" do detalhe de um pedido do iFood: o número vai para o chat.</summary>
+    public event Action<string>? PediuAjudaIfood;
 
     private readonly string _loja;
     private DispatcherTimer? _timer;
@@ -90,7 +92,10 @@ public partial class Kds : UserControl
     /// </summary>
     public void AbrirDetalhe(Ticket t, DetalheNuvem? complemento = null)
     {
-        var painel = new DetalhePedidoKds(DetalhePedido.De(t, DateTime.Now, complemento), FecharDetalhe);
+        Action? ajuda = AjudaIfood.PodePedirAjuda(t.Origem, t.Numero)
+            ? () => { FecharDetalhe(); PediuAjudaIfood?.Invoke(t.Numero); }
+            : null;
+        var painel = new DetalhePedidoKds(DetalhePedido.De(t, DateTime.Now, complemento), FecharDetalhe, ajuda);
         PainelDetalhe.Content = painel;
         Veu.Visibility = Visibility.Visible;
         _detalheDe = t.Id;

@@ -34,7 +34,8 @@ public sealed class DetalhePedidoKds : Border
     private readonly StackPanel _obsPedido;      // observação do pedido inteiro, acima dos itens
     private readonly Button _fechar;
 
-    public DetalhePedidoKds(DetalhePedido d, Action fechar)
+    /// <param name="faleComIfood">Só em pedido do iFood: abre o atendimento do iFood para este pedido (null = sem botão).</param>
+    public DetalhePedidoKds(DetalhePedido d, Action fechar, Action? faleComIfood = null)
     {
         Detalhe = d;
 
@@ -144,8 +145,34 @@ public sealed class DetalhePedidoKds : Border
             MinHeight = 60, FontSize = 20, Margin = new Thickness(26, 12, 26, 20),
         };
         _fechar.Click += (_, _) => fechar();
-        Grid.SetRow(_fechar, 2);
-        raiz.Children.Add(_fechar);
+        if (faleComIfood is null)
+        {
+            Grid.SetRow(_fechar, 2);
+            raiz.Children.Add(_fechar);
+        }
+        else
+        {
+            // FALE COM O iFOOD (12/09/2026, pedido do dono): "motoqueiro não chegou, no
+            // Gestor tem a opção Fale com o iFood". Ao lado do Fechar, só em pedido do iFood.
+            var rodape = new Grid { Margin = new Thickness(26, 12, 26, 20) };
+            rodape.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            rodape.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var ajuda = new Button
+            {
+                Content = "🛟 " + AjudaIfood.TextoBotao,
+                Style = (Style)Application.Current.Resources["BotaoBase"],
+                MinHeight = 60, FontSize = 18, Margin = new Thickness(0, 0, 8, 0),
+                ToolTip = "Abre o atendimento do iFood para este pedido, na aba Chat",
+            };
+            ajuda.Click += (_, _) => faleComIfood();
+            Grid.SetColumn(ajuda, 0);
+            rodape.Children.Add(ajuda);
+            _fechar.Margin = new Thickness(8, 0, 0, 0);
+            Grid.SetColumn(_fechar, 1);
+            rodape.Children.Add(_fechar);
+            Grid.SetRow(rodape, 2);
+            raiz.Children.Add(rodape);
+        }
 
         Child = raiz;
         PintarNuvem();

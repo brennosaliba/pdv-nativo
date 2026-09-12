@@ -150,6 +150,16 @@ public partial class ChatIfood : UserControl
                 var modo = doc.RootElement.TryGetProperty("modo", out var v) ? v.GetString() : null;
                 TxtEstado.Text = modo == "gestor" ? "Gestor (chat na barra lateral)" : "painel do chat";
             }
+            else if (tipo == "ajuda")
+            {
+                // a página conta como foi a busca do pedido; se desistiu, o Gestor inteiro
+                // ficou na tela e o botão da barra tem que dizer isso
+                var texto = doc.RootElement.TryGetProperty("texto", out var v) ? v.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(texto)) TxtEstado.Text = texto;
+                var inteiro = doc.RootElement.TryGetProperty("gestorInteiro", out var g) && g.ValueKind == JsonValueKind.True;
+                _gestorInteiro = inteiro;
+                TxtGestorInteiro.Text = inteiro ? "Só o chat" : "Gestor inteiro";
+            }
         }
         catch { /* mensagem malformada não derruba nada */ }
     }
@@ -323,6 +333,51 @@ public partial class ChatIfood : UserControl
     }
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
+
+    // ── AJUDA DO iFOOD ("Fale com o iFood") ──────────────────────────────────────
+    // 12/09/2026, pedido do dono: "quando um pedido tem problema (motoqueiro não
+    // chegou), no Gestor tem a opção Fale com o iFood; clica e já abre chamado. Tem
+    // como adicionar isso no KDS? E abre um chat na aba chat, no meio: ajuda iFood
+    // entre respostas prontas e conversas."
+    //
+    // Mapeado pelo diagnóstico da loja (11/09 20:42): a gaveta do Atendimento mora no
+    // cabeçalho do Gestor (irmã do botão com o ícone de fone, ifdl-icon-customer-service)
+    // e por dentro é o help-center (data-testid help-center__page--chat, mensagens
+    // help-center__message--text, árvore de decisão help-center__btn--decision-tree). O
+    // "Fale com o iFood" é um link sem href dentro do detalhe do pedido; só JS abre.
+
+    /// <summary>Botão da barra: abre o Atendimento do iFood na coluna do meio.</summary>
+    private async void AbrirAjuda(object sender, RoutedEventArgs e)
+    {
+        if (!_pronto || Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu"; return; }
+        try
+        {
+            var r = await Web.CoreWebView2.ExecuteScriptAsync("window.pdvAbrirAjuda ? window.pdvAbrirAjuda() : false");
+            TxtEstado.Text = r == "true" ? "abrindo o atendimento do iFood…" : "não achei o botão de atendimento do iFood nesta tela";
+        }
+        catch (Exception ex) { TxtEstado.Text = "ajuda: " + ex.Message; }
+    }
+
+    /// <summary>
+    /// Do KDS: "Fale com o iFood" de um pedido. A página procura o pedido no Gestor
+    /// (busca, card, link) e, achando, isola a gaveta do Atendimento ao lado do chat;
+    /// não achando, deixa o Gestor inteiro na tela com a dica do caminho. Devolve
+    /// false só se a página nem recebeu o pedido (chat sem WebView2).
+    /// </summary>
+    public async Task<bool> FaleComIfoodAsync(string numero)
+    {
+        if (!AjudaIfood.PodePedirAjuda("ifood", numero)) return false;
+        if (!_pronto) await PreAquecerAsync();
+        if (!_pronto || Web.CoreWebView2 is null) return false;
+        try
+        {
+            TxtEstado.Text = AjudaIfood.Abrindo(numero);
+            var arg = JsonSerializer.Serialize(AjudaIfood.SoDigitos(numero));
+            var r = await Web.CoreWebView2.ExecuteScriptAsync($"window.pdvFaleComIfood ? window.pdvFaleComIfood({arg}) : false");
+            return r == "true";
+        }
+        catch { return false; }
+    }
 
     private bool _gestorInteiro;
 
@@ -509,6 +564,20 @@ public partial class ChatIfood : UserControl
         if (document.getElementById('pdv-css')) return;
         var s = document.createElement('style'); s.id = 'pdv-css';
         s.textContent = 'body.pdv-so-chat [data-pdv-hide]{display:none!important;pointer-events:none!important}' +
+          // a cadeia do cabecalho ate a gaveta da ajuda fica invisivel (sem faixa branca em cima);
+          // a gaveta em si volta a aparecer por cima, na coluna do meio
+          'body.pdv-so-chat [data-pdv-veu]{visibility:hidden!important;background:transparent!important;box-shadow:none!important;border-color:transparent!important}' +
+          'body.pdv-so-chat [data-pdv-ajuda]{visibility:visible!important;position:fixed!important;top:18px!important;bottom:18px!important;height:auto!important;max-height:none!important;max-width:none!important;margin:0!important;transform:none!important;z-index:2147482000!important;border-radius:16px;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.18)}' +
+          '#pdv-ajuda{position:fixed;z-index:2147483000;display:none;font:14px system-ui,Segoe UI,sans-serif}' +
+          'body.pdv-so-chat #pdv-ajuda.pdv-visivel{display:block}' +
+          '#pdv-ajuda.pdv-coluna{top:18px;background:#f7f4ee;border:1px solid #e6e1d8;border-radius:16px;padding:14px}' +
+          '#pdv-ajuda h4{margin:0 0 10px 2px;font-size:12px;letter-spacing:.08em;color:#8a8580;font-weight:700}' +
+          '#pdv-ajuda p{margin:10px 2px 0;color:#6b655e;font-size:13px;line-height:1.4}' +
+          '#pdv-ajuda button{display:block;width:100%;border:0;border-radius:24px;padding:12px 16px;background:#F276A5;color:#fff;font:700 14px system-ui,Segoe UI,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.18)}' +
+          '#pdv-ajuda.pdv-pill{background:transparent;padding:0}' +
+          '#pdv-ajuda.pdv-pill h4,#pdv-ajuda.pdv-pill p{display:none}' +
+          '#pdv-conversas-pill{position:fixed;right:18px;top:18px;z-index:2147483000;display:none;border:0;border-radius:24px;padding:12px 18px;background:#2b2724;color:#fff;font:700 14px system-ui,Segoe UI,sans-serif;cursor:pointer}' +
+          'body.pdv-so-chat #pdv-conversas-pill.pdv-visivel{display:block}' +
           '#pdv-cortina{position:fixed;inset:0;z-index:2147483647;background:#f7f4ee;display:flex;align-items:center;' +
           'justify-content:center;font:16px system-ui,Segoe UI,sans-serif;color:#555}';
         (document.head || document.documentElement).appendChild(s);
@@ -541,6 +610,39 @@ public partial class ChatIfood : UserControl
         }
         return null;
       }
+      // AJUDA DO iFOOD (12/09/2026). A gaveta do Atendimento ("Fale com o iFood") e o
+      // help-center: mora no CABECALHO do Gestor, irma do botao com o icone de fone.
+      // Mapeado pelo diagnostico da loja de 11/09 20:42 (gestor-diagnostico-204245).
+      function ajudaMiolo(){ return document.querySelector('[data-testid^="help-center__"]'); }
+      function pareceGaveta(el){
+        var r = el.getBoundingClientRect();
+        return r.width >= 250 && r.height > 300 && r.width * r.height < window.innerWidth * window.innerHeight * 0.9;
+      }
+      // sobe do miolo ate o no mais alto que ainda tem cara de gaveta (o pai dele e o
+      // grupo de botoes do cabecalho, 208x40, ou a pagina inteira)
+      function ajudaCandidato(){
+        var m = ajudaMiolo(); if (!m) return null;
+        var no = m, ultimo = null;
+        while (no && no !== document.body){
+          if (pareceGaveta(no)) ultimo = no;
+          else if (ultimo) break;
+          no = no.parentElement;
+        }
+        return ultimo;
+      }
+      function botaoAtendimento(){
+        var ic = document.querySelector('.ifdl-icon-customer-service,[class*="icon-customer-service"]');
+        if (ic) return ic.closest('button,a,[role="button"]') || ic;
+        return document.querySelector('[aria-label*="Atendimento"]');
+      }
+      window.pdvAbrirAjuda = function () {
+        try {
+          if (ajudaCandidato()) return true;
+          var b = botaoAtendimento(); if (!b) return false;
+          b.click(); return true;
+        } catch (e) { return false; }
+      };
+
       // O X DA GAVETA (04/09, pedido do dono). O holofote esconde os IRMÃOS da
       // gaveta, mas o X fica DENTRO dela, na linha do título, e continuava
       // clicável. Fechar por ele deixava o PDV sem chat e sem saída: o resto da
@@ -674,10 +776,11 @@ public partial class ChatIfood : UserControl
           if (!box || !pill) return;
           if (!document.body.classList.contains('pdv-so-chat') || !window.__pdvRespostas.length) { box.classList.remove('pdv-inline'); pill.classList.remove('pdv-visivel'); return; }
           var l = alvo ? alvo.getBoundingClientRect().left - 36 : window.innerWidth - 36;
-          var cabe = l >= 160 && areaLivre(alvo);
+          var la = ajudaCandidato() ? layoutAjuda() : null;
+          var cabe = la ? la.inline : (l >= 160 && areaLivre(alvo));
           if (cabe) {
             box.classList.add('pdv-inline'); box.classList.remove('pdv-compacto', 'pdv-aberto');
-            box.style.width = Math.max(0, Math.min(340, l)) + 'px';
+            box.style.width = (la ? la.respW : Math.max(0, Math.min(340, l))) + 'px';
             pill.classList.remove('pdv-visivel');
           } else {
             box.classList.remove('pdv-inline'); box.classList.add('pdv-compacto');
@@ -745,31 +848,209 @@ public partial class ChatIfood : UserControl
         } catch (e) {}
       };
 
+      // A COLUNA DO MEIO (12/09/2026): a gaveta da ajuda, quando aberta, fica entre as
+      // respostas prontas e o chat. Em tela estreita (1024) as respostas viram a pilula e
+      // a ajuda ocupa a esquerda inteira; em tela larga cabem as tres colunas. Sem gaveta
+      // aberta, um cartao "Ajuda iFood" (ou so o botao, se nao ha espaco) segura o lugar.
+      function medidaLivre(){
+        var chat = candidato();
+        return chat ? chat.getBoundingClientRect().left : window.innerWidth;
+      }
+      function layoutAjuda(){
+        var direita = medidaLivre();                       // onde comeca o chat (ou a borda)
+        var livre = direita - 36;                          // margens de 18 dos dois lados
+        var inline = livre >= 320 + 260 + 18;              // ajuda minima 320 + respostas 260
+        var respW = inline ? Math.max(0, Math.min(340, livre - 320 - 18)) : 0;
+        var ajudaL = inline ? 18 + respW + 18 : 18;
+        var ajudaW = Math.max(0, Math.min(640, direita - ajudaL - 18));
+        return { inline: inline, respW: respW, ajudaL: ajudaL, ajudaW: ajudaW, direita: direita };
+      }
+      function posicionarAjuda(){
+        var a = ajudaCandidato(); if (!a) return;
+        var l = layoutAjuda();
+        a.setAttribute('data-pdv-ajuda', '');
+        a.style.setProperty('left', l.ajudaL + 'px', 'important');
+        a.style.setProperty('width', l.ajudaW + 'px', 'important');
+      }
+      function cartaoAjuda(){
+        var c = document.getElementById('pdv-ajuda');
+        if (c) return c;
+        c = document.createElement('div'); c.id = 'pdv-ajuda';
+        var h = document.createElement('h4'); h.textContent = 'AJUDA iFOOD'; c.appendChild(h);
+        var b = document.createElement('button'); b.type = 'button'; b.textContent = '🛟 Falar com o iFood';
+        b.addEventListener('click', function (ev) { ev.stopPropagation(); if (!window.pdvAbrirAjuda()) envia({tipo:'ajuda', texto:'não achei o botão de atendimento do iFood nesta tela'}); });
+        c.appendChild(b);
+        var p = document.createElement('p'); p.textContent = 'Abre o atendimento do iFood aqui do lado. Para um pedido específico: Delivery, toque no pedido e em Fale com o iFood.'; c.appendChild(p);
+        ['pointerdown','mousedown','touchstart','click'].forEach(function (tp) { c.addEventListener(tp, function (ev) { ev.stopPropagation(); }); });
+        document.body.appendChild(c);
+        var cp = document.createElement('button'); cp.id = 'pdv-conversas-pill'; cp.type = 'button'; cp.textContent = 'Abrir conversas';
+        ['pointerdown','mousedown','touchstart'].forEach(function (tp) { cp.addEventListener(tp, function (ev) { ev.stopPropagation(); }); });
+        cp.addEventListener('click', function (ev) { ev.stopPropagation(); window.pdvAbrirConversas(); });
+        document.body.appendChild(cp);
+        return c;
+      }
+      function ajustarAjuda(){
+        try {
+          var c = cartaoAjuda(); var cp = document.getElementById('pdv-conversas-pill');
+          var isolado = document.body.classList.contains('pdv-so-chat');
+          var gaveta = ajudaCandidato();
+          if (!isolado || gaveta) { c.classList.remove('pdv-visivel'); }
+          else {
+            var l = layoutAjuda();
+            // com respostas na tela: o cartao entra a direita delas se sobra >= 200; senao vira botao no rodape
+            var box = document.getElementById('pdv-respostas');
+            var respInline = box && box.classList.contains('pdv-inline');
+            var esq = respInline ? 18 + box.getBoundingClientRect().width + 18 : 18;
+            var sobra = l.direita - esq - 18;
+            c.classList.add('pdv-visivel');
+            if (sobra >= 200) { c.classList.add('pdv-coluna'); c.classList.remove('pdv-pill'); c.style.left = esq + 'px'; c.style.top = '18px'; c.style.bottom = ''; c.style.width = Math.min(300, sobra) + 'px'; }
+            else { c.classList.add('pdv-pill'); c.classList.remove('pdv-coluna'); c.style.left = '18px'; c.style.top = ''; c.style.bottom = respInline ? '' : '70px'; c.style.width = '190px'; if (respInline) { c.style.top = '18px'; c.style.left = (18 + box.getBoundingClientRect().width + 12) + 'px'; c.style.width = Math.max(120, Math.min(190, sobra - 12)) + 'px'; } }
+          }
+          if (cp) { if (isolado && gaveta && !candidato()) cp.classList.add('pdv-visivel'); else cp.classList.remove('pdv-visivel'); }
+          if (gaveta) posicionarAjuda();
+        } catch (e) {}
+      }
+      window.pdvAjustarAjuda = ajustarAjuda;
+
       window.pdvIsolar = function () {
         try {
-          var alvo = candidato();
-          if (!alvo){ envia({tipo:'modo', modo:'gestor'}); return false; }
+          var chat = candidato(), ajuda = ajudaCandidato();
+          var alvos = [chat, ajuda].filter(Boolean);
+          if (!alvos.length){ envia({tipo:'modo', modo:'gestor'}); return false; }
           estilo();
           document.querySelectorAll('[data-pdv-hide]').forEach(function(x){ x.removeAttribute('data-pdv-hide'); });
-          var el = alvo;
-          while (el && el !== document.body){
-            var p = el.parentElement; if (!p) break;
-            for (var i=0;i<p.children.length;i++){ if (p.children[i] !== el && !/^pdv-/.test(p.children[i].id || '')) p.children[i].setAttribute('data-pdv-hide',''); }
-            el = p;
+          document.querySelectorAll('[data-pdv-veu]').forEach(function(x){ x.removeAttribute('data-pdv-veu'); });
+          // guarda = os alvos e todos os seus ancestrais: nunca escondidos
+          var guarda = [];
+          alvos.forEach(function (a) { var e = a; while (e && e !== document.body) { guarda.push(e); e = e.parentElement; } });
+          function guardado(x){ return guarda.indexOf(x) >= 0; }
+          alvos.forEach(function (alvo) {
+            var el = alvo;
+            while (el && el !== document.body){
+              var p = el.parentElement; if (!p) break;
+              for (var i=0;i<p.children.length;i++){ var c = p.children[i]; if (c !== el && !guardado(c) && !/^pdv-/.test(c.id || '')) c.setAttribute('data-pdv-hide',''); }
+              el = p;
+            }
+          });
+          // a cadeia da AJUDA que nao e cadeia do chat fica invisivel (o cabecalho do Gestor
+          // e a pagina por tras dele); a gaveta em si e reposicionada por cima
+          if (ajuda) {
+            var cadeiaChat = []; if (chat) { var e2 = chat; while (e2 && e2 !== document.body) { cadeiaChat.push(e2); e2 = e2.parentElement; } }
+            var e3 = ajuda.parentElement;
+            while (e3 && e3 !== document.body) { if (cadeiaChat.indexOf(e3) < 0) e3.setAttribute('data-pdv-veu', ''); e3 = e3.parentElement; }
           }
           var titulo = tituloDoPainel();
-          if (titulo) esconderFecharDaGaveta(alvo, titulo);
+          if (chat && titulo) esconderFecharDaGaveta(chat, titulo);
           document.body.classList.add('pdv-so-chat');
           window.pdvDefinirRespostas(window.__pdvRespostas);
           ajustarLarguraRespostas();
+          ajustarAjuda();
           envia({tipo:'modo', modo:'chat'});
           return true;
         } catch (e) { envia({tipo:'modo', modo:'gestor'}); return false; }
       };
 
+      // FALE COM O iFOOD DE UM PEDIDO (do KDS). Sem deep-link no Gestor, a pagina faz o
+      // caminho de uma pessoa: Gestor inteiro, busca pelo numero, toque no pedido, toque
+      // no link "Fale com o iFood", e ai isola a gaveta da ajuda ao lado do chat. Tudo
+      // por baixo da cortina. Se nao achar em ~25 s, deixa o Gestor inteiro na tela com
+      // o caminho dito na barra: o dono chega la em dois toques.
+      function setValor(inp, v){
+        try {
+          var proto = inp.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          var set = Object.getOwnPropertyDescriptor(proto, 'value').set;
+          inp.focus(); set.call(inp, v); inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (e) {}
+      }
+      function visivelEl(el){ try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; } }
+      function acharCardDoPedido(n){
+        // o menor elemento visivel cujo texto tem o numero (com ou sem #), fora dos nossos
+        var re = new RegExp('(^|[^0-9])#?' + n + '([^0-9]|$)');
+        var cands = document.querySelectorAll('[role="listitem"] *, article *, [role="list"] *, [class*="card"] *, [class*="Card"] *');
+        var melhor = null, area = Infinity;
+        for (var i = 0; i < cands.length; i++) {
+          var el = cands[i]; if (el.closest('#pdv-respostas,#pdv-ajuda,#pdv-cortina')) continue;
+          if (!visivelEl(el)) continue;
+          var t = (el.textContent || '').replace(/\s+/g, ' ');
+          if (t.length > 400 || !re.test(t)) continue;
+          var r = el.getBoundingClientRect(); var a = r.width * r.height;
+          if (a < area) { area = a; melhor = el; }
+        }
+        if (!melhor) return null;
+        return melhor.closest('[role="listitem"],article,a,button,[role="button"],[class*="card"],[class*="Card"]') || melhor;
+      }
+      function acharLinkAjuda(){
+        var els = document.querySelectorAll('a,button,[role="button"],span');
+        for (var i = 0; i < els.length; i++) {
+          var t = (els[i].textContent || '').trim();
+          if (/^fale com o ifood$/i.test(t) && visivelEl(els[i])) return els[i].closest('a,button,[role="button"]') || els[i];
+        }
+        return null;
+      }
+      function desisolar(){
+        document.body.classList.remove('pdv-so-chat');
+        document.querySelectorAll('[data-pdv-hide]').forEach(function(x){ x.removeAttribute('data-pdv-hide'); });
+        document.querySelectorAll('[data-pdv-veu]').forEach(function(x){ x.removeAttribute('data-pdv-veu'); });
+      }
+      var __pdvBuscaAjuda = null;
+      window.pdvFaleComIfood = function (numero) {
+        var n = String(numero || '').replace(/\D/g, '');
+        if (!n) return false;
+        try {
+          if (__pdvBuscaAjuda) { clearInterval(__pdvBuscaAjuda); __pdvBuscaAjuda = null; }
+          window.__pdvSemHolofote = true;
+          desisolar();
+          cortina(false); cortina(true);
+          var c = document.getElementById('pdv-cortina'); if (c) c.textContent = 'Abrindo o Fale com o iFood do pedido #' + n + '...';
+          var passo = 0, tent = 0, tinhaAjuda = !!ajudaCandidato();
+          function fim(ok){
+            clearInterval(__pdvBuscaAjuda); __pdvBuscaAjuda = null;
+            if (ok) {
+              window.__pdvSemHolofote = false;
+              window.pdvIsolar(); cortina(false);
+              envia({tipo:'ajuda', texto:'Ajuda do iFood aberta para o pedido #' + n, gestorInteiro:false});
+            } else {
+              cortina(false);
+              envia({tipo:'ajuda', texto:'Não achei o pedido #' + n + ' no Gestor. Abra o pedido e toque em Fale com o iFood; depois toque em Só o chat.', gestorInteiro:true});
+            }
+          }
+          __pdvBuscaAjuda = setInterval(function () {
+            tent++;
+            try {
+              if (passo >= 2 && ajudaCandidato() && !tinhaAjuda) { fim(true); return; }
+              if (passo === 0) {
+                var inp = document.querySelector('#order-search,input[name="order-search"],input[role="search"],input[placeholder*="Buscar"]');
+                if (!inp || !visivelEl(inp)) { if (tent === 1 && location.hash.indexOf('order-display') < 0) location.hash = '#/home/order-display/expedition'; }
+                else { setValor(inp, n); passo = 1; }
+              } else if (passo === 1) {
+                var card = acharCardDoPedido(n); if (card) { card.click(); passo = 2; }
+              } else if (passo === 2) {
+                var a = acharLinkAjuda(); if (a) { a.click(); passo = 3; tinhaAjuda = false; }
+              } else if (passo === 3) {
+                if (ajudaCandidato()) { fim(true); return; }
+              }
+            } catch (e) {}
+            if (tent >= 36) fim(false);
+          }, 700);
+          return true;
+        } catch (e) { return false; }
+      };
+
       // observador: qualquer mexida no DOM reconta (com folga) e tenta abrir/isolar.
       var pend = null;
-      function agenda(){ if (pend) return; pend = setTimeout(function(){ pend=null; window.pdvContar(); if (window.pdvAjustarRespostas) window.pdvAjustarRespostas(); }, 400); }
+      var ajudaAntes = false;
+      function vigiarAjuda(){
+        try {
+          var agora = !!ajudaCandidato();
+          if (agora !== ajudaAntes) {
+            ajudaAntes = agora;
+            // a gaveta entrou ou saiu: o holofote e refeito com os alvos de agora
+            if (!window.__pdvSemHolofote && (document.body.classList.contains('pdv-so-chat') || agora)) window.pdvIsolar();
+          }
+          if (window.pdvAjustarAjuda) window.pdvAjustarAjuda();
+        } catch (e) {}
+      }
+      function agenda(){ if (pend) return; pend = setTimeout(function(){ pend=null; window.pdvContar(); if (window.pdvAjustarRespostas) window.pdvAjustarRespostas(); vigiarAjuda(); }, 400); }
       // CORTINA: o dono nao quer ver o painel do Gestor nem por 3 segundos depois
       // de recarregar. Cobre a pagina desde a carga e so sai quando o chat esta
       // isolado. Nunca fica para sempre: cai sozinha em 25 s (tela morta e pior
@@ -816,6 +1097,7 @@ public partial class ChatIfood : UserControl
           if (window.__pdvSemHolofote) return;   // o dono pediu o Gestor inteiro: nao reisolar
           if (!pronto) return;
           if (candidato()) return;
+          if (ajudaCandidato()) return;          // ajuda aberta sem chat: nao clicar no chat (poderia fechar a ajuda)
           pronto = false;
           tentar();
         }, 1500);

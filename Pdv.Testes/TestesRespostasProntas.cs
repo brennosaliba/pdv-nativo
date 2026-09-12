@@ -80,7 +80,7 @@ public static class TestesRespostasProntas
             "o script monta os cartões na página e só os mostra com o chat isolado (nunca por cima do login do Gestor)");
         checar(chat.Contains("navigator.clipboard") && chat.Contains("execCommand('copy')") && chat.Contains("execCommand('insertText'"),
             "o toque copia (com plano B) e tenta colar direto na caixa de mensagem");
-        checar(chat.Contains("!/^pdv-/.test(p.children[i].id || '')"), "o holofote do chat não esconde os cartões");
+        checar(chat.Contains("!guardado(c) && !/^pdv-/.test(c.id || '')"), "o holofote do chat não esconde os cartões (nem os alvos guardados)");
         checar(chat.Contains("window.pdvDefinirRespostas(window.__pdvRespostas);"), "ao isolar o chat, os cartões (re)aparecem");
         checar(chat.Contains("RespostasProntas.Json(") && chat.Contains("if (e.IsSuccess) _ = DefinirRespostasAsync(core);"),
             "a lista é lida do banco e entregue à página a cada carga (editar + Recarregar basta)");
