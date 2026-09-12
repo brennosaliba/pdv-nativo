@@ -71,3 +71,43 @@ Para editar: Configuração (senha do administrador), passo do pareamento, bloco
 **Respostas prontas do chat do iFood**. Um bloco por resposta, separados por uma linha
 em branco; a primeira linha é o título do cartão. Até 8 respostas. Apagar tudo volta às
 cinco de fábrica. Depois de salvar, toque em **Recarregar** na tela do chat.
+
+## Fale com o iFood (1.0.8, 12/09/2026)
+
+Pedido do dono: "quando um pedido tem problema (motoqueiro não chegou), no Gestor tem a
+opção Fale com o iFood; clica e já abre chamado. Tem como adicionar isso no KDS? E abre
+um chat na aba Chat, no meio: Ajuda iFood entre respostas prontas e conversas."
+
+### Onde aparece
+
+- **Delivery (KDS)** → toque no cabeçalho do pedido → detalhe → botão **Fale com o iFood**
+  (só em pedido do iFood; balcão, encomenda e Cardápio Digital não têm). Ele fecha o
+  detalhe, abre a aba Chat e manda o número do pedido para a página.
+- **Chat** → botão **Ajuda iFood** na barra (abre o atendimento do iFood sem pedido), e o
+  cartão/pílula **Ajuda iFood** no espaço entre as respostas prontas e as conversas.
+
+### O que a página faz com o pedido (pdvFaleComIfood)
+
+O Gestor não tem link direto para o atendimento de um pedido, então a página faz o
+caminho de uma pessoa, por baixo da cortina: Gestor inteiro, busca pelo número
+(`#order-search`), toque no card, toque no link "Fale com o iFood", e aí isola a gaveta
+do Atendimento ao lado do chat. Se em ~25 s não achar, deixa o Gestor inteiro na tela e
+a barra diz o caminho ("Abra o pedido e toque em Fale com o iFood; depois toque em Só o
+chat").
+
+### A gaveta do Atendimento
+
+Mapeada pelo diagnóstico da loja de 11/09 20:42 (`gestor-diagnostico-204245.txt`): mora
+no cabeçalho do Gestor, irmã do botão com o ícone de fone (`ifdl-icon-customer-service`),
+e por dentro é o help-center (`data-testid="help-center__page--chat"`, mensagens
+`help-center__message--text`, árvore de decisão `help-center__btn--decision-tree` com
+opções como "Entregador chegou mas não entregou"). O holofote passou a isolar DOIS alvos
+(chat e ajuda): a cadeia do cabeçalho fica invisível (`data-pdv-veu`), a gaveta é
+reposicionada na coluna do meio (`data-pdv-ajuda`, fixa, largura pelo espaço livre). Em
+1024 as respostas prontas viram a pílula e a ajuda ocupa a esquerda; em tela larga cabem
+as três colunas. A vigia da gaveta do chat não clica no chat enquanto a ajuda está aberta
+(poderia fechá-la); se o chat fechar, a pílula "Abrir conversas" traz de volta.
+
+Ainda sem prova ao vivo: se o Gestor fecha o chat quando a ajuda abre, e se o link
+"Fale com o iFood" está no detalhe da Expedição ou só no painel de Pedidos. O
+`Diagnóstico` da aba Chat continua lá para mapear o que faltar.
