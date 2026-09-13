@@ -49,6 +49,11 @@ public sealed class FakePostgrest : IDisposable
     /// pdv_combo_escolhas); a RPC de venda comum NUNCA recebe escolhas.
     /// </summary>
     public volatile string CombosAtivos = "[]";
+    /// <summary>
+    /// COMBO POR TOTAL (13/09): o que pdv_combos_ativos_v2 responde. Nulo = servidor sem a
+    /// v2 (404 PGRST202): o caixa cai na v1.
+    /// </summary>
+    public volatile string? CombosAtivosV2;
     /// <summary>Encena o servidor SEM a RPC composta (exe publicado antes da migration): PostgREST responde 404 PGRST202.</summary>
     public volatile bool CompostaAusente;
     public ConcurrentDictionary<string, string> EscolhasRecebidas { get; } = new();
@@ -161,6 +166,14 @@ public sealed class FakePostgrest : IDisposable
                     Responder(ctx, 200, $$"""{"ok":true,"sale_id":"{{saleId}}","idempotente":{{(nova ? "false" : "true")}}}""");
                     return;
                 }
+                case "/rest/v1/rpc/pdv_combos_ativos_v2":
+                    // combo por total (13/09): nulo encena o servidor SEM a v2 (404 PGRST202)
+                    ChamadasPorRpc.AddOrUpdate("pdv_combos_ativos_v2", 1, (_, n) => n + 1);
+                    if (CombosAtivosV2 is null)
+                        Responder(ctx, 404, """{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.pdv_combos_ativos_v2(_loja) in the schema cache"}""");
+                    else
+                        Responder(ctx, 200, CombosAtivosV2);
+                    return;
                 case "/rest/v1/rpc/pdv_combos_ativos":
                     ChamadasPorRpc.AddOrUpdate("pdv_combos_ativos", 1, (_, n) => n + 1);
                     Responder(ctx, 200, CombosAtivos);

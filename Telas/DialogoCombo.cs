@@ -22,6 +22,10 @@ namespace Pdv.Telas;
 /// escolha e realocada pela fonte; a que nenhum grupo aceita aparece no bloco
 /// "Fora do combo" com o botao Tirar, e o Adicionar so liga depois de resolvida.
 ///
+/// COMBO POR TOTAL (regra do dono 13/09/2026): o titulo conta "Combo 4 Donuts · 3 de 4",
+/// o "+" de todo card trava quando o total fecha (ou o teto do grupo), e o rodape diz
+/// a frase da regra unica ("Falta 1 donut", "Escolha 2 Homer").
+///
 /// Toda a regra (minimo, maximo, tudo igual, textos) mora em <see cref="Combos.Estado"/>;
 /// aqui so se desenha e se repinta.
 /// </summary>
@@ -143,6 +147,8 @@ public static class DialogoCombo
 
         void Atualizar()
         {
+            // combo por total: "Combo 4 Donuts · 3 de 4" no titulo
+            titulo.Text = estado.ProgressoTotal is { } total ? $"{Combos.Titulo(def)} · {total}" : Combos.Titulo(def);
             PintarFora();
             foreach (var c in cards) c.Atualizar(estado);
             foreach (var (g, progresso, cheia, vazia, tudoIgual) in cabecalhos)

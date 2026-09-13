@@ -575,13 +575,12 @@ public sealed class Nuvem
         try
         {
             if (!await SessaoOkAsync().ConfigureAwait(false)) return -1;
-            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_combos_ativos");
-            req.Content = new StringContent(
-                JsonSerializer.Serialize(new { _loja = loja }), Encoding.UTF8, "application/json");
-            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return -1;
-
-            var corpo = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            // v2 (13/09/2026): total do combo e faixa efetiva por grupo. Servidor sem a
+            // v2 (migration 20260913190000 ainda nao aplicada) ou porta do caixa que
+            // ainda nao a lista: cai na v1, que ja esconde o combo por total.
+            var corpo = await CorpoCombosAsync("pdv_combos_ativos_v2", loja).ConfigureAwait(false)
+                        ?? await CorpoCombosAsync("pdv_combos_ativos", loja).ConfigureAwait(false);
+            if (corpo is null) return -1;
             using var doc = JsonDocument.Parse(corpo);
             if (doc.RootElement.ValueKind != JsonValueKind.Array) return -1;
 
@@ -601,6 +600,16 @@ public sealed class Nuvem
             return n;
         }
         catch { return -1; }
+    }
+
+    /// <summary>Corpo de uma RPC de combos, ou null quando o servidor nao responde 2xx.</summary>
+    private async Task<string?> CorpoCombosAsync(string rpc, string loja)
+    {
+        using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/" + rpc);
+        req.Content = new StringContent(
+            JsonSerializer.Serialize(new { _loja = loja }), Encoding.UTF8, "application/json");
+        using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+        return resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync().ConfigureAwait(false) : null;
     }
 
     /// <summary>Status atual (efetivo) de pedidos ESPECIFICOS - a reconciliacao

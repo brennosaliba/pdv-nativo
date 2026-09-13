@@ -63,7 +63,194 @@ public static class TestesCombos
         await VendaEFilaAsync(checar);
         Fiscal(checar);
         await DescidaAsync(checar);
+        LimiteTotal(checar);
+        await DescidaV2Async(checar);
         Tela(checar);
+    }
+
+    // ── combo por total (regra do dono 13/09/2026): payloads no shape de pdv_combos_ativos_v2 ──
+    /// <summary>"Box 4": Premium ate 2 (categoria) e Homer ate 2 (produto). Soma dos tetos = 4: 2 e 2 obrigatorio.</summary>
+    private const string PayloadBox22 = """
+        {"produto_id":"box-4","plu":"90","nome":"COMBO BOX 4 DONUTS","min_total":4,"max_total":4,
+         "grupos":[
+          {"id":"g-premium","nome":"Premium","min":2,"max":2,"min_proprio":0,"max_proprio":2,
+           "fonte":{"tipo":"categoria","grupo":"Premium","itens":[{"produto_id":"d-pistache","plu":"30","nome":"DONUT PISTACHE"},{"produto_id":"d-nutella","plu":"31","nome":"DONUT NUTELLA"}]}},
+          {"id":"g-homer","nome":"Homer","min":2,"max":2,"min_proprio":0,"max_proprio":2,
+           "fonte":{"tipo":"itens","grupo":null,"itens":[{"produto_id":"d-homer","plu":"20","nome":"DONUT HOMER"}]}}]}
+        """;
+
+    /// <summary>"Combo 4 Donuts" com "4 em todas": Classicos e Premium ate 4 cada, 4 no total.</summary>
+    private const string PayloadLivre4 = """
+        {"produto_id":"livre-4","plu":"91","nome":"COMBO 4 DONUTS","min_total":4,"max_total":4,
+         "grupos":[
+          {"id":"g-cl","nome":"Clássicos","min":0,"max":4,"min_proprio":0,"max_proprio":4,
+           "fonte":{"tipo":"categoria","grupo":"Classicos","itens":[{"produto_id":"d-acucar","plu":"10","nome":"DONUT ACUCAR"},{"produto_id":"d-homer","plu":"20","nome":"DONUT HOMER"}]}},
+          {"id":"g-pr","nome":"Premium","min":0,"max":4,"min_proprio":0,"max_proprio":4,
+           "fonte":{"tipo":"categoria","grupo":"Premium","itens":[{"produto_id":"d-pistache","plu":"30","nome":"DONUT PISTACHE"},{"produto_id":"d-nutella","plu":"31","nome":"DONUT NUTELLA"}]}}]}
+        """;
+
+    /// <summary>Limite por produto: Classicos ate 4 e Homer ate 1. O servidor ja tirou o Homer da categoria.</summary>
+    private const string PayloadHomer1 = """
+        {"produto_id":"homer-1","plu":"92","nome":"COMBO 4 DONUTS HOMER","min_total":4,"max_total":4,
+         "grupos":[
+          {"id":"g-cl","nome":"Clássicos","min":3,"max":4,"min_proprio":0,"max_proprio":4,
+           "fonte":{"tipo":"categoria","grupo":"Classicos","itens":[{"produto_id":"d-acucar","plu":"10","nome":"DONUT ACUCAR"}]}},
+          {"id":"g-homer","nome":"Homer","min":0,"max":1,"min_proprio":0,"max_proprio":1,
+           "fonte":{"tipo":"itens","itens":[{"produto_id":"d-homer","plu":"20","nome":"DONUT HOMER"}]}}]}
+        """;
+
+    private static readonly List<Combos.ProdutoLocal> CatalogoTotal = new()
+    {
+        new("d-acucar", "10", "DONUT ACUCAR", "Classicos"),
+        new("d-homer", "20", "DONUT HOMER", "Classicos"),
+        new("d-canela", "11", "DONUT CANELA", "Classicos"),     // so no catalogo local
+        new("d-pistache", "30", "DONUT PISTACHE", "Premium"),
+        new("d-nutella", "31", "DONUT NUTELLA", "Premium"),
+    };
+
+    // ── 10. combo por total ────────────────────────────────────────────────
+    private static void LimiteTotal(Action<bool, string> checar)
+    {
+        // (a) a tabela de casos do dono: a MESMA do vitest do ERP e da suite 243 do banco
+        using (var doc = JsonDocument.Parse(VetoresComboLimites.Json))
+        {
+            var raiz = doc.RootElement;
+            var u = raiz.GetProperty("unidade");
+            var unidade = new ComboLimites.Unidade(u.GetProperty("singular").GetString()!, u.GetProperty("plural").GetString()!);
+            var produtos = raiz.GetProperty("produtos");
+            var combos = raiz.GetProperty("combos");
+            var divergentes = new List<string>();
+            var n = 0;
+            foreach (var caso in raiz.GetProperty("casos").EnumerateArray())
+            {
+                var combo = combos.GetProperty(caso.GetProperty("combo").GetString()!);
+                int? tMin = null, tMax = null;
+                if (combo.GetProperty("total").ValueKind == JsonValueKind.Object)
+                {
+                    tMin = combo.GetProperty("total").GetProperty("min").GetInt32();
+                    tMax = combo.GetProperty("total").GetProperty("max").GetInt32();
+                }
+                var grupos = combo.GetProperty("grupos").EnumerateArray().Select(g => new ComboLimites.Grupo(
+                    g.GetProperty("tipo").GetString()!,
+                    g.GetProperty("id").ValueKind == JsonValueKind.String ? g.GetProperty("id").GetString() : null,
+                    null, g.GetProperty("nome").GetString()!, g.GetProperty("maximo").GetInt32(),
+                    g.TryGetProperty("minimo", out var mi) ? mi.GetInt32() : 0)).ToList();
+                var escolhas = caso.GetProperty("escolhas").EnumerateArray().Select(e =>
+                {
+                    var chave = e.GetProperty("produto").GetString()!;
+                    var p = produtos.GetProperty(chave);
+                    return new ComboLimites.EscolhaRegra(chave,
+                        p.GetProperty("categorias").EnumerateArray().Select(x => x.GetString()!).ToList(),
+                        e.GetProperty("qtd").GetInt32(), p.GetProperty("nome").GetString());
+                }).ToList();
+                var r = ComboLimites.ValidarEscolha(tMin, tMax, grupos, escolhas, unidade);
+                n++;
+                string? Texto(string k) => caso.GetProperty(k).ValueKind == JsonValueKind.String ? caso.GetProperty(k).GetString() : null;
+                if (r.Ok != caso.GetProperty("ok").GetBoolean() || r.Codigo != Texto("codigo") || r.Erro != Texto("erro"))
+                    divergentes.Add($"{Texto("id")} veio {r.Codigo}/{r.Erro}");
+            }
+            checar(n > 0 && n == raiz.GetProperty("casos").GetArrayLength() && divergentes.Count == 0,
+                $"total: a tabela de casos do dono ({n} casos) da o mesmo ok, codigo e frase do ERP e do banco (divergentes: {(divergentes.Count == 0 ? "nenhum" : string.Join("; ", divergentes))})");
+        }
+
+        // (b) parser da v2
+        var box = Combos.Parsear(PayloadBox22)!;
+        checar(box.PorTotal && box.MinTotal == 4 && box.MaxTotal == 4 && box.Grupos[0].MinProprio == 0 && box.Grupos[0].MaxProprio == 2
+               && box.Grupos[0].Min == 2 && box.Grupos[1].Fonte.Tipo == "itens",
+            "total: parser le min_total/max_total e min_proprio/max_proprio da v2");
+        var antigo = Combos.Parsear(PayloadCombo())!;
+        checar(!antigo.PorTotal && antigo.MaxTotal is null && antigo.Grupos[0].MaxProprio is null,
+            "total: payload da v1 (sem total) segue regra antiga");
+        checar(!Combos.Parsear(PayloadBox22.Replace("\"max_total\":4", "\"max_total\":0"))!.PorTotal
+               && !Combos.Parsear(PayloadBox22.Replace("\"min_total\":4", "\"min_total\":5"))!.PorTotal,
+            "total: total fora de 1..99 ou piso acima do teto vira regra antiga (nunca trava o caixa)");
+
+        // (c) "4 em todas": qualquer divisao, nunca passa de 4
+        var livre = Combos.Parsear(PayloadLivre4)!;
+        var gCl = livre.Grupos[0]; var gPr = livre.Grupos[1];
+        var acucar = new Combos.ItemFonte("d-acucar", "10", "DONUT ACUCAR");
+        var pistache = new Combos.ItemFonte("d-pistache", "30", "DONUT PISTACHE");
+        var e = new Combos.Estado(livre, null, CatalogoTotal);
+        checar(e.Faltam == "Faltam 4 donuts" && e.ProgressoTotal == "0 de 4" && !e.Completo,
+            $"total: vazio diz 'Faltam 4 donuts' e conta '0 de 4' (veio '{e.Faltam}', '{e.ProgressoTotal}')");
+        e.Mais(gCl, acucar); e.Mais(gCl, acucar); e.Mais(gCl, acucar);
+        checar(e.TotalGeral == 3 && e.Faltam == "Falta 1 donut" && e.PodeMais(gPr) && e.PodeMais(gCl) && e.Progresso(gCl) == "Clássicos · 3 de 4",
+            $"total: 3 classicos, 'Falta 1 donut' e os dois grupos ainda aceitam (veio '{e.Faltam}')");
+        checar(e.Mais(gPr, pistache) && e.Completo && e.Faltam is null && e.ProgressoTotal == "4 de 4",
+            "total: 3 classicos e 1 premium fecha o combo");
+        checar(!e.PodeMais(gCl) && !e.PodeMais(gPr) && !e.Mais(gCl, acucar) && !e.Mais(gPr, pistache) && e.TotalGeral == 4,
+            "total: com 4, nenhum + entra em nenhum grupo (nunca 5)");
+        var tudo = new Combos.Estado(livre, null, CatalogoTotal);
+        tudo.Mais(gPr, pistache);
+        tudo.TudoIgual(gPr, pistache);
+        checar(tudo.Quantos(gPr.Id, "d-pistache") == 4 && tudo.Completo,
+            "total: 'Tudo igual' completa ate o total (4 super premium), nao ate o teto do grupo");
+        checar(Combos.Pendencia(livre, new[] { new Escolha("d-acucar", "10", "DONUT ACUCAR", "g-cl", 3) }) == "Combo 4 Donuts: falta 1 donut",
+            $"total: Finalizar recusa 3 numa caixa de 4 ('{Combos.Pendencia(livre, new[] { new Escolha("d-acucar", "10", "DONUT ACUCAR", "g-cl", 3) })}')");
+        var cinco = new Combos.Estado(livre, new[] { new Escolha("d-acucar", "10", "DONUT ACUCAR", "g-cl", 5) });
+        checar(cinco.TotalGeral == 4 && cinco.ForaDoCombo.Sum(x => x.Qtd) == 1 && !cinco.Completo && cinco.Faltam == "1 fora do combo",
+            $"total: 5 guardados numa caixa de 4 viram 4 e 1 fora do combo (veio '{cinco.Faltam}')");
+
+        // (d) "box 2 premium e 2 homer": obrigatoriamente 2 e 2
+        var gPremium = box.Grupos[0]; var gHomer = box.Grupos[1];
+        var homer = new Combos.ItemFonte("d-homer", "20", "DONUT HOMER");
+        var nutella = new Combos.ItemFonte("d-nutella", "31", "DONUT NUTELLA");
+        var b = new Combos.Estado(box, null, CatalogoTotal);
+        checar(b.Faltam == "Escolha 2 Premium" && b.Progresso(gHomer) == "Homer · 0 de 2", $"box: vazio diz 'Escolha 2 Premium' (veio '{b.Faltam}')");
+        b.Mais(gHomer, homer); b.Mais(gHomer, homer);
+        checar(!b.Mais(gHomer, homer) && b.Quantos(gHomer.Id, "d-homer") == 2, "box: o terceiro Homer nao entra (1 e 3 impossivel)");
+        b.Mais(gPremium, pistache);
+        checar(b.Faltam == "Escolha mais 1 Premium" && !b.Completo, $"box: 2 Homer e 1 Premium, 'Escolha mais 1 Premium' (veio '{b.Faltam}')");
+        b.Mais(gPremium, nutella);
+        checar(b.Completo && b.Escolhas().Sum(x => x.Qtd) == 4, "box: 2 e 2 fecha");
+        var umETres = Combos.Pendencia(box, new[] { new Escolha("d-pistache", "30", "DONUT PISTACHE", "g-premium", 1), new Escolha("d-homer", "20", "DONUT HOMER", "g-homer", 3) });
+        checar(umETres is not null && umETres.StartsWith("Combo Box 4 Donuts: ") && umETres.Contains("1 fora do combo"),
+            $"box: comanda com 1 e 3 nao finaliza (veio '{umETres}')");
+        var tresEUm = Combos.Pendencia(box, new[] { new Escolha("d-pistache", "30", "DONUT PISTACHE", "g-premium", 3), new Escolha("d-homer", "20", "DONUT HOMER", "g-homer", 1) });
+        checar(tresEUm is not null && tresEUm.Contains("1 fora do combo"), $"box: comanda com 3 e 1 nao finaliza (veio '{tresEUm}')");
+
+        // (e) limite por produto: o Homer nao entra pela categoria
+        var h1 = Combos.Parsear(PayloadHomer1)!;
+        var fonteCl = Combos.ResolverFonte(h1, h1.Grupos[0], CatalogoTotal).Select(i => i.ProdutoId).ToList();
+        var fonteHomer = Combos.ResolverFonte(h1, h1.Grupos[1], CatalogoTotal).Select(i => i.ProdutoId).ToList();
+        checar(fonteCl.SequenceEqual(new[] { "d-acucar", "d-canela" }) && fonteHomer.SequenceEqual(new[] { "d-homer" }),
+            $"homer: a categoria tira o Homer (nem pelo catalogo local) e ele so aparece no grupo dele (classicos: {string.Join(",", fonteCl)})");
+        var semTotal = h1 with { MinTotal = null, MaxTotal = null };
+        checar(Combos.ResolverFonte(semTotal, semTotal.Grupos[0], CatalogoTotal).Any(i => i.ProdutoId == "d-homer"),
+            "homer: sem total (regra antiga) o catalogo local continua trazendo o Homer para a categoria, como antes");
+        var eh = new Combos.Estado(h1, null, CatalogoTotal);
+        eh.Mais(h1.Grupos[1], homer);
+        checar(!eh.PodeMais(h1.Grupos[1]) && eh.Faltam == "Escolha 3 Clássicos",
+            $"homer: 1 Homer trava o grupo dele e o resto so cabe nos classicos (veio '{eh.Faltam}')");
+
+        var textos = new[] { e.Faltam ?? "", b.Faltam ?? "", umETres ?? "", tresEUm ?? "", cinco.Faltam ?? "", eh.Faltam ?? "" };
+        checar(textos.All(t => !t.Contains('—') && !t.Contains('–')), "total: nenhum texto com travessao");
+    }
+
+    // ── 11. descida da v2 com volta para a v1 ──────────────────────────────
+    private static async Task DescidaV2Async(Action<bool, string> checar)
+    {
+        var arquivo = Path.Combine(Path.GetTempPath(), $"pdv-combos-v2-{Guid.NewGuid():N}.db");
+        try
+        {
+            Banco.Migrar(arquivo);
+            using var cx = Banco.Abrir(arquivo);
+            using var fake = new FakePostgrest(4671) { CombosAtivos = "[" + PayloadCombo() + "]", CombosAtivosV2 = "[" + PayloadBox22 + "]" };
+            var nuvem = new Nuvem(fake.Url);
+            checar(await nuvem.EntrarAsync("combo@teste.com", "x"), "nuvem fake autentica (descida v2)");
+            var n = await nuvem.BaixarCombosAsync(cx, "American Day Savassi");
+            var lidos = Combos.Carregar(cx);
+            checar(n == 1 && lidos.TryGetValue("box-4", out var def) && def.PorTotal && def.MaxTotal == 4
+                   && fake.ChamadasPorRpc.GetValueOrDefault("pdv_combos_ativos_v2") == 1
+                   && fake.ChamadasPorRpc.GetValueOrDefault("pdv_combos_ativos") == 0,
+                "descida: com a v2 no servidor, o caixa baixa pela v2 (combo por total no espelho) e nem chama a v1");
+            fake.CombosAtivosV2 = null;
+            var n2 = await nuvem.BaixarCombosAsync(cx, "American Day Savassi");
+            checar(n2 == 1 && Combos.Carregar(cx).TryGetValue(Combo, out var velho) && !velho.PorTotal
+                   && fake.ChamadasPorRpc.GetValueOrDefault("pdv_combos_ativos") == 1,
+                "descida: servidor sem a v2 (404): cai na v1 e o caixa segue vendendo o combo antigo");
+        }
+        finally { SqliteConnection.ClearAllPools(); try { File.Delete(arquivo); } catch { } }
     }
 
     // ── 1. parser ──────────────────────────────────────────────────────────
@@ -678,6 +865,33 @@ public static class TestesCombos
         checar(faltamDepois == "" && adicionarSemFora, "dialogo: Tirar limpa o rodape e liga o Adicionar");
         checar(realocado is { Count: 1 } && realocado[0].ProdutoId == Ovo && realocado[0].Qtd == 10 && realocado[0].GrupoId == GrupoDonuts,
             "dialogo: Adicionar devolve os 10 Ovomaltine ja com o id NOVO do grupo");
+
+        // ── (1b) combo por total: o total trava o "+" e o titulo conta ───────
+        var box = Combos.Parsear(PayloadBox22)!;
+        string? tituloBox = null, faltamBox = null, tituloCheio = null;
+        bool maisHomerDesligado = false, adicionarDesligadoBox = false, adicionarBox = false, maisPremiumCheio = true;
+        QuandoAbrir(host, d =>
+        {
+            string Texto(string nome) => Descendentes<TextBlock>(d).First(t => AutomationProperties.GetName(t) == nome).Text;
+            Clicar(Botao(d, "Mais DONUT HOMER"));
+            Clicar(Botao(d, "Mais DONUT HOMER"));
+            maisHomerDesligado = !Botao(d, "Mais DONUT HOMER").IsEnabled && !Botao(d, "DONUT HOMER").IsEnabled;
+            faltamBox = Texto("Faltam");
+            tituloBox = Texto("TituloCombo");
+            adicionarDesligadoBox = !Botao(d, "Adicionar").IsEnabled;
+            Clicar(Botao(d, "Mais DONUT PISTACHE"));
+            Clicar(Botao(d, "Mais DONUT NUTELLA"));
+            tituloCheio = Texto("TituloCombo");
+            maisPremiumCheio = Botao(d, "Mais DONUT PISTACHE").IsEnabled;
+            adicionarBox = Botao(d, "Adicionar").IsEnabled;
+            Clicar(Botao(d, "Adicionar"));
+        });
+        var escolhidoBox = Pdv.Telas.DialogoCombo.Abrir(host, box, CatalogoTotal);
+        checar(maisHomerDesligado && faltamBox == "Escolha 2 Premium" && tituloBox == "Combo Box 4 Donuts · 2 de 4" && adicionarDesligadoBox,
+            $"dialogo total: 2 Homer travam o + do Homer, rodape 'Escolha 2 Premium', titulo conta '2 de 4' (veio '{faltamBox}', '{tituloBox}')");
+        checar(tituloCheio == "Combo Box 4 Donuts · 4 de 4" && !maisPremiumCheio && adicionarBox
+               && escolhidoBox is { Count: 3 } && escolhidoBox.Sum(x => x.Qtd) == 4,
+            $"dialogo total: 2 e 2 fecha '4 de 4', o + desliga e o Adicionar devolve as 4 escolhas (veio '{tituloCheio}')");
 
         // ── (2) a tela de venda ───────────────────────────────────────────
         var op = new Operador("op-ui", "Tela", "operador");

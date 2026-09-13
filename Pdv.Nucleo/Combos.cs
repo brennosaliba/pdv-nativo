@@ -41,11 +41,24 @@ public static class Combos
     /// </summary>
     public sealed record Fonte(string Tipo, string? Grupo, IReadOnlyList<ItemFonte> Itens);
 
-    /// <summary>Um grupo de escolha do combo: "Donuts", de 10 a 10, vindos da categoria Donuts.</summary>
-    public sealed record GrupoDef(string Id, string Nome, int Min, int Max, Fonte Fonte);
+    /// <summary>
+    /// Um grupo de escolha do combo: "Donuts", de 10 a 10, vindos da categoria Donuts.
+    /// Min/Max sao os que o servidor manda (na v2, ja EFETIVOS); MinProprio/MaxProprio sao
+    /// os do cadastro (so a v2 manda; sem eles, valem Min/Max).
+    /// </summary>
+    public sealed record GrupoDef(string Id, string Nome, int Min, int Max, Fonte Fonte,
+        int? MinProprio = null, int? MaxProprio = null);
 
-    /// <summary>A composicao de UM produto-combo.</summary>
-    public sealed record ComboDef(string ProdutoId, string? Plu, string Nome, IReadOnlyList<GrupoDef> Grupos);
+    /// <summary>
+    /// A composicao de UM produto-combo. MinTotal/MaxTotal: COMBO POR TOTAL (regra do dono
+    /// 13/09/2026, pdv_combos_ativos_v2): a caixa de 4 leva 4 e cada grupo so tem teto.
+    /// Nulos = regra antiga (minimo e maximo por grupo), identica a antes.
+    /// </summary>
+    public sealed record ComboDef(string ProdutoId, string? Plu, string Nome, IReadOnlyList<GrupoDef> Grupos,
+        int? MinTotal = null, int? MaxTotal = null)
+    {
+        public bool PorTotal => MaxTotal is not null;
+    }
 
     /// <summary>O que a tela sabe de um produto do catalogo local (o que ResolverFonte precisa).</summary>
     public sealed record ProdutoLocal(string Id, string? Plu, string Nome, string Categoria);
@@ -114,11 +127,23 @@ public static class Combos
                             }
                     }
                     if (tipo is not ("itens" or "categoria" or "todos")) tipo = "itens";
+                    var minProprio = Int(g, "min_proprio");
+                    var maxProprio = Int(g, "max_proprio");
                     grupos.Add(new GrupoDef(id, Str(g, "nome") ?? "Escolha", min, max,
-                        new Fonte(tipo, grupoTxt, itens)));
+                        new Fonte(tipo, grupoTxt, itens),
+                        minProprio is >= 0 and <= 99 ? minProprio : null,
+                        maxProprio is >= 1 and <= 99 ? maxProprio : null));
                 }
             if (grupos.Count == 0) return null;
-            return new ComboDef(produtoId, Str(e, "plu"), Str(e, "nome") ?? "COMBO", grupos);
+            // combo por total (v2): os dois de 1 a 99 e piso <= teto; senao, regra antiga
+            int? maxTotal = Int(e, "max_total");
+            int? minTotal = Int(e, "min_total") ?? maxTotal;
+            if (maxTotal is not (>= 1 and <= 99) || minTotal is not (>= 1 and <= 99) || minTotal > maxTotal)
+            {
+                maxTotal = null;
+                minTotal = null;
+            }
+            return new ComboDef(produtoId, Str(e, "plu"), Str(e, "nome") ?? "COMBO", grupos, minTotal, maxTotal);
         }
         catch { return null; }
     }
@@ -134,23 +159,55 @@ public static class Combos
     /// </summary>
     public static List<ItemFonte> ResolverFonte(ComboDef combo, GrupoDef g, IEnumerable<ProdutoLocal> catalogo)
     {
+        // COMBO POR TOTAL: um produto conta num grupo so (lista > categoria > todos).
+        // O servidor ja manda as listas assim; aqui a mesma regra vale para o que o
+        // catalogo local acrescenta.
+        var precedencia = combo.PorTotal && g.Fonte.Tipo is "categoria" or "todos";
+        var listados = precedencia
+            ? new HashSet<string>(combo.Grupos.Where(x => x.Fonte.Tipo == "itens")
+                .SelectMany(x => x.Fonte.Itens.Select(i => i.ProdutoId)), StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        var catsDeGrupo = precedencia && g.Fonte.Tipo == "todos"
+            ? new HashSet<string>(combo.Grupos.Where(x => x.Fonte.Tipo == "categoria" && x.Fonte.Grupo is not null)
+                .Select(x => x.Fonte.Grupo!.Trim()), StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         var vistos = new Dictionary<string, ItemFonte>(StringComparer.Ordinal);
         foreach (var i in g.Fonte.Itens)
-            if (i.ProdutoId != combo.ProdutoId) vistos.TryAdd(i.ProdutoId, i);
+            if (i.ProdutoId != combo.ProdutoId && !listados.Contains(i.ProdutoId)) vistos.TryAdd(i.ProdutoId, i);
 
         if (g.Fonte.Tipo is "categoria" or "todos")
         {
             var grupo = (g.Fonte.Grupo ?? "").Trim();
             foreach (var p in catalogo)
             {
-                if (p.Id == combo.ProdutoId) continue;
+                if (p.Id == combo.ProdutoId || listados.Contains(p.Id)) continue;
                 if (g.Fonte.Tipo == "categoria"
                     && !string.Equals(p.Categoria.Trim(), grupo, StringComparison.OrdinalIgnoreCase)) continue;
+                if (catsDeGrupo.Contains(p.Categoria.Trim())) continue;
                 vistos.TryAdd(p.Id, new ItemFonte(p.Id, p.Plu, p.Nome));
             }
         }
         return Categorias.OrdenarPorNome(vistos.Values, i => i.Nome).ToList();
     }
+
+    /// <summary>
+    /// Os grupos do combo no formato da regra unica (ComboLimites), com teto e minimo
+    /// PROPRIOS: a conta do obrigatorio e feita la, igual no ERP e no banco.
+    /// </summary>
+    public static List<ComboLimites.Grupo> GruposDaRegra(ComboDef combo)
+        => combo.Grupos.Select(g => new ComboLimites.Grupo(
+                g.Fonte.Tipo == "itens" ? "produto" : g.Fonte.Tipo,
+                g.Fonte.Tipo == "categoria" ? g.Fonte.Grupo : null,
+                g.Fonte.Tipo == "itens" ? g.Fonte.Itens.Select(i => i.ProdutoId).ToList() : null,
+                g.Nome, g.MaxProprio ?? g.Max, g.MinProprio ?? g.Min))
+            .ToList();
+
+    /// <summary>A palavra das frases do combo por total: "COMBO 4 DONUTS" fala em donuts; sem numero, sabores.</summary>
+    public static ComboLimites.Unidade UnidadeDe(ComboDef combo)
+        => ComboLimites.UnidadeDoNome(combo.Nome, new ComboLimites.Unidade("sabor", "sabores"));
+
+    private static string Minuscula(string s) => s.Length == 0 ? s : char.ToLowerInvariant(s[0]) + s[1..];
 
     // ── textos ──────────────────────────────────────────────────────────────
 
@@ -197,8 +254,19 @@ public static class Combos
     public static string? Pendencia(ComboDef combo, IReadOnlyList<Escolha>? escolhas, IEnumerable<ProdutoLocal>? catalogo = null)
     {
         var estado = new Estado(combo, escolhas, catalogo);
-        var faltam = combo.Grupos.Sum(g => Math.Max(0, g.Min - estado.Total(g.Id)));
         var fora = estado.ForaDoCombo.Sum(e => e.Qtd);
+        if (combo.PorTotal)
+        {
+            // combo por total: a frase da regra unica ("Combo 4 Donuts: falta 1 donut",
+            // "Combo Box: no máximo 2 Premium")
+            var s = estado.Situacao();
+            if (s.Ok && fora == 0) return null;
+            var partesTotal = new List<string>();
+            if (!s.Ok) partesTotal.Add(Minuscula(s.Erro!));
+            if (fora > 0) partesTotal.Add($"{fora} fora do combo");
+            return $"{Titulo(combo)}: {string.Join(", ", partesTotal)}";
+        }
+        var faltam = combo.Grupos.Sum(g => Math.Max(0, g.Min - estado.Total(g.Id)));
         if (faltam == 0 && fora == 0) return null;
         var partes = new List<string>();
         if (faltam > 0) partes.Add(faltam == 1 ? "falta 1 sabor" : $"faltam {faltam} sabores");
@@ -264,6 +332,9 @@ public static class Combos
 
         private readonly List<Escolha> _fora = new();
         private readonly Dictionary<string, List<ItemFonte>> _fontes = new(StringComparer.Ordinal);
+        /// <summary>Os grupos no formato da regra unica e o indice de cada um (ComboLimites).</summary>
+        private readonly List<ComboLimites.Grupo> _regra;
+        private readonly Dictionary<string, int> _indice = new(StringComparer.Ordinal);
 
         /// <summary>
         /// Escolhas que nenhum grupo aceita (sabor que saiu da composicao, ou grupo ja
@@ -283,7 +354,9 @@ public static class Combos
         public Estado(ComboDef combo, IReadOnlyList<Escolha>? atual = null, IEnumerable<ProdutoLocal>? catalogo = null)
         {
             Combo = combo;
+            _regra = GruposDaRegra(combo);
             var cat = catalogo?.ToList();
+            for (var k = 0; k < combo.Grupos.Count; k++) _indice[combo.Grupos[k].Id] = k;
             foreach (var g in combo.Grupos)
             {
                 _porGrupo[g.Id] = new List<Escolha>();
@@ -301,9 +374,12 @@ public static class Combos
                 if (proprio is not null && Aceita(proprio, e))
                 {
                     // o grupo de origem continua valendo: acima do maximo (a regra
-                    // encolheu) corta no maximo, como o cabecalho "10 de 10" mostra
-                    var pode = Math.Min(e.Qtd, proprio.Max - Total(proprio.Id));
+                    // encolheu) corta no maximo, como o cabecalho "10 de 10" mostra;
+                    // no combo por total, tambem na vaga do total. A sobra fica fora.
+                    var pode = Math.Min(e.Qtd, Vaga(proprio));
                     if (pode > 0) Somar(proprio, item, pode);
+                    if (combo.PorTotal && e.Qtd - Math.Max(0, pode) > 0)
+                        _fora.Add(e with { Qtd = e.Qtd - Math.Max(0, pode) });
                     continue;
                 }
                 var resta = e.Qtd;
@@ -311,7 +387,7 @@ public static class Combos
                 {
                     if (resta == 0) break;
                     if (!Aceita(g, e)) continue;
-                    var pode = Math.Min(resta, g.Max - Total(g.Id));
+                    var pode = Math.Min(resta, Vaga(g));
                     if (pode <= 0) continue;
                     Somar(g, item, pode);
                     resta -= pode;
@@ -331,11 +407,39 @@ public static class Combos
 
         public int Total(string grupoId) => _porGrupo[grupoId].Sum(e => e.Qtd);
 
+        /// <summary>Soma de todos os grupos (o "3 de 4" do combo por total).</summary>
+        public int TotalGeral => _porGrupo.Values.Sum(l => l.Sum(e => e.Qtd));
+
         public int Quantos(string grupoId, string produtoId)
             => _porGrupo[grupoId].FirstOrDefault(e => e.ProdutoId == produtoId)?.Qtd ?? 0;
 
-        /// <summary>Ainda cabe mais um neste grupo?</summary>
-        public bool PodeMais(GrupoDef g) => Total(g.Id) < g.Max;
+        private int[] Somas() => Combo.Grupos.Select(g => Total(g.Id)).ToArray();
+
+        /// <summary>Faixa efetiva do grupo (sem total, a propria; com total, a conta do obrigatorio).</summary>
+        public (int Min, int Max) Faixa(GrupoDef g)
+            => ComboLimites.FaixaEfetiva(_regra, Combo.MinTotal, Combo.MaxTotal)[_indice[g.Id]];
+
+        /// <summary>Quantos ainda cabem no grupo: teto efetivo e, no combo por total, a vaga do total.</summary>
+        private int Vaga(GrupoDef g)
+        {
+            var vaga = Faixa(g).Max - Total(g.Id);
+            if (Combo.MaxTotal is int max) vaga = Math.Min(vaga, max - TotalGeral);
+            return vaga;
+        }
+
+        /// <summary>O que a regra unica diz desta montagem (ok, ou a frase do que falta).</summary>
+        public ComboLimites.Resultado Situacao()
+            => ComboLimites.Situacao(Combo.MinTotal, Combo.MaxTotal, _regra, Somas(), UnidadeDe(Combo));
+
+        /// <summary>
+        /// Ainda cabe mais um neste grupo? Pelo teto do grupo e, no combo por total, pela
+        /// vaga do total: com a caixa de 4 cheia, nenhum "+" liga.
+        /// </summary>
+        public bool PodeMais(GrupoDef g)
+            => ComboLimites.PodeMais(Combo.MinTotal, Combo.MaxTotal, _regra, Somas(), _indice[g.Id]);
+
+        /// <summary>"3 de 4" do combo por total (null na regra antiga).</summary>
+        public string? ProgressoTotal => Combo.MaxTotal is int max ? $"{TotalGeral} de {max}" : null;
 
         /// <summary>+1 no item. Devolve false (e nao mexe) quando o grupo ja esta no maximo.</summary>
         public bool Mais(GrupoDef g, ItemFonte item)
@@ -364,7 +468,11 @@ public static class Combos
         /// </summary>
         public void TudoIgual(GrupoDef g, ItemFonte item)
         {
-            var falta = g.Max - Total(g.Id);
+            // ate onde o "+" deixaria: teto do grupo e, no combo por total, a vaga do total
+            var falta = 0;
+            while (falta < 99 && ComboLimites.PodeMais(Combo.MinTotal, Combo.MaxTotal, _regra,
+                       Combo.Grupos.Select(x => Total(x.Id) + (x.Id == g.Id ? falta : 0)).ToArray(), _indice[g.Id]))
+                falta++;
             if (falta > 0) Somar(g, item, falta);
         }
 
@@ -375,14 +483,22 @@ public static class Combos
             return lista.Count == 1 ? new ItemFonte(lista[0].ProdutoId, lista[0].Plu, lista[0].Nome) : null;
         }
 
-        /// <summary>Todos os grupos no minimo e nada fora do combo: o botao Adicionar liga.</summary>
-        public bool Completo => _fora.Count == 0 && Combo.Grupos.All(g => Total(g.Id) >= g.Min);
+        /// <summary>
+        /// Todos os grupos no minimo e nada fora do combo: o botao Adicionar liga. No combo
+        /// por total, a regra unica inteira (teto, total, obrigatorio pela conta).
+        /// </summary>
+        public bool Completo => _fora.Count == 0
+            && (Combo.PorTotal ? Situacao().Ok : Combo.Grupos.All(g => Total(g.Id) >= g.Min));
 
-        /// <summary>"Donuts · 7 de 10" (cabecalho do grupo).</summary>
-        public string Progresso(GrupoDef g) => $"{g.Nome} · {Total(g.Id)} de {g.Max}";
+        /// <summary>"Donuts · 7 de 10" (cabecalho do grupo; o maximo e o efetivo).</summary>
+        public string Progresso(GrupoDef g) => $"{g.Nome} · {Total(g.Id)} de {Faixa(g).Max}";
 
         /// <summary>Fracao preenchida do grupo, 0..1 (a barra fina do cabecalho).</summary>
-        public double Fracao(GrupoDef g) => g.Max <= 0 ? 1 : Math.Min(1.0, (double)Total(g.Id) / g.Max);
+        public double Fracao(GrupoDef g)
+        {
+            var max = Faixa(g).Max;
+            return max <= 0 ? 1 : Math.Min(1.0, (double)Total(g.Id) / max);
+        }
 
         /// <summary>
         /// "Faltam 3 donuts" / "Falta 1 bebida" / "Faltam 2 donuts e 1 bebida"; com escolha
@@ -392,6 +508,15 @@ public static class Combos
         {
             get
             {
+                if (Combo.PorTotal)
+                {
+                    // combo por total: a frase da regra unica ("Falta 1 donut", "Escolha 2 Homer")
+                    var s = Situacao();
+                    var foraTotal = _fora.Sum(e => e.Qtd);
+                    var frase = s.Ok ? null : s.Erro;
+                    if (foraTotal == 0) return frase;
+                    return (frase is null ? "" : frase + " · ") + $"{foraTotal} fora do combo";
+                }
                 var partes = new List<string>();
                 var total = 0;
                 foreach (var g in Combo.Grupos)
