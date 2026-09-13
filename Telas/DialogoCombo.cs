@@ -26,6 +26,10 @@ namespace Pdv.Telas;
 /// o "+" de todo card trava quando o total fecha (ou o teto do grupo), e o rodape diz
 /// a frase da regra unica ("Falta 1 donut", "Escolha 2 Homer").
 ///
+/// VARIAS CATEGORIAS NUM GRUPO ("4 cookies de qualquer tipo", 13/09/2026): o grupo
+/// chega como uma lista so, entao vira UM bloco "Cookies · 0 de 4" com os sabores das
+/// categorias todas na mesma grade, o "+" travando no total e o rodape "Falta 1 cookie".
+///
 /// Toda a regra (minimo, maximo, tudo igual, textos) mora em <see cref="Combos.Estado"/>;
 /// aqui so se desenha e se repinta.
 /// </summary>

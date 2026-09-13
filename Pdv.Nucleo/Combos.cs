@@ -38,6 +38,11 @@ public static class Combos
     /// (a categoria inteira; <c>Grupo</c> e o TEXTO da categoria, que e o que o catalogo
     /// local tem) ou "todos" (o cardapio todo). <c>Itens</c> ja vem expandido do
     /// servidor nos tres casos.
+    ///
+    /// Grupo de VARIAS categorias ("4 cookies de qualquer tipo", 13/09/2026) chega como
+    /// "itens", com <c>Grupo</c> nulo e a lista ja expandida (as categorias e os avulsos).
+    /// Nenhuma chave nova: o exe 1.0.10 vende certo, e produto novo numa das categorias
+    /// entra porque o servidor refaz a lista a cada sincronizacao.
     /// </summary>
     public sealed record Fonte(string Tipo, string? Grupo, IReadOnlyList<ItemFonte> Itens);
 

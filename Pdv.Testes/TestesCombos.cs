@@ -64,9 +64,53 @@ public static class TestesCombos
         Fiscal(checar);
         await DescidaAsync(checar);
         LimiteTotal(checar);
+        VariasCategorias(checar);
         await DescidaV2Async(checar);
         Tela(checar);
     }
+
+    // ── varias categorias num grupo (pedido do dono 13/09/2026) ──────────────
+    /// <summary>
+    /// "COMBO 4 COOKIES" com UM grupo "Cookies" de Classicos, Premium e Super Premium, ate 4,
+    /// 4 no total. Shape EXATO do contrato: o grupo de varias categorias chega como fonte
+    /// "itens" (grupo null, lista expandida), com min/max efetivos 4 e 4 e min_proprio 0.
+    /// </summary>
+    private const string PayloadCookies4V2 = """
+        {"produto_id":"combo-4-cookies","plu":"93","nome":"COMBO 4 COOKIES","min_total":4,"max_total":4,
+         "grupos":[
+          {"id":"g-cookies","nome":"Cookies","min":4,"max":4,"min_proprio":0,"max_proprio":4,
+           "fonte":{"tipo":"itens","grupo":null,"itens":[
+             {"produto_id":"k-baunilha","plu":"40","nome":"COOKIE BAUNILHA"},
+             {"produto_id":"k-chocolate","plu":"41","nome":"COOKIE CHOCOLATE"},
+             {"produto_id":"k-ferrero","plu":"50","nome":"COOKIE FERRERO"},
+             {"produto_id":"k-nutella","plu":"45","nome":"COOKIE NUTELLA"},
+             {"produto_id":"k-pistache","plu":"46","nome":"COOKIE PISTACHE"}]}}]}
+        """;
+
+    /// <summary>O mesmo combo como a v1 manda para o exe 1.0.10: sem total, min 4 e max 4.</summary>
+    private const string PayloadCookies4V1 = """
+        {"produto_id":"combo-4-cookies","plu":"93","nome":"COMBO 4 COOKIES",
+         "grupos":[
+          {"id":"g-cookies","nome":"Cookies","min":4,"max":4,
+           "fonte":{"tipo":"itens","grupo":null,"itens":[
+             {"produto_id":"k-baunilha","plu":"40","nome":"COOKIE BAUNILHA"},
+             {"produto_id":"k-chocolate","plu":"41","nome":"COOKIE CHOCOLATE"},
+             {"produto_id":"k-ferrero","plu":"50","nome":"COOKIE FERRERO"},
+             {"produto_id":"k-nutella","plu":"45","nome":"COOKIE NUTELLA"},
+             {"produto_id":"k-pistache","plu":"46","nome":"COOKIE PISTACHE"}]}}]}
+        """;
+
+    private static readonly List<Combos.ProdutoLocal> CatalogoCookies = new()
+    {
+        new("combo-4-cookies", "93", "COMBO 4 COOKIES", "Combos"),
+        new("k-baunilha", "40", "COOKIE BAUNILHA", "Cookies Clássicos"),
+        new("k-chocolate", "41", "COOKIE CHOCOLATE", "Cookies Clássicos"),
+        new("k-nutella", "45", "COOKIE NUTELLA", "Cookies Premium"),
+        new("k-pistache", "46", "COOKIE PISTACHE", "Cookies Premium"),
+        new("k-redvelvet", "47", "COOKIE RED VELVET", "Cookies Premium"),   // so no catalogo local
+        new("k-ferrero", "50", "COOKIE FERRERO", "Cookies Super Premium"),
+        new("d-acucar", "10", "DONUT ACUCAR", "Classicos"),
+    };
 
     // ── combo por total (regra do dono 13/09/2026): payloads no shape de pdv_combos_ativos_v2 ──
     /// <summary>"Box 4": Premium ate 2 (categoria) e Homer ate 2 (produto). Soma dos tetos = 4: 2 e 2 obrigatorio.</summary>
@@ -130,11 +174,17 @@ public static class TestesCombos
                     tMin = combo.GetProperty("total").GetProperty("min").GetInt32();
                     tMax = combo.GetProperty("total").GetProperty("max").GetInt32();
                 }
+                // formas de grupo da tabela: {tipo, id?}, {tipo:"produto", ids:[...]} e
+                // {tipo:"categoria", categorias:[...], avulsos:[...]} (grupo de varias categorias)
+                static List<string>? Lista(JsonElement g, string k)
+                    => g.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Array
+                        ? v.EnumerateArray().Select(x => x.GetString()!).ToList() : null;
                 var grupos = combo.GetProperty("grupos").EnumerateArray().Select(g => new ComboLimites.Grupo(
                     g.GetProperty("tipo").GetString()!,
-                    g.GetProperty("id").ValueKind == JsonValueKind.String ? g.GetProperty("id").GetString() : null,
-                    null, g.GetProperty("nome").GetString()!, g.GetProperty("maximo").GetInt32(),
-                    g.TryGetProperty("minimo", out var mi) ? mi.GetInt32() : 0)).ToList();
+                    g.TryGetProperty("id", out var gid) && gid.ValueKind == JsonValueKind.String ? gid.GetString() : null,
+                    Lista(g, "ids"), g.GetProperty("nome").GetString()!, g.GetProperty("maximo").GetInt32(),
+                    g.TryGetProperty("minimo", out var mi) ? mi.GetInt32() : 0,
+                    Lista(g, "categorias"), Lista(g, "avulsos"))).ToList();
                 var escolhas = caso.GetProperty("escolhas").EnumerateArray().Select(e =>
                 {
                     var chave = e.GetProperty("produto").GetString()!;
@@ -225,6 +275,141 @@ public static class TestesCombos
 
         var textos = new[] { e.Faltam ?? "", b.Faltam ?? "", umETres ?? "", tresEUm ?? "", cinco.Faltam ?? "", eh.Faltam ?? "" };
         checar(textos.All(t => !t.Contains('—') && !t.Contains('–')), "total: nenhum texto com travessao");
+    }
+
+    // ── 10b. varias categorias num grupo ───────────────────────────────────
+    private static void VariasCategorias(Action<bool, string> checar)
+    {
+        // (a) a regra unica com o grupo de varias categorias (e avulso), e a prova de que a
+        // lista expandida que a v1/v2 mandam da o MESMO ok, codigo e frase
+        var donut = new ComboLimites.Unidade("donut", "donuts");
+        var cats = new Dictionary<string, (string Nome, string Cat)>
+        {
+            ["acucar"] = ("Donut Açúcar", "classicos"), ["homer"] = ("Homer", "classicos"),
+            ["pistache"] = ("Donut Pistache", "premium"), ["nutella"] = ("Donut Nutella", "premium"),
+            ["ferrero"] = ("Donut Ferrero", "super"), ["brownie"] = ("Brownie", "outros"),
+        };
+        List<ComboLimites.EscolhaRegra> Esc(params (string P, int Q)[] xs)
+            => xs.Select(x => new ComboLimites.EscolhaRegra(x.P, new[] { cats[x.P].Cat }, x.Q, cats[x.P].Nome)).ToList();
+        var qualquer4 = new List<ComboLimites.Grupo>
+            { new("categoria", null, null, "Donuts", 4, 0, new[] { "classicos", "premium", "super" }) };
+        var comoLista = new List<ComboLimites.Grupo>
+            { new("produto", null, new[] { "acucar", "homer", "pistache", "nutella", "ferrero" }, "Donuts", 4) };
+        var casosQ = new (string Id, List<ComboLimites.EscolhaRegra> E, bool Ok, string? Codigo, string? Erro)[]
+        {
+            ("Q1", Esc(("acucar", 3), ("pistache", 1)), true, null, null),
+            ("Q2", Esc(("ferrero", 4)), true, null, null),
+            ("Q3", Esc(("acucar", 2), ("nutella", 1), ("ferrero", 1)), true, null, null),
+            ("Q4", Esc(("acucar", 3), ("pistache", 2)), false, "total_acima", "No máximo 4 donuts"),
+            ("Q5", Esc(("homer", 1), ("pistache", 1), ("ferrero", 1)), false, "total_abaixo", "Falta 1 donut"),
+            ("Q6", Esc(), false, "total_abaixo", "Faltam 4 donuts"),
+            ("Q7", Esc(("ferrero", 5)), false, "total_acima", "No máximo 4 donuts"),
+            ("Q8", Esc(("acucar", 3), ("brownie", 1)), false, "fora_do_combo", "Brownie não faz parte do combo"),
+        };
+        var divergentes = new List<string>();
+        foreach (var c in casosQ)
+            foreach (var (rotulo, grupos) in new[] { ("categorias", qualquer4), ("lista", comoLista) })
+            {
+                var r = ComboLimites.ValidarEscolha(4, 4, grupos, c.E, donut);
+                if (r.Ok != c.Ok || r.Codigo != c.Codigo || r.Erro != c.Erro) divergentes.Add($"{c.Id}/{rotulo} veio {r.Codigo}/{r.Erro}");
+            }
+        checar(divergentes.Count == 0,
+            $"varias categorias: 'qualquer 4' por categorias e pela lista expandida dao o mesmo ok, codigo e frase (divergentes: {(divergentes.Count == 0 ? "nenhum" : string.Join("; ", divergentes))})");
+        checar(ComboLimites.FaixaEfetiva(qualquer4, 4, 4)[0] == (0, 4)
+               && ComboLimites.FaixaEfetiva(new[] { new ComboLimites.Grupo("categoria", "premium", null, "Premium", 2), new ComboLimites.Grupo("categoria", "classicos", null, "Clássicos", 2) }, 4, 4)
+                   .SequenceEqual(new[] { (2, 2), (2, 2) })
+               && ComboLimites.FaixaEfetiva(new[] { new ComboLimites.Grupo("produto", null, new[] { "acucar" }, "Donuts", 4, 4) }, null, null)[0] == (4, 4),
+            "varias categorias: grupo unico nao fica obrigatorio pela conta (0 a 4); 2+2 continua 2 e 2; sem total, o minimo proprio vale");
+
+        // avulso: conta no nivel produto (Homer em Especiais, nunca em Classicos pela categoria)
+        var misto = new List<ComboLimites.Grupo>
+        {
+            new("categoria", null, null, "Especiais", 2, 0, new[] { "premium", "super" }, new[] { "homer" }),
+            new("categoria", "classicos", null, "Clássicos", 4),
+        };
+        var m1 = ComboLimites.ValidarEscolha(4, 4, misto, Esc(("homer", 2), ("acucar", 2)), donut);
+        var m2 = ComboLimites.ValidarEscolha(4, 4, misto, Esc(("homer", 1), ("pistache", 2), ("acucar", 1)), donut);
+        var m3 = ComboLimites.ValidarEscolha(4, 4, misto, Esc(("homer", 3), ("acucar", 1)), donut);
+        var m4 = ComboLimites.ValidarEscolha(4, 4, misto, Esc(("ferrero", 1), ("acucar", 2)), donut);
+        checar(m1.Ok && m1.Somas.SequenceEqual(new[] { 2, 2 })
+               && m2.Codigo == "grupo_acima" && m2.Erro == "No máximo 2 Especiais"
+               && m3.Codigo == "grupo_acima" && m3.Erro == "No máximo 2 Especiais"
+               && m4.Codigo == "total_abaixo" && m4.Erro == "Falta 1 donut"
+               && ComboLimites.GrupoDaEscolha(misto, Esc(("homer", 1))[0]) == 0
+               && ComboLimites.GrupoDaEscolha(misto, Esc(("ferrero", 1))[0]) == 0
+               && ComboLimites.GrupoDaEscolha(misto, Esc(("brownie", 1))[0]) == -1,
+            $"varias categorias: o avulso Homer conta em Especiais (2 Homer e 2 Classicos passa; 3 Homer recusa) (m2 '{m2.Erro}', m4 '{m4.Erro}')");
+        checar(ComboLimites.CategoriasDoGrupo(misto[1]).SequenceEqual(new[] { "classicos" })
+               && ComboLimites.ProdutosDoGrupo(misto[0]).SequenceEqual(new[] { "homer" })
+               && ComboLimites.CategoriasDoGrupo(comoLista[0]).Count == 0
+               && ComboLimites.ProdutosDoGrupo(new ComboLimites.Grupo("produto", "homer", new[] { "acucar" }, "X", 1)).SequenceEqual(new[] { "homer", "acucar" }),
+            "varias categorias: CategoriasDoGrupo e ProdutosDoGrupo juntam o id antigo com as listas novas");
+
+        // (b) o que o caixa recebe: fonte "itens", grupo null, lista expandida
+        var v2 = Combos.Parsear(PayloadCookies4V2)!;
+        var g = v2.Grupos[0];
+        checar(v2.PorTotal && v2.MinTotal == 4 && v2.MaxTotal == 4 && v2.Grupos.Count == 1 && g.Fonte.Tipo == "itens" && g.Fonte.Grupo is null
+               && g.Fonte.Itens.Count == 5 && g.Min == 4 && g.Max == 4 && g.MinProprio == 0 && g.MaxProprio == 4,
+            "varias categorias: o parser le o grupo de varias categorias da v2 como UMA lista (itens, grupo null, 5 cookies, min_proprio 0)");
+        var fonte = Combos.ResolverFonte(v2, g, CatalogoCookies).Select(i => i.Nome).ToList();
+        checar(fonte.SequenceEqual(new[] { "COOKIE BAUNILHA", "COOKIE CHOCOLATE", "COOKIE FERRERO", "COOKIE NUTELLA", "COOKIE PISTACHE" }),
+            $"varias categorias: os cookies das 3 categorias numa grade so, por nome, sem o combo nem donut (veio: {string.Join(", ", fonte)})");
+
+        // (c) o estado na v2 (proximo release): o total fala, nao o grupo
+        var baunilha = new Combos.ItemFonte("k-baunilha", "40", "COOKIE BAUNILHA");
+        var chocolate = new Combos.ItemFonte("k-chocolate", "41", "COOKIE CHOCOLATE");
+        var nutella = new Combos.ItemFonte("k-nutella", "45", "COOKIE NUTELLA");
+        var pistache = new Combos.ItemFonte("k-pistache", "46", "COOKIE PISTACHE");
+        var ferrero = new Combos.ItemFonte("k-ferrero", "50", "COOKIE FERRERO");
+        var e = new Combos.Estado(v2, null, CatalogoCookies);
+        checar(e.Faltam == "Faltam 4 cookies" && e.Progresso(g) == "Cookies · 0 de 4" && e.ProgressoTotal == "0 de 4" && !e.Completo,
+            $"varias categorias v2: vazio 'Faltam 4 cookies' e 'Cookies · 0 de 4' (veio '{e.Faltam}', '{e.Progresso(g)}')");
+        e.Mais(g, chocolate); e.Mais(g, nutella); e.Mais(g, ferrero);
+        checar(e.Faltam == "Falta 1 cookie" && e.Situacao().Codigo == "total_abaixo" && e.PodeMais(g) && !e.Completo && e.Progresso(g) == "Cookies · 3 de 4",
+            $"varias categorias v2: 3 de 3 categorias diferentes dizem 'Falta 1 cookie', nunca 'Escolha mais 1 Cookies' (veio '{e.Faltam}')");
+        checar(e.Mais(g, pistache) && e.Completo && e.Faltam is null && e.ProgressoTotal == "4 de 4"
+               && !e.PodeMais(g) && !e.Mais(g, baunilha) && e.TotalGeral == 4,
+            "varias categorias v2: o 4o fecha em qualquer mistura e o + trava (nunca 5)");
+        checar(e.Escolhas().Count == 4 && e.Escolhas().All(x => x.GrupoId == "g-cookies" && x.GrupoNome == "Cookies")
+               && Combos.LinhasKds(e.Escolhas()).Contains("Cookies: 1x Nutella"),
+            "varias categorias v2: as escolhas saem com o id do grupo e a cozinha le 'Cookies: 1x Nutella'");
+        var igual = new Combos.Estado(v2, null, CatalogoCookies);
+        igual.Mais(g, ferrero); igual.TudoIgual(g, ferrero);
+        checar(igual.Quantos(g.Id, "k-ferrero") == 4 && igual.Completo, "varias categorias v2: 'Tudo igual' completa ate 4 do mesmo");
+        var tres = new[] { new Escolha("k-chocolate", "41", "COOKIE CHOCOLATE", "g-cookies", 2), new Escolha("k-ferrero", "50", "COOKIE FERRERO", "g-cookies", 1) };
+        checar(Combos.Pendencia(v2, tres, CatalogoCookies) == "Combo 4 Cookies: falta 1 cookie",
+            $"varias categorias v2: Finalizar recusa 3 com 'Combo 4 Cookies: falta 1 cookie' (veio '{Combos.Pendencia(v2, tres, CatalogoCookies)}')");
+        var cinco = new Combos.Estado(v2, new[] { new Escolha("k-nutella", "45", "COOKIE NUTELLA", "g-cookies", 5) }, CatalogoCookies);
+        checar(cinco.TotalGeral == 4 && cinco.ForaDoCombo.Sum(x => x.Qtd) == 1 && !cinco.Completo,
+            "varias categorias v2: 5 guardados viram 4 e 1 fora do combo");
+
+        // (d) o exe 1.0.10 (le a v1: sem total, min 4 e max 4): vende certo com o mesmo payload
+        var v1 = Combos.Parsear(PayloadCookies4V1)!;
+        var g1 = v1.Grupos[0];
+        var e1 = new Combos.Estado(v1, null, CatalogoCookies);
+        var vazioV1 = e1.Faltam;
+        e1.Mais(g1, baunilha); e1.Mais(g1, nutella); e1.Mais(g1, nutella);
+        var tresV1 = e1.Completo;
+        e1.Mais(g1, ferrero);
+        checar(!v1.PorTotal && vazioV1 == "Faltam 4 cookies" && !tresV1 && e1.Completo && !e1.PodeMais(g1) && !e1.Mais(g1, pistache)
+               && Combos.Pendencia(v1, tres, CatalogoCookies) == "Combo 4 Cookies: falta 1 sabor",
+            $"varias categorias v1 (exe 1.0.10): 'Faltam 4 cookies', qualquer mistura de 4 fecha, o + trava no 4o (veio '{vazioV1}')");
+
+        // (e) "Juntar" no painel: 3 grupos viram 1 com o id do 1o. A comanda montada nos 3
+        // grupos antigos e realocada inteira no grupo novo, sem nada fora do combo
+        var antigas = new[]
+        {
+            new Escolha("k-chocolate", "41", "COOKIE CHOCOLATE", "g-cookies", 1, "Cookies Clássicos"),
+            new Escolha("k-nutella", "45", "COOKIE NUTELLA", "g-premium-velho", 2, "Cookies Premium"),
+            new Escolha("k-ferrero", "50", "COOKIE FERRERO", "g-super-velho", 1, "Cookies Super Premium"),
+        };
+        var juntado = new Combos.Estado(v2, antigas, CatalogoCookies);
+        checar(juntado.Completo && juntado.ForaDoCombo.Count == 0 && juntado.Escolhas().All(x => x.GrupoId == "g-cookies")
+               && juntado.Escolhas().Sum(x => x.Qtd) == 4 && Combos.Pendencia(v2, antigas, CatalogoCookies) is null,
+            "varias categorias: comanda dos 3 grupos antigos e realocada no grupo juntado (completo, nada fora)");
+
+        var textos = new[] { e.Faltam ?? "", vazioV1 ?? "", Combos.Pendencia(v2, tres, CatalogoCookies) ?? "", m2.Erro ?? "", m4.Erro ?? "" };
+        checar(textos.All(t => !t.Contains('—') && !t.Contains('–')), "varias categorias: nenhum texto com travessao");
     }
 
     // ── 11. descida da v2 com volta para a v1 ──────────────────────────────
@@ -892,6 +1077,46 @@ public static class TestesCombos
         checar(tituloCheio == "Combo Box 4 Donuts · 4 de 4" && !maisPremiumCheio && adicionarBox
                && escolhidoBox is { Count: 3 } && escolhidoBox.Sum(x => x.Qtd) == 4,
             $"dialogo total: 2 e 2 fecha '4 de 4', o + desliga e o Adicionar devolve as 4 escolhas (veio '{tituloCheio}')");
+
+        // ── (1c) varias categorias num grupo: UM bloco, a lista toda, o total trava ──
+        var cookies = Combos.Parsear(PayloadCookies4V2)!;
+        var blocosCookies = -1;
+        string? cabecalhoCookies = null, cardNutella = null, faltamVazioCookies = null, tituloTres = null, faltamTres = null, tituloQuatro = null;
+        List<string> cardsCookies = new();
+        bool adicionarTres = true, maisTravadoQuatro = false, adicionarQuatro = false;
+        QuandoAbrir(host, d =>
+        {
+            string Texto(string nome) => Descendentes<TextBlock>(d).First(t => AutomationProperties.GetName(t) == nome).Text;
+            blocosCookies = Descendentes<TextBlock>(d).Count(t => (AutomationProperties.GetName(t) ?? "").StartsWith("Progresso "));
+            cabecalhoCookies = Texto("Progresso Cookies");
+            cardsCookies = Descendentes<Button>(d).Select(b => AutomationProperties.GetName(b) ?? "")
+                .Where(n => n.StartsWith("COOKIE")).ToList();
+            cardNutella = (Botao(d, "COOKIE NUTELLA").Content as TextBlock)?.Text;
+            faltamVazioCookies = Texto("Faltam");
+            Clicar(Botao(d, "Mais COOKIE CHOCOLATE"));
+            Clicar(Botao(d, "COOKIE NUTELLA"));
+            Clicar(Botao(d, "Mais COOKIE FERRERO"));
+            tituloTres = Texto("TituloCombo");
+            faltamTres = Texto("Faltam");
+            adicionarTres = Botao(d, "Adicionar").IsEnabled;
+            Clicar(Botao(d, "Mais COOKIE PISTACHE"));
+            tituloQuatro = Texto("TituloCombo");
+            maisTravadoQuatro = !Botao(d, "Mais COOKIE BAUNILHA").IsEnabled && !Botao(d, "COOKIE BAUNILHA").IsEnabled
+                                && !Botao(d, "Mais COOKIE NUTELLA").IsEnabled;
+            adicionarQuatro = Botao(d, "Adicionar").IsEnabled;
+            Clicar(Botao(d, "Adicionar"));
+        });
+        var escolhidoCookies = Pdv.Telas.DialogoCombo.Abrir(host, cookies, CatalogoCookies);
+        checar(blocosCookies == 1 && cabecalhoCookies == "Cookies · 0 de 4"
+               && cardsCookies.SequenceEqual(new[] { "COOKIE BAUNILHA", "COOKIE CHOCOLATE", "COOKIE FERRERO", "COOKIE NUTELLA", "COOKIE PISTACHE" }),
+            $"dialogo varias categorias: UM bloco 'Cookies · 0 de 4' com os cookies das 3 categorias na mesma grade (blocos {blocosCookies}, '{cabecalhoCookies}', cards: {string.Join(", ", cardsCookies)})");
+        checar(cardNutella == "Nutella" && faltamVazioCookies == "Faltam 4 cookies",
+            $"dialogo varias categorias: card 'Nutella' sem o prefixo e rodape 'Faltam 4 cookies' (veio '{cardNutella}', '{faltamVazioCookies}')");
+        checar(tituloTres == "Combo 4 Cookies · 3 de 4" && faltamTres == "Falta 1 cookie" && !adicionarTres,
+            $"dialogo varias categorias: 3 de categorias diferentes, titulo '3 de 4', rodape 'Falta 1 cookie', Adicionar desligado (veio '{tituloTres}', '{faltamTres}')");
+        checar(tituloQuatro == "Combo 4 Cookies · 4 de 4" && maisTravadoQuatro && adicionarQuatro
+               && escolhidoCookies is { Count: 4 } && escolhidoCookies.All(x => x.GrupoId == "g-cookies") && escolhidoCookies.Sum(x => x.Qtd) == 4,
+            $"dialogo varias categorias: o 4o fecha, todo + trava e o Adicionar devolve as 4 escolhas no grupo (veio '{tituloQuatro}')");
 
         // ── (2) a tela de venda ───────────────────────────────────────────
         var op = new Operador("op-ui", "Tela", "operador");

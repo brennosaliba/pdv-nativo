@@ -11,12 +11,36 @@ namespace Pdv.Nucleo;
 /// total obrigam cada grupo ("2 Premium e 2 Homer" e 2 e 2, nunca 1 e 3). Um
 /// produto conta num grupo so: lista de produtos, depois categoria, depois
 /// cardapio todo. Combo sem total e a regra antiga (minimo e maximo por grupo).
+///
+/// VARIAS CATEGORIAS NUM GRUPO (pedido do dono 13/09/2026, "4 cookies de qualquer
+/// tipo"): o grupo "categoria" pode ter mais de uma categoria (Categorias) e produtos
+/// avulsos (Avulsos). O avulso conta no nivel produto e as categorias no nivel
+/// categoria, com a mesma precedencia. No caixa esse grupo chega como lista expandida
+/// ("itens"), que da o mesmo resultado (casos "_como_lista" da tabela).
 /// Tudo puro: sem WPF, sem banco.
 /// </summary>
 public static class ComboLimites
 {
-    /// <summary>Grupo da regra. Tipo: "categoria" (Id), "produto" (Id ou Ids) ou "todos".</summary>
-    public sealed record Grupo(string Tipo, string? Id, IReadOnlyList<string>? Ids, string Nome, int Maximo, int Minimo = 0);
+    /// <summary>
+    /// Grupo da regra. Tipo: "categoria" (Id e/ou Categorias, com Avulsos opcionais),
+    /// "produto" (Id ou Ids) ou "todos". Posicional compativel com o de antes.
+    /// </summary>
+    public sealed record Grupo(string Tipo, string? Id, IReadOnlyList<string>? Ids, string Nome, int Maximo, int Minimo = 0,
+        IReadOnlyList<string>? Categorias = null, IReadOnlyList<string>? Avulsos = null);
+
+    /// <summary>As categorias que o grupo aceita (so tipo "categoria": Id e Categorias).</summary>
+    public static IReadOnlyList<string> CategoriasDoGrupo(Grupo g)
+        => g.Tipo != "categoria" ? Array.Empty<string>()
+            : (g.Id is { } id ? new[] { id } : Array.Empty<string>()).Concat(g.Categorias ?? Array.Empty<string>()).ToList();
+
+    /// <summary>Os produtos que o grupo aceita no nivel produto ("produto": Id e Ids; "categoria": Avulsos).</summary>
+    public static IReadOnlyList<string> ProdutosDoGrupo(Grupo g)
+        => g.Tipo switch
+        {
+            "produto" => (g.Id is { } id ? new[] { id } : Array.Empty<string>()).Concat(g.Ids ?? Array.Empty<string>()).ToList(),
+            "categoria" => g.Avulsos ?? Array.Empty<string>(),
+            _ => Array.Empty<string>(),
+        };
 
     /// <summary>Uma escolha de UMA unidade do combo.</summary>
     public sealed record EscolhaRegra(string Produto, IReadOnlyList<string>? Categorias, int Qtd, string? Nome = null);
@@ -31,7 +55,11 @@ public static class ComboLimites
 
     private static int MinimoProprio(Grupo g) => Math.Max(0, g.Minimo);
 
-    /// <summary>Faixa efetiva de cada grupo contando os outros e o total (a conta do obrigatorio).</summary>
+    /// <summary>
+    /// Faixa efetiva de cada grupo contando os outros e o total (a conta do obrigatorio).
+    /// Combo de UM grupo nao vira "obrigatorio pela conta": quem fala e o total ("Falta 1
+    /// cookie", nunca "Escolha mais 1 Cookies"). Aceita e recusa exatamente o mesmo.
+    /// </summary>
     public static (int Min, int Max)[] FaixaEfetiva(IReadOnlyList<Grupo> grupos, int? tMin, int? tMax)
     {
         var tetos = grupos.Select(g => tMax is int m ? Math.Min(g.Maximo, m) : g.Maximo).ToArray();
@@ -42,7 +70,7 @@ public static class ComboLimites
         for (var i = 0; i < grupos.Count; i++)
         {
             var min = mins[i];
-            if (tMin is int tmin) min = Math.Max(min, tmin - (somaTetos - tetos[i]));
+            if (tMin is int tmin && grupos.Count > 1) min = Math.Max(min, tmin - (somaTetos - tetos[i]));
             var max = grupos[i].Maximo;
             if (tMax is int tmax) max = Math.Min(max, tmax - (somaMins - mins[i]));
             min = Math.Max(0, min);
@@ -51,15 +79,19 @@ public static class ComboLimites
         return r;
     }
 
-    /// <summary>Em que grupo a escolha conta (lista, categoria, todos). -1 = fora do combo.</summary>
+    /// <summary>
+    /// Em que grupo a escolha conta: nivel produto (lista de produtos ou avulso de um grupo
+    /// de categorias), depois nivel categoria (qualquer categoria do grupo), depois todos.
+    /// -1 = fora do combo.
+    /// </summary>
     public static int GrupoDaEscolha(IReadOnlyList<Grupo> grupos, EscolhaRegra e)
     {
         for (var i = 0; i < grupos.Count; i++)
-            if (grupos[i].Tipo == "produto" && (grupos[i].Id == e.Produto || (grupos[i].Ids?.Contains(e.Produto) ?? false)))
+            if (ProdutosDoGrupo(grupos[i]).Contains(e.Produto))
                 return i;
         var cats = e.Categorias ?? Array.Empty<string>();
         for (var i = 0; i < grupos.Count; i++)
-            if (grupos[i].Tipo == "categoria" && grupos[i].Id is { } id && cats.Contains(id))
+            if (CategoriasDoGrupo(grupos[i]).Any(cats.Contains))
                 return i;
         for (var i = 0; i < grupos.Count; i++)
             if (grupos[i].Tipo == "todos") return i;
