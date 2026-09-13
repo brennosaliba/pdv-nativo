@@ -252,7 +252,7 @@ public static class TestesPromoAutorizacao
                 var porDia2fa = P("{\"id\":\"pd2\",\"nome\":\"donuts do dia (func)\",\"tipo\":\"percentual\",\"alvo\":\"produtos\",\"produto_ids\":[\"C\"],\"ativa\":true,\"inicio\":\"2026-01-01\",\"fim\":null,"
                     + "\"regras_semana\":[{\"dias\":[5],\"precos_cent\":{\"C\":500},\"produto_ids\":[\"C\"]}],\"config\":{\"autorizacao\":\"dono\"}}");
                 var so2fa = Promocoes.ProdutosEmPromocao(new[] { func, porDia2fa }, sexta);
-                checar(so2fa.Count == 0, "MT-25 só promoções com 2FA (percentual e por regra do dia): categoria Promoção vazia, nem card cinza");
+                checar(so2fa.Count == 0, "MT-25 só promoções com 2FA (percentual e por regra do dia): nenhum PRODUTO listado nem card cinza (o card com chave delas vem de PromocoesComSenhaNaVitrine, 13/09)");
                 ctx.Autorizar("func", "l", "Marcos");
                 checar(!Promocoes.ProdutosEmPromocao(new[] { func, livreB }, sexta).ContainsKey("A")
                        && typeof(Promocoes).GetMethod("ProdutosEmPromocao")!.GetParameters().All(pa => pa.ParameterType != typeof(Promocoes.ContextoAutorizacao)),
@@ -589,7 +589,9 @@ public static class TestesPromoAutorizacao
                 "FP-8b ela so pinta o botao que OFERECE a promocao");
             checar(Metodo(venda, "private void AplicarPromoComSenha").Contains("PerguntarPromocoesAsync", StringComparison.Ordinal),
                 "FP-8c e quem pergunta e o toque no botao");
-            var perguntar = Metodo(venda, "private async Task PerguntarPromocoesAsync()");
+            // 13/09/2026: recebe as pendentes (o botao passa todas; o card da categoria
+            // PROMOCAO passa so a dele). O corpo e o mesmo portao.
+            var perguntar = Metodo(venda, "private async Task PerguntarPromocoesAsync(");
             checar(perguntar.Contains("PortaoPromocao.ResolverAsync", StringComparison.Ordinal) && perguntar.Contains("Caixa.Auditar", StringComparison.Ordinal)
                    && perguntar.Contains("AvisoNaoAplicada", StringComparison.Ordinal) && perguntar.Contains("new TelaAutorizacao(dono)", StringComparison.Ordinal)
                    && Ordem(perguntar, "PortaoPromocao.ResolverAsync", "PintarComanda()")

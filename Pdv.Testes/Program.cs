@@ -1404,6 +1404,10 @@ TestesAvisoParadas.Rodar((cond, nome) => Check("aviso-parada: " + nome, cond));
 
 // Promocao com senha: oferecida no botao, nunca imposta ao bipar o primeiro item.
 TestesPromoOferecida.Rodar((cond, nome) => Check("promo-oferecida: " + nome, cond));
+TestesPromoFuncionarioSavassi.Rodar((cond, nome) => Check("promo-func-savassi: " + nome, cond));
+// 13/09/2026 (Savassi): "PROMOÇÃO FUNCIONÁRIO ATIVA E NÃO APARECE NO PDV". Card com chave na
+// categoria PROMOÇÃO; o toque pede o código pelo mesmo portão do botão ao lado do total.
+await TestesPromoComSenhaNaVitrine.RodarAsync((cond, nome) => Check("promo-card-senha: " + nome, cond));
 
 // Funcionario novo no painel consegue entrar no caixa (a Savassi ficou de fora hoje).
 await TestesLoginBuscaNoPainel.RodarAsync((cond, nome) => Check("login-painel: " + nome, cond));

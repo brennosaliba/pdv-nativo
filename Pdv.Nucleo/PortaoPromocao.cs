@@ -143,4 +143,79 @@ public static class PortaoPromocao
     public static string LinhaAuditoria(Resultado r) => r.Autorizada
         ? $"promo={r.Promo.PromoId} ({r.Promo.Nome}) nivel={r.Promo.Nivel} desconto={new Dinheiro(r.Promo.DescontoCent).Formatado()}{Autorizacao.Trilha(r.Desfecho)}"
         : $"promo={r.Promo.PromoId} ({r.Promo.Nome}) nivel={r.Promo.Nivel} recusada: {r.Desfecho.Motivo}";
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  O CARD NA CATEGORIA PROMOCAO (13/09/2026, Savassi)
+    //
+    //  "PROMOCAO FUNCIONARIO ATIVA E NAO APARECE NO PDV". Ela so aparecia no botao
+    //  ao lado do total, e so depois do primeiro item. Agora tem card na categoria
+    //  PROMOCAO, e o toque no card decide AQUI o que fazer. Pedir o codigo continua
+    //  sendo ResolverAsync, o mesmo do botao: mesma nuvem, mesma auditoria. Nao
+    //  existe caminho que aplique sem o codigo.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>O que o toque no card faz.</summary>
+    public enum Toque
+    {
+        /// <summary>Promocao sumiu do caixa ou saiu da vigencia/janela desde a pintura.</summary>
+        Indisponivel,
+        /// <summary>Comanda sem item: nao pede codigo (nao ha desconto a liberar).</summary>
+        ComandaVazia,
+        /// <summary>Ja liberada nesta venda: nao pede de novo.</summary>
+        JaAplicada,
+        /// <summary>Pede o codigo (ResolverAsync com esta pendente).</summary>
+        Perguntar,
+        /// <summary>Alcanca a comanda, mas outra promocao da mais desconto (uma por pedido).</summary>
+        OutraValeMais,
+        /// <summary>Nenhum item da comanda entra nela.</summary>
+        NaoAlcanca,
+    }
+
+    public sealed record DecisaoToque(Toque Acao, string Nome, Promocoes.PromoPendente? Pendente);
+
+    /// <summary>
+    /// Decide o toque no card de uma promocao com codigo.
+    ///
+    /// Unico efeito no contexto: se ela foi RECUSADA antes nesta venda (sem internet,
+    /// codigo errado 3 vezes) e o toque vai perguntar, ela volta a ser pendente
+    /// (<see cref="Promocoes.ContextoAutorizacao.Reabrir"/>), porque o operador pediu de
+    /// novo. Nunca autoriza: isso so acontece em ResolverAsync, com o codigo conferido.
+    /// </summary>
+    public static DecisaoToque Tocar(string promoId, IReadOnlyList<Promocoes.Promo> promos,
+        IReadOnlyList<Promocoes.ItemCarrinho> itens, DateTime agora, Promocoes.ContextoAutorizacao contexto,
+        ISet<string>? combos = null)
+    {
+        var promo = promos.FirstOrDefault(p => p.Id == promoId && p.ExigeAutorizacao);
+        if (promo is null || !Promocoes.Vigente(promo, agora)) return new(Toque.Indisponivel, promo?.Nome ?? "", null);
+        if (itens.Count == 0) return new(Toque.ComandaVazia, promo.Nome, null);
+        if (contexto.Autorizada(promoId)) return new(Toque.JaAplicada, promo.Nome, null);
+
+        // simula com ela pendente, sem mexer no que a venda ja decidiu
+        var simulado = contexto.Copia();
+        simulado.Reabrir(promoId);
+        var av = Promocoes.AvaliarCarrinho(promos, itens, agora, simulado, combos);
+        var pendente = av.Pendentes.FirstOrDefault(p => p.PromoId == promoId);
+        if (pendente is not null)
+        {
+            contexto.Reabrir(promoId);
+            return new(Toque.Perguntar, promo.Nome, pendente);
+        }
+        // nao venceria: e porque outra vale mais, ou porque ela nao alcanca nada?
+        var sozinha = Promocoes.AvaliarCarrinho(new[] { promo }, itens, agora, new Promocoes.ContextoAutorizacao(), combos);
+        return new(sozinha.Pendentes.Count > 0 ? Toque.OutraValeMais : Toque.NaoAlcanca, promo.Nome, null);
+    }
+
+    /// <summary>Aviso de uma linha quando o toque no card nao pede codigo.</summary>
+    public static string AvisoDoToque(Toque t) => t switch
+    {
+        Toque.Indisponivel => "Promoção indisponível agora.",
+        Toque.ComandaVazia => "Adicione um item antes.",
+        Toque.JaAplicada => "Promoção já aplicada nesta venda.",
+        Toque.OutraValeMais => "Outra promoção vale mais nesta venda.",
+        Toque.NaoAlcanca => "Nenhum item da venda entra nesta promoção.",
+        _ => "",
+    };
+
+    /// <summary>A linha embaixo do nome no card: a regra e de quem e o codigo.</summary>
+    public static string LinhaDoCard(string regra, string nivel) => $"{regra} · código do {Autorizacao.Papel(nivel)}";
 }

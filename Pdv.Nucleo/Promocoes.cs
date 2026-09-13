@@ -98,6 +98,22 @@ public static class Promocoes
             _excluidas.Add(promoId);
         }
 
+        /// <summary>
+        /// Recusada nesta venda volta a ser PENDENTE (13/09/2026): o operador tocou no card
+        /// da promocao de novo, entao ele quer tentar de novo. So sai de Excluidas; nunca
+        /// entra em Autorizadas. Continua exigindo o codigo, e a nuvem segue limitando erros.
+        /// </summary>
+        public void Reabrir(string promoId) => _excluidas.Remove(promoId);
+
+        /// <summary>Copia independente, para simular sem mexer no que a venda decidiu.</summary>
+        public ContextoAutorizacao Copia()
+        {
+            var c = new ContextoAutorizacao();
+            foreach (var kv in _autorizadas) c._autorizadas[kv.Key] = kv.Value;
+            foreach (var id in _excluidas) c._excluidas.Add(id);
+            return c;
+        }
+
         /// <summary>Nova venda (ou rascunho restaurado): tudo volta a ser perguntado.</summary>
         public void Zerar() { _autorizadas.Clear(); _excluidas.Clear(); }
     }
@@ -653,7 +669,13 @@ public static class Promocoes
     /// Homer, Ninho com Nutella · qui: Ovomaltine · ter: Redvelvet"). Quem está no caixa
     /// com fila não lê agenda: a pergunta é "posso vender isto agora?". Então a resposta
     /// virou uma linha só, direta.
+    ///
+    /// 13/09/2026, o dono de novo: "texto desnecessário.. é só falar sem produto ativo para
+    /// promoção data de hoje ou algo mais simples". A frase diz o que falta (produto na
+    /// promoção), e não "item disponível", que soava como estoque.
     /// </summary>
+    public const string SemProdutoHoje = "Sem produto na promoção hoje.";
+
     public static string LinhaDaPromocao(IEnumerable<string> quandoDosQueValemAgora)
     {
         var quando = quandoDosQueValemAgora
@@ -661,7 +683,7 @@ public static class Promocoes
             .Distinct()
             .ToList();
         return quando.Count == 0
-            ? "Sem item disponível hoje."
+            ? SemProdutoHoje
             : "Vale hoje: " + string.Join("  ·  ", quando);
     }
 
@@ -673,8 +695,10 @@ public static class Promocoes
     /// (Alvo por categoria/todos fica de fora da listagem: enumeraria o cardápio
     /// inteiro e a vitrine viraria ruído.)
     /// Promoção com config.autorizacao (código do gerente/dono, ex. desconto
-    /// funcionário) NUNCA entra: a vitrine é do cliente e não conhece o contexto
-    /// da venda; liberada, o preço cai no card da categoria normal (PrecoEfetivoCent).
+    /// funcionário) NUNCA entra AQUI, na lista de produtos: a vitrine não conhece o
+    /// contexto da venda, e o alvo dela costuma ser "todos" (sem id para listar).
+    /// Desde 13/09/2026 ela tem o próprio card na categoria PROMOÇÃO, que vem de
+    /// <see cref="PromocoesComSenhaNaVitrine"/>: o dono procurou ali e não achou.
     /// </summary>
     public static Dictionary<string, ProdutoPromo> ProdutosEmPromocao(
         IEnumerable<Promo> promos, DateTime agora)
@@ -713,6 +737,34 @@ public static class Promocoes
             }
         }
         return r;
+    }
+
+    /// <summary>Card de promoção com código na categoria PROMOÇÃO: o nome, a regra e de quem é o código.</summary>
+    public sealed record PromoComSenha(string PromoId, string Nome, string Regra, string Nivel);
+
+    /// <summary>
+    /// PROMOÇÃO COM CÓDIGO NA CATEGORIA PROMOÇÃO (13/09/2026, Savassi).
+    ///
+    /// "PROMOÇÃO FUNCIONÁRIO ATIVA E NÃO APARECE NO PDV". Ela aparecia, mas só como o
+    /// botão ao lado do total, e só depois do primeiro item. Na categoria PROMOÇÃO, onde
+    /// o dono procurou, ela nunca entrava (ver ProdutosEmPromocao).
+    ///
+    /// Aqui sai uma linha por promoção com config.autorizacao que vale AGORA: dentro da
+    /// vigência e da janela de hora, no dia (dias_semana, ou alguma regra da semana de
+    /// hoje). Não depende de produto_ids: "todos" também aparece. Isto só ANUNCIA; quem
+    /// aplica continua sendo o motor, e só com a promoção em Autorizadas.
+    /// </summary>
+    public static List<PromoComSenha> PromocoesComSenhaNaVitrine(IEnumerable<Promo> promos, DateTime agora)
+    {
+        var iso = DiaIso(agora);
+        return promos
+            .Where(p => p.ExigeAutorizacao && Vigente(p, agora))
+            .Where(p => p.Regras.Count > 0
+                ? p.Regras.Any(r => r.DiasIso.Length == 0 || r.DiasIso.Contains(iso))
+                : DiaBate(p, agora))
+            .OrderBy(p => p.Nome, StringComparer.Create(new System.Globalization.CultureInfo("pt-BR"), true))
+            .Select(p => new PromoComSenha(p.Id, p.Nome, DescreveRegra(p), p.Autorizacao!))
+            .ToList();
     }
 
     /// <summary>"qui · 18:00–20:00" — os dias/horários em que a promoção vale.</summary>

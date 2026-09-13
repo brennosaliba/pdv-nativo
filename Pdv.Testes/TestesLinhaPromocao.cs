@@ -18,7 +18,8 @@ public static class TestesLinhaPromocao
     public static void Rodar(Action<bool, string> checar)
     {
         var vazio = Promocoes.LinhaDaPromocao(Array.Empty<string>());
-        checar(vazio == "Sem item disponível hoje.", "sem nada valendo agora, a linha é uma frase só");
+        // 13/09/2026: "é só falar sem produto ativo para promoção data de hoje ou algo mais simples"
+        checar(vazio == "Sem produto na promoção hoje.", $"sem nada valendo agora, a linha é uma frase só (viu: {vazio})");
         checar(!vazio.Contains(':') || vazio.IndexOf(':') == vazio.Length - 1 || vazio.Count(c => c == ':') == 0,
             "a frase de hoje-não-tem não vira lista com dois pontos");
         checar(vazio.Length <= 40, $"cabe numa linha do cabeçalho da seção ({vazio.Length} caracteres)");
@@ -32,7 +33,7 @@ public static class TestesLinhaPromocao
             "regra repetida aparece uma vez só");
         checar(Promocoes.LinhaDaPromocao(new[] { "", "  ", "qui" }) == "Vale hoje: qui",
             "regra em branco não vira separador solto");
-        checar(Promocoes.LinhaDaPromocao(new[] { "", "  " }) == "Sem item disponível hoje.",
+        checar(Promocoes.LinhaDaPromocao(new[] { "", "  " }) == "Sem produto na promoção hoje.",
             "só regras em branco valem o mesmo que nada valendo");
 
         var venda = Fonte(Path.Combine("Telas", "Venda.xaml.cs")) ?? "";

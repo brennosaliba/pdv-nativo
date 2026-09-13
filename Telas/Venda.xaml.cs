@@ -73,6 +73,14 @@ public partial class Venda : UserControl
     /// <summary>Id da comanda em andamento: amarra o registro da nuvem a ESTA comanda.</summary>
     private string _comandaId = Guid.NewGuid().ToString("N");
     private bool _perguntandoPromo;
+    /// <summary>
+    /// SO A SUITE preenche, por reflexao: a nuvem de mentira (FakeTotp) e uma tela que
+    /// digita o codigo, para provar o toque no card na tela de verdade sem falar com a
+    /// producao. Nenhuma config, arquivo ou tela chega aqui. Nulo no caixa, e ai vale
+    /// Servicos.Autorizador() (URL fixa) com TelaAutorizacao. Os dois passam pelo mesmo
+    /// PortaoPromocao.ResolverAsync, e a nuvem continua sendo quem confere o codigo.
+    /// </summary>
+    private Func<Window, (IAutorizacaoRemota? Remota, ITelaAutorizacao Tela)>? _portaoDeTeste = null;
     private bool _modoLista;
     private double _larguraGrade;
     private DispatcherTimer? _relogio;
@@ -1199,14 +1207,18 @@ public partial class Venda : UserControl
         // vitrine de PROMOÇÃO no topo: só existe quando alguma promoção vigente
         // menciona produto do catálogo — categoria vazia é pior que nenhuma
         var emPromo = _catalogo.Count(pp => _promoVitrine.ContainsKey(pp.Id));
+        // 13/09/2026 (Savassi): promoção com código (desconto funcionário) também tem card
+        // aqui. Loja só com ela precisa da categoria: foi onde o dono procurou.
+        var naPromo = emPromo + Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now).Count;
         var nomesCat = _catalogo.Select(p => p.Categoria).ToList();
-        if (emPromo > 0) nomesCat.Add(CategoriaPromo);
+        if (naPromo > 0) nomesCat.Add(CategoriaPromo);
 
         var cats = Nucleo.Categorias.Ordenar(nomesCat, CategoriaPromo);
         foreach (var c in cats) _quantosPorCategoria[c] = _catalogo.Count(p => p.Categoria == c);
         // PROMOÇÃO não é categoria de produto — a contagem dela é quantos produtos do
-        // catálogo alguma promoção vigente alcança, não quantos têm essa categoria (zero).
-        if (emPromo > 0) _quantosPorCategoria[CategoriaPromo] = emPromo;
+        // catálogo alguma promoção vigente alcança (mais os cards de promoção com código),
+        // não quantos têm essa categoria (zero).
+        if (naPromo > 0) _quantosPorCategoria[CategoriaPromo] = naPromo;
         _categoriaMini = _estreita;   // 03/09: mini só em tela estreita (2 por linha, 3 linhas de nome)
         _quantasCategorias = cats.Count;
         AjustarColunasCategorias();
@@ -1430,11 +1442,16 @@ public partial class Venda : UserControl
             // dia" (brigadeiro na quarta, ovomaltine na quinta) aparecia, na
             // quinta, toda cinza com "só vale qua", ovomaltine incluso. Agora
             // só entra na vitrine o que vale AGORA; o resto nem aparece.
+            // 13/09/2026: primeiro os cards das promoções com código (desconto
+            // funcionário). O toque pede o código do gerente/dono pelo mesmo portão do
+            // botão ao lado do total; nada é aplicado sem ele.
+            var comSenha = Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now);
+            foreach (var c in comSenha) ListaProdutos.Items.Add(CardPromoComSenha(c));
             var grupos = lista
                 .GroupBy(p => _promoVitrine[p.Id].Nome)
                 .OrderByDescending(g => g.Any(p => _promoVitrine[p.Id].AtivaAgora))
                 .ThenBy(g => g.Key);
-            var visiveis = 0;
+            var visiveis = comSenha.Count;
             foreach (var g in grupos)
             {
                 var ativos = g.Where(p => _promoVitrine[p.Id].AtivaAgora).ToList();
@@ -1449,6 +1466,52 @@ public partial class Venda : UserControl
                 ListaProdutos.Items.Add(_modoLista ? LinhaProduto(p) : CartaoProduto(p));
         }
         TxtSemProduto.Visibility = ListaProdutos.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Card de promoção com código na categoria PROMOÇÃO: chave, nome e uma linha com a
+    /// regra e de quem é o código ("30% de desconto · código do gerente"). É um botão:
+    /// o toque vai para <see cref="TocarPromoComSenha"/>.
+    /// </summary>
+    private Button CardPromoComSenha(Nucleo.Promocoes.PromoComSenha promo)
+    {
+        var b = new Button
+        {
+            Style = (Style)Application.Current.Resources["BotaoBase"],
+            Margin = new Thickness(4, 6, 4, 10), Padding = new Thickness(14, 10, 14, 11),
+            MinHeight = 64, VerticalAlignment = VerticalAlignment.Top,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            BorderThickness = new Thickness(2), Tag = promo.PromoId,
+        };
+        b.SetResourceReference(Control.BackgroundProperty, "VeuElevado");
+        b.SetResourceReference(Control.BorderBrushProperty, "Rosa");
+        var linha = new DockPanel { LastChildFill = true };
+        var chave = new TextBlock
+        {
+            Text = "🔑", FontSize = 22, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0),
+        };
+        DockPanel.SetDock(chave, Dock.Left);
+        linha.Children.Add(chave);
+        var coluna = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        var titulo = new TextBlock
+        {
+            Text = Capitalizar(promo.Nome), FontSize = 17, FontWeight = FontWeights.Bold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        titulo.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
+        coluna.Children.Add(titulo);
+        var regra = new TextBlock
+        {
+            Text = PortaoPromocao.LinhaDoCard(promo.Regra, promo.Nivel), FontSize = 13,
+            Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        regra.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
+        coluna.Children.Add(regra);
+        linha.Children.Add(coluna);
+        b.Content = linha;
+        AutomationProperties.SetName(b, Capitalizar(promo.Nome));
+        b.Click += (_, _) => TocarPromoComSenha(promo.PromoId);
+        return b;
     }
 
     /// <summary>
@@ -1824,12 +1887,16 @@ public partial class Venda : UserControl
 
     private Nucleo.Promocoes.Avaliacao? _avaliacao;
 
+    /// <summary>A comanda como o motor a vê: quantidade já sem as unidades da cortesia.</summary>
+    private List<Nucleo.Promocoes.ItemCarrinho> CarrinhoDoMotor()
+        => _comanda.Select(i => new Nucleo.Promocoes.ItemCarrinho(
+            i.Produto.Id, i.Produto.Categoria, i.Produto.Preco.Centavos,
+            Math.Max(0, i.Qtd.Milesimos - CoberturaDe(i) * 1000L))).ToList();
+
     /// <summary>Roda o motor de promoções sobre a comanda (cortesia já fora) e escreve nas linhas.</summary>
     private Nucleo.Promocoes.Avaliacao AvaliarComanda(DateTime agora)
     {
-        var carrinho = _comanda.Select(i => new Nucleo.Promocoes.ItemCarrinho(
-            i.Produto.Id, i.Produto.Categoria, i.Produto.Preco.Centavos,
-            Math.Max(0, i.Qtd.Milesimos - CoberturaDe(i) * 1000L))).ToList();
+        var carrinho = CarrinhoDoMotor();
         var av = Nucleo.Promocoes.AvaliarCarrinho(_promos, carrinho, agora, _autorizacao, _combos.Keys.ToHashSet());
         for (var k = 0; k < _comanda.Count; k++)
         {
@@ -1912,12 +1979,6 @@ public partial class Venda : UserControl
     }
 
     /// <summary>
-    /// Pergunta o código do autenticador (gerente ou dono) para cada promoção que o
-    /// motor devolveu em Pendentes. A decisão mora em PortaoPromocao (núcleo,
-    /// testado contra o FakeTotp); aqui só auditoria, aviso de uma linha e repintura.
-    /// Nunca lança: é chamado de um BeginInvoke sem ninguém para pegar exceção.
-    /// </summary>
-    /// <summary>
     /// O botão da promoção com senha: aparece só quando ela valeria para o que está na
     /// comanda, e some assim que for respondida (aplicada ou recusada) ou quando a
     /// comanda deixa de alcançá-la. Quem decide o texto é <see cref="PortaoPromocao"/>.
@@ -1935,10 +1996,39 @@ public partial class Venda : UserControl
     {
         if (_perguntandoPromo) return;
         _perguntandoPromo = true;
-        _ = PerguntarPromocoesAsync();
+        _ = PerguntarPromocoesAsync(_avaliacao?.Pendentes ?? Array.Empty<Nucleo.Promocoes.PromoPendente>());
     }
 
-    private async Task PerguntarPromocoesAsync()
+    /// <summary>
+    /// TOQUE NO CARD da promoção com código, na categoria PROMOÇÃO (13/09/2026, Savassi:
+    /// "PROMOÇÃO FUNCIONÁRIO ATIVA E NÃO APARECE NO PDV").
+    ///
+    /// Quem decide é PortaoPromocao.Tocar (núcleo, testado). Comanda vazia, já aplicada,
+    /// outra promoção maior ou item fora da promoção: aviso de uma linha e nenhuma janela.
+    /// Senão, pede o código pelo MESMO caminho do botão ao lado do total
+    /// (PerguntarPromocoesAsync: portão, auditoria, aviso e repintura).
+    /// </summary>
+    private void TocarPromoComSenha(string promoId)
+    {
+        if (_perguntandoPromo) return;
+        var decisao = PortaoPromocao.Tocar(promoId, _promos, CarrinhoDoMotor(), DateTime.Now, _autorizacao,
+            _combos.Keys.ToHashSet());
+        if (decisao.Acao != PortaoPromocao.Toque.Perguntar || decisao.Pendente is null)
+        {
+            AvisoLeve(PortaoPromocao.AvisoDoToque(decisao.Acao));
+            return;
+        }
+        _perguntandoPromo = true;
+        _ = PerguntarPromocoesAsync(new[] { decisao.Pendente });
+    }
+
+    /// <summary>
+    /// Pergunta o código do autenticador (gerente ou dono) para as promoções pendentes
+    /// recebidas (o botão passa as do motor; o card passa só a dele). A decisão mora em
+    /// PortaoPromocao (núcleo, testado contra o FakeTotp); aqui só auditoria, aviso de
+    /// uma linha e repintura. Nunca lança: ninguém espera esta Task para pegar exceção.
+    /// </summary>
+    private async Task PerguntarPromocoesAsync(IReadOnlyList<Nucleo.Promocoes.PromoPendente> pendentes)
     {
         // só repinta se alguma promoção foi respondida: sem janela (tela ainda não
         // ancorada) nada é perguntado, e repintar aqui viraria laço pelo BeginInvoke
@@ -1946,15 +2036,20 @@ public partial class Venda : UserControl
         try
         {
             var dono = Window.GetWindow(this);
-            var pendentes = _avaliacao?.Pendentes ?? Array.Empty<Nucleo.Promocoes.PromoPendente>();
             if (dono is null || pendentes.Count == 0) return;
             PortaoPromocao.Comanda comanda;
             using (var cxa = Banco.Abrir())
                 comanda = new PortaoPromocao.Comanda(_comandaId, Autorizacao.NomeDoTerminal(cxa),
                     cxa.ExecuteScalar<string?>("SELECT loja_nome FROM terminal LIMIT 1"), _operador.Nome);
             IAutorizacaoRemota? remota;
-            try { remota = Servicos.Autorizador(); } catch { remota = null; }
-            var resultados = await PortaoPromocao.ResolverAsync(pendentes, _autorizacao, comanda, remota, new TelaAutorizacao(dono));
+            ITelaAutorizacao tela;
+            if (_portaoDeTeste is { } deTeste) (remota, tela) = deTeste(dono);
+            else
+            {
+                try { remota = Servicos.Autorizador(); } catch { remota = null; }
+                tela = new TelaAutorizacao(dono);
+            }
+            var resultados = await PortaoPromocao.ResolverAsync(pendentes, _autorizacao, comanda, remota, tela);
             respondidas = resultados.Count;
             var recusadas = new List<string>();
             foreach (var r in resultados)

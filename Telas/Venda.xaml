@@ -443,11 +443,15 @@
                             <Button x:Name="BtnPromoComSenha" Click="AplicarPromoComSenha" Style="{StaticResource BotaoBase}"
                                     MinHeight="46" Margin="0,0,0,10" Visibility="Collapsed"
                                     HorizontalContentAlignment="Center">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🔑" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <!-- DockPanel e nao StackPanel horizontal (13/09): o StackPanel da
+                                     largura infinita ao texto, e o fim do nome era cortado seco na
+                                     borda em 1024. Aqui o texto ganha o que sobra e as reticencias
+                                     funcionam. -->
+                                <DockPanel LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Left" Text="🔑" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                     <TextBlock x:Name="TxtPromoComSenha" FontSize="14" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis"/>
-                                </StackPanel>
+                                </DockPanel>
                             </Button>
 
                             <!-- MODO DE HOMOLOGAÇÃO: o roteiro do TEF manda cobrar valores exatos
