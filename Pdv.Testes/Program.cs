@@ -1686,6 +1686,14 @@ Console.WriteLine();
 Console.WriteLine("--- CETICO: fechamento (forma sem venda, mesma maquininha, fechar duas vezes) ---");
 TestesCeticoFechamento.Rodar((cond, nome) => Check("cetico-fech: " + nome, cond));
 
+// -- 13/09/2026: resumo do fechamento partido em TEF e POS -----------------------
+// "relatorio de fechamento de caixa tem como segmentar credito em Credito TEF, e
+// Credito POS. Caso pos Seja 0, mostra 0.00. o mesmo com debito". A montagem das
+// linhas saiu das duas telas para Pdv.Nucleo/ResumoFechamento.
+Console.WriteLine();
+Console.WriteLine("--- Resumo do fechamento: Crédito TEF e POS, Débito TEF e POS, sempre ---");
+TestesResumoFechamento.Rodar((cond, nome) => Check("resumo-fech: " + nome, cond));
+
 // -- 05/09/2026: COMBO com sub-escolhas no caixa --------------------------------
 // "COMBO 10 DONUTS" vendia como uma linha sem conteudo e o estoque baixava "10 de
 // um sabor qualquer". Parser da descida, fonte servidor ∪ local, estado do dialogo

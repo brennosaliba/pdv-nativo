@@ -170,22 +170,10 @@ public partial class AberturaCaixa : UserControl
 
         void Concluir(List<LinhaFechamento> linhas, Sessao sessao, string? justificativa)
         {
-            var texto = string.Join("\n", linhas.Select(l =>
-            {
-                var dif = l.Situacao switch
-                {
-                    "confere" => "confere",
-                    "sobra" => "SOBRA " + l.Diferenca.Abs.Formatado(),
-                    "sem_conferencia" => "sem conferência",
-                    _ => "FALTA " + l.Diferenca.Abs.Formatado(),
-                };
-                // "contou" era mentira na linha do cartão: ali quem informou foi a
-                // maquininha. A palavra tem que dizer de onde o número veio.
-                var origem = l.Contada ? "contou " : "máquina";
-                // "esperado", não "sistema": é o valor com que a contagem tem que
-                // bater, e é assim que a divergência da abertura chama a mesma coisa.
-                return $"{FormaBr(l.Forma),-9} {origem} {l.Declarado.Formatado(),11}  esperado {l.Apurado.Formatado(),11}  {dif}";
-            }));
+            // As linhas saem do Núcleo (ResumoFechamento), a MESMA montagem do fechamento
+            // normal: crédito e débito partidos em TEF e POS, com R$ 0,00 na parte sem venda.
+            // O Fechar daqui roda com o TEF dado como disponível (o padrão), e o resumo também.
+            var texto = ResumoFechamento.Texto(linhas);
             // Venda de teste fica fora dos totais — mas aparece rotulada, aqui também.
             if (Caixa.ResumoDeTeste(cx, sessao) is string teste) texto += "\n\n" + teste;
             Dialogo.Relatorio(dono, $"Caixa de {DataBr(sessao.BusinessDate)} fechado", texto,

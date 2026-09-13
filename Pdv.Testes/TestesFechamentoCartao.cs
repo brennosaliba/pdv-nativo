@@ -232,7 +232,13 @@ public static class TestesFechamentoCartao
             "o fechamento do caixa esquecido usa o MESMO roteiro (nao pergunta cartao do TEF)");
 
         var resultado = Trecho(venda, "private static void MostrarResultado", "private static string Rotulo");
-        checar(resultado.Contains("\"sem_conferencia\" => \"sem conferência\""),
+        // 13/09/2026: a montagem das linhas saiu da tela para o Nucleo (ResumoFechamento).
+        // A regra continua valendo, agora provada pelo comportamento e nao pelo fonte.
+        checar(resultado.Contains("ResumoFechamento.Texto(linhas, tefDisponivel)"),
+            "o relatorio sai da montagem do Nucleo, a mesma do caixa esquecido");
+        var semConf = ResumoFechamento.Texto(new[]
+            { new LinhaFechamento("pix", Dinheiro.DeReais(10), Dinheiro.DeReais(10), false, default, false) });
+        checar(semConf.Contains("sem conferência") && !semConf.Contains("FALTA"),
             "o relatorio mostra \"sem conferência\", nunca FALTA de R$ 0,00");
         checar(resultado.Contains("l.DiferencaConferida.Abs.Centavos"),
             "e o total da tela usa a MESMA conta do Nucleo: so o que foi conferido");

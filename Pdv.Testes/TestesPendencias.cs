@@ -258,12 +258,13 @@ public static class TestesPendencias
             checar(Dialogo.Encaixar("a\n\nb", Colunas) == "a\n\nb",
                 "linha em branco (separador de parágrafo) sobrevive à quebra");
 
-            // A linha mais larga do FECHAMENTO tem 76 caracteres e a janela antiga
+            // A linha mais larga do FECHAMENTO tem 78 caracteres e a janela antiga
             // dava 69: o relatório de fechamento também vinha cortando valor em
             // silêncio. Na janela nova ela cabe — e sai intacta, com o padding das
-            // colunas preservado.
-            var maiorDoFechamento =
-                $"{"dinheiro",-9} {"contou",-7} {"R$ 102.626,50",11}  esperado {"R$ 205.253,00",11}  FALTA R$ 102.626,50";
+            // colunas preservado. 13/09/2026: o rótulo cresceu para 11 colunas
+            // ("Crédito POS"), e a linha é a que o Núcleo monta de verdade.
+            var maiorDoFechamento = new LinhaDoResumo("Crédito POS", "contou", Dinheiro.DeReais(102_626.50m),
+                Dinheiro.DeReais(205_253m), "falta", Dinheiro.DeReais(-102_626.50m), false).Texto;
             checar(maiorDoFechamento.Length <= Colunas,
                 $"a linha mais larga do fechamento cabe ({maiorDoFechamento.Length} de {Colunas} colunas)");
             checar(Dialogo.Encaixar(maiorDoFechamento, Colunas) == maiorDoFechamento,

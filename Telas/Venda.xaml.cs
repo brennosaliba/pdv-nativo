@@ -3618,7 +3618,8 @@ public partial class Venda : UserControl
             if (TefEmAndamento(dono)) return;
             if (doTef.Count > 0)
             {
-                var corpo = string.Join("\n", doTef.Select(p => $"{Rotulo(p.Forma)} {p.PeloTef.Formatado()}"))
+                // "Crédito TEF", a mesma palavra do resumo que sai no fim do fechamento.
+                var corpo = string.Join("\n", doTef.Select(p => $"{ResumoFechamento.RotuloTef(p.Forma)} {p.PeloTef.Formatado()}"))
                     + "\n\nEsses valores vêm da maquininha. Você conta só o dinheiro."
                     + (tefDisponivel ? "" : "\n\n" + MsgTefSemResposta);
                 if (!Dialogo.Confirmar(dono, "Cartão da maquininha", corpo, "Contar o dinheiro", "Voltar"))
@@ -3674,7 +3675,7 @@ public partial class Venda : UserControl
                 var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
                 var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, null, tefDisponivel, fica);
                 var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
-                MostrarResultado(dono, linhasFech, null, divergencias, resumoTeste, papel);
+                MostrarResultado(dono, linhasFech, null, divergencias, resumoTeste, papel, tefDisponivel);
                 FechouCaixa?.Invoke();
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
@@ -3690,7 +3691,7 @@ public partial class Venda : UserControl
                     var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
                     var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just, tefDisponivel, fica);
                     var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
-                    MostrarResultado(dono, linhasFech, just, divergencias, resumoTeste, papel);
+                    MostrarResultado(dono, linhasFech, just, divergencias, resumoTeste, papel, tefDisponivel);
                     FechouCaixa?.Invoke();
                 }
                 catch (Exception e2)
@@ -3775,26 +3776,13 @@ public partial class Venda : UserControl
     }
 
     private static void MostrarResultado(Window dono, List<LinhaFechamento> linhas, string? justificativa,
-        List<DivergenciaTef> divergencias, string? resumoTeste = null, string? retirada = null)
+        List<DivergenciaTef> divergencias, string? resumoTeste = null, string? retirada = null,
+        bool tefDisponivel = true)
     {
-        var texto = string.Join("\n", linhas.Select(l =>
-        {
-            var dif = l.Situacao switch
-            {
-                "confere" => "confere",
-                "sobra" => "SOBRA " + l.Diferenca.Abs.Formatado(),
-                // linha que ninguém pôde conferir NÃO pode sair como falta de R$ 0,00:
-                // isso é o desvio inventado voltando pela porta do relatório
-                "sem_conferencia" => "sem conferência",
-                _ => "FALTA " + l.Diferenca.Abs.Formatado(),
-            };
-            // "TEF" não diz nada a quem está fechando a gaveta: o que importa é se o
-            // valor foi contado à mão ou veio da maquininha.
-            var origem = l.Contada ? "contou" : "máquina";
-            // "esperado", e não "sistema", é a mesma palavra que a abertura usa na
-            // conferência do fundo — é o valor com que a contagem tem que bater.
-            return $"{Rotulo(l.Forma),-9} {origem,-7} {l.Declarado.Formatado(),11}  esperado {l.Apurado.Formatado(),11}  {dif}";
-        }));
+        // As linhas saem do Núcleo (ResumoFechamento), a MESMA montagem do caixa esquecido.
+        // 13/09/2026, pedido do dono: crédito e débito sempre partidos em "Crédito TEF" e
+        // "Crédito POS" (e o mesmo no débito), com R$ 0,00 quando uma parte não teve venda.
+        var texto = ResumoFechamento.Texto(linhas, tefDisponivel);
 
         // O desvio é a soma dos módulos. O líquido esconderia falta num lugar
         // compensada por sobra em outro, que é justamente o que se quer enxergar.
@@ -3804,7 +3792,8 @@ public partial class Venda : UserControl
         var corpo = texto + $"\n\nDiferença total: {desvio.Formatado()}";
 
         // Fechou com forma sem conferência: dizer isso é o oposto de fabricar desvio.
-        var semConferencia = linhas.Where(l => !l.Conferida).Select(l => Rotulo(l.Forma)).ToList();
+        // Nomeia a PARTE que ficou sem conferência ("Crédito TEF"), não a forma inteira.
+        var semConferencia = ResumoFechamento.SemConferencia(linhas, tefDisponivel);
         if (semConferencia.Count > 0)
             corpo += $"\n\n{string.Join(", ", semConferencia)}: sem conferência.\n" +
                      "O valor é o que o sistema registrou, ninguém comparou com a maquininha.";
@@ -3824,7 +3813,7 @@ public partial class Venda : UserControl
 
         if (divergencias.Count > 0)
             corpo += "\n\nMaquininha x caixa:\n" + string.Join("\n", divergencias.Select(d =>
-                $"{Rotulo(d.Forma),-9} máquina {d.NoTef.Formatado(),11}  caixa {d.NaVenda.Formatado(),11}" +
+                $"{ResumoFechamento.RotuloTef(d.Forma),-ResumoFechamento.LarguraRotulo} máquina {d.NoTef.Formatado(),11}  caixa {d.NaVenda.Formatado(),11}" +
                 $"  diferença {d.Diferenca.Abs.Formatado()}"))
                 + "\n\nA maquininha aprovou uma cobrança que não virou venda aqui (queda de\n" +
                   "energia, programa fechado ou tempo esgotado). Confira o extrato da\n" +
