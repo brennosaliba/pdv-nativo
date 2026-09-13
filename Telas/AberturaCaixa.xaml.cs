@@ -171,7 +171,7 @@ public partial class AberturaCaixa : UserControl
         void Concluir(List<LinhaFechamento> linhas, Sessao sessao, string? justificativa)
         {
             // As linhas saem do Núcleo (ResumoFechamento), a MESMA montagem do fechamento
-            // normal: crédito e débito partidos em TEF e POS, com R$ 0,00 na parte sem venda.
+            // normal: crédito, débito e PIX partidos em TEF e POS, com R$ 0,00 na parte sem venda.
             // O Fechar daqui roda com o TEF dado como disponível (o padrão), e o resumo também.
             var texto = ResumoFechamento.Texto(linhas);
             // Venda de teste fica fora dos totais — mas aparece rotulada, aqui também.

@@ -3780,8 +3780,8 @@ public partial class Venda : UserControl
         bool tefDisponivel = true)
     {
         // As linhas saem do Núcleo (ResumoFechamento), a MESMA montagem do caixa esquecido.
-        // 13/09/2026, pedido do dono: crédito e débito sempre partidos em "Crédito TEF" e
-        // "Crédito POS" (e o mesmo no débito), com R$ 0,00 quando uma parte não teve venda.
+        // 13/09/2026, pedido do dono: crédito, débito e PIX sempre partidos em TEF e POS
+        // ("Crédito TEF", "Crédito POS"...), com R$ 0,00 quando uma parte não teve venda.
         var texto = ResumoFechamento.Texto(linhas, tefDisponivel);
 
         // O desvio é a soma dos módulos. O líquido esconderia falta num lugar
@@ -3831,10 +3831,13 @@ public partial class Venda : UserControl
     public static string PerguntaDoFechamento(ConferenciaForma p)
     {
         if (p.Forma == "dinheiro") return "Quanto você contou em dinheiro? Conte a gaveta inteira, com o fundo de troco.";
+        // 13/09/2026: o que se pergunta aqui é a linha "PIX POS" do resumo, e a parte do
+        // TEF é a "PIX TEF" que o diálogo da maquininha acabou de mostrar. Mesma pergunta,
+        // com a palavra do relatório para o operador ligar uma coisa à outra.
         if (p.Forma == "pix")
             return p.PeloTef.Centavos == 0
-                ? "Quanto deu em PIX fora do caixa? Some o PIX da maquininha avulsa e o PIX do QR do banco."
-                : "Quanto deu em PIX fora do caixa (maquininha avulsa e QR do banco)? O PIX da maquininha do caixa já entrou sozinho.";
+                ? PerguntaPixPos
+                : "Quanto deu em PIX POS, fora do caixa (maquininha avulsa e QR do banco)? O PIX TEF já entrou sozinho.";
         return p.PeloTef.Centavos == 0
             ? $"Quanto deu em {Rotulo(p.Forma)} no fechamento da maquininha?"
             // parte do turno passou pelo TEF e parte não: só a de fora se conta
@@ -3867,7 +3870,7 @@ public partial class Venda : UserControl
             {
                 var forma = FormasDaMaquininha[i];
                 var texto = forma == "pix"
-                    ? "Quanto deu em PIX fora do caixa? Some o PIX da maquininha avulsa e o PIX do QR do banco. Zero se não teve."
+                    ? PerguntaPixPos + " Zero se não teve."
                     : $"Quanto deu em {rotulo(forma)} no fechamento da maquininha avulsa? Zero se não teve.";
                 var r = PedirValor.MostrarComVoltar(dono, titulo, texto);
                 if (r.Voltou) { if (i == 0) { voltouAoInicio = true; break; } i--; continue; }
@@ -3880,6 +3883,13 @@ public partial class Venda : UserControl
             foreach (var f in FormasDaMaquininha) contagem.Remove(f);
         }
     }
+
+    /// <summary>
+    /// A pergunta do PIX quando nada passou pelo TEF: tudo o que houve de PIX é a linha
+    /// "PIX POS" do resumo. Uma frase só para o fechamento e para a maquininha avulsa.
+    /// </summary>
+    public const string PerguntaPixPos =
+        "Quanto deu em PIX POS, fora do caixa? Some o PIX da maquininha avulsa e o PIX do QR do banco.";
 
     private static string Rotulo(string forma) => forma switch
     {

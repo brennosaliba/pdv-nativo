@@ -1,3 +1,8 @@
+using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Threading;
 using Dapper;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
@@ -14,6 +19,11 @@ namespace Pdv.Testes;
 /// caixa esquecido) usam ela. Aqui se prova a partição: a parte TEF nunca tem sobra nem
 /// falta, a diferença inteira é da parte POS, e crédito e débito saem sempre em duas
 /// linhas, com R$ 0,00 quando uma parte não teve venda.
+///
+/// Segunda resposta do dono no mesmo dia: "sim pix separado TEF POS". O PIX passa a sair
+/// sempre como "PIX TEF" e "PIX POS", com a mesma regra. Com duas linhas fixas a mais, a
+/// janela do relatório ganhou teto de altura e rolagem (Dialogo.Relatorio), provada aqui
+/// na conta e numa janela de verdade a 1024x768.
 /// </summary>
 public static class TestesResumoFechamento
 {
@@ -27,9 +37,12 @@ public static class TestesResumoFechamento
         PosComFalta(checar);
         TefSemConferencia(checar);
         NinguemContou(checar);
+        PixTefEPos(checar);
         OrdemELargura(checar);
         NoBancoDeVerdade(checar);
         Telas(checar);
+        PerguntasDoPix(checar);
+        AlturaDoRelatorio(checar);
     }
 
     private static Dinheiro R(decimal v) => Dinheiro.DeReais(v);
@@ -198,17 +211,102 @@ public static class TestesResumoFechamento
         checar(Parte(semTef, "Crédito TEF") is { SemConferencia: true } && Parte(semTef, "Crédito POS") is { SemConferencia: true },
             "TEF mudo e ninguém contou: as duas partes ficam sem conferência");
 
-        // PIX e Refeição não se partem: uma linha só, com a regra de sempre.
+        // 13/09/2026: o PIX também se parte ("sim pix separado TEF POS"). Refeição não:
+        // segue numa linha só, com a regra de sempre.
         var pix = new List<LinhaFechamento>
         {
             new("pix", R(40), R(45), true, R(30), false),
             new("voucher", R(12), R(12), true, Dinheiro.Zero, true),
         };
         var rp = ResumoFechamento.Linhas(pix, false);
-        checar(Parte(rp, "PIX") is { Situacao: "falta", SemConferencia: true, Origem: "contou" }
-               && Parte(rp, "Refeição") is { Situacao: "confere" }
-               && !rp.Any(x => x.Rotulo.StartsWith("PIX ", StringComparison.Ordinal)),
-            "PIX e Refeição seguem numa linha só (sem \"PIX TEF\")");
+        checar(Parte(rp, "PIX TEF") is { Situacao: "sem_conferencia", SemConferencia: true, Origem: "máquina" } pt && pt.Declarado == R(30)
+               && Parte(rp, "PIX POS") is { Situacao: "falta", SemConferencia: false, Origem: "contou" } pp
+               && pp.Declarado == R(10) && pp.Esperado == R(15) && pp.Fim == "FALTA " + R(5).Formatado()
+               && Parte(rp, "PIX") is null,
+            "PIX com maquininha muda e falta fora do caixa: PIX TEF sem conferência e PIX POS FALTA R$ 5,00, cada um no seu lugar");
+        checar(Parte(rp, "Refeição") is { Situacao: "confere" }
+               && !rp.Any(x => x.Rotulo.StartsWith("Refeição ", StringComparison.Ordinal)),
+            "Refeição segue numa linha só (sem \"Refeição TEF\")");
+    }
+
+    // ── PIX partido em TEF e POS ("sim pix separado TEF POS") ──────────────
+    private static void PixTefEPos(Action<bool, string> checar)
+    {
+        // R$ 30,00 na maquininha do caixa e R$ 45,00 fora dele (avulsa + QR do banco),
+        // e o operador contou os R$ 45,00 de fora.
+        var linhas = new List<LinhaFechamento>
+        {
+            new("dinheiro", R(10), R(10)),
+            new("pix", R(75), R(75), true, R(30), true),
+        };
+        var r = ResumoFechamento.Linhas(linhas);
+        var tef = Parte(r, "PIX TEF");
+        var pos = Parte(r, "PIX POS");
+        checar(tef is { Origem: "máquina", Situacao: "confere", SemConferencia: false }
+               && tef.Declarado == R(30) && tef.Esperado == R(30) && tef.Diferenca == Dinheiro.Zero,
+            $"PIX TEF: apurado = declarado = a parte da maquininha do caixa, R$ 30,00, sem diferença (veio {tef?.Texto})");
+        checar(pos is { Origem: "contou", Situacao: "confere" } && pos.Declarado == R(45) && pos.Esperado == R(45),
+            $"PIX POS: apurado e declarado sem a parte do TEF, R$ 45,00 (veio {pos?.Texto})");
+        checar(Parte(r, "PIX") is null
+               && !ResumoFechamento.Texto(linhas).Split('\n').Any(x => x.StartsWith("PIX ", StringComparison.Ordinal)
+                                                                    && !x.StartsWith("PIX TEF ", StringComparison.Ordinal)
+                                                                    && !x.StartsWith("PIX POS ", StringComparison.Ordinal)),
+            "não sobra linha de \"PIX\" inteiro junto das duas partes");
+
+        // Sobra (QR do banco que o sistema não viu) e falta: só na parte POS.
+        var sobra = ResumoFechamento.Linhas(new List<LinhaFechamento> { new("pix", R(80), R(75), true, R(30), true) });
+        checar(Parte(sobra, "PIX TEF") is { Situacao: "confere" } st && st.Diferenca == Dinheiro.Zero
+               && Parte(sobra, "PIX POS") is { Situacao: "sobra" } sp && sp.Diferenca == R(5) && sp.Fim == "SOBRA " + R(5).Formatado(),
+            "sobra no PIX cai no PIX POS, nunca no PIX TEF");
+
+        // Só pela maquininha do caixa: PIX POS aparece zerado.
+        var soTef = ResumoFechamento.Linhas(new List<LinhaFechamento> { new("pix", R(30), R(30), false, R(30), true) });
+        checar(Parte(soTef, "PIX TEF") is { Situacao: "confere" } a && a.Declarado == R(30)
+               && Parte(soTef, "PIX POS") is { Situacao: "confere", SemConferencia: false } b
+               && b.Declarado == Dinheiro.Zero && b.Esperado == Dinheiro.Zero,
+            "só PIX na maquininha do caixa: PIX POS sai com R$ 0,00 e confere");
+
+        // Turno sem PIX nenhum: as duas linhas aparecem com R$ 0,00.
+        var semPix = new List<LinhaFechamento> { new("dinheiro", R(10), R(10)) };
+        var texto = ResumoFechamento.Texto(semPix);
+        var lt = Linha(texto, "PIX TEF");
+        var lp = Linha(texto, "PIX POS");
+        checar(lt.Contains(Dinheiro.Zero.Formatado()) && lt.EndsWith("confere")
+               && lp.Contains(Dinheiro.Zero.Formatado()) && lp.EndsWith("confere"),
+            $"turno sem PIX: \"PIX TEF ... R$ 0,00 ... confere\" e \"PIX POS ... R$ 0,00 ... confere\" (veio \"{lt}\" / \"{lp}\")");
+
+        // Fechamento antigo, linha sem a parte do TEF: nada de separação inventada.
+        var antigo = ResumoFechamento.Linhas(new List<LinhaFechamento> { new("pix", R(40), R(45)) });
+        checar(Parte(antigo, "PIX TEF") is { Situacao: "confere" } e && e.Declarado == Dinheiro.Zero
+               && Parte(antigo, "PIX POS") is { Situacao: "falta" } f && f.Declarado == R(40) && f.Esperado == R(45),
+            "linha sem a parte do TEF: PIX TEF R$ 0,00 e a linha inteira, com a falta, no PIX POS (igual ao crédito)");
+
+        // Maquininha muda: a mesma regra do cartão.
+        var mudo = new List<LinhaFechamento> { new("pix", R(75), R(75), true, R(30), false) };
+        var rm = ResumoFechamento.Linhas(mudo, tefDisponivel: false);
+        checar(Parte(rm, "PIX TEF") is { Situacao: "sem_conferencia", SemConferencia: true } g && g.Fim == "sem conferência"
+               && Parte(rm, "PIX POS") is { Situacao: "confere", SemConferencia: false },
+            "maquininha muda: PIX TEF sem conferência e o PIX POS contado confere");
+        checar(ResumoFechamento.SemConferencia(mudo, false).SequenceEqual(new[] { "PIX TEF" })
+               && Parte(ResumoFechamento.Linhas(mudo), "PIX TEF") is { SemConferencia: true },
+            "a tela nomeia \"PIX TEF\" sem conferência, mesmo quando o chamador não passa o TEF (caixa esquecido)");
+        var ninguem = new List<LinhaFechamento> { new("pix", R(75), R(75), false, R(30), false) };
+        checar(Parte(ResumoFechamento.Linhas(ninguem, true), "PIX TEF") is { Situacao: "confere" }
+               && Parte(ResumoFechamento.Linhas(ninguem, true), "PIX POS") is { Situacao: "sem_conferencia" } n && n.Esperado == R(45),
+            "TEF respondeu e ninguém contou o PIX de fora: só o PIX POS fica sem conferência");
+
+        // Totais: a partição não muda a diferença total nem a situação da forma.
+        var misto = new List<LinhaFechamento>
+        {
+            new("dinheiro", R(98), R(100)),
+            new("credito", R(3122.46m), R(3127.46m), true, R(3107.46m), true),
+            new("pix", R(72), R(75), true, R(30), true),
+            new("voucher", R(12), R(12)),
+        };
+        var totalNucleo = misto.Sum(l => l.DiferencaConferida.Abs.Centavos);
+        var totalResumo = ResumoFechamento.Linhas(misto).Sum(x => x.Diferenca.Abs.Centavos);
+        checar(totalNucleo == totalResumo && totalResumo == 1000,
+            $"com PIX partido, a diferença total do resumo continua a do Núcleo (resumo {totalResumo}, núcleo {totalNucleo})");
     }
 
     // ── ordem fixa, largura e texto ─────────────────────────────────────────
@@ -223,14 +321,14 @@ public static class TestesResumoFechamento
             new("dinheiro", R(150), R(150)),
         };
         var rotulos = ResumoFechamento.Linhas(embaralhado).Select(x => x.Rotulo).ToList();
-        var esperada = new[] { "Dinheiro", "Crédito TEF", "Crédito POS", "Débito TEF", "Débito POS", "PIX", "Refeição", "outros" };
+        var esperada = new[] { "Dinheiro", "Crédito TEF", "Crédito POS", "Débito TEF", "Débito POS", "PIX TEF", "PIX POS", "Refeição", "outros" };
         checar(rotulos.SequenceEqual(esperada),
             $"a ordem é fixa, não a do banco (veio: {string.Join(", ", rotulos)})");
 
         var vazio = ResumoFechamento.Linhas(new List<LinhaFechamento>());
-        checar(vazio.Select(x => x.Rotulo).SequenceEqual(new[] { "Crédito TEF", "Crédito POS", "Débito TEF", "Débito POS" })
+        checar(vazio.Select(x => x.Rotulo).SequenceEqual(new[] { "Crédito TEF", "Crédito POS", "Débito TEF", "Débito POS", "PIX TEF", "PIX POS" })
                && vazio.All(x => x.Declarado == Dinheiro.Zero && x.Situacao == "confere"),
-            "turno sem venda de cartão: as quatro linhas de crédito e débito saem com R$ 0,00");
+            "turno sem cartão nem PIX: as seis linhas de crédito, débito e PIX saem com R$ 0,00");
 
         var texto = ResumoFechamento.Texto(embaralhado);
         var saida = texto.Split('\n');
@@ -242,10 +340,18 @@ public static class TestesResumoFechamento
         var grande = new List<LinhaFechamento>
         {
             new("credito", R(102_626.50m + 99_999.99m), R(205_253m + 99_999.99m), true, R(99_999.99m), false),
+            new("pix", R(102_626.50m + 99_999.99m), R(205_253m + 99_999.99m), true, R(99_999.99m), false),
+            new("outros", R(0), R(102_626.50m), true, Dinheiro.Zero, false),
         };
-        var maior = ResumoFechamento.Texto(grande, false).Split('\n').Max(x => x.Length);
+        var saidaGrande = ResumoFechamento.Texto(grande, false).Split('\n');
+        var maior = saidaGrande.Max(x => x.Length);
         checar(maior <= Colunas,
-            $"a linha mais larga do resumo cabe na tela do relatório ({maior} de {Colunas} colunas)");
+            $"a linha mais larga do resumo, PIX TEF e PIX POS inclusive, cabe na tela do relatório ({maior} de {Colunas} colunas)");
+        // Valor de seis dígitos já passa das 11 colunas do valor e empurra o "esperado" em
+        // qualquer linha; o que se prova é que o PIX sai no MESMO formato do crédito.
+        int Coluna(string rotulo) => Linha(string.Join("\n", saidaGrande), rotulo).IndexOf("esperado", StringComparison.Ordinal);
+        checar(Coluna("PIX TEF") > 0 && Coluna("PIX TEF") == Coluna("Crédito TEF") && Coluna("PIX POS") == Coluna("Crédito POS"),
+            $"e o PIX TEF e o PIX POS saem no mesmo formato do Crédito TEF e POS com o mesmo valor (colunas {Coluna("PIX TEF")}/{Coluna("Crédito TEF")} e {Coluna("PIX POS")}/{Coluna("Crédito POS")})");
     }
 
     // ── pelo Caixa.Fechar de verdade ────────────────────────────────────────
@@ -286,6 +392,20 @@ public static class TestesResumoFechamento
                    && Parte(r2, "Crédito POS") is { Situacao: "falta" } p2 && p2.Diferenca.Abs == R(5),
                 $"no banco, TEF mudo: Crédito TEF sem conferência e Crédito POS FALTA R$ 5,00 (veio:\n{ResumoFechamento.Texto(l2, false)})");
 
+            // PIX: R$ 30,00 pela maquininha do caixa e R$ 45,00 fora dele (avulsa + QR do
+            // banco), e o operador responde "PIX fora do caixa" com R$ 45,00.
+            var s4 = Caixa.Abrir(cx, op, Dinheiro.Zero);
+            Pagar(cx, s4, op, "pix", 3000, "AUT-PIX1");
+            Pagar(cx, s4, op, "pix", 4500, null);
+            var l4 = Caixa.Fechar(cx, s4,
+                new Dictionary<string, Dinheiro> { ["dinheiro"] = Dinheiro.Zero, ["pix"] = R(45) },
+                op, new Dinheiro(200));
+            var r4 = ResumoFechamento.Linhas(l4, true);
+            checar(Parte(r4, "PIX TEF") is { Situacao: "confere" } t4 && t4.Declarado == R(30)
+                   && Parte(r4, "PIX POS") is { Situacao: "confere" } p4 && p4.Declarado == R(45) && p4.Esperado == R(45)
+                   && Parte(r4, "PIX") is null,
+                $"no banco: PIX TEF R$ 30,00 e PIX POS R$ 45,00 (veio:\n{ResumoFechamento.Texto(l4)})");
+
             // Caixa sem TEF: o crédito inteiro é POS e o TEF sai zerado.
             Vendas.GravarConfig(cx, "tef_habilitado", "0");
             var s3 = Caixa.Abrir(cx, op, Dinheiro.Zero);
@@ -316,6 +436,165 @@ public static class TestesResumoFechamento
             "os dois caminhos do fechamento (com e sem justificativa) levam a resposta do TEF ao resumo");
         checar(abertura.Contains("ResumoFechamento.Texto(linhas)") && !abertura.Contains("esperado {"),
             "o fechamento do caixa esquecido usa a MESMA montagem (a cópia do formato saiu)");
+    }
+
+    // ── a pergunta do PIX e o diálogo da maquininha usam as palavras do resumo ──
+    private static void PerguntasDoPix(Action<bool, string> checar)
+    {
+        ConferenciaForma F(long tef) => new("pix", new Dinheiro(7500), new Dinheiro(tef), true);
+        var semTef = Pdv.Telas.Venda.PerguntaDoFechamento(F(0));
+        var comTef = Pdv.Telas.Venda.PerguntaDoFechamento(F(3000));
+        checar(semTef == Pdv.Telas.Venda.PerguntaPixPos && semTef.Contains("PIX POS") && semTef.Contains("fora do caixa")
+               && semTef.Contains("maquininha avulsa") && semTef.Contains("QR do banco") && !semTef.Contains("PIX TEF"),
+            $"sem TEF, a pergunta é a linha PIX POS e continua pedindo avulsa + QR do banco (\"{semTef}\")");
+        checar(comTef.Contains("PIX POS") && comTef.Contains("fora do caixa") && comTef.Contains("maquininha avulsa")
+               && comTef.Contains("QR do banco") && comTef.Contains("PIX TEF já entrou sozinho"),
+            $"com TEF, pergunta o PIX POS e diz que o PIX TEF já entrou (\"{comTef}\")");
+        foreach (var t in new[] { semTef, comTef })
+            checar(t.Length <= 110 && !t.Contains('—') && !t.Contains('–'),
+                $"pergunta do PIX curta e sem travessão ({t.Length} letras)");
+
+        var venda = Fonte(Path.Combine("Telas", "Venda.xaml.cs")) ?? "";
+        var avulsa = Trecho(venda, "internal static bool PerguntarMaquininhaAvulsa(", "private static string Rotulo(");
+        checar(avulsa.Contains("PerguntaPixPos + \" Zero se não teve.\"") && !avulsa.Contains("\"Quanto deu em PIX fora do caixa"),
+            "a pergunta da maquininha avulsa usa a MESMA frase do PIX POS (sem cópia)");
+
+        // "Cartão da maquininha": a lista do que o TEF liquidou sai com o rótulo do resumo.
+        var fechar = Trecho(venda, "private async void FecharCaixa(object sender, RoutedEventArgs e)", "private static void MostrarResultado");
+        checar(fechar.Contains("doTef.Select(p => $\"{ResumoFechamento.RotuloTef(p.Forma)} {p.PeloTef.Formatado()}\")")
+               && ResumoFechamento.RotuloTef("pix") == "PIX TEF" && ResumoFechamento.RotuloTef("credito") == "Crédito TEF"
+               && ResumoFechamento.RotuloTef("voucher") == "Refeição",
+            "o diálogo da maquininha lista \"PIX TEF R$ x\", a mesma palavra do resumo");
+    }
+
+    // ── a janela do relatório não passa da tela ─────────────────────────────
+    private static void AlturaDoRelatorio(Action<bool, string> checar)
+    {
+        // A conta pura.
+        checar(Pdv.Telas.Dialogo.AlturaMaximaRelatorio(768) == 768 - Pdv.Telas.Dialogo.FolgaTelaRelatorio,
+            $"a 768 px (tela da loja) o relatório para em {Pdv.Telas.Dialogo.AlturaMaximaRelatorio(768)} px");
+        checar(Pdv.Telas.Dialogo.AlturaMaximaRelatorio(1080) == 1080 - Pdv.Telas.Dialogo.FolgaTelaRelatorio,
+            "numa tela maior o teto acompanha a tela");
+        checar(Pdv.Telas.Dialogo.AlturaMaximaRelatorio(200) == 200,
+            "tela menor que o mínimo: o teto é a própria tela, nunca maior");
+        checar(Pdv.Telas.Dialogo.AlturaMaximaRelatorio(0) == Pdv.Telas.Dialogo.AlturaMinimaRelatorio
+               && Pdv.Telas.Dialogo.AlturaMaximaRelatorio(double.NaN) == Pdv.Telas.Dialogo.AlturaMinimaRelatorio,
+            "altura que não mediu não vira janela de zero pixel");
+
+        // A barra reservada no padding é a barra que o estilo desenha.
+        var estilos = Fonte("Estilos.xaml") ?? "";
+        var barra = Regex.Match(estilos, @"<Style TargetType=""ScrollBar"">.*?<Setter Property=""Width"" Value=""(\d+)""/>",
+            RegexOptions.Singleline);
+        checar(barra.Success && double.Parse(barra.Groups[1].Value) == Pdv.Telas.Dialogo.BarraRolagem,
+            $"a barra de rolagem do relatório tem a largura do estilo (Estilos.xaml {(barra.Success ? barra.Groups[1].Value : "?")}, Dialogo {Pdv.Telas.Dialogo.BarraRolagem})");
+
+        // A janela de verdade, sobre um caixa de 1024x768.
+        var linhas = new List<LinhaFechamento>
+        {
+            new("dinheiro", R(98), R(100)),
+            new("credito", R(3122.46m), R(3127.46m), true, R(3107.46m), false),
+            new("debito", R(35), R(30), true, Dinheiro.Zero, true),
+            new("pix", R(72), R(75), true, R(30), false),
+            new("voucher", R(12), R(12)),
+        };
+        var corpoGrande = ResumoFechamento.Texto(linhas, false) + "\n\nDiferença total: R$ 15,00"
+            + string.Concat(Enumerable.Range(1, 40).Select(i => $"\n\nParágrafo {i} do relatório, para passar da tela."));
+        var justificativa = "Justificativa: " + string.Join(" ", Enumerable.Repeat("conferi a avulsa duas vezes", 40));
+        var corpoPequeno = ResumoFechamento.Texto(new List<LinhaFechamento> { new("dinheiro", R(10), R(10)) });
+
+        Medida? grande = null, pequeno = null;
+        Exception? erro = null;
+        try
+        {
+            HostWpf.Executar(() =>
+            {
+                var host = new Window
+                {
+                    Width = 1024, Height = 768, WindowStyle = WindowStyle.None, ShowInTaskbar = false,
+                    ShowActivated = false, Left = -20000, Top = -20000, Opacity = 0,
+                };
+                host.Show();
+                try
+                {
+                    QuandoAbrir(host, d => grande = Medir(d));
+                    Pdv.Telas.Dialogo.Relatorio(host, "Caixa fechado", corpoGrande, justificativa);
+                    QuandoAbrir(host, d => pequeno = Medir(d));
+                    Pdv.Telas.Dialogo.Relatorio(host, "Caixa fechado", corpoPequeno);
+                }
+                finally { host.Close(); }
+            });
+        }
+        catch (Exception ex) { erro = ex; }
+        checar(erro is null && grande is not null && pequeno is not null,
+            "relatório: as duas janelas abriram e fecharam pelo botão Fechar (" + (erro?.Message ?? "ok") + ")");
+        if (grande is not { } g || pequeno is not { } p) return;
+
+        checar(g.Altura <= 768 && g.Altura <= g.Teto + 0.5 && g.Teto <= 768,
+            $"relatório comprido a 1024x768: a janela para em {g.Altura:0} px (teto {g.Teto:0}), dentro dos 768 da tela");
+        checar(g.Rolavel > 0 && g.BarraVisivel,
+            $"o texto que não coube rola por dentro ({g.Rolavel:0} px para rolar)");
+        checar(g.FundoDoFechar <= g.Altura + 0.5 && g.FecharForaDaRolagem,
+            $"o botão Fechar fica inteiro à vista, fora da rolagem (fundo dele em {g.FundoDoFechar:0} de {g.Altura:0} px)");
+        checar(g.RodapeNaRolagem,
+            "a justificativa comprida rola junto com o texto, sem empurrar o Fechar");
+        checar(Math.Abs(g.LarguraTexto - Pdv.Telas.Dialogo.LarguraUtilRelatorio) < 1,
+            $"com a barra à vista o texto tem a largura que o Encaixar usou ({g.LarguraTexto:0} de {Pdv.Telas.Dialogo.LarguraUtilRelatorio:0} px): nenhuma coluna quebra");
+        checar(p.Rolavel == 0 && p.Altura < p.Teto - 100 && p.FundoDoFechar <= p.Altura + 0.5,
+            $"relatório curto continua do tamanho do texto, sem rolagem ({p.Altura:0} px)");
+    }
+
+    private sealed record Medida(double Altura, double Teto, double Rolavel, bool BarraVisivel,
+        double FundoDoFechar, bool FecharForaDaRolagem, bool RodapeNaRolagem, double LarguraTexto);
+
+    /// <summary>Mede o relatório aberto e fecha pelo botão Fechar (o mesmo toque do operador).</summary>
+    private static Medida Medir(Window d)
+    {
+        d.UpdateLayout();
+        var rolagem = Descendentes<ScrollViewer>(d).First();
+        var fechar = Descendentes<Button>(d).First(b => b.Content as string == "Fechar");
+        var texto = Descendentes<TextBlock>(rolagem).First(t => t.FontFamily.Source == "Consolas");
+        var fundo = fechar.TransformToAncestor(d).Transform(new Point(0, fechar.ActualHeight)).Y;
+        var m = new Medida(d.ActualHeight, d.MaxHeight, rolagem.ScrollableHeight,
+            rolagem.ComputedVerticalScrollBarVisibility == Visibility.Visible, fundo,
+            !Descendentes<Button>(rolagem).Any(),
+            Descendentes<TextBlock>(rolagem).Any(t => t.Text.StartsWith("Justificativa:", StringComparison.Ordinal)),
+            texto.ActualWidth);
+        fechar.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        return m;
+    }
+
+    /// <summary>
+    /// Espera o próximo diálogo modal abrir sobre o host e age nele (ShowDialog bloqueia quem
+    /// chamou; o laço aninhado dele dispara o timer). Se a ação falhar, o diálogo é fechado
+    /// mesmo assim, para a suíte nunca ficar presa numa janela aberta.
+    /// </summary>
+    private static void QuandoAbrir(Window host, Action<Window> acao)
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        var tentativas = 0;
+        timer.Tick += (_, _) =>
+        {
+            var d = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w != host && w.Owner == host && w.IsVisible);
+            if (d is null)
+            {
+                if (++tentativas > 50) timer.Stop();
+                return;
+            }
+            timer.Stop();
+            try { acao(d); }
+            finally { if (d.IsVisible) d.Close(); }
+        };
+        timer.Start();
+    }
+
+    private static IEnumerable<T> Descendentes<T>(DependencyObject raiz) where T : DependencyObject
+    {
+        foreach (var filho in LogicalTreeHelper.GetChildren(raiz))
+        {
+            if (filho is not DependencyObject d) continue;
+            if (d is T t) yield return t;
+            foreach (var neto in Descendentes<T>(d)) yield return neto;
+        }
     }
 
     // ── util ────────────────────────────────────────────────────────────────

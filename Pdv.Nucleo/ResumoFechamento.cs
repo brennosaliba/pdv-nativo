@@ -6,8 +6,8 @@ namespace Pdv.Nucleo;
 /// <paramref name="Situacao"/> usa as MESMAS palavras de <see cref="LinhaFechamento.Situacao"/>
 /// ("confere", "sobra", "falta", "sem_conferencia"), para a tela e a nuvem não falarem
 /// línguas diferentes. <paramref name="SemConferencia"/> é separado da situação porque
-/// uma linha pode mostrar FALTA e ainda assim ter parte que ninguém conferiu (PIX com a
-/// maquininha muda e a parte avulsa contada a menos).
+/// uma forma que o resumo não parte pode mostrar FALTA e ainda assim ter parte que
+/// ninguém conferiu (maquininha muda e a parte de fora contada a menos).
 /// </summary>
 public sealed record LinhaDoResumo(string Rotulo, string Origem, Dinheiro Declarado, Dinheiro Esperado,
     string Situacao, Dinheiro Diferenca, bool SemConferencia)
@@ -46,7 +46,15 @@ public sealed record LinhaDoResumo(string Rotulo, string Origem, Dinheiro Declar
 ///    PeloTef + o que o operador contou, a diferença INTEIRA é desta parte, e a
 ///    "Diferença total" da tela continua batendo com a do Núcleo sem mudar nada.
 ///
-/// Dinheiro, PIX e Refeição seguem numa linha só.
+/// 13/09/2026, segunda resposta do dono: "sim pix separado TEF POS". O PIX segue a MESMA
+/// regra: "PIX TEF" é o que a maquininha do caixa liquidou e "PIX POS" é o resto, a
+/// maquininha avulsa mais o QR do banco (o que a tela pergunta como "PIX fora do caixa").
+///
+/// Fechamento antigo sem a parte do TEF na linha (PeloTef zero) não ganha separação
+/// inventada: a parte TEF sai R$ 0,00 e a POS leva a linha inteira, igual a crédito e
+/// débito. Totais, sobra, falta e diferença total não mudam com a partição.
+///
+/// Dinheiro e Refeição seguem numa linha só.
 /// </summary>
 public static class ResumoFechamento
 {
@@ -54,7 +62,7 @@ public static class ResumoFechamento
     public const int LarguraRotulo = 11;
 
     /// <summary>As formas que o resumo parte em TEF e POS, sempre, com ou sem venda.</summary>
-    public static readonly string[] FormasPartidas = { "credito", "debito" };
+    public static readonly string[] FormasPartidas = { "credito", "debito", "pix" };
 
     private static readonly string[] Ordem = { "dinheiro", "credito", "debito", "pix", "voucher" };
 
@@ -70,15 +78,15 @@ public static class ResumoFechamento
     };
 
     /// <summary>
-    /// O rótulo da parte que a maquininha do caixa liquidou: "Crédito TEF", "Débito TEF".
-    /// Forma que o resumo não parte (PIX, Refeição) fica com o rótulo de sempre.
+    /// O rótulo da parte que a maquininha do caixa liquidou: "Crédito TEF", "Débito TEF",
+    /// "PIX TEF". Forma que o resumo não parte (Refeição) fica com o rótulo de sempre.
     /// </summary>
     public static string RotuloTef(string forma)
         => FormasPartidas.Contains(forma) ? Rotulo(forma) + " TEF" : Rotulo(forma);
 
     /// <summary>
     /// As linhas do resumo, em ordem fixa: Dinheiro, Crédito TEF, Crédito POS, Débito TEF,
-    /// Débito POS, PIX, Refeição, e depois qualquer forma desconhecida.
+    /// Débito POS, PIX TEF, PIX POS, Refeição, e depois qualquer forma desconhecida.
     ///
     /// <paramref name="tefDisponivel"/> é a maquininha respondendo na hora de fechar. Ele
     /// só decide o caso que a linha sozinha não diz: forma que ninguém contou, com parte
@@ -117,7 +125,7 @@ public static class ResumoFechamento
         => string.Join("\n", Linhas(linhas, tefDisponivel).Select(r => r.Texto));
 
     /// <summary>
-    /// Os rótulos que ficaram sem conferência ("Crédito TEF", "PIX"...), na ordem do
+    /// Os rótulos que ficaram sem conferência ("Crédito TEF", "PIX POS"...), na ordem do
     /// resumo. É a lista que a tela nomeia embaixo da tabela.
     /// </summary>
     public static List<string> SemConferencia(IEnumerable<LinhaFechamento> linhas, bool tefDisponivel = true)

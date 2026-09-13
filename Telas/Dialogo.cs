@@ -210,40 +210,108 @@ public static class Dialogo
     private const double PadCorpo = 16;
     private const double CorpoFontSize = 14;
 
+    // ── O RELATÓRIO TAMBÉM NÃO PODE PASSAR DA TELA ────────────────────────────
+    // A janela crescia com o texto (SizeToContent sem teto). Em 13/09/2026 o fechamento
+    // ganhou PIX TEF e PIX POS; com sem conferência, venda de teste, retirada e
+    // "Maquininha x caixa" juntos, o relatório passava dos 768 px da tela da loja e o
+    // botão Fechar ia para fora dela. Agora a altura para no espaço da tela, o texto
+    // rola por dentro e o Fechar fica sempre à vista, fora da rolagem.
+    //
+    // A barra de rolagem mora no padding direito da caixa escura: com ela à vista o
+    // texto tem EXATAMENTE a largura útil que o Encaixar usou para quebrar as linhas;
+    // sem ela, sobram alguns pixels à direita, e nenhuma coluna muda.
+
+    /// <summary>Largura da barra de rolagem do app (Estilos.xaml, Style TargetType="ScrollBar").</summary>
+    public const double BarraRolagem = 10;
+
+    /// <summary>O que fica livre acima e abaixo da janela, somados.</summary>
+    public const double FolgaTelaRelatorio = 24;
+
+    /// <summary>Abaixo disto a tela é absurda: o relatório não encolhe mais (a não ser que a tela seja menor).</summary>
+    public const double AlturaMinimaRelatorio = 320;
+
+    /// <summary>Largura em pixels que o texto do relatório tem para as colunas.</summary>
+    public const double LarguraUtilRelatorio = LarguraRelatorio - MolduraLateral - 2 * PadCorpo;
+
+    /// <summary>
+    /// A altura máxima da janela do relatório numa tela de <paramref name="alturaTela"/>
+    /// (unidades do WPF). Nunca passa da tela. Público e sem WPF dentro para a suíte
+    /// provar a conta sem abrir janela.
+    /// </summary>
+    public static double AlturaMaximaRelatorio(double alturaTela)
+    {
+        if (double.IsNaN(alturaTela) || alturaTela <= 0) return AlturaMinimaRelatorio;
+        return Math.Min(alturaTela, Math.Max(AlturaMinimaRelatorio, alturaTela - FolgaTelaRelatorio));
+    }
+
+    /// <summary>
+    /// A tela onde o relatório abre: a área de trabalho, ou a janela dona se ela for menor
+    /// (o caixa da loja é a janela cheia de 1024x768).
+    /// </summary>
+    private static double AlturaDaTela(Window dono)
+    {
+        var area = SystemParameters.WorkArea.Height;
+        return dono.ActualHeight > 0 ? Math.Min(area, dono.ActualHeight) : area;
+    }
+
     /// <summary>Texto monoespaçado (relatório de fechamento) — alinha as colunas.</summary>
     public static void Relatorio(Window dono, string titulo, string corpo, string? rodape = null)
     {
         var janela = Base(dono, LarguraRelatorio);
-        var pilha = new StackPanel();
-        pilha.Children.Add(new TextBlock
+        janela.MaxHeight = AlturaMaximaRelatorio(AlturaDaTela(dono));
+
+        // Título e Fechar em linhas Auto; o meio (texto e rodapé) é a linha que encolhe e rola.
+        var raiz = new Grid();
+        raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        raiz.RowDefinitions.Add(new RowDefinition());
+        raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var tituloBloco = new TextBlock
         {
             Text = titulo, FontSize = 22, FontWeight = FontWeights.Bold, Foreground = R("Texto"),
-        });
+        };
+        Grid.SetRow(tituloBloco, 0);
+        raiz.Children.Add(tituloBloco);
+
         var fonte = new FontFamily("Consolas");
-        var util = LarguraRelatorio - MolduraLateral - 2 * PadCorpo;
-        pilha.Children.Add(new Border
+        var meio = new StackPanel();
+        meio.Children.Add(new TextBlock
+        {
+            Text = Encaixar(corpo, Colunas(janela, LarguraUtilRelatorio, fonte, CorpoFontSize)),
+            FontFamily = fonte, FontSize = CorpoFontSize,
+            Foreground = R("Texto"), TextWrapping = TextWrapping.Wrap,
+        });
+        // A justificativa é digitada pelo operador e não tem tamanho: rola junto com o
+        // texto, senão uma justificativa comprida empurraria o Fechar para fora.
+        if (rodape is not null)
+            meio.Children.Add(new TextBlock
+            {
+                Text = rodape, FontSize = 14, Foreground = R("TextoFraco"),
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 14, 0, 0),
+            });
+        var rolagem = new ScrollViewer
+        {
+            Content = meio,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        var caixa = new Border
         {
             Background = R("Fundo"),
             CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(PadCorpo),
+            Padding = new Thickness(PadCorpo, PadCorpo, PadCorpo - BarraRolagem, PadCorpo),
             Margin = new Thickness(0, 14, 0, 14),
-            Child = new TextBlock
-            {
-                Text = Encaixar(corpo, Colunas(janela, util, fonte, CorpoFontSize)),
-                FontFamily = fonte, FontSize = CorpoFontSize,
-                Foreground = R("Texto"), TextWrapping = TextWrapping.Wrap,
-            },
-        });
-        if (rodape is not null)
-            pilha.Children.Add(new TextBlock
-            {
-                Text = rodape, FontSize = 14, Foreground = R("TextoFraco"),
-                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 14),
-            });
+            Child = rolagem,
+        };
+        Grid.SetRow(caixa, 1);
+        raiz.Children.Add(caixa);
+
         var ok = Botao("Fechar", true);
         ok.Click += (_, _) => janela.Close();
-        pilha.Children.Add(ok);
-        janela.Content = Moldura(pilha);
+        Grid.SetRow(ok, 2);
+        raiz.Children.Add(ok);
+
+        janela.Content = Moldura(raiz);
         janela.ShowDialog();
     }
 
