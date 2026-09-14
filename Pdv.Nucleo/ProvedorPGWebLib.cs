@@ -80,6 +80,27 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public const string MsgPastaInacessivel = "TEF não responde: a PGWebLib não iniciou, pasta de trabalho inacessível";
     public const string MsgNaoInstalado = "PayGo não instalado neste terminal: faça a instalação pelo menu do TEF";
 
+    /// <summary>
+    /// Outra operação da biblioteca ainda está em voo (14/09/2026, Castelo: a primeira instalação
+    /// ficou presa minutos dentro de uma chamada e a segunda esperava calada atrás dela). Tirar o
+    /// cabo do pinpad encerrou a chamada presa em 0,3 s no log daquele dia. Só aparece fora de
+    /// venda: instalação, ADM e menu do TEF.
+    /// </summary>
+    public const string MsgAindaOcupado = "A maquininha ainda está presa na tentativa anterior. Tire o cabo USB do pinpad, espere 10 segundos e tente de novo. Se não voltar, feche e abra o caixa.";
+
+    /// <summary>
+    /// A biblioteca disse que não há pinpad (PWRET_PPNOTFOUND, PPCOMERR ou PINPADERR). A tela
+    /// recebia "TEF não aceitou o dado 32514: PWRET_PPNOTFOUND" e ninguém na loja sabia o que
+    /// fazer com isso. O código fica só na auditoria.
+    /// </summary>
+    public static string MsgPinpadNaoAchado(string? porta)
+        => PortaDoPinpad.Normalizar(porta) is var n && n != PortaDoPinpad.Automatica
+            ? $"Não achei a maquininha na porta {n}. Confira o cabo, feche o programa da Gertec e o PayGo Windows se estiverem abertos."
+            : "Não achei a maquininha em nenhuma porta. Confira o cabo, feche o programa da Gertec e o PayGo Windows se estiverem abertos.";
+
+    /// <summary>Retornos com que a biblioteca diz "não achei o pinpad".</summary>
+    public static bool EhPinpadAusente(short ret) => ret is PW.PWRET_PPNOTFOUND or PW.PWRET_PPCOMERR or PW.PWRET_PINPADERR;
+
     /// <summary>CNFREQ=0 (já definitiva na rede) e o caixa não gravou: não existe REV; o cliente JÁ pagou.</summary>
     public static string MsgNaoGravada(string? nsu) => $"Cobrança aprovada (NSU {nsu ?? "-"}) mas não gravada no caixa. Não cobre de novo: confira no PayGo";
     public static string MsgCancelamentoNaoGravado(string? nsu) => $"Cancelamento aprovado (NSU {nsu ?? "-"}) mas não gravado no caixa. Não repita: confira no PayGo";
@@ -104,6 +125,21 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// 09/09/2026 (passo 55): a PGWebLib levava de 20 a 40 s para sair da espera do host do Pix.
     /// </summary>
     public int TempoMaxCancelamentoMs { get; init; } = 5_000;
+
+    /// <summary>
+    /// Quanto uma operação administrativa (instalação, ADM, menu do TEF) espera outra terminar
+    /// antes de desistir com <see cref="MsgAindaOcupado"/>. Antes esperava sem teto e sem aviso.
+    /// </summary>
+    public int EsperaOcupadoMs { get; init; } = 3_000;
+
+    /// <summary>
+    /// O TESTE DO PINPAD antes da instalação (14/09/2026, pedido do dono depois da Castelo).
+    /// Recebe a porta configurada e devolve o resultado. Não deu = a instalação NÃO chama a
+    /// biblioteca e devolve a frase do teste. Deu = a instalação manda a porta que respondeu.
+    /// Null = sem teste (a bateria e o comportamento antigo). Se o teste lançar, a instalação
+    /// segue sem ele: defeito do teste não pode travar a loja.
+    /// </summary>
+    public Func<string, CancellationToken, Task<ResultadoTestePinpad>>? ConferirPinpad { get; init; }
 
     /// <summary>
     /// Cadência de segurança do PW_iIdleProc: vale quando a biblioteca não informa
@@ -236,6 +272,33 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// <summary>Quando <see cref="UltimaMensagem"/> chegou (hora do caixa, para casar com o roteiro).</summary>
     public DateTime? UltimaMensagemEm { get; private set; }
 
+    /// <summary>Uma chamada à biblioteca que ainda não voltou.</summary>
+    public sealed record ChamadaNativa(string Nome, DateTime DesdeUtc);
+
+    private volatile ChamadaNativa? _emVoo;
+
+    /// <summary>
+    /// A VIGIA DA CHAMADA NATIVA. Null = nenhuma chamada em voo. Existe porque a biblioteca pode
+    /// ficar minutos dentro de UMA chamada (14/09/2026: PW_iExecTransac das 19:00:54 que não voltou
+    /// até o caixa ser morto) e nada no caixa sabia disso. A tela da instalação lê daqui para
+    /// dizer há quanto tempo a maquininha não responde.
+    /// </summary>
+    public ChamadaNativa? EmVoo => _emVoo;
+
+    /// <summary>A última coisa que a biblioteca pediu ou mostrou durante a operação (prompt, display do pinpad).</summary>
+    public string? UltimoRecado { get; private set; }
+    public DateTime? UltimoRecadoEm { get; private set; }
+
+    private void Recado(string? texto)
+    {
+        if (string.IsNullOrWhiteSpace(texto)) return;
+        UltimoRecado = texto.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        UltimoRecadoEm = DateTime.Now;
+    }
+
+    private void Entrar(string nome) => _emVoo = new ChamadaNativa(nome, DateTime.UtcNow);
+    private void Sair() => _emVoo = null;
+
     // ------------------------------------------------------------------ init / ativo
 
 
@@ -255,6 +318,15 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// O laco de ExecutarAsync ja saia da tela depois do primeiro `Task.Delay`. O que
     /// faltava era sair ANTES da primeira chamada, que e a demorada.
     /// </summary>
+    /// <remarks>
+    /// ⚠️ 14/09/2026, CASTELO: ISTO SOZINHO NÃO SAÍA DA TELA. Quem chamava fazia
+    /// <c>await ForaDaTelaAsync();</c> sem <c>ConfigureAwait(false)</c>, e esse await volta para o
+    /// contexto de quem chamou, que é a thread da tela. Provado num Dispatcher de WPF de verdade:
+    /// 12 de 22 chamadas nativas caíam na tela, entre elas PW_iInit, PW_iNewTransac e o
+    /// PW_iAddParam(USINGPINPAD) que varre as portas COM. Na loja isso foram 62 s de caixa
+    /// "não respondendo" num clique. Todo chamador usa <c>.ConfigureAwait(false)</c> agora, e a
+    /// bateria roda o provedor dentro de uma thread de tela para cobrar isso.
+    /// </remarks>
     private static async Task ForaDaTelaAsync()
     {
         if (SynchronizationContext.Current is null) return;   // ja esta fora
@@ -276,6 +348,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             return false;
         }
         short ret;
+        Entrar("PW_iInit");
         try { ret = _lib.Init(_pasta); }
         catch (Exception ex)
         {
@@ -287,6 +360,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             Auditar?.Invoke("pgweblib: PW_iInit lançou: " + ex.GetType().Name + " " + ex.Message);
             return false;
         }
+        finally { Sair(); }
         _iniciada = ret is PW.PWRET_OK or PW.PWRET_INVCALL;
         if (!_iniciada)
         {
@@ -419,7 +493,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public async Task<(short Retorno, IReadOnlyList<PwOperacao> Operacoes)> OperacoesAsync(byte tipo, CancellationToken ct)
     {
         await _um.WaitAsync(ct).ConfigureAwait(false);
-        await ForaDaTelaAsync();
+        await ForaDaTelaAsync().ConfigureAwait(false);
         try
         {
             if (!Iniciar()) return (PW.PWRET_DLLNOTINIT, Array.Empty<PwOperacao>());
@@ -440,7 +514,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     public async Task<bool> AtivoAsync(CancellationToken ct)
     {
         await _um.WaitAsync(ct).ConfigureAwait(false);
-        await ForaDaTelaAsync();
+        await ForaDaTelaAsync().ConfigureAwait(false);
         try
         {
             if (!Iniciar()) return false;
@@ -490,7 +564,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
 
         try { await _um.WaitAsync(ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { return Falha(SituacaoTef.Cancelado, chargeId, CodigoTef.Cancelado, "cobrança cancelada pelo operador"); }
-        await ForaDaTelaAsync();   // a cobranca e a mais longa de todas: nunca na thread da tela
+        await ForaDaTelaAsync().ConfigureAwait(false);   // a cobranca e a mais longa de todas: nunca na thread da tela
         Contexto? ctxExibicao = null;
         try
         {
@@ -536,8 +610,13 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     Param(ctx, PW.PWINFO_AUTHSYSTNOME, _op.RedeCartao!);
                 }
             }
+            ctx.Porta = PortaDoPinpad.Normalizar(_op.PortaPinpad);
             Param(ctx, PW.PWINFO_USINGPINPAD, "1");
-            Param(ctx, PW.PWINFO_PPCOMMPORT, _op.PortaPinpad);
+            Param(ctx, PW.PWINFO_PPCOMMPORT, ctx.Porta);
+            // Sem pinpad a venda não entra na chamada longa. Exceção: Pix com o QR na TELA, que
+            // pode seguir sem pinpad nenhum.
+            if (!(tipo == TipoTef.Pix && _op.PreferenciaQr == PW.DSPQRPREF_TELA) && PinpadAusente(ctx) is { } semPinpad)
+                return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, semPinpad);
 
             // A partir daqui a biblioteca pode ir ao host: linha 'aguardando' antes de executar.
             Guardar(new TransacaoPayGo(chargeId, id, tipo, valor.Centavos, parc, "aguardando", null));
@@ -685,7 +764,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, "transação original sem NSU: cancele pelo menu do PayGo");
 
         await _um.WaitAsync(ct).ConfigureAwait(false);
-        await ForaDaTelaAsync();
+        await ForaDaTelaAsync().ConfigureAwait(false);
         try
         {
             var prep = await PrepararAsync(PW.PWOPER_SALEVOID, chargeId).ConfigureAwait(false);
@@ -719,8 +798,11 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             if (data is not null) Param(ctx, PW.PWINFO_TRNORIGDATE, data);
             if (hora is not null) Param(ctx, PW.PWINFO_TRNORIGTIME, hora);
             if (r0.Rede is not null) Param(ctx, PW.PWINFO_AUTHSYST, r0.Rede);
+            ctx.Porta = PortaDoPinpad.Normalizar(_op.PortaPinpad);
             Param(ctx, PW.PWINFO_USINGPINPAD, "1");
-            Param(ctx, PW.PWINFO_PPCOMMPORT, _op.PortaPinpad);
+            Param(ctx, PW.PWINFO_PPCOMMPORT, ctx.Porta);
+            if (PinpadAusente(ctx) is { } semPinpadCnc)
+                return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, semPinpadCnc);
 
             var fim = await ExecutarAsync(ctx).ConfigureAwait(false);
             var r = RespostaDaLib("CNC", id, original.ValorCent, original.Tipo, original.Parcelas, fim.Aprovada, fim.Resultados);
@@ -824,16 +906,59 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         var id = ClientePayGo.NovaIdentificacao();
         var chargeId = prefixo + id;
-        await _um.WaitAsync(ct).ConfigureAwait(false);
-        await ForaDaTelaAsync();
+        // NUNCA ESPERAR CALADO ATRÁS DE OUTRA OPERAÇÃO (14/09/2026, Castelo). A segunda instalação
+        // esperava no semáforo, sem teto e sem aviso, a primeira sair de uma chamada presa há minutos.
         try
         {
+            if (!await _um.WaitAsync(EsperaOcupadoMs, ct).ConfigureAwait(false))
+            {
+                Auditar?.Invoke($"pgweblib: {rotulo} recusada: outra operação ainda em voo ({EmVoo?.Nome ?? "sem chamada nativa"})");
+                return Falha(SituacaoTef.Erro, chargeId, CodigoTef.TefNaoResponde, MsgAindaOcupado);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return Falha(SituacaoTef.Cancelado, chargeId, CodigoTef.Cancelado, "operação cancelada pelo operador");
+        }
+        await ForaDaTelaAsync().ConfigureAwait(false);
+        try
+        {
+            UltimoRecado = null; UltimoRecadoEm = null;
+            string? portaDaVez = null;
+            if (oper == PW.PWOPER_INSTALL && ConferirPinpad is { } conferir)
+            {
+                // O TESTE DO PINPAD ANTES DE TOCAR NA BIBLIOTECA. Nem o PW_iInit: com uma porta
+                // guardada, ele mesmo abre o pinpad e fica 20 s parado (medido na Castelo).
+                Recado("Procurando o pinpad");
+                ResultadoTestePinpad? teste = null;
+                try { teste = await conferir(_op.PortaPinpad, ct).ConfigureAwait(false); }
+                catch (Exception ex) { Auditar?.Invoke("pgweblib: o teste do pinpad lançou " + ex.GetType().Name + "; a instalação segue sem ele"); }
+                if (teste is { Ok: false })
+                {
+                    Auditar?.Invoke($"pgweblib: instalação não chamou a biblioteca: teste do pinpad {teste.Situacao} ({teste.Frase})");
+                    Recado(teste.Frase);
+                    return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, teste.Frase);
+                }
+                if (teste is { Ok: true })
+                {
+                    Recado(teste.Frase);
+                    portaDaVez = teste.Numero;
+                    Auditar?.Invoke($"pgweblib: teste do pinpad antes da instalação: {teste.Frase}");
+                }
+            }
+            if (ct.IsCancellationRequested)
+                return Falha(SituacaoTef.Cancelado, chargeId, CodigoTef.Cancelado, "operação cancelada pelo operador");
             var prep = await PrepararAsync(oper, chargeId).ConfigureAwait(false);
             if (prep is not null) return prep;
             var ctx = new Contexto(chargeId, id, "ADM", TipoTef.Credito, 0, 1, null, ct);
+            ctx.Porta = portaDaVez ?? PortaDoPinpad.Normalizar(_op.PortaPinpad);
             ParametrosDeIdentidade(ctx);
             Param(ctx, PW.PWINFO_USINGPINPAD, "1");
-            Param(ctx, PW.PWINFO_PPCOMMPORT, _op.PortaPinpad);
+            Param(ctx, PW.PWINFO_PPCOMMPORT, ctx.Porta);
+            // A biblioteca já disse que não há pinpad: não entra na chamada longa (log da Castelo,
+            // 19:08:15 e 19:25:08: PW_iAddParam(0x7F02) <-2489> e mesmo assim 4 min presos depois).
+            if (PinpadAusente(ctx) is { } semPinpadAdm)
+                return Falha(SituacaoTef.Erro, chargeId, CodigoTef.Plataforma, semPinpadAdm);
 
             var fim = await ExecutarAsync(ctx).ConfigureAwait(false);
             var r = RespostaDaLib("ADM", id, 0, TipoTef.Credito, 1, fim.Aprovada, fim.Resultados);
@@ -888,7 +1013,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         var n = 0;
         await _um.WaitAsync().ConfigureAwait(false);
-        await ForaDaTelaAsync();
+        await ForaDaTelaAsync().ConfigureAwait(false);
         try
         {
             if (!Iniciar()) { Auditar?.Invoke("pgweblib: religamento sem PW_iInit; pendências ficam para o próximo boot"); return 0; }
@@ -943,7 +1068,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         if (_descartado || ProximoIdle is not { } quando || quando > DateTime.Now) return false;
         if (!await _um.WaitAsync(0).ConfigureAwait(false)) return false;
-        await ForaDaTelaAsync();
+        await ForaDaTelaAsync().ConfigureAwait(false);
         try
         {
             // Relê o descarte já com o semáforo: um tique que entrou junto com o Encerrar() não pode reiniciar a DLL depois do PW_End.
@@ -1058,6 +1183,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
         /// </summary>
         public Dictionary<ushort, string> Respondidos { get; } = new();
         public string? UltimoDisplay;
+
+        /// <summary>
+        /// Os dados que a biblioteca RECUSOU no PW_iAddParam, com o retorno. Dado recusado não é
+        /// "resposta pronta": se ela pedir de novo, o caixa não reenvia sozinho o mesmo valor
+        /// (14/09/2026, Castelo, dado 32514).
+        /// </summary>
+        public Dictionary<ushort, short> Recusados { get; } = new();
+
+        /// <summary>A porta do pinpad que esta operação manda (PWINFO_PPCOMMPORT), já normalizada.</summary>
+        public string Porta { get; set; } = PortaDoPinpad.Automatica;
     }
 
     private sealed class Fim
@@ -1130,9 +1265,20 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 ResolverPendenciaManual(pnd, "antes de " + chargeId);
         }
         short nt;
+        Entrar("PW_iNewTransac");
         try { nt = _lib.NewTransac(oper); }
         catch (Exception ex) { Auditar?.Invoke("pgweblib: PW_iNewTransac lançou: " + ex.Message); return Falha(SituacaoTef.Erro, chargeId, CodigoTef.TefNaoResponde, MsgTefNaoResponde); }
-        if (nt == PW.PWRET_DLLNOTINIT) { _iniciada = false; if (Iniciar()) nt = _lib.NewTransac(oper); }
+        finally { Sair(); }
+        if (nt == PW.PWRET_DLLNOTINIT)
+        {
+            _iniciada = false;
+            if (Iniciar())
+            {
+                Entrar("PW_iNewTransac");
+                try { nt = _lib.NewTransac(oper); }
+                finally { Sair(); }
+            }
+        }
         await Task.CompletedTask.ConfigureAwait(false);
         return nt switch
         {
@@ -1155,8 +1301,31 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     {
         var v = ArquivoIntpos.Ascii(valor);
         ctx.Conhecidos[info] = v;
-        var ret = _lib.AddParam(info, v);
-        if (ret != PW.PWRET_OK) Auditar?.Invoke($"pgweblib: PW_iAddParam({info}) {PW.Nome(ret)}");
+        short ret;
+        // USINGPINPAD e PPCOMMPORT são as que podem demorar: é nelas que a biblioteca varre as portas.
+        Entrar($"PW_iAddParam({info})");
+        try { ret = _lib.AddParam(info, v); }
+        finally { Sair(); }
+        if (ret == PW.PWRET_OK) { ctx.Recusados.Remove(info); return; }
+        ctx.Recusados[info] = ret;
+        Auditar?.Invoke($"pgweblib: PW_iAddParam({info}) {PW.Nome(ret)} ({ret})");
+    }
+
+    /// <summary>
+    /// A frase de "não achei a maquininha" quando a biblioteca recusou USINGPINPAD ou PPCOMMPORT
+    /// com um retorno de pinpad ausente. Null = pinpad aceito (ou recusado por outro motivo, como
+    /// o PWRET_INVPARAM que a DLL devolve na administrativa e que não impede nada).
+    /// </summary>
+    private string? PinpadAusente(Contexto ctx)
+    {
+        foreach (var info in new[] { PW.PWINFO_PPCOMMPORT, PW.PWINFO_USINGPINPAD })
+            if (ctx.Recusados.TryGetValue(info, out var ret) && EhPinpadAusente(ret))
+            {
+                Auditar?.Invoke($"pgweblib: {ctx.ChargeId} sem pinpad (PW_iAddParam({info}) {PW.Nome(ret)} {ret}, porta {ctx.Porta}): não entra no PW_iExecTransac");
+                Recado(MsgPinpadNaoAchado(ctx.Porta));
+                return MsgPinpadNaoAchado(ctx.Porta);
+            }
+        return null;
     }
 
     private async Task<Fim> ExecutarAsync(Contexto ctx)
@@ -1186,12 +1355,14 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 return Encerrar(fim, SituacaoTef.Cancelado, CodigoTef.Cancelado, "cobrança cancelada pelo operador", desfeita: true, ler: true);
             short ret;
             IReadOnlyList<PwGetData> pedidos;
+            Entrar("PW_iExecTransac");
             try { ret = _lib.ExecTransac(out pedidos); }
             catch (Exception ex)
             {
                 Auditar?.Invoke($"pgweblib: PW_iExecTransac lançou em {ctx.ChargeId}: {ex.Message}");
                 return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, "TEF falhou no meio da operação: confira no PayGo", posOcupado: true);
             }
+            finally { Sair(); }
             switch (ret)
             {
                 case PW.PWRET_OK:
@@ -1272,6 +1443,16 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             var p = pedidos[i];
             if (p.EhMenu || p.EhDigitado)
             {
+                // A PORTA QUE A BIBLIOTECA JÁ RECUSOU POR FALTA DE PINPAD (14/09/2026, Castelo). Antes o
+                // caixa respondia sozinho o mesmo valor e a tela recebia "TEF não aceitou o dado 32514:
+                // PWRET_PPNOTFOUND". Reenviar não acha pinpad nenhum; a frase diz o que fazer.
+                if (p.Identificador is PW.PWINFO_PPCOMMPORT or PW.PWINFO_USINGPINPAD
+                    && ctx.Recusados.TryGetValue(p.Identificador, out var recusaPinpad) && EhPinpadAusente(recusaPinpad))
+                {
+                    Auditar?.Invoke($"pgweblib: o TEF pediu de novo o dado {p.Identificador}, recusado antes com {PW.Nome(recusaPinpad)}; não reenviado");
+                    return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, MsgPinpadNaoAchado(ctx.Porta), ler: true);
+                }
+                Recado(p.Prompt);
                 var valor = Predefinido(ctx, p);
                 if (valor is null)
                 {
@@ -1297,7 +1478,13 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     return await DesistirAsync(ctx, p, fim).ConfigureAwait(false);
                 var ret = _lib.AddParam(p.Identificador, ArquivoIntpos.Ascii(valor));
                 if (ret != PW.PWRET_OK)
+                {
+                    ctx.Recusados[p.Identificador] = ret;
+                    Auditar?.Invoke($"pgweblib: PW_iAddParam({p.Identificador}) da resposta recusado: {PW.Nome(ret)} ({ret})");
+                    if (EhPinpadAusente(ret))
+                        return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, MsgPinpadNaoAchado(ctx.Porta), ler: true);
                     return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, $"TEF não aceitou o dado {p.Identificador}: {PW.Nome(ret)}", ler: true);
+                }
                 ctx.Respondidos[p.Identificador] = valor;
                 continue;
             }
@@ -1509,8 +1696,11 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             Auditar?.Invoke($"pgweblib: PW_iPP* ({p.Tipo}) lançou: {ex.Message}");
             return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, "falha ao falar com o pinpad", ler: true);
         }
-        if (ret is PW.PWRET_PPNOTFOUND or PW.PWRET_PPCOMERR or PW.PWRET_PINPADERR)
-            return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, "pinpad não encontrado: confira o cabo e o PayGo", ler: true);
+        if (EhPinpadAusente(ret))
+        {
+            Auditar?.Invoke($"pgweblib: PW_iPP* ({p.Tipo}) {PW.Nome(ret)} ({ret})");
+            return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, MsgPinpadNaoAchado(ctx.Porta), ler: true);
+        }
         if (ret != PW.PWRET_OK)
             return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, "pinpad recusou a captura: " + PW.Nome(ret), ler: true);
 
@@ -1544,6 +1734,7 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     if (!string.IsNullOrWhiteSpace(display) && display != ctx.UltimoDisplay)
                     {
                         ctx.UltimoDisplay = display;
+                        Recado(display);
                         ctx.Andamento?.Report(new AndamentoTef(FaseTef.Recado, ctx.ChargeId, ctx.Id, display.Replace('\r', ' ').Trim()));
                     }
                     break;
@@ -1574,6 +1765,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// <summary>Valor que a automação já sabe para o dado pedido (o que mandou em AddParam, ou a rede pré-selecionada).</summary>
     private string? Predefinido(Contexto ctx, PwGetData p)
     {
+        // Dado que a biblioteca RECUSOU não volta sozinho: ela quer outro valor, e quem decide é a tela.
+        if (ctx.Recusados.ContainsKey(p.Identificador))
+        {
+            Auditar?.Invoke($"pgweblib: o TEF pediu o dado {p.Identificador}, que tinha recusado ({PW.Nome(ctx.Recusados[p.Identificador])}); a tela pergunta");
+            return null;
+        }
         if (!ctx.Conhecidos.TryGetValue(p.Identificador, out var v) || string.IsNullOrWhiteSpace(v))
         {
             // Menu com uma opção só não precisa de operador. O menu de redes é a exceção EM

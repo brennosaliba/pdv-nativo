@@ -391,8 +391,17 @@ public static class TestesAssistente
         var pinCurto = Bloq(comAdmin with { AdminNome = "Breno", AdminCpf = CpfOk, AdminPin = "12" });
         checar(pinCurto is not null && pinCurto.Contains("4 a 6"),
             "senha de 2 dígitos não passa, e a frase diz o tamanho certo");
-        checar(Bloq(comAdmin with { AdminNome = "Breno", AdminCpf = CpfOk, AdminPin = "1234" }) is null,
-            "nome + CPF válido + senha de 4 dígitos conclui a primeira instalação");
+        checar(Bloq(comAdmin with { AdminNome = "Breno", AdminCpf = CpfOk, AdminPin = "1234", AdminPinRepetido = "1234" }) is null,
+            "nome + CPF válido + senha de 4 dígitos repetida igual conclui a primeira instalação");
+
+        // 14/09/2026, Castelo: a senha ficava à vista numa caixa de texto comum. Agora o campo é
+        // escondido e repetido, e sem repetir igual não conclui (erro de digitação não passa calado).
+        var semRepetir = Bloq(comAdmin with { AdminNome = "Breno", AdminCpf = CpfOk, AdminPin = "1234" });
+        checar(semRepetir is not null && semRepetir.Contains("não conferem"),
+            "senha sem a repetição não conclui: " + semRepetir);
+        var diferente = Bloq(comAdmin with { AdminNome = "Breno", AdminCpf = CpfOk, AdminPin = "1234", AdminPinRepetido = "1243" });
+        checar(diferente is not null && diferente.Contains("não conferem") && diferente.Contains("mesma senha") && !diferente.Contains('—'),
+            "senhas diferentes não concluem, e a frase diz o que fazer");
     }
 
     /// <summary>

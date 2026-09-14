@@ -261,7 +261,7 @@ public static class ConfigPGWebLib
             Capacidades: caps,
             RedeCartao: Limpo(config("tef_paygo_rede")),
             RedePix: Limpo(config("tef_paygo_rede_pix")),
-            PortaPinpad: Limpo(config(ChavePortaPinpad)) ?? "0",
+            PortaPinpad: PortaDoPinpad.Normalizar(config(ChavePortaPinpad)),
             Ambiente: Ambiente(config),
             RedesPermitidas: Redes(config),
             PreferenciaQr: PreferenciaQr(config));

@@ -1344,6 +1344,12 @@ Console.WriteLine();
 Console.WriteLine("--- Porta do pinpad (achar sozinho e avisar) ---");
 TestesPortaDoPinpad.Rodar((cond, nome) => Check("pinpad-porta: " + nome, cond));
 
+// -- 14/09/2026, CASTELO: "Instalar ponto de captura" preso 5 minutos, duas vezes ---------
+// Pinpad mudo, -2489 ignorado, DLL na thread da tela e a 2a tentativa esperando calada.
+Console.WriteLine();
+Console.WriteLine("--- Pinpad da Castelo (testar antes, nada na tela, nunca esperar calado) ---");
+TestesPinpadCastelo.Rodar((cond, nome) => Check("pinpad-castelo: " + nome, cond));
+
 // -- ROTEIRO DE HOMOLOGACAO DO TEF: os 58 passos e a planilha ----------------
 Console.WriteLine();
 Console.WriteLine("--- Roteiro do TEF (58 passos, valores e planilha) ---");

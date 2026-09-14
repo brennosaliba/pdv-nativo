@@ -611,6 +611,85 @@ public static class Instalacao
         catch (Exception ex) { return ex.Message; }
     }
 
+    // ── APAGAR TAMBÉM OS DADOS DESTE CAIXA (14/09/2026, loja Castelo) ─────────────
+    //
+    // O dono desinstalou e instalou de novo, e o caixa "já começou logado". Não era defeito da
+    // instalação: desinstalar nunca toca em C:\ProgramData\PdvNativo (regra de ouro 1), então o
+    // banco, o pareamento e o login voltaram junto. Isso continua sendo o PADRÃO. A opção existe,
+    // desmarcada, para quem quer começar do zero, e mesmo ela não apaga nada em silêncio: avisa o
+    // que ainda não subiu para o painel e tira a pasta do lugar, guardada com a data.
+
+    /// <summary>O que a pasta de dados tem que importa antes de tirá-la do lugar.</summary>
+    /// <param name="NaFila">Registros (vendas, turnos, movimentos) que ainda não subiram para o painel.</param>
+    /// <param name="Erro">Não deu para ler o banco: ninguém sabe se há o que perder.</param>
+    public sealed record DadosDoCaixa(bool Existe, int NaFila, string? Erro);
+
+    public const string PerguntaApagarDados =
+        "Apagar também os dados deste caixa?\n\n" +
+        "Sim: na próxima instalação o caixa começa do zero, sem login, sem configuração e sem o ponto de captura do TEF.\n\n" +
+        "Não (recomendado): os dados ficam para a próxima instalação.";
+
+    /// <summary>Lê a fila do banco do caixa sem mexer em nada (somente leitura, sem pool de conexão).</summary>
+    public static DadosDoCaixa ConferirDados(string pastaDados)
+    {
+        if (!Directory.Exists(pastaDados)) return new DadosDoCaixa(false, 0, null);
+        var db = Path.Combine(pastaDados, "pdv.db");
+        if (!File.Exists(db)) return new DadosDoCaixa(true, 0, null);
+        try
+        {
+            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = db,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+                // Sem pool: conexão guardada no pool segura o arquivo, e aí a pasta não sai do lugar.
+                Pooling = false,
+            }.ToString();
+            using var cx = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+            cx.Open();
+            using var cmd = cx.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM outbox WHERE enviado_em IS NULL AND desistido_em IS NULL";
+            return new DadosDoCaixa(true, Convert.ToInt32(cmd.ExecuteScalar()), null);
+        }
+        catch (Exception ex) { return new DadosDoCaixa(true, 0, ex.Message); }
+    }
+
+    /// <summary>A segunda pergunta, quando há o que perder. Null = nada pendente, pode seguir.</summary>
+    public static string? AvisoAntesDeApagar(DadosDoCaixa d)
+    {
+        if (!d.Existe) return null;
+        if (d.Erro is not null)
+            return "Não consegui conferir se este caixa tem vendas que ainda não subiram para o painel.\n\n"
+                 + "Os dados ficam numa cópia que só o suporte recupera. Apagar mesmo assim?";
+        if (d.NaFila <= 0) return null;
+        var um = d.NaFila == 1;
+        return $"{d.NaFila} {(um ? "registro" : "registros")} deste caixa (vendas, turnos) ainda não {(um ? "subiu" : "subiram")} para o painel.\n\n"
+             + "Se apagar agora, eles ficam numa cópia que só o suporte recupera. Apagar mesmo assim?";
+    }
+
+    /// <summary>Onde a pasta de dados vai parar: ao lado dela, com a data ("PdvNativo.apagado-20260914-193000").</summary>
+    public static string PastaApartada(string pastaDados, DateTime agora)
+        => Path.TrimEndingDirectorySeparator(pastaDados) + ".apagado-"
+         + agora.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Tira a pasta de dados do lugar (renomeia). NUNCA apaga. Null = deu (com o destino); senão
+    /// a frase para a tela. Com o caixa aberto o Windows não deixa, e a frase manda fechar.
+    /// </summary>
+    public static string? ApartarDados(string pastaDados, DateTime agora, out string? destino)
+    {
+        destino = null;
+        if (!Directory.Exists(pastaDados)) return null;
+        var alvo = PastaApartada(pastaDados, agora);
+        try
+        {
+            Directory.Move(pastaDados, alvo);
+            destino = alvo;
+            return null;
+        }
+        catch (IOException) { return "Não consegui tirar os dados do lugar: feche o caixa nesta máquina e tente de novo."; }
+        catch (UnauthorizedAccessException) { return "O Windows não deixou mexer nos dados do caixa. Abra o instalador como administrador e tente de novo."; }
+    }
+
     /// <summary>Atalho .lnk sem referenciar COM tipado: um VBScript de uma vez
     /// evita dependência de Interop no publish single-file.</summary>
     private static void CriarAtalho(string lnk, string alvo)

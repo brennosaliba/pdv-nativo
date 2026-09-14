@@ -23,6 +23,8 @@ public partial class JanelaInstalador : Window
     private string? _paygoExe;
     private string? _pastaAgente;
     private bool _atualizacao;
+    /// <summary>Onde os dados antigos foram guardados, quando o dono escolheu começar do zero.</summary>
+    private string? _dadosGuardadosEm;
 
     public JanelaInstalador()
     {
@@ -33,6 +35,9 @@ public partial class JanelaInstalador : Window
         var aoLado = Instalacao.AcharOrigemAoLado();
 
         TxtPasso.Text = _atualizacao ? "ATUALIZAÇÃO" : "INSTALAÇÃO";
+        // Instalação nova com dados de um caixa anterior nesta máquina: oferece começar do zero.
+        ChkComecarDoZero.Visibility = !_atualizacao && File.Exists(Path.Combine(Instalacao.PastaDados, "pdv.db"))
+            ? Visibility.Visible : Visibility.Collapsed;
         TxtTitulo.Text = _atualizacao ? "Atualizar o caixa" : "Instalar o caixa";
         TxtIntro.Text = _atualizacao
             ? "Esta máquina já tem o caixa instalado. Atualizar troca só o programa: "
@@ -84,6 +89,19 @@ public partial class JanelaInstalador : Window
 
     private async Task InstalarTudo()
     {
+        if (ChkComecarDoZero.Visibility == Visibility.Visible && ChkComecarDoZero.IsChecked == true)
+        {
+            if (!App.PerguntarApagarDados(this)) return;
+            if (Instalacao.ApartarDados(Instalacao.PastaDados, DateTime.Now, out var destino) is { } erroDados)
+            {
+                TxtErro.Text = erroDados;
+                TxtErro.Visibility = Visibility.Visible;
+                return;
+            }
+            _dadosGuardadosEm = destino;
+            ChkComecarDoZero.IsChecked = false;
+            ChkComecarDoZero.Visibility = Visibility.Collapsed;
+        }
         _etapa = Etapa.Trabalhando;
         PainelInicio.Visibility = Visibility.Collapsed;
         PainelProgresso.Visibility = Visibility.Visible;
@@ -188,7 +206,8 @@ public partial class JanelaInstalador : Window
         TxtResumo.Text = _atualizacao
             ? "O programa foi trocado. As vendas e a configuração da loja continuam onde estavam."
             : "Falta só configurar a loja: dados, nota fiscal, impressora e maquininha. "
-            + "O caixa abre já nessa tela e vai passo a passo.";
+            + "O caixa abre já nessa tela e vai passo a passo."
+            + (_dadosGuardadosEm is null ? "" : $" Os dados antigos ficaram guardados em {_dadosGuardadosEm}.");
 
         if (aviso is not null)
         {

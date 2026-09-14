@@ -34,14 +34,24 @@ public partial class App : Application
         }
         if (e.Args.Length > 0 && e.Args[0] == "--desinstalar")
         {
+            // 14/09/2026, Castelo: desinstalar e instalar de novo trazia o caixa "já logado", porque os
+            // dados ficam. Continuam ficando por padrão (Enter e Esc caem no Não); quem quer começar do
+            // zero diz Sim, vê o que ainda não subiu, e a pasta sai do lugar guardada com a data.
+            var apagarDados = PerguntarApagarDados();
+            if (apagarDados && Instalacao.PastaInstalada() is { } instalada)
+                Instalacao.PararAgente(Instalacao.PastaDoAgente(instalada));
             var erro = Instalacao.Desinstalar();
+            string? destino = null, erroDados = null;
+            if (erro is null && apagarDados)
+                erroDados = Instalacao.ApartarDados(Instalacao.PastaDados, DateTime.Now, out destino);
             MessageBox.Show(
-                erro is null
-                    ? "Caixa removido desta máquina. As vendas e a configuração da loja "
+                erro is not null ? "Não consegui remover: " + erro
+                : !apagarDados ? "Caixa removido desta máquina. As vendas e a configuração da loja "
                     + "foram PRESERVADAS em C:\\ProgramData\\PdvNativo."
-                    : "Não consegui remover: " + erro,
+                : erroDados is not null ? "Caixa removido desta máquina, mas os dados continuam no lugar. " + erroDados
+                : $"Caixa removido desta máquina. Os dados foram guardados em {destino}. A próxima instalação começa do zero.",
                 "Remover o caixa", MessageBoxButton.OK,
-                erro is null ? MessageBoxImage.Information : MessageBoxImage.Error);
+                erro is null && erroDados is null ? MessageBoxImage.Information : MessageBoxImage.Error);
             Shutdown(erro is null ? 0 : 1);
             return;
         }
@@ -93,6 +103,25 @@ public partial class App : Application
             if (temporaria is not null)
                 try { Directory.Delete(temporaria, true); } catch { /* temporário */ }
         }
+    }
+
+    /// <summary>
+    /// "Apagar também os dados deste caixa?" com o Não como resposta padrão. Se há algo que ainda
+    /// não subiu para o painel (ou não deu para conferir), pergunta de novo dizendo quanto.
+    /// </summary>
+    internal static bool PerguntarApagarDados(Window? dono = null)
+    {
+        var dados = Instalacao.ConferirDados(Instalacao.PastaDados);
+        if (!dados.Existe) return false;
+        var sim = dono is null
+            ? MessageBox.Show(Instalacao.PerguntaApagarDados, "Remover o caixa", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No)
+            : MessageBox.Show(dono, Instalacao.PerguntaApagarDados, "Começar do zero", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+        if (sim != MessageBoxResult.Yes) return false;
+        if (Instalacao.AvisoAntesDeApagar(dados) is not { } aviso) return true;
+        var mesmoAssim = dono is null
+            ? MessageBox.Show(aviso, "Remover o caixa", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+            : MessageBox.Show(dono, aviso, "Começar do zero", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        return mesmoAssim == MessageBoxResult.Yes;
     }
 
     private static void AbrirCaixa()

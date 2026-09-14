@@ -92,6 +92,13 @@
                       Content="Ligar o caixa junto com o Windows (é o que a loja quer)"/>
             <CheckBox x:Name="ChkAtalho" IsChecked="True"
                       Content="Deixar um atalho na área de trabalho"/>
+            <!-- 14/09/2026, Castelo: instalação nova numa máquina que já teve o caixa traz de volta o
+                 login e a configuração, porque os dados ficam no ProgramData. Só aparece nesse caso, e
+                 nasce DESMARCADA: marcar pergunta de novo e avisa o que ainda não subiu. -->
+            <CheckBox x:Name="ChkComecarDoZero" IsChecked="False" Visibility="Collapsed">
+                <TextBlock TextWrapping="Wrap"
+                           Text="Começar do zero: apagar os dados antigos deste caixa (login, configuração e o que ainda não subiu para o painel)"/>
+            </CheckBox>
         </StackPanel>
 
         <!-- ============================ 2. TRABALHANDO ============================ -->

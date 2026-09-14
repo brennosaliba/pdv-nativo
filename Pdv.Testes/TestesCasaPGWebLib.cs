@@ -269,8 +269,8 @@ public static class TestesCasaPGWebLib
                 checar(System.Text.RegularExpressions.Regex.IsMatch(xaml, "x:Name=\"" + escondido.TrimEnd('"') + "\"[^>]*Visibility=\"Collapsed\""),
                     escondido.TrimEnd('"') + " continua no código, mas escondido");
             checar(xaml.Contains("BlocoPGWebLib", StringComparison.Ordinal)
-                   && xaml.Contains("TxtPgwebPorta", StringComparison.Ordinal) && !xaml.Contains("TxtPgwebCapacidades", StringComparison.Ordinal),
-                "com o campo da porta do pinpad; AUTCAP saiu da tela (11/09: detalhe de protocolo, o padrão serve)");
+                   && xaml.Contains("CboPgwebPorta", StringComparison.Ordinal) && !xaml.Contains("TxtPgwebCapacidades", StringComparison.Ordinal),
+                "com a lista da porta do pinpad (14/09: em avançado); AUTCAP saiu da tela (11/09: detalhe de protocolo, o padrão serve)");
             var cfgInst = Fonte("Telas", "Configuracao.xaml.cs") ?? "";
             checar(cfgInst.Contains("tef_pgweb_instalado_em", StringComparison.Ordinal)
                    && cfgInst.Contains("BtnInstalarPgweb.Visibility = Visibility.Collapsed", StringComparison.Ordinal)

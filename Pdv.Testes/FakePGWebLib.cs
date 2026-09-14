@@ -187,7 +187,34 @@ public sealed class FakePGWebLib : IPGWebLib
     private ushort? _ppEsperado;
     private Queue<(short Ret, string Display)> _eventos = new();
 
-    private void Log(string s) => Chamadas.Add(s);
+    private void Log(string s)
+    {
+        lock (Chamadas)
+        {
+            Chamadas.Add(s);
+            ThreadsDasChamadas.Add((s, Environment.CurrentManagedThreadId));
+        }
+    }
+
+    // ── 14/09/2026, Castelo: o que a DLL de verdade fez naquela loja ─────────
+    /// <summary>A thread de cada chamada: a bateria cobra que nenhuma caia na thread da tela.</summary>
+    public List<(string Chamada, int Thread)> ThreadsDasChamadas { get; } = new();
+
+    /// <summary>
+    /// PW_iAddParam devolve este código para o dado, em qualquer operação. Medido na Castelo:
+    /// PW_iAddParam(0x7F02, 0) &lt;-2489&gt; (PWRET_PPNOTFOUND) logo depois de varrer as portas.
+    /// </summary>
+    public Dictionary<ushort, short> RecusarParamSempre { get; } = new();
+
+    /// <summary>Como <see cref="RecusarParamSempre"/>, mas só na primeira vez: a resposta seguinte é aceita.</summary>
+    public Dictionary<ushort, short> RecusarParamUmaVez { get; } = new();
+
+    /// <summary>A instalação pede este dado por PWRET_MOREDATA uma vez antes de concluir.</summary>
+    public PwGetData? PedidoNaInstalacao { get; set; }
+    private bool _pediuNaInstalacao;
+
+    /// <summary>Roda no começo de cada PW_iExecTransac: a bateria prende a chamada aqui, como a DLL presa no pinpad.</summary>
+    public Action? DentroDoExecTransac { get; set; }
 
     // ------------------------------------------------------------------ ambiente
 
@@ -293,6 +320,7 @@ public sealed class FakePGWebLib : IPGWebLib
         _pediuRede = _pediuQr = _cancelada = _abortada = false;
         _menusGenericos = 0;
         _dadosDigitados = 0;
+        _pediuNaInstalacao = false;
         _res.Clear();
         _ppEsperado = null;
         _eventos.Clear();
@@ -308,6 +336,8 @@ public sealed class FakePGWebLib : IPGWebLib
         if (Transacoes.Count == 0 || _params is null) return PW.PWRET_TRNNOTINIT;
         if (valor is null || valor.Any(ch => ch < 0x20 || ch > 0x7E)) return PW.PWRET_INVPARAM;
         if (_oper == PW.PWOPER_ADMIN && ParamsRecusadosNoAdmin.Contains(info)) return PW.PWRET_INVPARAM;
+        if (RecusarParamSempre.TryGetValue(info, out var sempre)) return sempre;
+        if (RecusarParamUmaVez.Remove(info, out var umaVez)) return umaVez;
         _params[info] = valor;
         return PW.PWRET_OK;
     }
@@ -317,6 +347,7 @@ public sealed class FakePGWebLib : IPGWebLib
     public short ExecTransac(out IReadOnlyList<PwGetData> pedidos)
     {
         Log("ExecTransac");
+        DentroDoExecTransac?.Invoke();
         pedidos = Array.Empty<PwGetData>();
         if (!_iniciada) return PW.PWRET_DLLNOTINIT;
         if (_ppEsperado is not null) return PW.PWRET_INVCALL;          // pediu captura e a automação não capturou
@@ -361,7 +392,7 @@ public sealed class FakePGWebLib : IPGWebLib
             PW.PWOPER_SALEVOID => Cancelamento(out pedidos),
             PW.PWOPER_ADMIN => Administrativa(out pedidos),
             PW.PWOPER_REPRINT => Reimpressao(),
-            PW.PWOPER_INSTALL => Instalacao(),
+            PW.PWOPER_INSTALL => Instalacao(out pedidos),
             PW.PWOPER_VERSION => Versao(),
             // As outras do menu administrativo (parâmetros, relatórios, configuração,
             // manutenção): a biblioteca resolve sozinha com a rede e devolve a frase dela. Sem
@@ -635,8 +666,16 @@ public sealed class FakePGWebLib : IPGWebLib
         return PW.PWRET_OK;
     }
 
-    private short Instalacao()
+    private short Instalacao(out IReadOnlyList<PwGetData> pedidos)
     {
+        pedidos = Array.Empty<PwGetData>();
+        if (PedidoNaInstalacao is { } pedido && !_pediuNaInstalacao)
+        {
+            _pediuNaInstalacao = true;
+            pedidos = new[] { pedido };
+            return PW.PWRET_MOREDATA;
+        }
+        if (PedidoNaInstalacao is { } p2 && !_params.ContainsKey(p2.Identificador)) return PW.PWRET_NOMANDATORY;
         Instalado = true;
         _res[PW.PWINFO_CNFREQ] = "0";
         _res[PW.PWINFO_RESULTMSG] = "INSTALACAO CONCLUIDA";

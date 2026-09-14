@@ -58,11 +58,77 @@ public static class TestesInstalador
             EtapaPayGo(checar);
             CaudaDoPacote(checar);
             PacoteIdaEVolta(checar, raiz);
+            ApagarDados(checar, raiz);
         }
         finally
         {
             try { if (Directory.Exists(raiz)) Directory.Delete(raiz, recursive: true); } catch { }
         }
+    }
+
+    // ---------------------------------------------------------------- apagar dados
+
+    /// <summary>
+    /// APAGAR TAMBÉM OS DADOS DESTE CAIXA (14/09/2026, loja Castelo). O dono desinstalou,
+    /// instalou de novo, e o caixa voltou logado: os dados ficam, e isso continua sendo o padrão.
+    /// A opção nova é desmarcada, avisa o que ainda não subiu e nunca apaga: tira a pasta do
+    /// lugar, guardada com a data.
+    /// </summary>
+    private static void ApagarDados(Action<bool, string> checar, string raiz)
+    {
+        var agora = new DateTime(2026, 9, 14, 19, 30, 0);
+        var nada = Path.Combine(raiz, "dados-que-nao-existem");
+        checar(Instalacao.ConferirDados(nada) is { Existe: false } && Instalacao.AvisoAntesDeApagar(Instalacao.ConferirDados(nada)) is null,
+            "sem pasta de dados: nada a perguntar");
+        checar(Instalacao.ApartarDados(nada, agora, out var semDestino) is null && semDestino is null, "sem pasta de dados: não faz nada");
+
+        var dados = Path.Combine(raiz, "PdvNativo");
+        Directory.CreateDirectory(dados);
+        var db = Path.Combine(dados, "pdv.db");
+        using (var cx = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = db, Pooling = false }.ToString()))
+        {
+            cx.Open();
+            using var cmd = cx.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE outbox (id INTEGER PRIMARY KEY, tipo TEXT, enviado_em TEXT, desistido_em TEXT);
+                INSERT INTO outbox (tipo, enviado_em, desistido_em) VALUES ('venda', NULL, NULL), ('venda', NULL, NULL),
+                    ('venda', '2026-09-14', NULL), ('caixa_sessao', NULL, '2026-09-14');
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        var lidos = Instalacao.ConferirDados(dados);
+        checar(lidos is { Existe: true, NaFila: 2, Erro: null }, $"conta só o que ainda não subiu nem foi desistido ({lidos.NaFila})");
+        var aviso = Instalacao.AvisoAntesDeApagar(lidos);
+        checar(aviso is not null && aviso.Contains("2 registros") && aviso.Contains("subiram") && aviso.Contains("mesmo assim"),
+            "com algo na fila, pergunta de novo dizendo quanto: " + aviso);
+
+        var torto = Path.Combine(raiz, "PdvNativo-torto");
+        Directory.CreateDirectory(torto);
+        File.WriteAllText(Path.Combine(torto, "pdv.db"), "isto não é um banco");
+        var lidoTorto = Instalacao.ConferirDados(torto);
+        checar(lidoTorto.Erro is not null && Instalacao.AvisoAntesDeApagar(lidoTorto)?.Contains("Não consegui conferir") == true,
+            "banco que não abre: não finge que está tudo vazio");
+
+        checar(Instalacao.ApartarDados(dados, agora, out var destino) is null && destino is not null
+               && !Directory.Exists(dados) && File.Exists(Path.Combine(destino, "pdv.db"))
+               && destino.EndsWith("PdvNativo.apagado-20260914-193000", StringComparison.Ordinal),
+            "apagar tira a pasta do lugar e guarda com a data, sem apagar o banco: " + destino);
+        checar(Instalacao.ConferirDados(destino!) is { NaFila: 2 }, "e o que estava na fila continua lá, inteiro, para o suporte");
+
+        foreach (var texto in new[] { Instalacao.PerguntaApagarDados, aviso ?? "", Instalacao.AvisoAntesDeApagar(lidoTorto) ?? "" })
+            checar(!texto.Contains('—') && !texto.Contains('–'), "texto da opção de apagar sem travessão");
+        checar(Instalacao.PerguntaApagarDados.Contains("Não (recomendado)"), "a pergunta diz que o Não é o recomendado");
+
+        var app = FonteDoRepo(Path.Combine("Pdv.Instalador", "App.xaml.cs")) ?? "";
+        var desinstalar = app.IndexOf("\"--desinstalar\"", StringComparison.Ordinal);
+        var trecho = desinstalar >= 0 ? app[desinstalar..Math.Min(app.Length, desinstalar + 2_500)] : "";
+        checar(trecho.Contains("PerguntarApagarDados()", StringComparison.Ordinal)
+               && trecho.IndexOf("Instalacao.Desinstalar()", StringComparison.Ordinal) < trecho.IndexOf("Instalacao.ApartarDados(", StringComparison.Ordinal)
+               && app.Contains("MessageBoxResult.No)", StringComparison.Ordinal),
+            "o desinstalador pergunta com o Não como padrão e só mexe nos dados depois de remover o programa");
+        var janela = FonteDoRepo(Path.Combine("Pdv.Instalador", "JanelaInstalador.xaml")) ?? "";
+        checar(System.Text.RegularExpressions.Regex.IsMatch(janela, "x:Name=\"ChkComecarDoZero\" IsChecked=\"False\""),
+            "na instalação nova, 'Começar do zero' nasce desmarcada");
     }
 
     // ---------------------------------------------------------------- origem

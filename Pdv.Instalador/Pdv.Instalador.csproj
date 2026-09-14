@@ -46,4 +46,11 @@
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
+  <!-- 14/09/2026: o desinstalador (e a instalação nova com "Começar do zero") lê a fila do banco
+       do caixa ANTES de tirar os dados do lugar, para avisar o que ainda não subiu para o painel.
+       Mesma versão do Pdv.exe. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+
 </Project>

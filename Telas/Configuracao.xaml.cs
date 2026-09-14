@@ -197,7 +197,14 @@ public partial class Configuracao : UserControl
         _pgwebDll = ConfigPGWebLib.PastaDll(k => Vendas.Config(cx, k)) ?? "";
         TxtPgwebPdc.Text = Vendas.Config(cx, "tef_pgweb_ponto_captura", "");
         TxtPgwebCnpj.Text = Vendas.Config(cx, "tef_pgweb_cnpj", "");
-        TxtPgwebPorta.Text = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
+        {
+            // A porta do pinpad é lista desde 14/09/2026: Automática por padrão. Porta escolhida à
+            // mão abre o "avançado" sozinha, para não virar configuração invisível.
+            var portaGravada = Vendas.Config(cx, "tef_pgweb_porta_pinpad", "");
+            EncherPortasPinpad(Array.Empty<PortaSerial>(), portaGravada);
+            ChkPgwebAvancado.IsChecked = PortaDoPinpad.Normalizar(portaGravada) != PortaDoPinpad.Automatica;
+            BlocoPgwebAvancado.Visibility = Se(ChkPgwebAvancado.IsChecked == true);
+        }
         // AUTCAP (tef_pgweb_capacidades) e detalhe de protocolo: saiu da tela (11/09/2026), o
         // padrao serve e a chave, se alguem gravou, continua valendo.
         _pgwebCap = Vendas.Config(cx, "tef_pgweb_capacidades", "");
@@ -407,7 +414,8 @@ public partial class Configuracao : UserControl
         PedeAdmin = BlocoOperador.Visibility == Visibility.Visible,
         AdminNome = TxtOpNome.Text,
         AdminCpf = TxtOpCpf.Text,
-        AdminPin = TxtOpPin.Text,
+        AdminPin = PwdOpPin.Password,
+        AdminPinRepetido = PwdOpPin2.Password,
     };
 
     // ── PASSO 1: LOJA ───────────────────────────────────────────────────────
@@ -1358,7 +1366,7 @@ public partial class Configuracao : UserControl
             if (BlocoOperador.Visibility == Visibility.Visible)
             {
                 var nome = TxtOpNome.Text.Trim();
-                var pin = TxtOpPin.Text.Trim();
+                var pin = PwdOpPin.Password.Trim();
                 // A REGRA mora no núcleo (Operadores.SalvarAdministrador), não aqui: é ela
                 // que decide entre CRIAR um cadastro local e ADOTAR o que o painel já tem
                 // para este CPF — a origem dos dois ids para a mesma pessoa. Tela não é
@@ -1555,6 +1563,9 @@ public partial class Configuracao : UserControl
         BtnTestarPgweb.IsEnabled = !ocupado;
         BtnInstalarPgweb.IsEnabled = !ocupado;
         BtnAdmPgweb.IsEnabled = !ocupado;
+        BtnTestarPinpad.IsEnabled = !ocupado;
+        BtnFecharProgramaPinpad.IsEnabled = !ocupado;
+        CboPgwebPorta.IsEnabled = !ocupado;
         BtnSalvar.IsEnabled = !ocupado;
         BtnVoltar.IsEnabled = !ocupado && _passo != PassoConfig.Loja;
         BtnSair.IsEnabled = !ocupado;
@@ -1620,7 +1631,7 @@ public partial class Configuracao : UserControl
         // tef_pgweb_dir e tef_pgweb_dll não passam mais pela tela: ficam como estão no banco.
         Chave("tef_pgweb_ponto_captura", TxtPgwebPdc.Text);
         Chave("tef_pgweb_cnpj", TxtPgwebCnpj.Text);   // em branco: o Windows procura a PGWebLib.dll sozinho
-        Chave("tef_pgweb_porta_pinpad", TxtPgwebPorta.Text);
+        Chave("tef_pgweb_porta_pinpad", PortaPinpadEscolhida());   // Automática = sem chave
         // tef_pgweb_capacidades nao passa mais pela tela: fica como esta no banco.
         // 11/09/2026: o campo "redes que aparecem para o caixa escolher" saiu da tela (rede do
         // cartão e do PIX bastam). Salvar APAGA a chave: filtro que ninguém vê não pode ficar.
@@ -1837,7 +1848,20 @@ public partial class Configuracao : UserControl
                         ok ? "Ok" : "Erro");
                     break;
                 case "instalar":
-                    var di = await pg.InstalarAsync(CancellationToken.None);
+                    // 14/09/2026, CASTELO: a instalação ficou mais de 5 minutos com a tela parada, duas
+                    // vezes, e o dono matou o caixa. Agora ela roda dentro de uma tela com cronômetro,
+                    // a última mensagem da biblioteca, o prazo e um Cancelar que devolve a tela na hora.
+                    // Antes de tocar na biblioteca o provedor testa o pinpad (ConferirPinpad).
+                    if (pg.Ocupado) { StatusTef("✗ " + ProvedorPGWebLib.MsgAindaOcupado, "Erro"); break; }
+                    var (acompanhado, cancelou) = TelaOperacaoTef.Acompanhar(
+                        Window.GetWindow(this) ?? Application.Current.MainWindow, "Instalando o ponto de captura", "Instalando",
+                        pg, AcompanhamentoTef.PrazoInstalacao, ct => pg.InstalarAsync(ct));
+                    if (cancelou || acompanhado is null)
+                    {
+                        StatusTef("✗ " + AcompanhamentoTef.Cancelada("Instalação"), "Erro");
+                        break;
+                    }
+                    var di = acompanhado;
                     // A frase da REDE entra junto ("TRANSACAO APROVADA"): é o que os passos 01 e 18
                     // do roteiro mandam o operador ler na instalação. O ramo administrativo, logo
                     // abaixo, já fazia isso; aqui a resposta da rede estava sendo jogada fora.
@@ -1922,6 +1946,102 @@ public partial class Configuracao : UserControl
         TxtStatusTef.Text = texto;
         TxtStatusTef.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[tom ?? "TextoFraco"];
     }
+
+    // ── TESTAR PINPAD e a porta em "avançado" (14/09/2026, loja Castelo) ────────────
+    //
+    // Pedido do dono no dia: "add opção de teste do pinpad" e "SAAS não posso ficar dependendo
+    // disso... vc tem que resolver". O teste mora no núcleo (TestePinpad, com portas simuladas
+    // na bateria); aqui só se chama e se mostra a linha.
+
+    /// <summary>O programa que o último teste achou segurando a porta, quando o caixa pode oferecer fechá-lo.</summary>
+    private string? _programaDoPinpad;
+
+    private async void TestarPinpad(object sender, RoutedEventArgs e)
+    {
+        TravarTef(true);
+        BtnFecharProgramaPinpad.Visibility = Visibility.Collapsed;
+        _programaDoPinpad = null;
+        StatusPinpad("Procurando o pinpad...", null);
+        try
+        {
+            // Nunca abrir a porta com a biblioteca em voo: é ela que está falando com o pinpad.
+            if (Servicos.PGWebLib() is { Ocupado: true })
+            {
+                StatusPinpad(ProvedorPGWebLib.MsgAindaOcupado, "Erro");
+                return;
+            }
+            var r = await Servicos.TestarPinpadAsync(PortaPinpadEscolhida(), CancellationToken.None);
+            StatusPinpad(r.Frase, r.Ok ? "Ok" : "Erro");
+            if (r.Situacao == SituacaoPinpad.Ocupada && ProgramasDeMaquininha.PodeFechar(r.Programa))
+            {
+                _programaDoPinpad = r.Programa;
+                BtnFecharProgramaPinpad.Content = $"Fechar o {r.Programa}";
+                BtnFecharProgramaPinpad.Visibility = Visibility.Visible;
+            }
+            if (ChkPgwebAvancado.IsChecked == true) await RecarregarPortasPinpadAsync();
+        }
+        catch (Exception ex) { StatusPinpad("Não consegui testar o pinpad. Detalhe: " + ex.Message, "Erro"); }
+        finally { TravarTef(false); }
+    }
+
+    /// <summary>Fecha o programa que segura a porta do pinpad. Só com confirmação, e só os que o núcleo deixa (PayGo Windows, ControlPay, Gertec).</summary>
+    private async void FecharProgramaPinpad(object sender, RoutedEventArgs e)
+    {
+        if (_programaDoPinpad is not { } prog) return;
+        var dono = Window.GetWindow(this) ?? Application.Current.MainWindow;
+        if (!Dialogo.Confirmar(dono, $"Fechar o {prog}?",
+                $"O {prog} está segurando a porta do pinpad. Se ele estiver no meio de uma cobrança, essa cobrança se perde.",
+                $"Fechar o {prog}", "Voltar", perigo: true))
+            return;
+        TravarTef(true);
+        try
+        {
+            var erro = await Task.Run(() => ProgramasDeMaquininha.Fechar(prog));
+            _programaDoPinpad = null;
+            BtnFecharProgramaPinpad.Visibility = Visibility.Collapsed;
+            StatusPinpad(erro ?? $"{prog} fechado. Toque em Testar pinpad de novo.", erro is null ? "Ok" : "Erro");
+        }
+        catch (Exception ex) { StatusPinpad($"Não consegui fechar o {prog}. Detalhe: " + ex.Message, "Erro"); }
+        finally { TravarTef(false); }
+    }
+
+    private void StatusPinpad(string texto, string? tom)
+    {
+        TxtStatusPinpad.Text = texto;
+        TxtStatusPinpad.Visibility = Visibility.Visible;
+        TxtStatusPinpad.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[tom ?? "TextoFraco"];
+    }
+
+    private async void PgwebAvancadoMudou(object sender, RoutedEventArgs e)
+    {
+        if (BlocoPgwebAvancado is null || CboPgwebPorta is null || ChkPgwebAvancado is null) return;
+        var aberto = ChkPgwebAvancado.IsChecked == true;
+        BlocoPgwebAvancado.Visibility = Se(aberto);
+        if (!aberto) return;
+        try { await RecarregarPortasPinpadAsync(); }
+        catch { /* sem a lista do Windows fica a Automática e a porta gravada */ }
+    }
+
+    /// <summary>Lê as portas do Windows fora da tela e remonta a lista, mantendo a escolhida.</summary>
+    private async Task RecarregarPortasPinpadAsync()
+    {
+        var escolhida = PortaPinpadEscolhida();
+        IReadOnlyList<PortaSerial> portas;
+        try { portas = await Task.Run(() => new SerialWindows().Listar()); }
+        catch { portas = Array.Empty<PortaSerial>(); }
+        EncherPortasPinpad(portas, escolhida);
+    }
+
+    private void EncherPortasPinpad(IReadOnlyList<PortaSerial> portas, string? gravada)
+    {
+        var opcoes = PortaDoPinpad.Opcoes(portas, gravada);
+        CboPgwebPorta.Items.Clear();
+        foreach (var o in opcoes) CboPgwebPorta.Items.Add(o);
+        CboPgwebPorta.SelectedIndex = PortaDoPinpad.Indice(opcoes, gravada);
+    }
+
+    /// <summary>O número da porta escolhida, ou "" para Automática.</summary>
+    private string PortaPinpadEscolhida() => (CboPgwebPorta?.SelectedItem as PortaDoPinpad.Opcao)?.Valor ?? "";
 
     // ── tema ────────────────────────────────────────────────────────────────
     private bool _carregandoTema;
@@ -2074,6 +2194,8 @@ public sealed record DadosAssistente
     public string AdminNome { get; init; } = "";
     public string AdminCpf { get; init; } = "";
     public string AdminPin { get; init; } = "";
+    /// <summary>A senha do administrador digitada de novo. Tem que ser igual: o campo agora é escondido.</summary>
+    public string AdminPinRepetido { get; init; } = "";
 }
 
 /// <summary>Uma linha da tela de resumo. <see cref="Atencao"/> não é erro: é escolha que precisa ser vista.</summary>
@@ -2395,6 +2517,9 @@ public static class AssistenteConfig
             return "CPF do administrador inválido: é com ele que o dono entra no caixa.";
         if (!Operadores.PinValido(d.AdminPin.Trim()))
             return "A senha do administrador deve ter de 4 a 6 dígitos.";
+        // O campo é escondido (14/09/2026): sem repetir, um erro de digitação passaria calado.
+        if (d.AdminPinRepetido.Trim() != d.AdminPin.Trim())
+            return "As duas senhas do administrador não conferem. Digite a mesma senha nos dois campos.";
         return null;
     }
 

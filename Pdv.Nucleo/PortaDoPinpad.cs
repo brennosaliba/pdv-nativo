@@ -139,4 +139,51 @@ public static class PortaDoPinpad
         => porta.Descricao.Trim().Length == 0
             ? porta.Com
             : $"{porta.Com} · {porta.Descricao.Trim()}";
+
+    /// <summary>
+    /// O número que a PWINFO_PPCOMMPORT quer, venha como vier: "COM2", "com02" e " 2 " viram
+    /// "2"; vazio, nulo ou texto sem número viram "0" (automática).
+    ///
+    /// 14/09/2026, Castelo: o campo era texto livre e ia para a biblioteca do jeito que foi
+    /// digitado. "COM3" chegava cru. Não foi a causa daquele dia, mas é a mesma armadilha.
+    /// </summary>
+    public static string Normalizar(string? porta)
+    {
+        var d = new string((porta ?? "").Where(char.IsAsciiDigit).ToArray()).TrimStart('0');
+        return d.Length == 0 ? Automatica : d;
+    }
+
+    /// <summary>Uma linha da lista de portas da Configuração. <see cref="Valor"/> vazio = automática.</summary>
+    public sealed record Opcao(string Valor, string Rotulo)
+    {
+        public override string ToString() => Rotulo;
+    }
+
+    public const string RotuloAutomatica = "Automática (recomendado)";
+
+    /// <summary>
+    /// A lista da tela: "Automática" primeiro, depois as portas que o Windows mostra, com o nome
+    /// do aparelho. A porta gravada que não existe mais continua aparecendo, marcada, para
+    /// ninguém achar que a configuração sumiu sozinha.
+    /// </summary>
+    public static IReadOnlyList<Opcao> Opcoes(IReadOnlyList<PortaSerial>? portas, string? gravada)
+    {
+        var lista = new List<Opcao> { new("", RotuloAutomatica) };
+        foreach (var p in portas ?? Array.Empty<PortaSerial>())
+            if (p is not null && p.Numero.Length > 0 && lista.All(o => o.Valor != p.Numero))
+                lista.Add(new Opcao(p.Numero, Rotulo(p)));
+        var alvo = Normalizar(gravada);
+        if (alvo != Automatica && lista.All(o => o.Valor != alvo))
+            lista.Add(new Opcao(alvo, $"COM{alvo} (não encontrada neste computador)"));
+        return lista;
+    }
+
+    /// <summary>Qual linha da lista está gravada. Nunca -1: sem casar, é a automática.</summary>
+    public static int Indice(IReadOnlyList<Opcao> opcoes, string? gravada)
+    {
+        var alvo = Normalizar(gravada);
+        if (alvo == Automatica) return 0;
+        for (var i = 0; i < opcoes.Count; i++) if (opcoes[i].Valor == alvo) return i;
+        return 0;
+    }
 }

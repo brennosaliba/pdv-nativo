@@ -336,6 +336,10 @@ public static class Servicos
                     // Menu de redes sem rede gravada, parcelas, senha do lojista: a biblioteca
                     // pergunta e a tela responde com os diálogos da casa.
                     Perguntar = PerguntarNaTelaAsync,
+                    // 14/09/2026, Castelo: a instalação testa o pinpad (abre a porta, manda CAN, espera
+                    // EOT, até 10 s) ANTES de chamar a biblioteca. Pinpad mudo não prende mais o caixa
+                    // cinco minutos dentro de uma chamada que não volta.
+                    ConferirPinpad = TestarPinpadAsync,
                     // Passos 37 a 40 do roteiro: a rede aprova e o operador confirma ou desfaz
                     // NA MAO. A tela so pergunta quando a venda nasceu de um desses passos.
                     DecidirConfirmacao = DecidirConfirmacaoNaTelaAsync,
@@ -506,6 +510,15 @@ public static class Servicos
     public static ProvedorPGWebLib? PGWebLib() => Tef() as ProvedorPGWebLib;
 
     /// <summary>
+    /// TESTAR PINPAD com as portas de verdade desta máquina (14/09/2026, Castelo). É o mesmo teste
+    /// que a instalação roda antes de chamar a biblioteca e o que o botão "Testar pinpad" da
+    /// Configuração mostra. Mora aqui para a tela não tocar na DLL nativa: só o Servicos sabe se
+    /// ela já está carregada (porta ocupada sem outro programa, então, é a própria biblioteca).
+    /// </summary>
+    public static Task<ResultadoTestePinpad> TestarPinpadAsync(string? porta, CancellationToken ct)
+        => TestePinpad.TestarAsync(new SerialWindows(), porta, PGWebLibNativa.Carregada(), ct);
+
+    /// <summary>
     /// Um dado que a PGWebLib pede no meio da operação (PWRET_MOREDATA) e a automação não
     /// sabe: menu de redes sem rede gravada, parcelas, senha do lojista, dado livre. Vai para
     /// os diálogos da casa na thread de UI; título, validação e valor devolvido são de
@@ -646,7 +659,15 @@ public static class Servicos
     private static System.Windows.Window JanelaAtiva()
     {
         var app = System.Windows.Application.Current;
-        return app.Windows.OfType<System.Windows.Window>().FirstOrDefault(w => w.IsActive) ?? app.MainWindow;
+        var janelas = app.Windows.OfType<System.Windows.Window>().ToList();
+        // Nenhuma janela do caixa ativa (outro programa na frente, como o da Gertec): a pergunta
+        // nascia na MainWindow, atrás da tela da instalação, e o caixa parecia travado esperando
+        // uma resposta que ninguém via. A última janela aberta e visível é a de cima.
+        var dono = janelas.FirstOrDefault(w => w.IsActive)
+                   ?? janelas.LastOrDefault(w => w.IsVisible)
+                   ?? app.MainWindow;
+        if (!dono.IsActive) { try { dono.Activate(); } catch { /* o Windows pode recusar o foco: a janela ainda nasce em cima */ } }
+        return dono;
     }
 
     /// <summary>O provedor atual, se souber estornar/ADM/ativo (PayGo ou ControlPay) — é o que o botão TEF da venda e a Configuração usam.</summary>
