@@ -95,7 +95,32 @@ public sealed class FakeTotp : IDisposable
     public ConcurrentQueue<Chamada> Chamadas { get; } = new();
 
     public sealed record Tentativa(bool Ok, string? Motivo, string? Referencia, string? Tipo,
-        string? TerminalUuid, bool TestouOCodigo, string? Id, string? Nivel = null, string? Autorizador = null);
+        string? TerminalUuid, bool TestouOCodigo, string? Id, string? Nivel = null, string? Autorizador = null,
+        string? Dica = null);
+
+    // ── A DICA NA RECUSA (contrato de 15/09/2026, ERP e PDV em paralelo) ─────────
+    // Só no caminho "codigo invalido" (nunca no replay, nunca no rate limit):
+    //  · o código bate com o segredo de um CANDIDATO do nível em passos FORA de -1..+1
+    //    (dentro de <see cref="PassosDaDica"/>) → dica 'vencido';
+    //  · bate, em -1..+1, com o segredo de quem NÃO é candidato do nível (o gerente num
+    //    estorno) → dica 'outro_autenticador'.
+    // Nunca aprova, nunca grava contador, conta no rate limit igual. A chave "dica" só vai
+    // no corpo quando não é nula (a suíte do banco confere as chaves da resposta do replay).
+
+    /// <summary>false (padrão) = a RPC de hoje, sem dica: os cenários antigos continuam idênticos.</summary>
+    public bool EmiteDica { get; set; }
+
+    /// <summary>Passos (em relação a T) que a sonda do 'vencido' varre; -1..+1 nunca entra.</summary>
+    public (int De, int Ate) PassosDaDica { get; set; } = (-20, 2);
+
+    /// <summary>Força esta dica em toda recusa "codigo invalido" (servidor com valor que o caixa não conhece).</summary>
+    public string? DicaForcada { get; set; }
+
+    /// <summary>Manda "dica": null explícito no corpo da recusa (outra forma de "sem dica").</summary>
+    public bool DicaNulaNoCorpo { get; set; }
+
+    /// <summary>Força a dica em QUALQUER recusa, inclusive "muitas tentativas" (o caixa tem que ignorar).</summary>
+    public string? DicaEmTodaRecusa { get; set; }
 
     /// <summary>O `pdv_autorizacao_totp_log`: toda tentativa, ok ou não.</summary>
     public ConcurrentQueue<Tentativa> Log { get; } = new();
@@ -222,10 +247,14 @@ public sealed class FakeTotp : IDisposable
             // _nivel default 'dono' (assinatura antiga continua valendo = dono)
             var nivel = string.IsNullOrWhiteSpace(nivelBruto) ? "dono" : nivelBruto.Trim().ToLowerInvariant();
 
-            object Nao(string motivo, bool testou)
+            object Nao(string motivo, bool testou, string? dica = null)
             {
-                Log.Enqueue(new Tentativa(false, motivo, referencia, tipo, terminal, testou, null, nivel));
-                return new { ok = false, motivo };
+                dica ??= DicaEmTodaRecusa;
+                Log.Enqueue(new Tentativa(false, motivo, referencia, tipo, terminal, testou, null, nivel, null, dica));
+                var corpo = new Dictionary<string, object?> { ["ok"] = false, ["motivo"] = motivo };
+                if (dica is not null) corpo["dica"] = dica;
+                else if (DicaNulaNoCorpo) corpo["dica"] = null;
+                return corpo;
             }
 
             if (nivel is not ("dono" or "gerente")) return Nao("nivel invalido", false);
@@ -242,20 +271,35 @@ public sealed class FakeTotp : IDisposable
             if (candidatos.Count == 0) return Nao("autenticador nao configurado", false);
 
             var t = agora.ToUnixTimeSeconds() / 30;
+            var replay = false;
             foreach (var cand in candidatos)
                 for (var d = -1; d <= 1; d++)
                 {
                     var candidato = t + d;
                     if (Codigo(cand.segredo, candidato * 30) != codigo) continue;
-                    if (candidato <= cand.ultimo()) break;          // replay: contador já gasto
+                    if (candidato <= cand.ultimo()) { replay = true; break; }   // replay: contador já gasto
                     cand.gravar(candidato);
                     var id = Guid.NewGuid().ToString();
                     Log.Enqueue(new Tentativa(true, null, referencia, tipo, terminal, true, id, nivel, cand.nome));
                     return new { ok = true, id, autorizador = cand.nome };
                 }
             falhas.Add(agora);
-            return Nao("codigo invalido", true);
+            return Nao("codigo invalido", true, replay ? null : DicaForcada ?? SondarDica(codigo, nivel, t, candidatos.Select(c => c.segredo).ToList()));
         }
+    }
+
+    /// <summary>A sonda da dica, como o contrato manda: primeiro o outro autenticador (±1), depois o vencido.</summary>
+    private string? SondarDica(string codigo, string nivel, long t, List<byte[]> segredosDoNivel)
+    {
+        if (!EmiteDica || codigo.Length != 6 || !codigo.All(char.IsDigit)) return null;
+        // não candidato do nível: o gerente num pedido de nível dono (no nível gerente o dono é candidato)
+        if (nivel == "dono" && ConfiguradoGerente)
+            for (var d = -1; d <= 1; d++)
+                if (Codigo(SegredoGerente, (t + d) * 30) == codigo) return "outro_autenticador";
+        foreach (var s in segredosDoNivel)
+            for (var d = PassosDaDica.De; d <= PassosDaDica.Ate; d++)
+                if (d is < -1 or > 1 && Codigo(s, (t + d) * 30) == codigo) return "vencido";
+        return null;
     }
 
     private static string? Txt(JsonElement e, string nome)

@@ -62,7 +62,7 @@ public enum ViaAutorizacao
 /// que decide o fluxo: com JSON na mão (inclusive 401) o PDV já sabe o veredito;
 /// só timeout e erro de rede são "não sei", e "não sei" também recusa.
 /// </summary>
-public sealed record RespostaTotp(bool Ok, bool Definitiva, string? Motivo, string? Id, string? Autorizador);
+public sealed record RespostaTotp(bool Ok, bool Definitiva, string? Motivo, string? Id, string? Autorizador, string? Dica = null);
 
 /// <summary>
 /// O que identifica o ato que está sendo autorizado. `Referencia` é o que amarra
@@ -160,6 +160,36 @@ public static class Autorizacao
 
     /// <summary>O motivo que a RPC devolve para código errado (e para replay).</summary>
     public const string MotivoCodigoInvalido = "codigo invalido";
+
+    // ── A DICA NA RECUSA (15/09/2026, Castelo) ──────────────────────────────────
+    // Três "codigo invalido" seguidos no Castelo e ninguém sabia por quê: código repassado por
+    // mensagem que venceu, ou o código da entrada do GERENTE num estorno (que só aceita o do
+    // dono). A RPC passa a mandar `dica` junto do "codigo invalido": 'vencido' (bateu com o
+    // segredo certo num passo que já passou) ou 'outro_autenticador' (bateu com o segredo de
+    // quem não pode aprovar este nível). A dica nunca aprova e conta no limite igual; aqui ela
+    // só troca a frase. Servidor sem dica (a RPC de antes) e dica desconhecida: a frase de hoje.
+
+    public const string DicaVencido = "vencido";
+    public const string DicaOutroAutenticador = "outro_autenticador";
+
+    public const string AvisoCodigoInvalido = "Código inválido. Tente de novo.";
+    public const string AvisoCodigoVencido = "Esse código já venceu. Digite o que está na tela agora.";
+    public const string AvisoCodigoDoGerente = "Esse código é do gerente. Aqui vale o do dono.";
+
+    /// <summary>Só as dicas do contrato passam; qualquer outro valor vira null (a frase de hoje).</summary>
+    public static string? DicaConhecida(string? dica) => dica is DicaVencido or DicaOutroAutenticador ? dica : null;
+
+    /// <summary>
+    /// A frase entre uma tentativa e outra. 'outro_autenticador' só existe no nível dono (o outro
+    /// autenticador é o do gerente); no nível gerente o dono também vale e a RPC nunca manda essa
+    /// dica, então ali fica a frase de hoje.
+    /// </summary>
+    public static string AvisoDeNovaTentativa(string? dica, string? nivel) => DicaConhecida(dica) switch
+    {
+        DicaVencido => AvisoCodigoVencido,
+        DicaOutroAutenticador when nivel != NivelGerente => AvisoCodigoDoGerente,
+        _ => AvisoCodigoInvalido,
+    };
 
     /// <summary>Os dois níveis que a RPC conhece (parâmetro _nivel, default 'dono').</summary>
     public const string NivelDono = "dono";
@@ -297,7 +327,7 @@ public static class Autorizacao
 
             if (Normal(v.Motivo) == MotivoCodigoInvalido)
             {
-                aviso = "Código inválido. Tente de novo.";
+                aviso = AvisoDeNovaTentativa(v.Dica, pedido.Nivel);
                 continue;
             }
 
@@ -428,10 +458,14 @@ public sealed class ClienteAutorizacao : IAutorizacaoRemota
         {
             var ok = okProp.ValueKind == JsonValueKind.True;
             var motivo = ok ? null : Str(r, "motivo") ?? "recusado";
-            Anotar($"{tipo} {referencia} código {mascara}: HTTP {status} ok={ok}" + (ok ? "" : $" motivo={motivo}"));
+            // 15/09/2026: a dica só existe na recusa, e só as do contrato passam. A linha de
+            // diagnóstico leva a dica: a próxima recusa na loja diz se venceu ou se era outro celular.
+            var dica = ok ? null : Autorizacao.DicaConhecida(Str(r, "dica"));
+            Anotar($"{tipo} {referencia} código {mascara}: HTTP {status} ok={ok}" + (ok ? "" : $" motivo={motivo}")
+                   + (dica is null ? "" : $" dica={dica}"));
             return ok
                 ? new RespostaTotp(true, true, null, Str(r, "id"), Str(r, "autorizador"))
-                : new RespostaTotp(false, true, motivo, null, null);
+                : new RespostaTotp(false, true, motivo, null, null, dica);
         }
 
         // Erro do PostgREST ({code, message}): 401 de sessão vencida, 404 de RPC

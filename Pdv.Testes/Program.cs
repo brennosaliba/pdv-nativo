@@ -1819,5 +1819,13 @@ Console.WriteLine();
 Console.WriteLine("--- Usuario master da rede: so ele faz acao de admin no caixa ---");
 await TestesUsuarioMaster.RodarAsync((cond, nome) => Check("master: " + nome, cond));
 
+// -- 15/09/2026: tres "codigo invalido" seguidos no Castelo -----------------------------
+// Ninguem sabia se o codigo ja tinha vencido (repassado por mensagem) ou se era o do gerente
+// num estorno. A RPC passa a mandar uma dica na recusa, e o caixa troca so a frase.
+Console.WriteLine();
+Console.WriteLine("--- 2FA: a dica na recusa (codigo vencido, codigo do outro autenticador) ---");
+await TestesTotpDica.RodarAsync((cond, nome) => Check("totp-dica: " + nome, cond));
+
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;
