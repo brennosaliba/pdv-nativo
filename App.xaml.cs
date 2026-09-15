@@ -104,27 +104,35 @@ public partial class App : Application
         var modo = LinhaDeComando.Modo(args);
         if (!LinhaDeComando.AbreOCaixa(modo))
         {
-            Banco.Migrar();
-            using var cx = Banco.Abrir();
-            var t = cx.QueryFirstOrDefault("SELECT loja_nome, cnpj, serie_nfce FROM terminal LIMIT 1");
-            var dados = Servicos.CupomDeExemplo(
-                (t?.loja_nome as string) ?? "",
-                (t?.cnpj as string) ?? "",
-                t is null ? 0 : Convert.ToInt32(t.serie_nfce));
-
+            // FERRAMENTA QUE FALHA SAI COM 1, SEM CAIXA DE AVISO (revisão, 14/09/2026). Sem a
+            // MainWindow, uma exceção aqui (banco ilegível, impressora que lança) caía no aviso
+            // "segurei o caixa de pé" e o processo ficava vivo, sem janela, até o instalador
+            // matá-lo aos 90 s. Quem chamou lê o FALHOU e o código de saída.
             string? erro;
-            string onde;
-            if (modo == ModoDoExe.CupomTeste)
+            string onde = "";
+            try
             {
-                onde = args.Length > 1 ? args[1]
-                    : Path.Combine(Path.GetTempPath(), "cupom-teste.png");
-                erro = await Impressao.PreVisualizarAsync(dados, onde);
+                Banco.Migrar();
+                using var cx = Banco.Abrir();
+                var t = cx.QueryFirstOrDefault("SELECT loja_nome, cnpj, serie_nfce FROM terminal LIMIT 1");
+                var dados = Servicos.CupomDeExemplo(
+                    (t?.loja_nome as string) ?? "",
+                    (t?.cnpj as string) ?? "",
+                    t is null ? 0 : Convert.ToInt32(t.serie_nfce));
+
+                if (modo == ModoDoExe.CupomTeste)
+                {
+                    onde = args.Length > 1 ? args[1]
+                        : Path.Combine(Path.GetTempPath(), "cupom-teste.png");
+                    erro = await Impressao.PreVisualizarAsync(dados, onde);
+                }
+                else
+                {
+                    onde = args.Length > 1 ? args[1] : (Impressao.ImpressoraPadrao() ?? "(padrão)");
+                    erro = await Impressao.ImprimirAsync(dados, args.Length > 1 ? args[1] : null);
+                }
             }
-            else
-            {
-                onde = args.Length > 1 ? args[1] : (Impressao.ImpressoraPadrao() ?? "(padrão)");
-                erro = await Impressao.ImprimirAsync(dados, args.Length > 1 ? args[1] : null);
-            }
+            catch (Exception ex) { erro = ex.GetType().Name + ": " + ex.Message; }
 
             // console anexado: WinExe não tem stdout próprio, mas herda o do terminal
             // que o chamou — sem isso o comando roda em silêncio e ninguém sabe o resultado

@@ -222,6 +222,31 @@ public static class TestesInstanciaUnica
                     try { File.Delete(a); } catch { }
             }
         }
+
+        // ── 8. FERRAMENTA QUE FALHA SAI COM 1, SEM AVISO E SEM FICAR VIVA ───
+        // Revisão da onda 2 (14/09/2026): sem a MainWindow, uma exceção no --cupom-teste (aqui,
+        // um banco que não abre) caía no aviso "segurei o caixa de pé" e deixava o processo vivo
+        // e invisível até o instalador matá-lo aos 90 s. Tem que sair com 1 e escrever FALHOU.
+        {
+            var bloqueio = Path.Combine(Path.GetTempPath(), $"cupom_bloqueio_{Guid.NewGuid():N}");
+            var png = Path.Combine(Path.GetTempPath(), $"cupom_sonda_{Guid.NewGuid():N}.png");
+            try
+            {
+                File.WriteAllText(bloqueio, "arquivo no lugar da pasta: o banco nao abre");
+                var (codigo, saida) = SubirPdvApp(Path.Combine(bloqueio, "pdv.db"), "--cupom-teste", png);
+                var resumo = saida.Trim().Length == 0 ? "" : " | " + saida.Trim().Replace("\r", "").Replace("\n", " | ");
+                checar(codigo == 1 && saida.Contains("FALHOU", StringComparison.Ordinal),
+                    $"--cupom-teste com banco que não abre sai com 1 e escreve FALHOU, sem aviso de tela (código {codigo}){resumo}");
+                checar(!saida.Contains(Sondas.MarcaJanela, StringComparison.Ordinal),
+                    "--cupom-teste que falha não abre janela nenhuma do caixa" + resumo);
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                foreach (var a in new[] { bloqueio, png })
+                    try { File.Delete(a); } catch { }
+            }
+        }
     }
 
     /// <summary>Sobe o Pdv.App de verdade (modo sonda do Pdv.Testes) com os argumentos do Pdv.exe.</summary>

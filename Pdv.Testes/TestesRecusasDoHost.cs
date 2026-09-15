@@ -121,6 +121,11 @@ public static class TestesRecusasDoHost
         var config = Fonte("Telas", "Configuracao.xaml.cs") ?? "";
         checar(config.Contains("RecusasDoHost.ParaTela(di.Motivo", StringComparison.Ordinal),
             "a instalação do ponto de captura também traduz a recusa do host");
+        checar(config.Contains("\" Resposta da PayGo: \" + di.Motivo.Trim()", StringComparison.Ordinal),
+            "na instalação (tela de quem fala com o suporte da PayGo) a resposta original do host continua à vista, depois da tradução");
+        var venda = Fonte("Telas", "Venda.xaml.cs") ?? "";
+        checar(venda.Contains("{d.MensagemParaTela.TrimEnd('.', ' ')}.", StringComparison.Ordinal),
+            "estorno negado: a recusa traduzida já termina em ponto, a frase não sai com dois pontos");
     }
 
     private static string? Fonte(params string[] partes)

@@ -1940,7 +1940,10 @@ public partial class Configuracao : UserControl
                         ? "✓ Ponto de captura instalado." + (di.Motivo is { Length: > 0 } mi ? " " + mi + "." : "")
                           + (papel is null ? " Comprovante impresso." : " ⚠ O comprovante não saiu: " + papel + ".")
                           + " Toque em Testar a maquininha e depois em Salvar."
-                        : "✗ Instalação não concluída: " + (di.Motivo is null ? "sem detalhe" : RecusasDoHost.ParaTela(di.Motivo)),
+                        : "✗ Instalação não concluída: " + (di.Motivo is null ? "sem detalhe" : RecusasDoHost.ParaTela(di.Motivo)
+                            // Tela de quem instala, falando com a PayGo: a tradução diz o que fazer,
+                            // e a resposta original é o que o suporte deles pede (revisão, 14/09/2026).
+                            + (RecusasDoHost.Traduzir(di.Motivo) is null ? "" : " Resposta da PayGo: " + di.Motivo.Trim() + ".")),
                         di.Pago ? "Ok" : "Erro");
                     break;
                 default:

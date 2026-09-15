@@ -3170,7 +3170,7 @@ public partial class Venda : UserControl
             Caixa.Auditar(cxn, null, "tef_estorno_negado", _operador.Id, aut.Autorizador,
                 $"venda={numero} nsu={nsu} {d.Motivo}{trilha}");
             Dialogo.Avisar(dono, "Estorno negado",
-                $"A maquininha não aprovou o estorno: {d.MensagemParaTela}.\n\n" +
+                $"A maquininha não aprovou o estorno: {d.MensagemParaTela.TrimEnd('.', ' ')}.\n\n" +
                 "O dinheiro não voltou para o cliente." +
                 (precisaCancelarNota ? " A nota fiscal já foi cancelada. Chame o gerente." : " Tente de novo.") + reqnumTxt,
                 "erro");
