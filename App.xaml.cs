@@ -78,9 +78,25 @@ public partial class App : Application
         static bool TeclaPerdidaDoWindows(Exception ex)
             => ex is NullReferenceException
                && (ex.StackTrace ?? "").Contains("TextServicesContext.Keystroke", StringComparison.Ordinal);
+        // FALHA DO WEBVIEW2 NÃO É CAIXA DE AVISO SOBRE O CAIXA (15/09/2026, Castelo). O PC novo
+        // mostrou "segurei o caixa de pé" com "CoreWebView2Controller members can only be accessed
+        // from the UI thread.": a frase que o SDK usa para QUALQUER E_NOINTERFACE do controller,
+        // lançada de dentro do layout, do foco ou da visibilidade de um controle cuja inicialização
+        // falhou no meio. O caixa não tem o que fazer com ela, e a caixa modal abre por cima da
+        // venda a cada passada de layout. Vai para o erros.log (com a thread e a versão do runtime,
+        // no máximo 3 vezes a cada 10 min por frase) e para a camada dona do controle quebrado,
+        // que mostra o painel dela e troca o controle.
+        var falhasWeb = new FiltroDeRepeticao(3, TimeSpan.FromMinutes(10));
         DispatcherUnhandledException += (_, args) =>
         {
             args.Handled = true;
+            if (Nucleo.FalhaWebView2.EhDoWebView2(args.Exception))
+            {
+                if (falhasWeb.Registrar(args.Exception.GetType().FullName + ": " + args.Exception.Message, DateTime.UtcNow))
+                    Registrar(Telas.HospedeWebView2.Contexto("tela webview2"), args.Exception);
+                try { Telas.HospedeWebView2.AvisarFalhaForaDaCamada(args.Exception); } catch { }
+                return;
+            }
             Registrar("tela", args.Exception);
             if (TeclaPerdidaDoWindows(args.Exception)) return;
             try

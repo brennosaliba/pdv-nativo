@@ -33,6 +33,20 @@ internal static class HostWpf
         if (erro is not null) throw erro;
     }
 
+    /// <summary>
+    /// Roda `passos` ASSINCRONOS na thread do Application e espera daqui (a thread da suíte),
+    /// com prazo. Para o que só anda com o laço de mensagens girando: WebView2, timers, awaits
+    /// que voltam ao Dispatcher. Quem chama NÃO é a thread da tela, então esperar aqui não trava.
+    /// </summary>
+    public static void ExecutarAsync(Func<Task> passos, TimeSpan prazo)
+    {
+        Iniciar();
+        if (_erroInicial is not null) throw _erroInicial;
+        var t = _app!.Dispatcher.InvokeAsync(passos).Task.Unwrap();
+        if (!t.Wait(prazo)) throw new TimeoutException($"os passos na thread da tela passaram de {prazo.TotalSeconds:0} s");
+        t.GetAwaiter().GetResult();
+    }
+
     private static void Iniciar()
     {
         lock (_trava)

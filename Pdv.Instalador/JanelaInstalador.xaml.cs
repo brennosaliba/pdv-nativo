@@ -25,6 +25,8 @@ public partial class JanelaInstalador : Window
     private bool _atualizacao;
     /// <summary>Onde os dados antigos foram guardados, quando o dono escolheu começar do zero.</summary>
     private string? _dadosGuardadosEm;
+    /// <summary>A frase do fim quando o componente do chat e do WhatsApp não entrou (null = entrou ou já estava).</summary>
+    private string? _avisoComponente;
 
     public JanelaInstalador()
     {
@@ -118,7 +120,14 @@ public partial class JanelaInstalador : Window
 
         var iniciar = ChkIniciar.IsChecked == true;
         var atalho = ChkAtalho.IsChecked == true;
+        _avisoComponente = null;
         void Progresso(string p) => Dispatcher.Invoke(() => TxtProgresso.Text = p);
+        // A barra gira enquanto não há porcentagem; no download do componente, ela anda.
+        void BarraDoDownload(int? p) => Dispatcher.Invoke(() =>
+        {
+            Barra.IsIndeterminate = p is null;
+            if (p is { } v) Barra.Value = v;
+        });
 
         // ---- o programa
         var erro = await Task.Run(() =>
@@ -158,6 +167,18 @@ public partial class JanelaInstalador : Window
 
         if (erro is not null) { Falhou(erro); return; }
 
+        // ---- o componente da Microsoft do chat e do WhatsApp (15/09/2026, Castelo)
+        //
+        // O PC novo do Castelo não tinha o WebView2 Runtime e a instalação terminava "pronta": o dono
+        // descobria no chat. O caixa já está instalado aqui, e a regra é a mesma do agente e do
+        // PayGo: nada daqui para frente desfaz o que deu certo. Sem internet, sem assinatura da
+        // Microsoft ou com o instalador dela falhando, fica uma frase no fim e o caixa vende sem chat.
+        // Em Task.Run: o download e o instalador da Microsoft levam minutos, e a janela tem que andar.
+        TxtTitulo.Text = "O chat e o WhatsApp";
+        var componente = await Task.Run(() => WebView2Runtime.GarantirAsync(WebView2Runtime.PassosDeVerdade(), Progresso, BarraDoDownload, Path.GetTempPath()));
+        _avisoComponente = componente.Aviso;
+        Barra.IsIndeterminate = true;
+
         // ---- o PayGo
         //
         // O caixa JÁ ESTÁ INSTALADO neste ponto, e essa ordem é a regra: nada que
@@ -191,7 +212,8 @@ public partial class JanelaInstalador : Window
             avisoPayGo = PayGo.Explicar(acao);
         }
 
-        Concluiu(avisoPayGo);
+        var avisos = new[] { _avisoComponente, avisoPayGo }.Where(a => !string.IsNullOrWhiteSpace(a)).ToArray();
+        Concluiu(avisos.Length == 0 ? null : string.Join("\n\n", avisos));
     }
 
     /// <summary>

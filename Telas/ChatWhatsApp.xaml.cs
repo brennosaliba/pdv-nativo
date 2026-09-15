@@ -51,9 +51,13 @@ public partial class ChatWhatsApp : UserControl
         "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding";
 
     private bool _pronto, _iniciando;
+    /// <summary>Cada inicialização ganha um número; a que foi passada para trás (controle recriado no meio) não mexe mais na tela.</summary>
+    private int _tentativa;
     private DispatcherTimer? _poll;
-    private int _recargasNaHora; private DateTime _janelaRecargas = DateTime.MinValue;
+    private readonly TetoPorHora _tetoRecargas = new TetoPorHora(6);
     private int _falhasSeguidas;
+    private readonly HospedeWebView2 Hospede;
+    private readonly string _perfil;
     private string? _ultimaSessaoDiag;
     private static readonly System.Diagnostics.Stopwatch _relogio = System.Diagnostics.Stopwatch.StartNew();
 
@@ -62,48 +66,44 @@ public partial class ChatWhatsApp : UserControl
     /// Só marcos: quando o WebView2 nasceu, se a página carregou, o número de não lidas,
     /// o estado da sessão e se a página tocou som. Nunca o conteúdo de mensagem. É o
     /// que responde "o WhatsApp caiu a que horas?" sem ninguém precisar reproduzir.
+    /// Passou de 1 MB vira .1: a hora da queda de ontem não pode sumir junto.
     /// </summary>
-    internal static void Diag(string texto)
-    {
-        try
-        {
-            var caminho = Path.Combine(Banco.Pasta, "whatsapp-diagnostico.txt");
-            // passou de 1 MB: vira .1 (a hora da queda de ontem não pode sumir junto)
-            if (File.Exists(caminho) && new FileInfo(caminho).Length > 1_000_000)
-                File.Move(caminho, Path.Combine(Banco.Pasta, "whatsapp-diagnostico.1.txt"), true);
-            File.AppendAllText(caminho, $"{DateTime.Now:dd/MM HH:mm:ss}  +{_relogio.Elapsed.TotalSeconds,7:0.0}s  {texto}{Environment.NewLine}");
-        }
-        catch { /* diagnóstico nunca atrapalha o caixa */ }
-    }
+    internal static void Diag(string texto) => HospedeWebView2.Anotar("whatsapp-diagnostico.txt", texto, _relogio.Elapsed);
 
     public ChatWhatsApp()
     {
         InitializeComponent();
+        _perfil = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "PdvNativo", PastaPerfil);
+        // 15/09/2026 (Castelo): o ambiente, o Ensure e a troca do controle que falhou moram no
+        // hospedeiro, igual para o chat do iFood. Ver Telas/HospedeWebView2.cs.
+        Hospede = new HospedeWebView2("whatsapp", Dispatcher, () => Web, w => Web = w, _perfil, Diag,
+            () => new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = ArgumentosDoNavegador });
+        Hospede.Quebrou += AoQuebrar;
         ServicoWhatsApp.SessaoMudou += PintarEstado;
         Dispatcher.ShutdownStarted += (_, _) => { try { _poll?.Stop(); } catch { } };
     }
 
-    /// <summary>Pré-aquece o WebView2 para o selo acender na venda antes de alguém abrir a aba.</summary>
-    public async Task PreAquecerAsync() { if (!_pronto) await IniciarAsync(); }
+    /// <summary>
+    /// Pré-aquece o WebView2 para o selo acender na venda antes de alguém abrir a aba. Chamado de
+    /// qualquer thread, volta para a da tela antes de encostar no controle.
+    /// </summary>
+    public Task PreAquecerAsync() => HospedeWebView2.NaTela(Dispatcher, () => _pronto ? Task.CompletedTask : IniciarAsync());
 
     private async Task IniciarAsync()
     {
         if (_iniciando || _pronto) return;
         _iniciando = true;
+        var minha = ++_tentativa;
         try
         {
             TxtEstado.Text = "carregando…";
-            Diag($"iniciar: visivel={IsVisible} carregado={IsLoaded}");
-            var perfil = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "PdvNativo", PastaPerfil);
-            Directory.CreateDirectory(perfil);
+            Diag($"iniciar: visivel={IsVisible} carregado={IsLoaded} {HospedeWebView2.Contexto("whatsapp")}");
+            Directory.CreateDirectory(_perfil);
 
-            var opcoes = new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = ArgumentosDoNavegador };
-            var ambiente = await CoreWebView2Environment.CreateAsync(null, perfil, opcoes);
-            Diag("ambiente ok: runtime " + ambiente.BrowserVersionString);
-            await Web.EnsureCoreWebView2Async(ambiente);
-            var core = Web.CoreWebView2;
+            var core = await Hospede.IniciarControleAsync();
+            if (minha != _tentativa) return;
             Diag($"core ok: visivel={IsVisible}");
             Iniciou?.Invoke();
 
@@ -174,6 +174,7 @@ public partial class ChatWhatsApp : UserControl
             core.WebMessageReceived += OnWebMessage;
 
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptContador);
+            if (minha != _tentativa) return;
 
             Web.Source = new Uri(UrlWhatsApp);
             Web.Visibility = Visibility.Visible;
@@ -200,18 +201,63 @@ public partial class ChatWhatsApp : UserControl
         }
         catch (Exception ex)
         {
-            Diag("falhou: " + ex.GetType().Name + " " + ex.Message);
-            Web.Visibility = Visibility.Collapsed;
+            // Uma tentativa passada para trás (o controle foi recriado no meio) não pinta a tela:
+            // a tentativa nova é a dona dela.
+            if (minha != _tentativa) { Diag("tentativa antiga terminou: " + ex.GetType().Name); return; }
+            // O hospedeiro anota (thread, runtime) e troca o controle que chegou a receber o Ensure:
+            // controle com init falho não se reaproveita (15/09/2026, Castelo).
+            var tipo = Hospede.Falhou("iniciar", ex);
+            MostrarFalha(tipo, FalhaWebView2.Painel(tipo, "O WhatsApp"));
+        }
+        finally { if (minha == _tentativa) _iniciando = false; }
+    }
+
+    /// <summary>
+    /// O painel de erro desta camada: UMA linha com o que fazer e o botão Tentar de novo. O
+    /// detalhe fica no whatsapp-diagnostico.txt, nunca na tela.
+    /// </summary>
+    private void MostrarFalha(TipoFalhaWeb tipo, string texto)
+    {
+        try
+        {
+            _pronto = false;
+            _poll?.Stop(); _poll = null;
+            try { Web.Visibility = Visibility.Collapsed; } catch { }
             PainelErro.Visibility = Visibility.Visible;
             TxtEstado.Text = "";
-            TxtErro.Text =
-                "O componente de navegação do Windows (WebView2) não está disponível " +
-                "nesta máquina. Instale o \"WebView2 Runtime\" da Microsoft e abra o " +
-                "WhatsApp de novo. O restante do caixa segue funcionando normalmente.\n\n" +
-                "Detalhe técnico: " + ex.Message;
-            ServicoWhatsApp.SemComponente();
+            TxtErro.Text = texto;
+            // A vigia na venda: sem runtime é "o WhatsApp não abre neste PC" (avisa uma vez); outra
+            // falha é página sem leitura, que o Tentar de novo resolve.
+            if (tipo == TipoFalhaWeb.RuntimeAusente) ServicoWhatsApp.SemComponente();
+            else ServicoWhatsApp.ReportarSessao("semleitura");
         }
-        finally { _iniciando = false; }
+        catch (Exception ex) { Diag("painel de erro: " + ex.GetType().Name); }
+    }
+
+    /// <summary>
+    /// Falha de WebView2 que chegou ao Dispatcher (layout, foco, visibilidade) e é DESTE controle
+    /// (App.xaml.cs, HospedeWebView2.AvisarFalhaForaDaCamada). No lugar da caixa de aviso sobre o
+    /// caixa: o painel desta camada, e um controle novo assim que o Dispatcher estiver livre.
+    /// </summary>
+    private void AoQuebrar(Exception ex)
+    {
+        _tentativa++; _iniciando = false;
+        MostrarFalha(TipoFalhaWeb.Outra, FalhaWebView2.Painel(TipoFalhaWeb.Outra, "O WhatsApp"));
+        Hospede.RecriarDepois("quebrou fora da inicialização");
+    }
+
+    /// <summary>"Tentar de novo" do painel: controle que já foi usado dá lugar a um novo, e inicia.</summary>
+    private async void TentarDeNovo(object sender, RoutedEventArgs e)
+    {
+        if (_iniciando) return;
+        try
+        {
+            ServicoWhatsApp.Recarregando();
+            Hospede.RecriarSeUsado("tentar de novo");
+            PainelErro.Visibility = Visibility.Collapsed;
+            await IniciarAsync();
+        }
+        catch (Exception ex) { Diag("tentar de novo: " + ex.GetType().Name + " " + ex.Message); }
     }
 
     /// <summary>
@@ -221,26 +267,16 @@ public partial class ChatWhatsApp : UserControl
     /// </summary>
     private async Task RecriarAsync(string motivo)
     {
+        if (!Dispatcher.CheckAccess()) { await HospedeWebView2.NaTela(Dispatcher, () => RecriarAsync(motivo)); return; }
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(3));
-            if (DateTime.UtcNow - _janelaRecargas > TimeSpan.FromHours(1)) { _janelaRecargas = DateTime.UtcNow; _recargasNaHora = 0; }
-            if (++_recargasNaHora > 6) { Diag("recriar: teto da hora"); return; }
+            if (!_tetoRecargas.Permitir(DateTime.UtcNow)) { Diag("recriar: teto da hora"); return; }
             Diag($"recriando o WebView2 ({motivo})");
             _poll?.Stop(); _poll = null;
-            _pronto = false; _iniciando = false;
-            var grade = Web.Parent as Grid;
-            var velho = Web;
-            var novo = new Microsoft.Web.WebView2.Wpf.WebView2 { Visibility = Visibility.Collapsed };
-            Grid.SetRow(novo, Grid.GetRow(velho));
-            if (grade is not null)
-            {
-                var i = grade.Children.IndexOf(velho);
-                grade.Children.Remove(velho);
-                grade.Children.Insert(Math.Max(0, i), novo);
-            }
-            Web = novo;
-            try { velho.Dispose(); } catch { }
+            _pronto = false; _tentativa++; _iniciando = false;
+            // Navegador morto: o ambiente dele também morreu. Controle novo no mesmo lugar da grade.
+            Hospede.Recriar(motivo, descartarAmbiente: true);
             ServicoWhatsApp.Recarregando();
             await IniciarAsync();
         }
@@ -254,8 +290,7 @@ public partial class ChatWhatsApp : UserControl
         {
             await Task.Delay(espera);
             if (!_pronto || Web.CoreWebView2 is null) return;
-            if (DateTime.UtcNow - _janelaRecargas > TimeSpan.FromHours(1)) { _janelaRecargas = DateTime.UtcNow; _recargasNaHora = 0; }
-            if (++_recargasNaHora > 6) { Diag("recarga automatica: teto da hora"); return; }
+            if (!_tetoRecargas.Permitir(DateTime.UtcNow)) { Diag("recarga automatica: teto da hora"); return; }
             Diag($"recarga automatica ({motivo})");
             ServicoWhatsApp.Recarregando();
             Web.CoreWebView2.Reload();

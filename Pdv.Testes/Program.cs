@@ -1826,6 +1826,16 @@ Console.WriteLine();
 Console.WriteLine("--- 2FA: a dica na recusa (codigo vencido, codigo do outro autenticador) ---");
 await TestesTotpDica.RodarAsync((cond, nome) => Check("totp-dica: " + nome, cond));
 
+// -- 15/09/2026: o PC novo do Castelo sem o runtime do WebView2 -------------------------
+// Painel mandando instalar o runtime e, depois, a caixa "segurei o caixa de pe" com a frase do
+// controller. A camada nao derruba o caixa, o erro vira painel da propria camada, e o instalador
+// poe o componente da Microsoft.
+Console.WriteLine();
+Console.WriteLine("--- WebView2: as camadas do chat e do WhatsApp nao derrubam o caixa ---");
+await TestesCamadaWebView2.RodarAsync((cond, nome) => Check("camada-web: " + nome, cond));
+Console.WriteLine();
+Console.WriteLine("--- Instalador: o componente da Microsoft do chat e do WhatsApp ---");
+TestesWebView2Runtime.Rodar((cond, nome) => Check("runtime-web: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

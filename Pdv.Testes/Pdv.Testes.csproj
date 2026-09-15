@@ -37,5 +37,6 @@
     <Compile Include="..\Pdv.Instalador\Instalacao.cs" Link="Instalador\Instalacao.cs" />
     <Compile Include="..\Pdv.Instalador\PayGo.cs" Link="Instalador\PayGo.cs" />
     <Compile Include="..\Pdv.Instalador\Pacote.cs" Link="Instalador\Pacote.cs" />
+    <Compile Include="..\Pdv.Instalador\WebView2Runtime.cs" Link="Instalador\WebView2Runtime.cs" />
   </ItemGroup>
 </Project>

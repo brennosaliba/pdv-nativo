@@ -45,6 +45,9 @@
             <TextBlock Text="🟢" FontSize="44" HorizontalAlignment="Center" Opacity="0.5"/>
             <TextBlock x:Name="TxtErro" Foreground="{DynamicResource Texto}" FontSize="16"
                        TextWrapping="Wrap" TextAlignment="Center" Margin="0,14,0,0"/>
+            <!-- 15/09/2026 (Castelo): o painel diz em uma linha o que fazer e recria o controle. -->
+            <Button Click="TentarDeNovo" Style="{StaticResource BotaoPrincipal}" HorizontalAlignment="Center"
+                    Padding="28,10" Margin="0,18,0,0" Content="Tentar de novo"/>
         </StackPanel>
     </Grid>
 </UserControl>

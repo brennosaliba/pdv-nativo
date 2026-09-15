@@ -37,7 +37,13 @@ public partial class ChatIfood : UserControl
     private const string UrlGestor = "https://gestordepedidos.ifood.com.br/";
     private bool _pronto;
     private bool _iniciando;
+    /// <summary>Cada inicialização ganha um número; a que foi passada para trás (controle recriado no meio) não mexe mais na tela.</summary>
+    private int _tentativa;
     private DispatcherTimer? _poll;
+    private readonly HospedeWebView2 Hospede;
+    private readonly string _perfil;
+    private readonly TetoPorHora _tetoRecriar = new TetoPorHora(6);
+    private static readonly System.Diagnostics.Stopwatch _relogio = System.Diagnostics.Stopwatch.StartNew();
 
     // Groundwork do nativo: acumulador em memória do que o CDP capturou.
     private readonly ChatCaptura.Acumulador _captura = new();
@@ -50,34 +56,51 @@ public partial class ChatIfood : UserControl
     public ChatIfood()
     {
         InitializeComponent();
-        Loaded += async (_, _) => { if (!_pronto) await IniciarAsync(); };
+        // perfil em ProgramData, NUNCA na pasta do exe: atualização de versão
+        // troca o executável e o login tem que continuar de pé
+        _perfil = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "PdvNativo", "webview");
+        // 15/09/2026 (Castelo): o ambiente, o Ensure e a troca do controle que falhou moram no
+        // hospedeiro, igual para o WhatsApp. Ver Telas/HospedeWebView2.cs.
+        Hospede = new HospedeWebView2("chat", Dispatcher, () => Web, w => Web = w, _perfil, Diag);
+        Hospede.Quebrou += AoQuebrar;
+        Loaded += async (_, _) =>
+        {
+            try { if (!_pronto) await IniciarAsync(); }
+            catch (Exception ex) { Diag("loaded: " + ex.GetType().Name + " " + ex.Message); }
+        };
     }
+
+    /// <summary>
+    /// Uma linha datada em ProgramData\PdvNativo\chat-webview-diagnostico.txt: quando o WebView2 do
+    /// chat nasceu, falhou (com a thread e a versão do runtime), caiu ou foi recriado. O
+    /// chat-diagnostico.txt continua sendo só a captura de rede mascarada.
+    /// </summary>
+    internal static void Diag(string texto) => HospedeWebView2.Anotar("chat-webview-diagnostico.txt", texto, _relogio.Elapsed);
 
     /// <summary>
     /// Pré-aquece o WebView2 para o observador já rodar em segundo plano (o selo
     /// na venda acende antes de alguém abrir o chat). Se a plataforma não
     /// inicializar o WebView2 enquanto a camada está oculta, não faz mal: o
     /// observador liga assim que o operador abrir o chat pela primeira vez.
+    /// Chamado de qualquer thread, volta para a da tela antes de encostar no controle.
     /// </summary>
-    public async Task PreAquecerAsync() { if (!_pronto) await IniciarAsync(); }
+    public Task PreAquecerAsync() => HospedeWebView2.NaTela(Dispatcher, () => _pronto ? Task.CompletedTask : IniciarAsync());
 
     private async Task IniciarAsync()
     {
         if (_iniciando || _pronto) return;   // pré-aquecer + 1ª abertura não podem inicializar duas vezes
         _iniciando = true;
+        var minha = ++_tentativa;
         try
         {
             TxtEstado.Text = "carregando…";
-            // perfil em ProgramData, NUNCA na pasta do exe: atualização de versão
-            // troca o executável e o login tem que continuar de pé
-            var perfil = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "PdvNativo", "webview");
-            Directory.CreateDirectory(perfil);
+            Diag("iniciar: " + HospedeWebView2.Contexto("chat"));
+            Directory.CreateDirectory(_perfil);
 
-            var ambiente = await CoreWebView2Environment.CreateAsync(null, perfil);
-            await Web.EnsureCoreWebView2Async(ambiente);
-            var core = Web.CoreWebView2;
+            var core = await Hospede.IniciarControleAsync();
+            if (minha != _tentativa) return;
 
             // quiosque: sem DevTools nem menu de contexto pro operador se perder.
             // (A captura de rede NÃO depende desta flag — ela é o F12 visual.)
@@ -95,11 +118,32 @@ public partial class ChatIfood : UserControl
             // mensagens do DOM (não lidas + modo do painel)
             core.WebMessageReceived += OnWebMessage;
 
+            // PROCESSO QUE CAIU (15/09/2026). O chat não tratava: com o navegador morto o
+            // Recarregar lançava na tela e o painel ficava branco até reiniciar o PDV. A regra é a
+            // do WhatsApp (doc do WebView2 1.0.4129): renderer morto recarrega; navegador morto
+            // deixa o CoreWebView2 inútil e pede um controle novo.
+            core.ProcessFailed += (_, e) =>
+            {
+                Diag($"processo caiu: {e.ProcessFailedKind} {e.Reason}");
+                switch (e.ProcessFailedKind)
+                {
+                    case CoreWebView2ProcessFailedKind.RenderProcessExited:
+                        if (!_tetoRecriar.Permitir(DateTime.UtcNow)) { Diag("recarga: teto da hora"); break; }
+                        try { Web.CoreWebView2?.Reload(); }
+                        catch { _ = RecriarAsync("renderer caiu e o navegador não respondeu"); }
+                        break;
+                    case CoreWebView2ProcessFailedKind.BrowserProcessExited:
+                        _ = RecriarAsync("navegador caiu");
+                        break;
+                }
+            };
+
             // injeta o script do painel ANTES de navegar (roda a cada carga)
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptPainel);
 
             // liga a captura de rede (groundwork do nativo) — best-effort
             await LigarCapturaAsync(core);
+            if (minha != _tentativa) return;
 
             Web.Source = new Uri(UrlGestor);
             Web.Visibility = Visibility.Visible;
@@ -117,16 +161,84 @@ public partial class ChatIfood : UserControl
         }
         catch (Exception ex)
         {
-            Web.Visibility = Visibility.Collapsed;
+            // Uma tentativa passada para trás (o controle foi recriado no meio) não pinta a tela.
+            if (minha != _tentativa) { Diag("tentativa antiga terminou: " + ex.GetType().Name); return; }
+            // O hospedeiro anota (thread, runtime) e troca o controle que chegou a receber o Ensure:
+            // controle com init falho não se reaproveita (15/09/2026, Castelo).
+            var tipo = Hospede.Falhou("iniciar", ex);
+            MostrarFalha(FalhaWebView2.Painel(tipo, "O chat"));
+        }
+        finally { if (minha == _tentativa) _iniciando = false; }
+    }
+
+    /// <summary>
+    /// O painel de erro desta camada: UMA linha com o que fazer e o botão Tentar de novo. O
+    /// detalhe fica no chat-webview-diagnostico.txt, nunca na tela.
+    /// </summary>
+    private void MostrarFalha(string texto)
+    {
+        try
+        {
+            _pronto = false;
+            _poll?.Stop(); _poll = null;
+            try { Web.Visibility = Visibility.Collapsed; } catch { }
             PainelErro.Visibility = Visibility.Visible;
             TxtEstado.Text = "";
-            TxtErro.Text =
-                "O componente de navegação do Windows (WebView2) não está disponível " +
-                "nesta máquina. Instale o \"WebView2 Runtime\" da Microsoft e abra o " +
-                "chat de novo. O restante do PDV segue funcionando normalmente.\n\n" +
-                "Detalhe técnico: " + ex.Message;
+            TxtErro.Text = texto;
         }
-        finally { _iniciando = false; }
+        catch (Exception ex) { Diag("painel de erro: " + ex.GetType().Name); }
+    }
+
+    /// <summary>
+    /// Falha de WebView2 que chegou ao Dispatcher (layout, foco, visibilidade) e é DESTE controle
+    /// (App.xaml.cs, HospedeWebView2.AvisarFalhaForaDaCamada). No lugar da caixa de aviso sobre o
+    /// caixa: o painel desta camada, e um controle novo assim que o Dispatcher estiver livre.
+    /// </summary>
+    private void AoQuebrar(Exception ex)
+    {
+        _tentativa++; _iniciando = false;
+        MostrarFalha(FalhaWebView2.Painel(TipoFalhaWeb.Outra, "O chat"));
+        Hospede.RecriarDepois("quebrou fora da inicialização");
+    }
+
+    /// <summary>"Tentar de novo" do painel: controle que já foi usado dá lugar a um novo, e inicia.</summary>
+    private async void TentarDeNovo(object sender, RoutedEventArgs e)
+    {
+        if (_iniciando) return;
+        try
+        {
+            ServicoChat.Recomecar();
+            Hospede.RecriarSeUsado("tentar de novo");
+            PainelErro.Visibility = Visibility.Collapsed;
+            await IniciarAsync();
+        }
+        catch (Exception ex) { Diag("tentar de novo: " + ex.GetType().Name + " " + ex.Message); }
+    }
+
+    /// <summary>
+    /// O processo do navegador morreu (ou o Recarregar lançou): o controle é inútil. Controle novo
+    /// no mesmo lugar, com ambiente novo, e inicia de novo. No máximo 6 por hora.
+    /// </summary>
+    private async Task RecriarAsync(string motivo)
+    {
+        if (!Dispatcher.CheckAccess()) { await HospedeWebView2.NaTela(Dispatcher, () => RecriarAsync(motivo)); return; }
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            if (!_tetoRecriar.Permitir(DateTime.UtcNow))
+            {
+                Diag("recriar: teto da hora");
+                MostrarFalha(FalhaWebView2.Painel(TipoFalhaWeb.NavegadorCaiu, "O chat"));
+                return;
+            }
+            Diag($"recriando o WebView2 ({motivo})");
+            _poll?.Stop(); _poll = null;
+            _pronto = false; _tentativa++; _iniciando = false;
+            Hospede.Recriar(motivo, descartarAmbiente: true);
+            ServicoChat.Recomecar();
+            await IniciarAsync();
+        }
+        catch (Exception ex) { Diag("recriar: " + ex.GetType().Name + " " + ex.Message); }
     }
 
     // ── mensagens vindas do DOM ──────────────────────────────────────────────
@@ -313,23 +425,27 @@ public partial class ChatIfood : UserControl
     /// </summary>
     public async Task<bool> AbrirConversaPorPedidoAsync(string numero)
     {
+        if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => AbrirConversaPorPedidoAsync(numero));
         if (!_pronto || !ChatContagem.NumeroPedidoValido(numero)) return false;
         try
         {
             var core = Web.CoreWebView2;
+            if (core is null) return false;
             await core.ExecuteScriptAsync("window.pdvAbrirConversas && window.pdvAbrirConversas()");
             var arg = JsonSerializer.Serialize(numero);   // dígitos, mas encode para não injetar
             var r = await core.ExecuteScriptAsync($"window.pdvBuscarConversa ? window.pdvBuscarConversa({arg}) : false");
             return r == "true";
         }
-        catch { return false; }
+        catch (Exception ex) { Diag("abrir conversa: " + ex.GetType().Name); return false; }
     }
 
     private void Recarregar(object sender, RoutedEventArgs e)
     {
         ServicoChat.Recomecar();   // a próxima leitura vira linha de base
-        if (_pronto) Web.Reload();
-        else _ = IniciarAsync();
+        if (!_pronto) { _ = IniciarAsync(); return; }
+        // com o navegador morto o controle lança: aí é recriar, não recarregar (15/09/2026)
+        try { Web.CoreWebView2?.Reload(); }
+        catch (Exception ex) { Diag("recarregar: " + ex.GetType().Name); _ = RecriarAsync("recarregar com o navegador morto"); }
     }
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
@@ -349,13 +465,17 @@ public partial class ChatIfood : UserControl
     /// <summary>Botão da barra: abre o Atendimento do iFood na coluna do meio.</summary>
     private async void AbrirAjuda(object sender, RoutedEventArgs e)
     {
-        if (!_pronto || Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu"; return; }
         try
         {
+            if (!_pronto || Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu"; return; }
             var r = await Web.CoreWebView2.ExecuteScriptAsync("window.pdvAbrirAjuda ? window.pdvAbrirAjuda() : false");
             TxtEstado.Text = r == "true" ? "abrindo o atendimento do iFood…" : "não achei o botão de atendimento do iFood nesta tela";
         }
-        catch (Exception ex) { TxtEstado.Text = "ajuda: " + ex.Message; }
+        catch (Exception ex)
+        {
+            Diag("ajuda: " + ex.GetType().Name + " " + ex.Message);
+            TxtEstado.Text = "a ajuda não abriu agora: toque em Recarregar";
+        }
     }
 
     /// <summary>
@@ -366,17 +486,18 @@ public partial class ChatIfood : UserControl
     /// </summary>
     public async Task<bool> FaleComIfoodAsync(string numero)
     {
+        if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => FaleComIfoodAsync(numero));
         if (!AjudaIfood.PodePedirAjuda("ifood", numero)) return false;
-        if (!_pronto) await PreAquecerAsync();
-        if (!_pronto || Web.CoreWebView2 is null) return false;
         try
         {
+            if (!_pronto) await PreAquecerAsync();
+            if (!_pronto || Web.CoreWebView2 is null) return false;
             TxtEstado.Text = AjudaIfood.Abrindo(numero);
             var arg = JsonSerializer.Serialize(AjudaIfood.SoDigitos(numero));
             var r = await Web.CoreWebView2.ExecuteScriptAsync($"window.pdvFaleComIfood ? window.pdvFaleComIfood({arg}) : false");
             return r == "true";
         }
-        catch { return false; }
+        catch (Exception ex) { Diag("fale com o ifood: " + ex.GetType().Name); return false; }
     }
 
     private bool _gestorInteiro;
@@ -388,17 +509,17 @@ public partial class ChatIfood : UserControl
     /// </summary>
     private async void AlternarGestorInteiro(object sender, RoutedEventArgs e)
     {
-        if (!_pronto || Web.CoreWebView2 is null) return;
-        _gestorInteiro = !_gestorInteiro;
-        TxtGestorInteiro.Text = _gestorInteiro ? "Só o chat" : "Gestor inteiro";
         try
         {
+            if (!_pronto || Web.CoreWebView2 is null) return;
+            _gestorInteiro = !_gestorInteiro;
+            TxtGestorInteiro.Text = _gestorInteiro ? "Só o chat" : "Gestor inteiro";
             await Web.CoreWebView2.ExecuteScriptAsync(_gestorInteiro
                 ? "window.__pdvSemHolofote = true; document.body.classList.remove('pdv-so-chat'); document.querySelectorAll('[data-pdv-hide]').forEach(function(x){ x.removeAttribute('data-pdv-hide'); });"
                 : "window.__pdvSemHolofote = false; window.pdvIsolar && window.pdvIsolar();");
             TxtEstado.Text = _gestorInteiro ? "Gestor inteiro (toque em Só o chat para voltar)" : "painel do chat";
         }
-        catch { }
+        catch (Exception ex) { Diag("gestor inteiro: " + ex.GetType().Name); }
     }
 
     /// <summary>
@@ -409,9 +530,9 @@ public partial class ChatIfood : UserControl
     /// </summary>
     private async void Diagnostico(object sender, RoutedEventArgs e)
     {
-        if (!_pronto || Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu"; return; }
         try
         {
+            if (!_pronto || Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu"; return; }
             var bruto = await Web.CoreWebView2.ExecuteScriptAsync(ScriptDiagnostico);
             var texto = JsonSerializer.Deserialize<string>(bruto) ?? "";
             var caminho = Path.Combine(Pdv.Nucleo.Banco.Pasta, $"gestor-diagnostico-{DateTime.Now:HHmmss}.txt");
