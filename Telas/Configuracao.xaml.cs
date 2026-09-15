@@ -275,6 +275,12 @@ public partial class Configuracao : UserControl
             ModoRecibo = false;
         }
 
+        // USUÁRIO MASTER DA REDE (15/09/2026): o aviso sob a senha do administrador (instalação) e,
+        // reconfigurando, qual senha vale neste caixa agora.
+        TxtAvisoMaster.Text = UsuarioMaster.AvisoInstalador;
+        TxtMaster.Text = UsuarioMaster.Estado(cx);
+        TxtMaster.Visibility = Se(_jaConfigurado);
+
         // status do pareamento na PRÓPRIA seção (a bateria de teste não fala dele)
         if (_pareado)
         {
@@ -509,7 +515,6 @@ public partial class Configuracao : UserControl
         TxtStatusIe.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[cor];
     }
 
-    /// <summary>Senha de admin guardada como hash (mesmo PBKDF2 do PIN), nunca em claro.</summary>
     /// <summary>Quiosque ligado e o dono quer a área de trabalho de volta agora: abre o Explorer (o PDV continua).</summary>
     private void SairParaOWindows(object sender, RoutedEventArgs e)
     {
@@ -518,12 +523,9 @@ public partial class Configuracao : UserControl
             "O Windows abriu a área de trabalho por trás do PDV. Para o quiosque não voltar na próxima entrada, desmarque a opção e salve.", null);
     }
 
-    public static bool SenhaAdminConfere(SqliteConnection cx, string senha)
-    {
-        var r = cx.QueryFirstOrDefault("SELECT pin_hash, pin_salt FROM operador WHERE id = '_admin_'");
-        if (r is null) return false;
-        return Operadores.Confere(senha, (string)r.pin_hash, (string)r.pin_salt);
-    }
+    // A conferência da senha de admin saiu daqui (15/09/2026): mora em Pdv.Nucleo/UsuarioMaster.Conferir,
+    // chamada pela MainWindow. A daqui só olhava a cópia `_admin_`, e foi assim que a senha de um
+    // funcionário abriu esta tela no Castelo.
 
     // ── SEGREDOS DA MÁQUINA ─────────────────────────────────────────────────
     // Certificado, senha dele, CSC e a credencial da nuvem ficam cifrados por DPAPI,
@@ -1411,9 +1413,9 @@ public partial class Configuracao : UserControl
             var adminNasceuPadrao = false;
 
             // ADMINISTRADOR DA LOJA (dono) — só quando ainda não há nenhum operador.
-            // Ele entra com TODOS os privilégios e a senha dele passa a ser a senha
-            // desta tela de configuração (o "_admin_" espelha o hash do dono —
-            // morre o 1234 padrão).
+            // A senha dele vira a senha desta tela SÓ ATÉ o primeiro Atualizar trazer o
+            // usuário master da rede (UsuarioMaster): com master guardado, o "_admin_" deixa
+            // de ser consultado.
             if (BlocoOperador.Visibility == Visibility.Visible)
             {
                 var nome = TxtOpNome.Text.Trim();

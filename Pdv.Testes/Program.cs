@@ -1812,5 +1812,12 @@ TestesRedePixDoTerminal.Rodar((cond, nome) => Check("rede-pix: " + nome, cond));
 TestesRecusasDoHost.Rodar((cond, nome) => Check("recusa-host: " + nome, cond));
 TestesNotaPelaNuvem.Rodar((cond, nome) => Check("nota-nuvem: " + nome, cond));
 
+// -- 15/09/2026: usuario master da rede ---------------------------------------------
+// Decisao do dono (14/09): uma senha para a rede toda, criada no painel, e a unica das acoes
+// de admin do caixa. No Castelo a senha do Lucas abria a Configuracao.
+Console.WriteLine();
+Console.WriteLine("--- Usuario master da rede: so ele faz acao de admin no caixa ---");
+await TestesUsuarioMaster.RodarAsync((cond, nome) => Check("master: " + nome, cond));
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

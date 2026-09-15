@@ -558,6 +558,9 @@
                     <TextBlock x:Name="TxtStatusPareamento"
                                Text="É o pareamento que manda vendas e notas para o painel, e é ele que traz o CNPJ e a série certos. Sem parear, não dá para concluir."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,16"/>
+                    <!-- USUÁRIO MASTER DA REDE (15/09/2026): o caixa diz qual senha abre esta tela. -->
+                    <TextBlock x:Name="TxtMaster" Visibility="Collapsed"
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,16"/>
 
                     <TextBlock x:Name="TxtPrimeiroOperador" Text="ADMINISTRADOR DA LOJA (DONO)"
                                Foreground="{DynamicResource Marca}" FontWeight="Bold" FontSize="13" Margin="0,0,0,8"/>
@@ -590,7 +593,9 @@
                                              BorderBrush="{DynamicResource Borda}" PasswordChanged="CampoMudouSenha"/>
                             </StackPanel>
                         </Grid>
-                        <TextBlock Text="Este primeiro cadastro é o dono: ele pode tudo: autoriza sangria e cancelamento, e a senha dele passa a ser a senha desta tela."
+                        <TextBlock Text="Este primeiro cadastro é o dono: ele autoriza sangria e cancelamento."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TxtAvisoMaster"
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     </StackPanel>
 

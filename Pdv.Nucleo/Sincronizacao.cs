@@ -295,6 +295,11 @@ public static class Sincronizacao
             try { await nuvem.BaixarConfigLojaAsync(cx).ConfigureAwait(false); }
             catch { /* idem: o próximo Atualizar tenta de novo */ }
 
+            // o usuário master da rede: a única senha das ações de admin, guardada para valer sem internet
+            andamento?.Report("Conferindo o usuário master…");
+            try { await nuvem.BaixarMasterAsync(cx).ConfigureAwait(false); }
+            catch { /* fica o master que já está guardado */ }
+
             mudou = ImpressaoDigital(cx) != antes;
 
             // Fotos por último e sem prazo curto: é o que mais demora e é o que menos

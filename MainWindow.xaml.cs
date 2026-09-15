@@ -309,7 +309,12 @@ public partial class MainWindow : Window
                 "O Windows abre direto no PDV (modo quiosque). O turno aberto continua salvo.",
                 "Reiniciar o PDV", "Sair para o Windows", "Voltar");
             if (o == 0) { Quiosque.ReiniciarPdv(); Application.Current.Shutdown(); }
-            else if (o == 1) { Quiosque.AbrirExplorer(); Application.Current.Shutdown(); }
+            else if (o == 1)
+            {
+                // Sair do quiosque é ação de admin (15/09/2026): só o usuário master da rede.
+                if (!AcessoDoMaster("Sair para o Windows", "saida_windows", "saida_windows_negada")) return;
+                Quiosque.AbrirExplorer(); Application.Current.Shutdown();
+            }
             return;
         }
         if (Dialogo.Confirmar(this, "Fechar o PDV",
@@ -330,16 +335,34 @@ public partial class MainWindow : Window
     /// </summary>
     private void AbrirConfigProtegida()
     {
-        var senha = PedirSenha.Mostrar(this, "Configuracao do PDV", "Senha de administrador");
-        if (senha is null) return;
-        using var cx = Banco.Abrir();
-        if (!Configuracao.SenhaAdminConfere(cx, senha))
-        {
-            Caixa.Auditar(cx, null, "config_negada", null, null, "senha de administrador incorreta");
-            Dialogo.Avisar(this, "Senha incorreta", "A senha de administrador nao confere.", "erro");
-            return;
-        }
-        Caixa.Auditar(cx, null, "config_aberta", null, null, null);
+        if (!AcessoDoMaster("Configuração do PDV", "config_aberta", "config_negada")) return;
         MostrarConfiguracao();
+    }
+
+    /// <summary>
+    /// A PORTA DE TODA AÇÃO DE ADMIN (15/09/2026): Configuração (e por ela trocar maquininha,
+    /// fiscal, quiosque) e sair para o Windows. A regra mora em UsuarioMaster.Conferir: com o
+    /// usuário master da rede guardado, só ele; sem master, a senha criada na instalação.
+    /// Operador, gerente ou não, nunca passa aqui (o Lucas abria a Configuração do Castelo
+    /// com a própria senha).
+    /// </summary>
+    private bool AcessoDoMaster(string titulo, string eventoLiberado, string eventoNegado)
+    {
+        // conexão fechada enquanto a caixa de senha está aberta: o Atualizar pode gravar por trás
+        string rotulo;
+        using (var cx0 = Banco.Abrir()) rotulo = UsuarioMaster.Rotulo(cx0);
+        var senha = PedirSenha.Mostrar(this, titulo, rotulo);
+        if (senha is null) return false;
+
+        using var cx = Banco.Abrir();
+        var c = UsuarioMaster.Conferir(cx, senha);
+        if (!c.Liberado)
+        {
+            Caixa.Auditar(cx, null, eventoNegado, null, null, UsuarioMaster.Detalhe(c) + ": senha incorreta");
+            Dialogo.Avisar(this, "Senha incorreta", UsuarioMaster.NaoConfere(cx), "erro");
+            return false;
+        }
+        Caixa.Auditar(cx, null, eventoLiberado, null, null, UsuarioMaster.Detalhe(c));
+        return true;
     }
 }

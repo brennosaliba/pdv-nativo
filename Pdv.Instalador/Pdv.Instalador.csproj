@@ -52,5 +52,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
   </ItemGroup>
+  <!-- 15/09/2026: apagar os dados do caixa pede a senha do usuario master da rede. O calculo da
+       senha e o MESMO arquivo do caixa (sem banco, sem Dapper): duas copias do PBKDF2 divergiriam. -->
+  <ItemGroup>
+    <Compile Include="..\Pdv.Nucleo\HashDeSenha.cs" Link="Nucleo\HashDeSenha.cs" />
+  </ItemGroup>
 
 </Project>

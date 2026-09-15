@@ -730,6 +730,51 @@ public static class Instalacao
     // desmarcada, para quem quer começar do zero, e mesmo ela não apaga nada em silêncio: avisa o
     // que ainda não subiu para o painel e tira a pasta do lugar, guardada com a data.
 
+    // ── APAGAR OS DADOS SÓ COM O USUÁRIO MASTER (15/09/2026) ─────────────────────────────
+    //
+    // Apagar os dados é ação de admin (decisão do dono de 14/09). O caixa guarda o usuário master da
+    // rede no config do banco (Pdv.Nucleo/UsuarioMaster); se ele existe, o instalador pede a senha
+    // antes de tirar a pasta do lugar. Sem master no banco (instalação que nunca pegou o master, ou
+    // banco ilegível) não há o que conferir: quem tem o administrador do Windows já tira a pasta na
+    // mão, e o que esta porta fecha é o caminho de quem só tem o caixa na frente.
+
+    /// <summary>O usuário master guardado no banco do caixa: só nome, hash e sal.</summary>
+    public sealed record MasterDoCaixa(string Nome, string Hash, string Salt);
+
+    /// <summary>Lê o master do banco do caixa (somente leitura, sem pool). Null = sem master ou sem banco legível.</summary>
+    public static MasterDoCaixa? LerMaster(string pastaDados)
+    {
+        var db = Path.Combine(pastaDados, "pdv.db");
+        if (!File.Exists(db)) return null;
+        try
+        {
+            var cs = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = db,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString();
+            using var cx = new Microsoft.Data.Sqlite.SqliteConnection(cs);
+            cx.Open();
+            string? Ler(string chave)
+            {
+                using var cmd = cx.CreateCommand();
+                cmd.CommandText = "SELECT valor FROM config WHERE chave = $c";
+                cmd.Parameters.AddWithValue("$c", chave);
+                return cmd.ExecuteScalar() as string;
+            }
+            var hash = Ler("master_hash");
+            var salt = Ler("master_salt");
+            if (string.IsNullOrWhiteSpace(hash) || string.IsNullOrWhiteSpace(salt)) return null;
+            return new MasterDoCaixa(Ler("master_nome") ?? "", hash, salt);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Sem master guardado, libera. Com master, só a senha dele.</summary>
+    public static bool MasterLibera(MasterDoCaixa? master, string? senha)
+        => master is null || Pdv.Nucleo.HashDeSenha.Confere((senha ?? "").Trim(), master.Hash, master.Salt);
+
     /// <summary>O que a pasta de dados tem que importa antes de tirá-la do lugar.</summary>
     /// <param name="NaFila">Registros (vendas, turnos, movimentos) que ainda não subiram para o painel.</param>
     /// <param name="Erro">Não deu para ler o banco: ninguém sabe se há o que perder.</param>

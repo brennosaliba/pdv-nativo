@@ -750,9 +750,15 @@ public static class TestesAutorizacao
                 var fonte = Fonte("MainWindow.xaml.cs") ?? "";
                 var i = fonte.IndexOf("private void AbrirConfigProtegida()", StringComparison.Ordinal);
                 var corpo = i < 0 ? "" : fonte[i..Math.Min(fonte.Length, i + 1200)];
-                checar(corpo.Contains("SenhaAdminConfere", StringComparison.Ordinal)
-                       && !corpo.Contains("ResolverAsync", StringComparison.Ordinal),
-                    "CF-1 a configuração é liberada pela senha de administrador, não pelo autenticador");
+                // 15/09/2026: a senha de administrador virou o usuário master da rede (UsuarioMaster),
+                // e a porta é uma só para toda ação de admin.
+                var j = fonte.IndexOf("private bool AcessoDoMaster(", StringComparison.Ordinal);
+                var porta = j < 0 ? "" : fonte[j..Math.Min(fonte.Length, j + 1500)];
+                checar(corpo.Contains("AcessoDoMaster(", StringComparison.Ordinal)
+                       && porta.Contains("UsuarioMaster.Conferir(", StringComparison.Ordinal)
+                       && !corpo.Contains("ResolverAsync", StringComparison.Ordinal)
+                       && !porta.Contains("ResolverAsync", StringComparison.Ordinal),
+                    "CF-1 a configuração é liberada pela senha de administrador (usuário master), não pelo autenticador");
             }
 
             // ── 8. O QUE O .EXE NÃO PODE CARREGAR ───────────────────────────

@@ -20,28 +20,12 @@ namespace Pdv.Nucleo;
 /// </summary>
 public static class Operadores
 {
-    private const int Iteracoes = 100_000;
-    private const int TamanhoHash = 32;
-
-    public static (string hash, string salt) GerarHash(string pin)
-    {
-        var salt = RandomNumberGenerator.GetBytes(16);
-        var hash = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(pin), salt, Iteracoes, HashAlgorithmName.SHA256, TamanhoHash);
-        return (Convert.ToBase64String(hash), Convert.ToBase64String(salt));
-    }
+    // O cálculo mora em HashDeSenha (15/09/2026): o instalador também confere senha, e duas
+    // cópias do PBKDF2 divergiriam.
+    public static (string hash, string salt) GerarHash(string pin) => HashDeSenha.Gerar(pin);
 
     public static bool Confere(string pin, string hashGuardado, string saltGuardado)
-    {
-        try
-        {
-            var salt = Convert.FromBase64String(saltGuardado);
-            var esperado = Convert.FromBase64String(hashGuardado);
-            var calculado = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(pin), salt, Iteracoes, HashAlgorithmName.SHA256, TamanhoHash);
-            // comparação em tempo fixo: não vaza quantos dígitos estão certos
-            return CryptographicOperations.FixedTimeEquals(calculado, esperado);
-        }
-        catch { return false; }
-    }
+        => HashDeSenha.Confere(pin, hashGuardado, saltGuardado);
 
     public static void Salvar(SqliteConnection cx, string id, string nome, string pin, string perfil,
         string? cpf = null)

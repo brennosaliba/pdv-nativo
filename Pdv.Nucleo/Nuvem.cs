@@ -305,6 +305,28 @@ public sealed class Nuvem
         catch { return null; }
     }
 
+    // ── USUÁRIO MASTER DA REDE (15/09/2026) ────────────────────────────────────────────
+    /// <summary>
+    /// O master da empresa deste terminal (RPC <see cref="UsuarioMaster.Rpc"/>): nome, hash e sal.
+    /// A RPC só responde a terminal pareado. As regras de guardar moram em UsuarioMaster.
+    /// Devolve o que mudou ("" = nada; null = não deu para consultar, e o guardado continua valendo).
+    /// </summary>
+    public async Task<string?> BaixarMasterAsync(SqliteConnection cx)
+    {
+        if (!await SessaoOkAsync().ConfigureAwait(false)) return null;
+        try
+        {
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/" + UsuarioMaster.Rpc);
+            req.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            // 404 enquanto a migration não estiver no ar: fica o que já está guardado.
+            if (!resp.IsSuccessStatusCode) return null;
+            var master = UsuarioMaster.Ler(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+            return UsuarioMaster.Aplicar(cx, master);
+        }
+        catch { return null; }
+    }
+
     // ── NOTA PELA NUVEM (14/09/2026, Castelo) ──────────────────────────────────────
     /// <summary>
     /// O que o painel tem do fiscal da loja deste terminal (certificado, CSC, ambiente): só

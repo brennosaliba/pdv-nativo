@@ -120,11 +120,66 @@ public partial class App : Application
             ? MessageBox.Show(Instalacao.PerguntaApagarDados, "Remover o caixa", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No)
             : MessageBox.Show(dono, Instalacao.PerguntaApagarDados, "Começar do zero", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
         if (sim != MessageBoxResult.Yes) return false;
+        // Apagar os dados é ação de admin (15/09/2026): com usuário master guardado, só a senha dele.
+        if (Instalacao.LerMaster(Instalacao.PastaDados) is { } master)
+        {
+            var senha = PedirSenhaMaster(dono, master.Nome);
+            if (senha is null) return false;
+            if (!Instalacao.MasterLibera(master, senha))
+            {
+                const string recusa = "A senha do usuário master não confere. Os dados continuam no lugar.";
+                if (dono is null) MessageBox.Show(recusa, "Remover o caixa", MessageBoxButton.OK, MessageBoxImage.Error);
+                else MessageBox.Show(dono, recusa, "Começar do zero", MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+        }
         if (Instalacao.AvisoAntesDeApagar(dados) is not { } aviso) return true;
         var mesmoAssim = dono is null
             ? MessageBox.Show(aviso, "Remover o caixa", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
             : MessageBox.Show(dono, aviso, "Começar do zero", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
         return mesmoAssim == MessageBoxResult.Yes;
+    }
+
+    /// <summary>A senha do usuário master, numa janela simples. Null = voltou sem digitar.</summary>
+    private static string? PedirSenhaMaster(Window? dono, string nome)
+    {
+        string? resultado = null;
+        var janela = new Window
+        {
+            Title = "Usuário master",
+            Width = 400,
+            SizeToContent = SizeToContent.Height,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = dono is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner,
+        };
+        if (dono is not null) janela.Owner = dono;
+        var pilha = new System.Windows.Controls.StackPanel { Margin = new Thickness(18) };
+        pilha.Children.Add(new System.Windows.Controls.TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(nome)
+                ? "Para apagar os dados deste caixa, digite a senha do usuário master da rede."
+                : $"Para apagar os dados deste caixa, digite a senha do usuário master da rede ({nome}).",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        var caixa = new System.Windows.Controls.PasswordBox { FontSize = 18, Padding = new Thickness(8) };
+        pilha.Children.Add(caixa);
+        var botoes = new System.Windows.Controls.StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 14, 0, 0),
+        };
+        var voltar = new System.Windows.Controls.Button { Content = "Voltar", IsCancel = true, MinWidth = 90, Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 0, 8, 0) };
+        var confirmar = new System.Windows.Controls.Button { Content = "Confirmar", IsDefault = true, MinWidth = 90, Padding = new Thickness(10, 6, 10, 6) };
+        confirmar.Click += (_, _) => { resultado = caixa.Password; janela.Close(); };
+        botoes.Children.Add(voltar);
+        botoes.Children.Add(confirmar);
+        pilha.Children.Add(botoes);
+        janela.Content = pilha;
+        janela.Loaded += (_, _) => caixa.Focus();
+        janela.ShowDialog();
+        return resultado;
     }
 
 }

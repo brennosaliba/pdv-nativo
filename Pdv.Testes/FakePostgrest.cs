@@ -69,6 +69,12 @@ public sealed class FakePostgrest : IDisposable
 
     public List<OperadorDoPainel> OperadoresDoPainel { get; } = new();
 
+    /// <summary>
+    /// USUÁRIO MASTER DA REDE (15/09): o corpo que pdv_master_caixa responde. Nulo encena o
+    /// servidor sem a migration (404 PGRST202).
+    /// </summary>
+    public volatile string? MasterDoPainel;
+
     // ── injeção de falhas ───────────────────────────────────────────────────
     /// <summary>% de respostas 503 nas rotas de DADOS (auth nunca falha).</summary>
     public volatile int PctErro503;
@@ -187,6 +193,13 @@ public sealed class FakePostgrest : IDisposable
                             id = o.Id, nome = o.Nome, pin_hash = o.PinHash, pin_salt = o.PinSalt,
                             perfil = o.Perfil, cpf = o.Cpf, ativo = o.Ativo,
                         })));
+                    return;
+                case "/rest/v1/rpc/pdv_master_caixa":
+                    ChamadasPorRpc.AddOrUpdate("pdv_master_caixa", 1, (_, n) => n + 1);
+                    if (MasterDoPainel is null)
+                        Responder(ctx, 404, """{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.pdv_master_caixa without parameters in the schema cache"}""");
+                    else
+                        Responder(ctx, 200, MasterDoPainel);
                     return;
                 case "/rest/v1/rpc/pdv_vincular_nfce":
                     Interlocked.Increment(ref Vinculos);
