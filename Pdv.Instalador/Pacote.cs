@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
@@ -90,6 +91,15 @@ public static class Pacote
                     foreach (var rel in Instalacao.ArquivosParaCopiar(pastaPdv))
                         zip.CreateEntryFromFile(Path.Combine(pastaPdv, rel),
                             "pdv/" + rel.Replace('\\', '/'), NivelDe(rel));
+
+                    // A versão do caixa anotada no pacote, para a tela do instalador mostrar a
+                    // do CAIXA sem extrair nada. Pacote velho não tem: a tela não mostra número.
+                    if (VersaoDoExe(Path.Combine(pastaPdv, "Pdv.exe")) is { Length: > 0 } versaoDoCaixa)
+                    {
+                        var entradaVersao = zip.CreateEntry(EntradaVersao, CompressionLevel.Fastest);
+                        using var escritor = new StreamWriter(entradaVersao.Open());
+                        escritor.Write(versaoDoCaixa);
+                    }
 
                     if (paygoExe is not null && File.Exists(paygoExe))
                     {
@@ -186,6 +196,40 @@ public static class Pacote
     }
 
     public static bool TemPayload() => LerTrailerDoProprioExe() is not null;
+
+    /// <summary>A entrada do zip com a FileVersion do Pdv.exe empacotado. Fica na raiz: não é instalada.</summary>
+    public const string EntradaVersao = "versao-do-caixa.txt";
+
+    private static string? VersaoDoExe(string exe)
+    {
+        try { return File.Exists(exe) ? FileVersionInfo.GetVersionInfo(exe).FileVersion : null; }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// A versão do CAIXA que viaja neste instalador, ou null (pacote antigo, sem a anotação).
+    /// Lê só o diretório do zip e uma entrada de texto: não extrai os 156 MB do Pdv.exe para
+    /// descobrir um número (14/09/2026, Castelo: a tela mostrava a versão do instalador).
+    /// </summary>
+    public static string? LerVersaoDoCaixa(string? deQualExe = null)
+    {
+        var eu = deQualExe ?? Environment.ProcessPath;
+        if (eu is null) return null;
+        try
+        {
+            using var fs = new FileStream(eu, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var cauda = LerTrailer(fs);
+            if (cauda is null) return null;
+            using var fatia = new Fatia(fs, cauda.Offset, cauda.Tamanho);
+            using var zip = new ZipArchive(fatia, ZipArchiveMode.Read);
+            var entrada = zip.GetEntry(EntradaVersao);
+            if (entrada is null) return null;
+            using var leitor = new StreamReader(entrada.Open());
+            var v = leitor.ReadToEnd().Trim();
+            return v.Length == 0 ? null : v;
+        }
+        catch { return null; }
+    }
 
     /// <summary>
     /// Extrai o payload para <paramref name="destino"/>. Devolve null no sucesso.

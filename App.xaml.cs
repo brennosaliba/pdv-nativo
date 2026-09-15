@@ -96,7 +96,13 @@ public partial class App : Application
         };
 
         var args = e.Args;
-        if (args.Length > 0 && (args[0] == "--cupom-teste" || args[0] == "--imprimir-teste"))
+        // MODO DE FERRAMENTA (14/09/2026, Castelo). O instalador roda `Pdv.exe --cupom-teste` para
+        // conferir se o caixa abre, com o caixa da loja às vezes já aberto. Este modo não pega a
+        // trava, não é barrado por ela e NUNCA abre a frente de caixa. Até aqui abria: o App.xaml
+        // tinha StartupUri, e o WPF construía a MainWindow no primeiro await abaixo. Deu dois
+        // Pdv.exe na loja, o segundo sem trava e disputando o pinpad. A regra é LinhaDeComando.
+        var modo = LinhaDeComando.Modo(args);
+        if (!LinhaDeComando.AbreOCaixa(modo))
         {
             Banco.Migrar();
             using var cx = Banco.Abrir();
@@ -108,7 +114,7 @@ public partial class App : Application
 
             string? erro;
             string onde;
-            if (args[0] == "--cupom-teste")
+            if (modo == ModoDoExe.CupomTeste)
             {
                 onde = args.Length > 1 ? args[1]
                     : Path.Combine(Path.GetTempPath(), "cupom-teste.png");
@@ -123,7 +129,10 @@ public partial class App : Application
             // console anexado: WinExe não tem stdout próprio, mas herda o do terminal
             // que o chamou — sem isso o comando roda em silêncio e ninguém sabe o resultado
             Console.WriteLine(erro is null ? $"ok: {onde}" : $"FALHOU: {erro}");
-            Shutdown(erro is null ? 0 : 1);
+            Console.Out.Flush();
+            // Environment.Exit, e não Shutdown: o OnExit é do CAIXA (marca atividade para a
+            // retomada sem login, solta a trava, encerra o TEF) e nada disso é da ferramenta.
+            Environment.Exit(erro is null ? 0 : 1);
             return;
         }
 
@@ -193,13 +202,38 @@ public partial class App : Application
             }
         });
         base.OnStartup(e);
+
+        // A JANELA DO CAIXA NASCE AQUI, depois da trava (14/09/2026). Era o StartupUri do
+        // App.xaml, e o WPF o construía também nos modos de ferramenta, sem trava nenhuma.
+        try
+        {
+            var janela = new MainWindow();
+            MainWindow = janela;
+            janela.Show();
+        }
+        catch (Exception ex)
+        {
+            Registrar("abertura", ex);
+            try
+            {
+                MessageBox.Show("O caixa não abriu nesta máquina: " + ex.Message
+                    + Environment.NewLine + Environment.NewLine
+                    + "Feche e abra de novo. Se repetir, chame o suporte (o detalhe ficou em erros.log).",
+                    "O caixa não abriu", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            catch { }
+            // Sem janela o processo ficaria vivo, invisível e com a trava: o próximo clique no
+            // ícone ouviria "já está aberto" de um caixa que ninguém vê.
+            Environment.Exit(1);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         // Fechou (para atualizar, ou pelo botão): a última atividade é agora, e a retomada
         // sem login vale nos 15 min seguintes.
-        try { using var cx = Banco.Abrir(); Caixa.MarcarAtividade(cx); } catch { }
+        if (_trava is not null)
+            try { using var cx = Banco.Abrir(); Caixa.MarcarAtividade(cx); } catch { }
         Agente.Encerrar();
         _trava?.Dispose();
         base.OnExit(e);
@@ -234,7 +268,9 @@ public partial class App : Application
                 using (p)
                 {
                     if (p.Id == eu.Id || p.MainWindowHandle == IntPtr.Zero) continue;
-                    ShowWindow(p.MainWindowHandle, SwRestore);
+                    // Só restaura se estiver minimizado: SW_RESTORE numa janela maximizada tira o
+                    // caixa da tela cheia.
+                    if (IsIconic(p.MainWindowHandle)) ShowWindow(p.MainWindowHandle, SwRestore);
                     SetForegroundWindow(p.MainWindowHandle);
                     return;
                 }
@@ -253,4 +289,7 @@ public partial class App : Application
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
 }

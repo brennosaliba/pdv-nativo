@@ -58,10 +58,15 @@ public partial class JanelaInstalador : Window
         if (!noPacote && _paygoExe is null)
             TxtItemPayGo.Text = "2.  Cartão pela maquininha: a biblioteca da PayGo já vem dentro do caixa.";
 
-        var versao = aoLado is not null && File.Exists(Path.Combine(aoLado, "Pdv.exe"))
-            ? FileVersionInfo.GetVersionInfo(Path.Combine(aoLado, "Pdv.exe")).FileVersion
-            : FileVersionInfo.GetVersionInfo(Environment.ProcessPath ?? "").FileVersion;
-        TxtVersao.Text = $"versão {versao ?? "?"}";
+        // A VERSÃO DO CAIXA, nunca a do instalador (14/09/2026, Castelo: a tela dizia "versão
+        // 2.0.0.0", que é o número do InstalarPdv). Empacotado, o Pdv.exe está dentro da cauda e a
+        // versão vem anotada no pacote; solto, lê do Pdv.exe ao lado. Sem saber, não mostra número.
+        var versao = noPacote
+            ? Pacote.LerVersaoDoCaixa()
+            : aoLado is not null && File.Exists(Path.Combine(aoLado, "Pdv.exe"))
+                ? FileVersionInfo.GetVersionInfo(Path.Combine(aoLado, "Pdv.exe")).FileVersion
+                : null;
+        TxtVersao.Text = Instalacao.RotuloVersao(versao);
 
         BtnPrincipal.Content = _atualizacao ? "Atualizar" : "Instalar";
     }
@@ -256,16 +261,8 @@ public partial class JanelaInstalador : Window
 
     private void AbrirPdvEFechar()
     {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe"),
-                WorkingDirectory = Instalacao.PastaDestinoPadrao,
-                UseShellExecute = true,
-            });
-        }
-        catch { /* o atalho e o menu do Windows continuam lá */ }
+        // Como o usuário da área de trabalho, e não como administrador: ver Instalacao.AbrirCaixa.
+        Instalacao.AbrirCaixa(Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe"));
         Close();
     }
 

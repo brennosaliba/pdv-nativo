@@ -174,28 +174,139 @@ public static class Instalacao
     /// pegaria: download corrompido, antivírus comendo uma DLL, biblioteca do sistema
     /// faltando, publish com a flag trocada.
     /// </summary>
-    public static string? ConferirQueOProgramaAbre(string exe)
+    public static string? ConferirQueOProgramaAbre(string exe) => ConferirQueOProgramaAbre(exe, PrazoDaConferencia);
+
+    /// <summary>A conferência com um prazo escolhido (a instalação usa <see cref="PrazoDaConferencia"/>).</summary>
+    public static string? ConferirQueOProgramaAbre(string exe, TimeSpan prazo)
     {
         var png = Path.Combine(Path.GetTempPath(), "pdv-conferencia-" + Guid.NewGuid().ToString("N")[..8] + ".png");
         try
         {
-            using var p = Process.Start(new ProcessStartInfo
-            {
-                FileName = exe,
-                Arguments = $"--cupom-teste \"{png}\"",
-                WorkingDirectory = Path.GetDirectoryName(exe)!,
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true,
-            });
-            if (p is null) return AvaliarConferencia(false, -1, "", exe);
-
-            var saida = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
-            var terminou = p.WaitForExit((int)PrazoDaConferencia.TotalMilliseconds);
-            if (!terminou) { try { p.Kill(entireProcessTree: true); } catch { } }
-            return AvaliarConferencia(terminou, terminou ? p.ExitCode : -1, saida, exe);
+            var psi = new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe)! };
+            psi.ArgumentList.Add("--cupom-teste");
+            psi.ArgumentList.Add(png);
+            var r = RodarComPrazo(psi, prazo);
+            return AvaliarConferencia(r.Terminou, r.Codigo, r.Saida, exe);
         }
         catch (Exception ex) { return AvaliarConferencia(false, -1, ex.Message, exe); }
         finally { try { File.Delete(png); } catch { } }
+    }
+
+    /// <summary>O que aconteceu com um programa rodado com prazo.</summary>
+    /// <param name="Matou">Passou do prazo e o instalador encerrou ESSE processo (e só ele).</param>
+    public sealed record Execucao(bool Terminou, int Codigo, string Saida, bool Matou);
+
+    /// <summary>
+    /// RODA UM PROGRAMA COM PRAZO DE VERDADE (14/09/2026, loja Castelo).
+    ///
+    /// O instalador ficou parado em "Conferindo se o caixa abre nesta máquina". A conferência
+    /// lia a saída inteira (ReadToEnd) ANTES de esperar com prazo, e ReadToEnd só volta quando
+    /// o cano fecha: quando o programa sai E todo filho que herdou a saída dele também sai. Um
+    /// Pdv.exe preso, ou um que abriu WebView2 ou o agente, deixava o prazo de 90 s sem valer
+    /// nunca. Aqui a saída é lida em paralelo, o prazo manda, e passou dele o instalador
+    /// encerra o processo que ELE abriu, pelo handle, nunca por nome: outro Pdv.exe aberto na
+    /// máquina (o caixa da loja) não é da conta da conferência.
+    /// </summary>
+    public static Execucao RodarComPrazo(ProcessStartInfo psi, TimeSpan prazo)
+    {
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        using var p = Process.Start(psi);
+        if (p is null) return new Execucao(false, -1, "", false);
+
+        var saida = p.StandardOutput.ReadToEndAsync();
+        var erro = p.StandardError.ReadToEndAsync();
+        var terminou = p.WaitForExit((int)Math.Clamp(prazo.TotalMilliseconds, 0, int.MaxValue));
+        var matou = false;
+        if (!terminou)
+        {
+            try { p.Kill(entireProcessTree: false); matou = true; } catch { /* saiu no mesmo instante */ }
+            try { p.WaitForExit(5_000); } catch { }
+        }
+
+        // O cano pode continuar aberto por um filho que herdou a saída: espera pouco e segue com
+        // o que chegou. O desfecho é o código de saída, não o texto.
+        try { Task.WaitAll(new Task[] { saida, erro }, TimeSpan.FromSeconds(2)); } catch { }
+        static string Texto(Task<string> t)
+        {
+            if (t.IsCompletedSuccessfully) return t.Result;
+            _ = t.ContinueWith(x => _ = x.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            return "";
+        }
+        return new Execucao(terminou, terminou ? p.ExitCode : -1, Texto(saida) + Texto(erro), matou);
+    }
+
+    /// <summary>
+    /// "versão 1.0.10" para a tela do instalador, a partir da FileVersion do CAIXA. Desconhecida
+    /// = texto vazio. Nunca a versão do próprio instalador: foi assim que a Castelo leu
+    /// "versão 2.0.0.0" (14/09/2026).
+    /// </summary>
+    public static string RotuloVersao(string? versao)
+    {
+        var v = (versao ?? "").Trim();
+        if (v.Length == 0) return "";
+        var partes = v.Split('.');
+        if (partes.Length == 4 && partes[3] == "0") v = string.Join('.', partes[..3]);
+        return "versão " + v;
+    }
+
+    /// <summary>Como o instalador abre o caixa no fim.</summary>
+    public enum ComoAbrir { Direto, PeloExplorer }
+
+    /// <summary>
+    /// ABRIR O CAIXA SEM HERDAR O ADMINISTRADOR (14/09/2026, Castelo). O instalador roda elevado;
+    /// o Pdv.exe aberto por ele também rodava, e um caixa elevado cria a trava com a DACL de
+    /// administrador. Com a área de trabalho do Windows aberta, quem abre é o Explorer, como o
+    /// usuário comum. Sem ela (quiosque), abre direto.
+    /// </summary>
+    public static ComoAbrir DecidirComoAbrir(bool elevado, bool explorerAberto)
+        => elevado && explorerAberto ? ComoAbrir.PeloExplorer : ComoAbrir.Direto;
+
+    /// <summary>Abre o caixa (fim da instalação, fim da atualização). Silencioso: o atalho continua lá.</summary>
+    public static void AbrirCaixa(string exe)
+    {
+        try
+        {
+            using var eu = Process.GetCurrentProcess();
+            bool elevado;
+            using (var id = System.Security.Principal.WindowsIdentity.GetCurrent())
+                elevado = new System.Security.Principal.WindowsPrincipal(id).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+            var explorer = false;
+            foreach (var p in Process.GetProcessesByName("explorer"))
+            {
+                try { explorer |= p.SessionId == eu.SessionId; } catch { }
+                finally { p.Dispose(); }
+            }
+
+            if (DecidirComoAbrir(elevado, explorer) == ComoAbrir.PeloExplorer)
+            {
+                var antes = IdsDoCaixa();
+                var psi = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+                psi.ArgumentList.Add(exe);
+                using (Process.Start(psi)) { }
+                // O Explorer não devolve erro quando não abre: confere se o caixa apareceu.
+                for (var i = 0; i < 20; i++)
+                {
+                    Thread.Sleep(250);
+                    if (IdsDoCaixa().Except(antes).Any()) return;
+                }
+            }
+            using (Process.Start(new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = true })) { }
+        }
+        catch { /* o atalho e o menu do Windows continuam lá */ }
+    }
+
+    private static HashSet<int> IdsDoCaixa()
+    {
+        var ids = new HashSet<int>();
+        foreach (var p in Process.GetProcessesByName("Pdv"))
+        {
+            ids.Add(p.Id);
+            p.Dispose();
+        }
+        return ids;
     }
 
     /// <summary>

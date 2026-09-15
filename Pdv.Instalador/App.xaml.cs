@@ -23,12 +23,14 @@ public partial class App : Application
         // completo abrir numa atualizacao e, com razao, quis so a troca.
         if (e.Args.Length > 0 && e.Args[0] == "--atualizar")
         {
-            var falha = AtualizarSilencioso();
+            var falha = AtualizarSilencioso(out var pastaDoCaixa);
             if (falha is not null)
                 MessageBox.Show("Não consegui atualizar: " + falha + "\nO caixa continua na versão anterior.",
                     "Atualizar o caixa", MessageBoxButton.OK, MessageBoxImage.Error);
             else
-                AbrirCaixa();
+                // Reabre ONDE o caixa está (a loja da Savassi mora em "PDV MMTech") e como o
+                // usuário da área de trabalho, sem herdar o administrador deste instalador.
+                Instalacao.AbrirCaixa(Path.Combine(pastaDoCaixa ?? Instalacao.PastaDestinoPadrao, "Pdv.exe"));
             Shutdown(falha is null ? 0 : 1);
             return;
         }
@@ -65,12 +67,13 @@ public partial class App : Application
     /// PayGo já está na máquina, prepara a pasta de troca. Não mexe no PayGo em
     /// atualização: o assistente dele é uma janela, e aqui não pode haver janela.
     /// </summary>
-    private static string? AtualizarSilencioso()
+    private static string? AtualizarSilencioso(out string? pasta)
     {
         // ATUALIZA ONDE O CAIXA ESTÁ, não onde ele nasceria hoje. A loja instalada como
         // "PDV MMTech" tem o programa em Program Files\PDV MMTech; procurar só a pasta do
         // nome novo (MMFood) faria a atualização morrer com "não está instalado".
         var pastaAtual = Instalacao.PastaInstalada();
+        pasta = pastaAtual;
         if (pastaAtual is null)
             return "o caixa não está instalado nesta máquina";
         // O caixa se fecha logo depois de nos chamar; sem o assistente no meio, a
@@ -124,17 +127,4 @@ public partial class App : Application
         return mesmoAssim == MessageBoxResult.Yes;
     }
 
-    private static void AbrirCaixa()
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe"),
-                WorkingDirectory = Instalacao.PastaDestinoPadrao,
-                UseShellExecute = true,
-            });
-        }
-        catch { /* o atalho e o menu do Windows continuam lá */ }
-    }
 }

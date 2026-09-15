@@ -176,6 +176,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
     /// </summary>
     public Action<IReadOnlyList<string>>? RedesDoTerminal { get; init; }
 
+    /// <summary>
+    /// As redes que o menu de rede ofereceu numa cobrança PIX (14/09/2026, loja Castelo). Lista à
+    /// parte da do cartão: é ela que a Configuração mostra primeiro na Rede do Pix.
+    /// </summary>
+    public Action<IReadOnlyList<string>>? RedesPixDoTerminal { get; init; }
+
     /// <summary>Imprime as vias ANTES da confirmação; false = desfaz (PWCNF_REV_PRN_AUT). Null = terminal sem impressão de TEF.</summary>
     public Func<TransacaoPayGo, Task<bool>>? ImprimirComprovante { get; init; }
 
@@ -649,8 +655,14 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                 // cancelamento tem quatro passos so para ele. A planilha exige o
                 // PWINFO_REQNUM neles do mesmo jeito: o que se prova ali e a recusa ter
                 // funcionado, e ela tem numero como qualquer outra transacao.
+                // Tipo e rede fixada sobem junto (14/09/2026): e com eles que a tela traduz uma
+                // recusa do host e sugere a rede em automatico quando a fixada nao vale.
                 return new DesfechoTef(fim.Situacao, id, chargeId, null, fim.Motivo, fim.PosOcupado)
-                { Codigo = fim.Codigo, Desfeita = fim.Desfeita, Reqnum = r.CodigoControle };
+                {
+                    Codigo = fim.Codigo, Desfeita = fim.Desfeita, Reqnum = r.CodigoControle,
+                    Tipo = tipo,
+                    RedeFixada = !string.IsNullOrWhiteSpace(tipo == TipoTef.Pix ? _op.RedePix : _op.RedeCartao),
+                };
             }
 
             var tx = new TransacaoPayGo(chargeId, id, tipo, valor.Centavos, parc, "aprovada", r);
@@ -1453,6 +1465,12 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     return Encerrar(fim, SituacaoTef.Erro, CodigoTef.Plataforma, MsgPinpadNaoAchado(ctx.Porta), ler: true);
                 }
                 Recado(p.Prompt);
+                // O menu de rede e a UNICA hora em que o terminal diz, com todas as letras, quais
+                // redes ele tem. Anuncia ANTES do filtro da loja (o que interessa guardar e o que o
+                // TERMINAL oferece) e ANTES de responder sozinho: em producao a rede unica e
+                // respondida pelo Predefinido, e sem isto loja de uma rede so nunca tinha a lista.
+                if (p.Identificador == PW.PWINFO_AUTHSYST && p.Opcoes is { Count: > 0 })
+                    AnunciarRedes(ctx, p.Opcoes.Select(o => o.Valor).ToList());
                 var valor = Predefinido(ctx, p);
                 if (valor is null)
                 {
@@ -1463,12 +1481,6 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
                     // tela — assim os botões e o valor devolvido saem da MESMA lista, e não tem
                     // como o operador tocar em C6PAY e a biblioteca receber CIELO. O menu nunca
                     // fica vazio: ver FiltroRedes.
-                    // O menu de rede e a UNICA hora em que o terminal diz, com todas as
-                    // letras, quais redes ele tem. Anuncia ANTES do filtro da loja: o
-                    // que interessa guardar e o que o TERMINAL oferece, e nao o que a
-                    // configuracao deixou passar.
-                    if (p.Identificador == PW.PWINFO_AUTHSYST && p.Opcoes is { Count: > 0 })
-                        try { RedesDoTerminal?.Invoke(p.Opcoes.Select(o => o.Valor).ToList()); } catch { }
                     var resposta = await PerguntarSeguroAsync(ctx, FiltroRedes.Aplicar(p, _op.RedesPermitidas, Auditar)).ConfigureAwait(false);
                     // A tela pode devolver o texto da opção ("RELATORIO") ou o valor em outra caixa
                     // ("cielo"): o que vai para a biblioteca é sempre o VALOR da opção.
@@ -1760,6 +1772,17 @@ public sealed class ProvedorPGWebLib : IProvedorTefOperavel, IDisposable
             }
             await Task.Delay(IntervaloPollMs).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>As redes do menu vão para a lista do tipo da cobrança: Pix numa, cartão (e ADM) na outra.</summary>
+    private void AnunciarRedes(Contexto ctx, IReadOnlyList<string> redes)
+    {
+        try
+        {
+            if (ctx.Tipo == TipoTef.Pix) RedesPixDoTerminal?.Invoke(redes);
+            else RedesDoTerminal?.Invoke(redes);
+        }
+        catch { /* saber as redes e conforto: nunca derruba a cobranca */ }
     }
 
     /// <summary>Valor que a automação já sabe para o dado pedido (o que mandou em AddParam, ou a rede pré-selecionada).</summary>

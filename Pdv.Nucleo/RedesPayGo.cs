@@ -110,29 +110,50 @@ public static class RedesPayGo
     /// encurtou, ou porque a rede estava fora do ar) nao pode apagar o que ja se
     /// sabia deste terminal.
     /// </summary>
-    public static void GuardarVistas(IReadOnlyList<string> redes)
+    public static void GuardarVistas(IReadOnlyList<string> redes) => GuardarVistas(redes, pix: false);
+
+    /// <summary>
+    /// Idem, na lista do cartão ou na do PIX. As redes que o menu mostrou numa cobrança PIX vão
+    /// para <see cref="ChaveVistasPix"/> (14/09/2026, Castelo): misturadas, uma rede de Pix subiria
+    /// para o campo do cartão, que é justamente a troca que a rede recusa.
+    /// </summary>
+    public static void GuardarVistas(IReadOnlyList<string> redes, bool pix)
     {
         try
         {
             using var cx = Banco.Abrir();
-            var atuais = Vistas(c => Vendas.Config(cx, c)).ToList();
-            var mudou = false;
-            foreach (var r in redes ?? Array.Empty<string>())
-            {
-                var v = (r ?? "").Trim();
-                if (v.Length == 0 || atuais.Contains(v, StringComparer.Ordinal)) continue;
-                atuais.Add(v);
-                mudou = true;
-            }
-            if (mudou) Vendas.GravarConfig(cx, ChaveVistas, string.Join("|", atuais));
+            var chave = pix ? ChaveVistasPix : ChaveVistas;
+            if (Acrescentar(Vendas.Config(cx, chave), redes) is { } novo) Vendas.GravarConfig(cx, chave, novo);
         }
         catch { /* saber as redes e conforto: nunca derruba a cobranca */ }
     }
 
-    /// <summary>As redes que este terminal ja ofereceu, na ordem em que apareceram.</summary>
-    public static IReadOnlyList<string> Vistas(Func<string, string?> config)
+    /// <summary>
+    /// A lista gravada ("A|B") com as redes novas no fim, ou null quando não há nada novo (nada a
+    /// gravar). Só acrescenta: menu curto não apaga o que já se sabia do terminal.
+    /// </summary>
+    public static string? Acrescentar(string? atual, IReadOnlyList<string>? redes)
     {
-        var bruto = config(ChaveVistas);
+        var lista = Lista(atual).ToList();
+        var mudou = false;
+        foreach (var r in redes ?? Array.Empty<string>())
+        {
+            var v = (r ?? "").Trim();
+            if (v.Length == 0 || lista.Contains(v, StringComparer.Ordinal)) continue;
+            lista.Add(v);
+            mudou = true;
+        }
+        return mudou ? string.Join("|", lista) : null;
+    }
+
+    /// <summary>As redes que este terminal ja ofereceu no CARTÃO, na ordem em que apareceram.</summary>
+    public static IReadOnlyList<string> Vistas(Func<string, string?> config) => Lista(config(ChaveVistas));
+
+    /// <summary>As redes que este terminal ja ofereceu numa cobrança PIX, na ordem em que apareceram.</summary>
+    public static IReadOnlyList<string> VistasPix(Func<string, string?> config) => Lista(config(ChaveVistasPix));
+
+    private static IReadOnlyList<string> Lista(string? bruto)
+    {
         if (string.IsNullOrWhiteSpace(bruto)) return Array.Empty<string>();
         return bruto.Split('|', StringSplitOptions.RemoveEmptyEntries)
             .Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
@@ -152,31 +173,65 @@ public static class RedesPayGo
     public static IReadOnlyList<OpcaoRede> OpcoesCartao(string? gravado, IReadOnlyList<string> vistas)
     {
         var basica = Opcoes(Cartao, Pix, "Pix", gravado);
-        if (vistas is null || vistas.Count == 0) return basica;
-
-        var fora = new List<OpcaoRede>();
-        foreach (var v in vistas)
-        {
-            var nome = (v ?? "").Trim();
-            if (nome.Length == 0) continue;
-            if (basica.Any(o => string.Equals(o.Valor, nome, StringComparison.Ordinal))) continue;
-            fora.Add(new OpcaoRede(nome, nome + "  (este terminal oferece)", Conhecida: true));
-        }
+        // Rede de Pix que apareceu no menu não sobe para o campo do cartão (14/09/2026).
+        var daqui = Filtrar(vistas, nome => CanonicoPix(nome) is null && !nome.StartsWith("PIX ", StringComparison.OrdinalIgnoreCase));
+        if (daqui.Count == 0) return basica;
 
         // As vistas primeiro, na ordem em que o terminal as mostrou; depois o resto.
-        var naFrente = vistas
-            .Select(v => basica.FirstOrDefault(o => string.Equals(o.Valor, (v ?? "").Trim(), StringComparison.Ordinal)))
-            .Where(o => o is not null)!
-            .Select(o => o! with { Rotulo = o.Rotulo + "  (este terminal oferece)" })
+        var (naFrente, fora, resto) = Separar(basica, daqui);
+        return naFrente.Concat(fora).Concat(resto).ToList();
+    }
+
+    /// <summary>
+    /// Opções do campo de PIX com as redes que ESTE TERMINAL ofereceu numa cobrança Pix logo
+    /// depois do automático (14/09/2026, loja Castelo: "PIX ITAU" copiado da Savassi voltou
+    /// "MODALIDADE DE PAGAMENTO INVALIDA"). O automático fica em PRIMEIRO no Pix: é o padrão de
+    /// instalação nova e o que resolve quando a rede fixada não vale para o terminal.
+    /// </summary>
+    public static IReadOnlyList<OpcaoRede> OpcoesPix(string? gravado, IReadOnlyList<string> vistas)
+    {
+        var basica = Opcoes(Pix, Cartao, "cartão", gravado);
+        var daqui = Filtrar(vistas, nome => CanonicoCartao(nome) is null);
+        if (daqui.Count == 0) return basica;
+
+        var (naFrente, fora, resto) = Separar(basica, daqui);
+        return resto.Where(o => o.Automatica)
+            .Concat(naFrente).Concat(fora)
+            .Concat(resto.Where(o => !o.Automatica))
+            .ToList();
+    }
+
+    private const string MarcaDoTerminal = "  (este terminal oferece)";
+
+    private static IReadOnlyList<string> Filtrar(IReadOnlyList<string>? vistas, Func<string, bool> daLista)
+        => (vistas ?? Array.Empty<string>())
+            .Select(v => (v ?? "").Trim())
+            .Where(v => v.Length > 0 && daLista(v))
+            .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        var resto = basica.Where(o => !naFrente.Any(f => string.Equals(f.Valor, o.Valor, StringComparison.Ordinal)));
-        return naFrente.Concat(fora).Concat(resto).ToList();
+    /// <summary>As vistas que a lista conhece (com a marca), as que ela não conhece, e o resto da lista.</summary>
+    private static (List<OpcaoRede> NaFrente, List<OpcaoRede> Fora, List<OpcaoRede> Resto) Separar(
+        IReadOnlyList<OpcaoRede> basica, IReadOnlyList<string> vistas)
+    {
+        var naFrente = new List<OpcaoRede>();
+        var fora = new List<OpcaoRede>();
+        foreach (var nome in vistas)
+        {
+            var achada = basica.FirstOrDefault(o => string.Equals(o.Valor, nome, StringComparison.Ordinal));
+            if (achada is not null) naFrente.Add(achada with { Rotulo = achada.Rotulo + MarcaDoTerminal });
+            else fora.Add(new OpcaoRede(nome, nome + MarcaDoTerminal, Conhecida: true));
+        }
+        var resto = basica.Where(o => !naFrente.Any(f => string.Equals(f.Valor, o.Valor, StringComparison.Ordinal))).ToList();
+        return (naFrente, fora, resto);
     }
 
     /// <summary>Opções do campo de PIX, já contando o valor gravado (mesmo fora da lista).</summary>
     public static IReadOnlyList<OpcaoRede> OpcoesPix(string? gravado = null)
         => Opcoes(Pix, Cartao, "cartão", gravado);
+
+    /// <summary>A chave onde ficam as redes que o terminal ofereceu numa cobrança PIX.</summary>
+    public const string ChaveVistasPix = "tef_redes_pix_do_terminal";
 
     /// <summary>Nome oficial correspondente ao valor gravado/digitado, ou null se não é da lista de cartão.</summary>
     public static string? CanonicoCartao(string? valor) => Achar(Cartao, valor);
@@ -217,13 +272,22 @@ public static class RedesPayGo
     public static int Indice(IReadOnlyList<OpcaoRede> opcoes, string? gravado)
     {
         var bruto = (gravado ?? "").Trim();
-        if (bruto.Length == 0) return 0;
+        // Nada gravado é o AUTOMÁTICO, esteja ele onde estiver na lista. Com as redes do terminal
+        // na frente (cartão), o índice 0 é uma rede, e o Salvar a fixaria sem o dono escolher.
+        if (bruto.Length == 0) return IndiceAutomatico(opcoes);
         // Texto exato primeiro: é ele que sobrevive como opção "fora da lista".
         for (var i = 0; i < opcoes.Count; i++)
             if (string.Equals(opcoes[i].Valor, bruto, StringComparison.Ordinal)) return i;
         // Depois a comparação tolerante ("cielo" gravado seleciona CIELO da lista).
         for (var i = 0; i < opcoes.Count; i++)
             if (opcoes[i].Valor.Length > 0 && Chave(opcoes[i].Valor) == Chave(bruto)) return i;
+        return IndiceAutomatico(opcoes);
+    }
+
+    private static int IndiceAutomatico(IReadOnlyList<OpcaoRede> opcoes)
+    {
+        for (var i = 0; i < opcoes.Count; i++)
+            if (opcoes[i].Automatica) return i;
         return 0;
     }
 

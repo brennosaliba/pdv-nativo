@@ -314,6 +314,8 @@ public static class Servicos
                     // A lista de redes deixa de ser chute: o terminal diz quais tem, no
                     // menu de rede, e a Configuracao passa a oferecer essas.
                     RedesDoTerminal = redes => RedesPayGo.GuardarVistas(redes),
+                    // 14/09/2026, Castelo: as do Pix numa lista à parte, que a Rede do Pix mostra primeiro.
+                    RedesPixDoTerminal = redes => RedesPayGo.GuardarVistas(redes, pix: true),
                     CnpjDaRede = rede =>
                     {
                         using var c2 = Banco.Abrir();

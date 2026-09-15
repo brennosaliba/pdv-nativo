@@ -143,6 +143,8 @@ public sealed class FakePGWebLib : IPGWebLib
     /// <summary>A biblioteca perde a pendência que segurava (queda, outro módulo resolveu): CNF/REV dela viram PWRET_INVALIDTRN.</summary>
     public void Esquecer() => _pendente = null;
     public string Rede { get; set; } = "REDE";
+    /// <summary>A frase que o host escreve na recusa (Desfecho.Recusar). Ex.: "[NA 0201] 03 ESTABELECIMENTO INVALIDO".</summary>
+    public string MensagemRecusa { get; set; } = "TRANSACAO NAO AUTORIZADA";
     public string AutDateTime { get; set; } = "20260905143000";
     /// <summary>AUTRESPCODE que a rede devolve na aprovação. Redes reais mandam "00", "000", "0000" ou nada (vazio = não informa).</summary>
     public string AutRespCode { get; set; } = "00";
@@ -520,7 +522,7 @@ public sealed class FakePGWebLib : IPGWebLib
                         return PW.PWRET_HOSTCONNERR;
                     case Desfecho.Recusar:
                         NovoReqNum();
-                        _res[PW.PWINFO_RESULTMSG] = "TRANSACAO NAO AUTORIZADA";
+                        _res[PW.PWINFO_RESULTMSG] = MensagemRecusa;
                         _res[PW.PWINFO_AUTRESPCODE] = "51";
                         return PW.PWRET_FROMHOST_FIM;
                 }

@@ -38,6 +38,41 @@ using Pdv.Testes;
 // silencio na suite de testes quando um argumento viesse errado — e foi exatamente o
 // que aconteceu: o script de build achou que empacotou e o que rodou foram os 1161
 // testes. Passo de build tem que falhar alto.
+// Sondas de processo (TestesInstanciaUnica e TestesInstaladorCastelo). Ficam no TOPO: a do
+// Pdv.App recebe os argumentos do Pdv.exe (ex.: --cupom-teste), e eles não podem cair em
+// nenhum outro modo daqui.
+if (Environment.GetEnvironmentVariable(Sondas.VariavelApp) == "1")
+    return Sondas.RodarApp();
+if (args.Length >= 2 && args[0] == "--sonda-presa")
+    return Sondas.Presa(args[1]);
+if (args.Length >= 3 && args[0] == "--sonda-neto")
+    return Sondas.Neto(args[1], args[2]);
+
+// PROVA COM HARDWARE REAL (14/09/2026, Castelo): roda o teste do pinpad do caixa contra as
+// portas seriais DESTA máquina e imprime a linha que a tela mostraria. Não chama a PGWebLib,
+// não fala com host nenhum, não faz transação: abre a porta, manda CAN, espera EOT e fecha.
+// Com o PDV aberto não roda, porque a porta pode estar com ele no meio de uma cobrança.
+//   Pdv.Testes.exe --testar-pinpad [porta]
+if (args.Length >= 1 && args[0] == "--testar-pinpad")
+{
+    var abertos = System.Diagnostics.Process.GetProcessesByName("Pdv");
+    if (abertos.Length > 0)
+    {
+        Console.WriteLine($"O PDV está aberto nesta máquina ({string.Join(", ", abertos.Select(p => p.Id))}). Feche o PDV e rode de novo.");
+        foreach (var p in abertos) p.Dispose();
+        return 3;
+    }
+    var acesso = new SerialWindows();
+    var portas = acesso.Listar();
+    Console.WriteLine(portas.Count == 0 ? "portas: nenhuma" : "portas: " + string.Join("; ", portas.Select(p => $"{p.Com} {p.Descricao}".Trim())));
+    var relogio = System.Diagnostics.Stopwatch.StartNew();
+    var r = TestePinpad.TestarAsync(acesso, args.Length >= 2 ? args[1] : null, bibliotecaNoCaixa: false).GetAwaiter().GetResult();
+    relogio.Stop();
+    Console.WriteLine($"situacao: {r.Situacao} em {relogio.ElapsedMilliseconds} ms");
+    Console.WriteLine(r.Frase);
+    return r.Ok ? 0 : 1;
+}
+
 if (args.Length >= 1 && args[0] == "--empacotar")
 {
     if (args.Length < 5)
@@ -1772,6 +1807,10 @@ TestesCaixaDeHomologacao.Rodar((cond, nome) => Check("caixa-homolog: " + nome, c
 Console.WriteLine();
 Console.WriteLine("--- Menu do TEF: medido na tela, com a chave desligada ---");
 TestesMenuTefNaTela.Rodar((cond, nome) => Check("menu-tef-tela: " + nome, cond));
+TestesInstaladorCastelo.Rodar((cond, nome) => Check("instalador-castelo: " + nome, cond));
+TestesRedePixDoTerminal.Rodar((cond, nome) => Check("rede-pix: " + nome, cond));
+TestesRecusasDoHost.Rodar((cond, nome) => Check("recusa-host: " + nome, cond));
+TestesNotaPelaNuvem.Rodar((cond, nome) => Check("nota-nuvem: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

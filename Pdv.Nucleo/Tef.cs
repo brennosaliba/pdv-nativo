@@ -166,6 +166,12 @@ public sealed record DesfechoTef(SituacaoTef Situacao, string? PaymentIdentifier
     /// </summary>
     public bool Desfeita { get; init; }
 
+    /// <summary>O tipo da cobrança, quando o provedor informa. Serve para traduzir a recusa do host.</summary>
+    public TipoTef? Tipo { get; init; }
+
+    /// <summary>A cobrança foi com rede pré-selecionada na Configuração (e não no automático).</summary>
+    public bool RedeFixada { get; init; }
+
     public bool Pago => Situacao == SituacaoTef.Pago;
     public bool SessaoExpirada => Codigo == CodigoTef.SessaoExpirada;
     public bool SemPermissao => Codigo == CodigoTef.SemPermissao;
@@ -193,9 +199,15 @@ public sealed record DesfechoTef(SituacaoTef Situacao, string? PaymentIdentifier
     /// mostraria "não foi possível concluir o pagamento" numa venda aprovada, exatamente a frase que
     /// faz o operador cobrar de novo. Provedor que não mandou mensagem devolve vazio, nunca o padrão.
     /// </summary>
+    ///
+    /// RECUSA DO HOST TRADUZIDA (14/09/2026, loja Castelo): "[NA 0201] 03 ESTABELECIMENTO INVALIDO"
+    /// e "MODALIDADE DE PAGAMENTO INVALIDA" chegavam crus ao operador. As recusas de cadastro
+    /// conhecidas (<see cref="RecusasDoHost"/>) saem com o que fazer; o original fica em `Motivo`.
+    /// </summary>
     public string MensagemParaTela => Pago
         ? Motivo ?? ""
-        : (Motivo ?? "não foi possível concluir o pagamento") + (PosPodeTerFicadoOcupado ? ClienteTef.SufixoPosOcupado : "");
+        : (RecusasDoHost.Traduzir(Motivo, Tipo, RedeFixada)?.ParaTela ?? Motivo ?? "não foi possível concluir o pagamento")
+          + (PosPodeTerFicadoOcupado ? ClienteTef.SufixoPosOcupado : "");
 }
 
 /// <summary>

@@ -658,6 +658,19 @@ public partial class Pagamento : UserControl
 
         AtualizarTef(d, forma);
 
+        // RECUSA DO HOST TRADUZIDA (14/09/2026, Castelo): a tela mostra o que fazer
+        // (DesfechoTef.MensagemParaTela); o texto original do host fica aqui, na auditoria, além
+        // de tef_transacao.motivo.
+        if (!d.Pago && RecusasDoHost.Traduzir(d.Motivo, d.Tipo, d.RedeFixada) is { } recusa)
+        {
+            try
+            {
+                using var cxr = Banco.Abrir();
+                Caixa.Auditar(cxr, null, "tef_recusa_host", null, null, $"{recusa.Codigo} · {forma} · original: {d.Motivo}");
+            }
+            catch { /* auditoria não derruba a tela */ }
+        }
+
         // O REQNUM DA TRANSACAO VIRA A LINHA DA PLANILHA (09/09/2026).
         //
         // A planilha de homologacao da PayGo exige, para integracao por biblioteca

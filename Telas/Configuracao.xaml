@@ -125,6 +125,19 @@
                                    Text="Este caixa está em SÓ RECIBO: não emite nota, então não pede certificado nem CSC. Para passar a emitir, volte ao passo 1 e escolha Cupom fiscal."/>
                     </Border>
 
+                    <!-- 14/09/2026, Castelo: sem o emissor local a nota sai pela nuvem, e o
+                         certificado e o CSC dela moram no painel (Empresa & Fiscal). O caixa não
+                         pede nada disso: mostra em uma linha o que o painel tem. -->
+                    <Border x:Name="BlocoNotaNuvem" Visibility="Collapsed" CornerRadius="12" Padding="14,12" Margin="0,0,0,10"
+                            Background="{DynamicResource Painel}" BorderBrush="{DynamicResource Borda}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock x:Name="TxtNotaNuvem" Foreground="{DynamicResource Texto}" FontSize="14" TextWrapping="Wrap"
+                                       Text="Nota pela nuvem: conferindo no painel…"/>
+                            <TextBlock Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"
+                                       Text="Este caixa emite a nota pela nuvem. O certificado e o CSC ficam no painel, em Empresa &amp; Fiscal."/>
+                        </StackPanel>
+                    </Border>
+
                     <StackPanel x:Name="BlocoCertificado">
                         <TextBlock Text="Certificado digital A1 (o arquivo .pfx que o contador manda)" Style="{StaticResource Rotulo}"/>
                         <Grid Margin="0,4,0,12">
@@ -582,15 +595,15 @@
                     </StackPanel>
 
                     <StackPanel x:Name="BlocoRespostasChat">
-                        <!-- RESPOSTAS PRONTAS DO CHAT DO IFOOD (11/09/2026, pedido do dono): os cartoes
-                             que aparecem no espaco vazio ao lado do chat. Um bloco por resposta,
-                             separados por linha em branco; a primeira linha e o titulo do cartao.
-                             Vazio = as cinco de fabrica (Pdv.Nucleo/RespostasProntas). -->
-                        <TextBlock Text="RESPOSTAS PRONTAS DO CHAT DO IFOOD" Foreground="{DynamicResource Marca}"
-                                   FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
-                        <TextBox x:Name="TxtRespostasChat" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="180" MaxHeight="300"
-                                 VerticalScrollBarVisibility="Auto" FontSize="13" Margin="0,0,0,6"/>
-                        <TextBlock Text="Um bloco por resposta, separados por uma linha em branco. A primeira linha é o título do cartão; o resto é a mensagem que o atendente copia com um toque. Até 8 respostas. Apague tudo para voltar às de fábrica."
+                        <!-- RESPOSTAS PRONTAS DO CHAT DO IFOOD (11/09/2026, pedido do dono): os cartoes
+                             que aparecem no espaco vazio ao lado do chat. Um bloco por resposta,
+                             separados por linha em branco; a primeira linha e o titulo do cartao.
+                             Vazio = as cinco de fabrica (Pdv.Nucleo/RespostasProntas). -->
+                        <TextBlock Text="RESPOSTAS PRONTAS DO CHAT DO IFOOD" Foreground="{DynamicResource Marca}"
+                                   FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
+                        <TextBox x:Name="TxtRespostasChat" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="180" MaxHeight="300"
+                                 VerticalScrollBarVisibility="Auto" FontSize="13" Margin="0,0,0,6"/>
+                        <TextBlock Text="Um bloco por resposta, separados por uma linha em branco. A primeira linha é o título do cartão; o resto é a mensagem que o atendente copia com um toque. Até 8 respostas. Apague tudo para voltar às de fábrica."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <TextBlock Text="Também dá para definir estas respostas (e a senha de administrador deste caixa) no painel, em Configurações da loja: o caixa copia ao tocar em Atualizar."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>

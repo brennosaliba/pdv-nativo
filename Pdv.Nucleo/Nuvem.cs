@@ -305,6 +305,31 @@ public sealed class Nuvem
         catch { return null; }
     }
 
+    // ── NOTA PELA NUVEM (14/09/2026, Castelo) ──────────────────────────────────────
+    /// <summary>
+    /// O que o painel tem do fiscal da loja deste terminal (certificado, CSC, ambiente): só
+    /// metadados, pela RPC <see cref="NotaPelaNuvem.Rpc"/>, com a sessão do terminal. O corpo
+    /// é lido por <see cref="NotaPelaNuvem.Ler"/>.
+    /// </summary>
+    public async Task<(ConsultaFiscal Consulta, string? Corpo)> FiscalDaLojaAsync(string? cnpj, CancellationToken ct = default)
+    {
+        if (!await SessaoOkAsync(ct).ConfigureAwait(false)) return (ConsultaFiscal.SemSessao, null);
+        try
+        {
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/" + NotaPelaNuvem.Rpc);
+            var digitos = Documentos.SoDigitos(cnpj ?? "");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _cnpj = digitos.Length == 14 ? digitos : null }), Encoding.UTF8, "application/json");
+            using var prazo = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            prazo.CancelAfter(TimeSpan.FromSeconds(8));
+            using var resp = await _http.SendAsync(req, prazo.Token).ConfigureAwait(false);
+            // 404 enquanto a migration não estiver no ar: a tela diz "o painel não respondeu".
+            if (!resp.IsSuccessStatusCode) return (ConsultaFiscal.NaoDisponivel, null);
+            return (ConsultaFiscal.Respondeu, await resp.Content.ReadAsStringAsync(prazo.Token).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { return (ConsultaFiscal.SemRede, null); }
+    }
+
     public async Task<int> BaixarOperadoresAsync(SqliteConnection cx)
     {
         if (!await SessaoOkAsync()) return 0;

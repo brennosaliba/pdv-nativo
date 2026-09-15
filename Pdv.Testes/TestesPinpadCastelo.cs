@@ -210,6 +210,25 @@ public static class TestesPinpadCastelo
                && SerialWindows.LimparNome("@oem12.inf,%usbser%;USB Serial Device (COM8)", "COM8") == "USB Serial Device",
             "o nome do Windows perde o '(COMn)' e o prefixo do driver");
 
+        // 14/09/2026, prova com o hardware desta máquina: Gertec desligado, só a COM1 da placa-mãe.
+        // A frase dizia "O pinpad está na COM1 mas não respondeu" sobre a porta do próprio computador.
+        var soPlaca = new SerialDeMentira();
+        soPlaca.Portas.Add(new PortaSerial("COM1", "Porta de comunicação"));
+        r = TestePinpad.Testar(soPlaca, "0", false, 10);
+        checar(r.Situacao == SituacaoPinpad.NenhumPinpad && r.Frase == TestePinpad.FraseNenhum && soPlaca.Abertas.Count == 1,
+            "só a porta da placa-mãe, calada: ela é testada, mas a frase não diz que o pinpad está nela (" + r.Frase + ")");
+
+        var placaEUsb = new SerialDeMentira();
+        placaEUsb.Portas.Add(new PortaSerial("COM1", "Porta de comunicação"));
+        placaEUsb.Portas.Add(new PortaSerial("COM4", "Dispositivo Serial USB"));
+        r = TestePinpad.Testar(placaEUsb, "0", false, 10);
+        checar(r.Situacao == SituacaoPinpad.NaoRespondeu && r.Numero == "4" && r.Frase.Contains("COM4", StringComparison.Ordinal) && !r.Frase.Contains("COM1", StringComparison.Ordinal),
+            "placa-mãe e serial USB caladas: a frase fala da USB, que pode ser o pinpad com driver genérico (" + r.Frase + ")");
+
+        r = TestePinpad.Testar(soPlaca, "1", false, 10);
+        checar(r.Situacao == SituacaoPinpad.NaoRespondeu && r.Frase.StartsWith("O pinpad está na COM1", StringComparison.Ordinal),
+            "a COM1 da placa escolhida à mão na Configuração continua sendo tratada como o pinpad (" + r.Frase + ")");
+
         foreach (var f in new[] { TestePinpad.FraseNenhum, TestePinpad.FrasePrazo, TestePinpad.FraseMudo(new("COM2", "")),
                      TestePinpad.FraseOcupada(new("COM2", ""), null), TestePinpad.FraseOcupada(new("COM2", ""), "Gertec") })
             checar(!f.Contains('—') && !f.Contains('–') && !f.Contains("PWRET_"), "frase do teste do pinpad sem travessão e sem código: " + f);

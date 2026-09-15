@@ -95,6 +95,20 @@ public static class TestePinpad
         return !NuncaTestar.Any(n => d.Contains(n, StringComparison.Ordinal));
     }
 
+    /// <summary>O nome que o Windows dá à porta serial da própria placa-mãe (em português e em inglês).</summary>
+    private static readonly string[] NomesDaPortaDaPlaca = { "porta de comunicação", "porta de comunicacao", "communications port" };
+
+    /// <summary>
+    /// A porta é a serial da placa-mãe? Ela ainda é testada (pinpad de cabo serial existe), mas
+    /// calada ela não é "o pinpad": 14/09/2026, prova com o hardware desta máquina, Gertec
+    /// desligado e só a COM1 da placa, e a frase dizia "O pinpad está na COM1 mas não respondeu".
+    /// </summary>
+    public static bool EhPortaDaPlaca(PortaSerial p)
+    {
+        var d = (p.Descricao ?? "").ToLowerInvariant();
+        return NomesDaPortaDaPlaca.Any(n => d.Contains(n, StringComparison.Ordinal));
+    }
+
     /// <summary>
     /// As portas que o teste vai tentar, na ordem. Porta escolhida na Configuração: só ela.
     /// Automática: primeiro as que parecem pinpad pelo nome, depois as outras que podem ser.
@@ -199,10 +213,13 @@ public static class TestePinpad
         if (ocupadas.FirstOrDefault(Pinpad) is { } op) return Ocupada(op);
         if (mudas.FirstOrDefault(Pinpad) is { } mp) return new(SituacaoPinpad.NaoRespondeu, FraseMudo(mp), mp);
         if (ocupadas.Count > 0) return Ocupada(ocupadas[0]);
-        if (mudas.Count == 1) return new(SituacaoPinpad.NaoRespondeu, FraseMudo(mudas[0]), mudas[0]);
-        if (mudas.Count > 1)
+        // A porta da placa-mãe calada não vira "o pinpad está na COMx" (ver EhPortaDaPlaca).
+        var mudasForaDaPlaca = mudas.Where(p => !EhPortaDaPlaca(p)).ToList();
+        if (mudasForaDaPlaca.Count == 1) return new(SituacaoPinpad.NaoRespondeu, FraseMudo(mudasForaDaPlaca[0]), mudasForaDaPlaca[0]);
+        if (mudasForaDaPlaca.Count > 1)
             return new(SituacaoPinpad.NaoRespondeu,
-                $"Nenhuma porta respondeu como pinpad ({string.Join(", ", mudas.Select(p => p.Com))}). Tire o cabo USB do pinpad, espere 10 segundos e ligue de novo.");
+                $"Nenhuma porta respondeu como pinpad ({string.Join(", ", mudasForaDaPlaca.Select(p => p.Com))}). Tire o cabo USB do pinpad, espere 10 segundos e ligue de novo.");
+        if (mudas.Count > 0) return new(SituacaoPinpad.NenhumPinpad, FraseNenhum);
         if (estourou) return new(SituacaoPinpad.PassouDoPrazo, FrasePrazo);
         return new(SituacaoPinpad.NenhumPinpad, FraseNenhum);
     }

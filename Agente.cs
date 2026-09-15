@@ -46,6 +46,19 @@ public static class Agente
     }
     private const string Health = "http://127.0.0.1:4610/health";
 
+    /// <summary>
+    /// O emissor fiscal LOCAL está instalado nesta máquina (ao lado do caixa ou na pasta antiga)?
+    /// É o que decide se a Configuração pede certificado e CSC (NotaPelaNuvem.PedirCertificadoNoCaixa).
+    /// </summary>
+    public static bool Instalado
+    {
+        get
+        {
+            try { return File.Exists(Path.Combine(Pasta, "pdv-agent.cjs")); }
+            catch { return false; }
+        }
+    }
+
     /// <summary>Garante o agente de pé. Chamado no boot e pela vigia a cada 30s.</summary>
     public static void Garantir()
     {

@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Dapper;
+using Microsoft.Win32.SafeHandles;
 using Microsoft.Data.Sqlite;
 using Pdv.Nucleo;
 
@@ -138,7 +140,153 @@ public static class TestesInstanciaUnica
             checar(corpo.Length > 0 && !corpo.Contains("Shutdown(", StringComparison.Ordinal),
                 "a recusa não confia no Shutdown() do WPF, que ainda constrói a MainWindow");
         }
+
+        // ── 5. CAIXA ABERTO COMO ADMINISTRADOR (OU POR OUTRA CONTA) ─────────
+        // 14/09/2026, Castelo: dois Pdv.exe abertos. O instalador roda elevado e abre o caixa
+        // ("Abrir o caixa e configurar a loja"); o mutex Global\ nasce com a DACL de quem é
+        // administrador. O clique seguinte no ícone, sem elevação, toma ACESSO NEGADO ao abrir
+        // esse mutex, a trava antiga lia isso como "não deu para criar", caía no Local\ (que
+        // estava livre) e subia o 2º caixa. Aqui o mutex alheio é montado com uma DACL que só
+        // deixa o SISTEMA abrir: para este processo, é exatamente aquele acesso negado.
+        {
+            checar(InstanciaUnica.Classificar(abriu: true, erroWin32: 0) == InstanciaUnica.Resposta.Nossa,
+                "trava: criou agora, é nossa");
+            checar(InstanciaUnica.Classificar(abriu: true, erroWin32: 183) == InstanciaUnica.Resposta.JaExiste,
+                "trava: já existia (ERROR_ALREADY_EXISTS), há um caixa aberto");
+            checar(InstanciaUnica.Classificar(abriu: false, erroWin32: 5) == InstanciaUnica.Resposta.JaExiste,
+                "trava: acesso negado também é caixa aberto (de outra conta ou como administrador)");
+            checar(InstanciaUnica.Classificar(abriu: false, erroWin32: 6) == InstanciaUnica.Resposta.TentarOutroEscopo,
+                "trava: outro erro do Windows não é caixa aberto, tenta a trava da sessão");
+
+            var nomeNegado = "PdvNativo.Teste." + Guid.NewGuid().ToString("N");
+            using var alheia = MutexSoDoSistema(@"Global\" + nomeNegado, out var erroAlheia);
+            checar(alheia is not null, $"sonda: montei a trava de um caixa que este usuário não consegue abrir (erro {erroAlheia})");
+            if (alheia is not null)
+            {
+                var intrusa = InstanciaUnica.Tentar(nomeNegado);
+                checar(intrusa is null,
+                    "com o caixa aberto como administrador, o clique normal no ícone é RECUSADO (acesso negado não abre o 2º caixa)"
+                    + (intrusa is null ? "" : $" [pegou a trava em '{intrusa.Escopo}']"));
+                intrusa?.Dispose();
+            }
+        }
+
+        // ── 6. MODO DE FERRAMENTA NÃO ABRE O CAIXA NEM PASSA PELA TRAVA ────
+        {
+            checar(LinhaDeComando.Modo(new[] { "--cupom-teste", "x.png" }) == ModoDoExe.CupomTeste
+                   && LinhaDeComando.Modo(new[] { "--imprimir-teste" }) == ModoDoExe.ImprimirTeste,
+                "linha de comando: --cupom-teste e --imprimir-teste são modos de ferramenta");
+            checar(!LinhaDeComando.PegaATrava(ModoDoExe.CupomTeste) && !LinhaDeComando.AbreOCaixa(ModoDoExe.CupomTeste)
+                   && !LinhaDeComando.PegaATrava(ModoDoExe.ImprimirTeste) && !LinhaDeComando.AbreOCaixa(ModoDoExe.ImprimirTeste),
+                "linha de comando: ferramenta não pega a trava (nem é barrada por ela) e não abre o caixa");
+            checar(LinhaDeComando.Modo(Array.Empty<string>()) == ModoDoExe.Caixa && LinhaDeComando.Modo(null) == ModoDoExe.Caixa
+                   && LinhaDeComando.PegaATrava(ModoDoExe.Caixa) && LinhaDeComando.AbreOCaixa(ModoDoExe.Caixa),
+                "linha de comando: sem argumento é o caixa, com trava");
+            checar(LinhaDeComando.Modo(new[] { "--qualquer-coisa" }) == ModoDoExe.Caixa,
+                "linha de comando: argumento desconhecido abre o caixa normal, com trava");
+
+            var app = Fonte("App.xaml.cs") ?? "";
+            var xaml = Fonte("App.xaml") ?? "";
+            checar(xaml.Length > 0 && !xaml.Contains("StartupUri", StringComparison.Ordinal),
+                "App.xaml não abre a MainWindow sozinho (StartupUri): era assim que o --cupom-teste abria um caixa sem trava");
+            checar(app.Contains("LinhaDeComando.Modo(", StringComparison.Ordinal),
+                "o boot decide o modo pela regra testada aqui");
+            var trava = app.IndexOf("InstanciaUnica.Tentar", StringComparison.Ordinal);
+            var janela = app.IndexOf("new MainWindow(", StringComparison.Ordinal);
+            checar(trava >= 0 && janela > trava, "a janela do caixa nasce no boot, DEPOIS da trava");
+        }
+
+        // ── 7. O Pdv.App DE VERDADE NO --cupom-teste, COM O CAIXA ABERTO ────
+        // Processo real, como o instalador faz. A trava do terminal fica na mão desta bateria
+        // durante a sonda (ou já está com um PDV aberto nesta máquina): o modo de ferramenta
+        // tem que desenhar o cupom e sair do mesmo jeito, sem abrir janela nenhuma.
+        {
+            var banco = Path.Combine(Path.GetTempPath(), $"cupom_sonda_{Guid.NewGuid():N}.db");
+            var png = Path.Combine(Path.GetTempPath(), $"cupom_sonda_{Guid.NewGuid():N}.png");
+            try
+            {
+                using var caixaAberto = InstanciaUnica.Tentar();
+                var relogio = Stopwatch.StartNew();
+                var (codigo, saida) = SubirPdvApp(banco, "--cupom-teste", png);
+                relogio.Stop();
+                var resumo = saida.Trim().Length == 0 ? "" : " | " + saida.Trim().Replace("\r", "").Replace("\n", " | ");
+                checar(codigo == 0 && File.Exists(png) && new FileInfo(png).Length > 0,
+                    $"--cupom-teste com o caixa aberto desenha o cupom e sai com 0 (código {codigo}, {relogio.ElapsedMilliseconds} ms){resumo}");
+                checar(!saida.Contains(Sondas.MarcaJanela, StringComparison.Ordinal),
+                    "--cupom-teste não abre janela nenhuma do caixa" + resumo);
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                foreach (var a in new[] { banco, banco + "-wal", banco + "-shm", png })
+                    try { File.Delete(a); } catch { }
+            }
+        }
     }
+
+    /// <summary>Sobe o Pdv.App de verdade (modo sonda do Pdv.Testes) com os argumentos do Pdv.exe.</summary>
+    private static (int Codigo, string Saida) SubirPdvApp(string banco, params string[] argumentos)
+    {
+        var psi = Sondas.Psi(argumentos);
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        psi.Environment[Sondas.VariavelApp] = "1";
+        psi.Environment[Sondas.VariavelBanco] = banco;
+        using var p = Process.Start(psi)!;
+        var saida = p.StandardOutput.ReadToEndAsync();
+        var erro = p.StandardError.ReadToEndAsync();
+        if (!p.WaitForExit(90_000)) { try { p.Kill(true); } catch { } return (-1, "[o Pdv.App não terminou em 90 s]"); }
+        Task.WaitAll(new Task[] { saida, erro }, 5_000);
+        return (p.ExitCode, (saida.IsCompletedSuccessfully ? saida.Result : "") + (erro.IsCompletedSuccessfully ? erro.Result : ""));
+    }
+
+    private static string? Fonte(params string[] partes)
+    {
+        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+        {
+            var alvo = Path.Combine(new[] { d.FullName }.Concat(partes).ToArray());
+            if (File.Exists(alvo)) return File.ReadAllText(alvo);
+        }
+        return null;
+    }
+
+    /// <summary>Um mutex nomeado com DACL que só o SISTEMA abre: o caixa elevado visto por um usuário comum.</summary>
+    private static SafeWaitHandle? MutexSoDoSistema(string nome, out int erro)
+    {
+        erro = 0;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW("D:(A;;GA;;;SY)", 1, out var sd, out _))
+        {
+            erro = Marshal.GetLastWin32Error();
+            return null;
+        }
+        try
+        {
+            var sa = new SecurityAttributes { nLength = Marshal.SizeOf<SecurityAttributes>(), lpSecurityDescriptor = sd };
+            var h = CreateMutexW(ref sa, false, nome);
+            erro = Marshal.GetLastWin32Error();
+            if (h.IsInvalid) { h.Dispose(); return null; }
+            return h;
+        }
+        finally { LocalFree(sd); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SecurityAttributes
+    {
+        public int nLength;
+        public IntPtr lpSecurityDescriptor;
+        [MarshalAs(UnmanagedType.Bool)] public bool bInheritHandle;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeWaitHandle CreateMutexW(ref SecurityAttributes sa, [MarshalAs(UnmanagedType.Bool)] bool inicial, string nome);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string sddl, uint revisao, out IntPtr sd, out uint tamanho);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr h);
 
     /// <summary>
     /// Duas cobranças VIVAS, do jeito que ficam com o cliente no pinpad: uma do PayGo

@@ -228,7 +228,12 @@ public partial class Configuracao : UserControl
             RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_paygo_rede"),
                                     RedesPayGo.Vistas(c => Vendas.Config(cx, c))),
             Vendas.Config(cx, "tef_paygo_rede"));
-        EncherRedes(CboPgwebRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_paygo_rede_pix")), Vendas.Config(cx, "tef_paygo_rede_pix"));
+        // Idem no Pix (14/09/2026, Castelo): "PIX ITAU" copiado da Savassi voltou MODALIDADE DE
+        // PAGAMENTO INVALIDA. Automático primeiro, depois as redes de Pix que ESTE terminal ofereceu.
+        EncherRedes(CboPgwebRedePix,
+            RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_paygo_rede_pix"),
+                                 RedesPayGo.VistasPix(c => Vendas.Config(cx, c))),
+            Vendas.Config(cx, "tef_paygo_rede_pix"));
         EncherRedes(CboCpayRede, RedesPayGo.OpcoesCartao(Vendas.Config(cx, "tef_cpay_adquirente")), Vendas.Config(cx, "tef_cpay_adquirente"));
         EncherRedes(CboCpayRedePix, RedesPayGo.OpcoesPix(Vendas.Config(cx, "tef_cpay_adquirente_pix")), Vendas.Config(cx, "tef_cpay_adquirente_pix"));
         PintarBlocosTef();
@@ -296,6 +301,7 @@ public partial class Configuracao : UserControl
         _passo = p;
         PassoLoja.Visibility = Se(p == PassoConfig.Loja);
         PassoFiscal.Visibility = Se(p == PassoConfig.Fiscal);
+        if (p == PassoConfig.Fiscal && BlocoNotaNuvem.Visibility == Visibility.Visible) _ = ConferirNotaNuvemAsync();
         PassoImpressora.Visibility = Se(p == PassoConfig.Impressora);
         PassoMaquininha.Visibility = Se(p == PassoConfig.Maquininha);
         PassoPareamento.Visibility = Se(p == PassoConfig.Pareamento);
@@ -381,6 +387,7 @@ public partial class Configuracao : UserControl
         Serie = TxtSerie.Text,
         Ambiente = _ambiente,
         TemCertificado = _pfxEscolhido is not null || File.Exists(ArqCert),
+        NotaPelaNuvem = !ModoRecibo && !Nucleo.NotaPelaNuvem.PedirCertificadoNoCaixa(EmissorLocalInstalado, ModoRecibo),
         SerieNuvem = _serieNuvem,
         SerieReservada = _serieReservada,
         SerieEmissorLocal = _serieEmissorLocal,
@@ -437,9 +444,47 @@ public partial class Configuracao : UserControl
     /// </summary>
     private void AplicarModoFiscal()
     {
-        if (BlocoCertificado is null || AvisoRecibo is null) return;
-        BlocoCertificado.Visibility = Se(!ModoRecibo);
+        if (BlocoCertificado is null || AvisoRecibo is null || BlocoNotaNuvem is null) return;
+        // 14/09/2026, Castelo: certificado e CSC só são pedidos quando o emissor LOCAL está
+        // instalado. Sem ele a nota sai pela nuvem, e o que vale é o cadastro do painel.
+        var pedir = Nucleo.NotaPelaNuvem.PedirCertificadoNoCaixa(EmissorLocalInstalado, ModoRecibo);
+        BlocoCertificado.Visibility = Se(pedir);
+        BlocoNotaNuvem.Visibility = Se(!ModoRecibo && !pedir);
         AvisoRecibo.Visibility = Se(ModoRecibo);
+    }
+
+    /// <summary>O emissor fiscal local (agente) está nesta máquina? Ver Agente.Instalado.</summary>
+    private static bool EmissorLocalInstalado => Agente.Instalado;
+
+    /// <summary>
+    /// Pergunta ao painel como está o fiscal desta loja e escreve a linha no passo 2. Nunca lança:
+    /// sem sessão, sem rede ou sem a RPC publicada, a linha diz isso.
+    /// </summary>
+    private async Task<LinhaNotaNuvem> ConferirNotaNuvemAsync()
+    {
+        TxtNotaNuvem.Text = "Nota pela nuvem: conferindo no painel…";
+        TxtNotaNuvem.Foreground = (System.Windows.Media.Brush)Application.Current.Resources["TextoFraco"];
+        LinhaNotaNuvem linha;
+        try
+        {
+            if (!Servicos.TemContaDeNuvem())
+                linha = Nucleo.NotaPelaNuvem.Linha(null, ConsultaFiscal.SemSessao, DateTime.Now);
+            else
+            {
+                var cnpj = TxtCnpj.Text;
+                var (consulta, corpo) = await Servicos.Nuvem().FiscalDaLojaAsync(cnpj);
+                // Caixa pareado sem sessão aqui é renovação que não saiu: é rede, não pareamento.
+                if (consulta == ConsultaFiscal.SemSessao) consulta = ConsultaFiscal.SemRede;
+                var loja = consulta == ConsultaFiscal.Respondeu
+                    ? Nucleo.NotaPelaNuvem.Escolher(Nucleo.NotaPelaNuvem.Ler(corpo), cnpj) : null;
+                linha = Nucleo.NotaPelaNuvem.Linha(loja, consulta, DateTime.Now);
+            }
+        }
+        catch { linha = Nucleo.NotaPelaNuvem.Linha(null, ConsultaFiscal.NaoDisponivel, DateTime.Now); }
+        TxtNotaNuvem.Text = linha.Texto;
+        TxtNotaNuvem.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[
+            linha.Nivel switch { 0 => "Ok", 1 => "Texto", _ => "Erro" }];
+        return linha;
     }
 
     /// <summary>ISENTO é o VALOR do campo (é o que sai impresso), por isso preenche o campo em vez de marcar uma opção ao lado.</summary>
@@ -1225,7 +1270,15 @@ public partial class Configuracao : UserControl
             // 2. Certificado (abre? validade? CNPJ bate?)
             var caminhoCert = _pfxEscolhido ?? (File.Exists(ArqCert) ? ArqCert : null);
             var producao = _ambiente == 1;
+            // Sem o emissor local a nota sai pela nuvem: certificado e CSC são os do painel, e a
+            // conferência é a linha da nuvem, não os campos desta tela (14/09/2026, Castelo).
+            var pedirCertificado = Nucleo.NotaPelaNuvem.PedirCertificadoNoCaixa(EmissorLocalInstalado, modoRecibo);
             if (modoRecibo) { /* pula certificado/CSC/emissor — segue pros testes de rede */ }
+            else if (!pedirCertificado)
+            {
+                var nuvem = await ConferirNotaNuvemAsync();
+                Add(nuvem.Nivel, (nuvem.Nivel == 0 ? "✓ " : nuvem.Nivel == 1 ? "⚠ " : "✗ ") + nuvem.Texto);
+            }
             else
             if (caminhoCert is null || TxtSenhaPfx.Password.Length == 0)
                 Add(producao ? 2 : 1, producao
@@ -1253,7 +1306,7 @@ public partial class Configuracao : UserControl
             }
 
             // 3. CSC + ID (a SEFAZ só valida o CSC de verdade na 1ª emissão)
-            if (!modoRecibo)
+            if (!modoRecibo && pedirCertificado)
             {
                 if (TxtCsc.Password.Length >= 16) Add(0, "✓ CSC preenchido. Se estiver errado, só a primeira nota vai dizer");
                 else Add(producao ? 2 : 1, TxtCsc.Password.Length == 0
@@ -1265,14 +1318,12 @@ public partial class Configuracao : UserControl
                     Add(1, "⚠ O ID do CSC é só número (ex.: 000001)");
             }
 
-            // 4. Emissor fiscal local (o vigia sobe junto com o PDV — MAS só nas
-            // máquinas de caixa, onde C:\kiosk\agent está instalado; ver Agente.cs)
+            // 4. Emissor fiscal local (o vigia sobe junto com o PDV quando ele está instalado, ao
+            // lado do caixa ou na pasta antiga; ver Agente.Instalado)
             if (modoRecibo) { /* recibo não usa emissor */ }
-            else if (!File.Exists(@"C:\kiosk\agent\pdv-agent.cjs"))
+            else if (!pedirCertificado)
             {
-                Add(1, "⚠ O programa que emite a nota não está instalado nesta máquina. É normal num PC que não "
-                     + "é o caixa da loja. Se as vendas forem sair DAQUI, chame o suporte para instalar, senão "
-                     + "a venda grava e a nota não sai.");
+                /* sem o emissor local a nota sai pela nuvem: a linha da nuvem, acima, já disse como ela está */
             }
             else
             {
@@ -1503,7 +1554,8 @@ public partial class Configuracao : UserControl
             seg["idCsc"] = TxtIdCsc.Text.Trim() is { Length: > 0 } i ? i : "000001";
             GravarSegredos(seg);
 
-            if (!modoRecibo && ambiente == 1 && (!File.Exists(ArqCert) || !seg.ContainsKey("csc")))
+            if (Nucleo.NotaPelaNuvem.PedirCertificadoNoCaixa(EmissorLocalInstalado, modoRecibo)
+                && ambiente == 1 && (!File.Exists(ArqCert) || !seg.ContainsKey("csc")))
             {
                 Dialogo.Avisar(Window.GetWindow(this)!, "Falta o certificado",
                     "Salvei a configuração. Mas, sem o certificado e o CSC, este caixa não emite nota: "
@@ -1875,6 +1927,10 @@ public partial class Configuracao : UserControl
                     Nucleo.PlacarHomologacao.GuardarUltimo(di.Reqnum, 0,
                         di.Pago ? "instalacao" : "nao concluida", passo: 1);
                     var papel = di.Pago ? await ImprimirInstalacaoAsync(di) : null;
+                    // Recusa do host traduzida na tela; o texto original fica na auditoria (14/09/2026).
+                    if (!di.Pago && RecusasDoHost.Traduzir(di.Motivo) is { } recusaInst)
+                        try { using var ca = Banco.Abrir(); Caixa.Auditar(ca, null, "tef_recusa_host", null, null, $"{recusaInst.Codigo} · instalação · original: {di.Motivo}"); }
+                        catch { /* auditoria não derruba a tela */ }
                     if (di.Pago)
                     {
                         using (var c1 = Banco.Abrir()) Vendas.GravarConfig(c1, ChaveInstaladoEm, DateTime.Now.ToString("o"));
@@ -1884,7 +1940,7 @@ public partial class Configuracao : UserControl
                         ? "✓ Ponto de captura instalado." + (di.Motivo is { Length: > 0 } mi ? " " + mi + "." : "")
                           + (papel is null ? " Comprovante impresso." : " ⚠ O comprovante não saiu: " + papel + ".")
                           + " Toque em Testar a maquininha e depois em Salvar."
-                        : "✗ Instalação não concluída: " + (di.Motivo ?? "sem detalhe"),
+                        : "✗ Instalação não concluída: " + (di.Motivo is null ? "sem detalhe" : RecusasDoHost.ParaTela(di.Motivo)),
                         di.Pago ? "Ok" : "Erro");
                     break;
                 default:
@@ -2096,6 +2152,12 @@ public sealed record DadosAssistente
     public string Serie { get; init; } = "";
     public int Ambiente { get; init; } = 2;      // 1 produção · 2 homologação (vem do pareamento)
     public bool TemCertificado { get; init; }
+
+    /// <summary>
+    /// A nota deste caixa sai pela nuvem (sem emissor local): certificado e CSC são os do painel,
+    /// e a falta deles no caixa não é aviso (14/09/2026, Castelo).
+    /// </summary>
+    public bool NotaPelaNuvem { get; init; }
 
     /// <summary>
     /// Série em que a NUVEM numera (<c>config['serie_nuvem']</c>, gravada no pareamento).
@@ -2556,8 +2618,8 @@ public static class AssistenteConfig
                     "Cupom fiscal (NFC-e) · "
                     + (serie.Length > 0 ? $"série {serie} · " : "série ainda em branco · ")
                     + (d.Ambiente == 1 ? "produção" : "MODO TESTE: as notas não valem")
-                    + (d.TemCertificado ? "" : " · sem certificado"),
-                    d.Ambiente != 1 || !d.TemCertificado || serie.Length == 0),
+                    + (d.NotaPelaNuvem ? " · certificado e CSC pelo painel" : d.TemCertificado ? "" : " · sem certificado"),
+                    d.Ambiente != 1 || (!d.NotaPelaNuvem && !d.TemCertificado) || serie.Length == 0),
             new("Impressora do cupom fiscal / recibo",
                 $"{d.Impressora ?? "padrão do Windows"} · bobina de {papel.BobinaMm.ToString("0", CultureInfo.InvariantCulture)} mm "
                 + $"({papel.Colunas} colunas)"
