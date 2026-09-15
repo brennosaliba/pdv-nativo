@@ -76,6 +76,21 @@ public partial class MainWindow : Window
         Roteia();
     }
 
+    /// <summary>
+    /// FECHAR O PDV COM O CHAT OU O WHATSAPP QUEBRADO (erros.log do Castelo, 15/09/2026 13:57:32). Logo
+    /// depois deste ponto o WPF tira a árvore visual e avisa cada elemento que ele deixou de ser visível;
+    /// o WebView2 repassa isso ao controller, e um controller meio vivo lançava a frase
+    /// "CoreWebView2Controller members can only be accessed from the UI thread" no meio do fechamento. Foi
+    /// a caixa "segurei o caixa de pé" que o dono viu. As camadas saem antes, e só quando ninguém
+    /// cancelou o fechamento.
+    /// </summary>
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        if (e.Cancel) return;
+        try { HospedeWebView2.EncerrarTodos(); } catch { /* fechar o caixa nunca depende disto */ }
+    }
+
     private void Roteia()
     {
         using var cx = Banco.Abrir();

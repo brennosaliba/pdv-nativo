@@ -42,6 +42,8 @@ public sealed class HospedeWebView2
     private bool _ensureChamado, _ensureTerminou;
     private int _geracao;
     private bool _recriacaoAgendada;
+    /// <summary>O PDV está fechando (ver <see cref="Encerrar"/>): nada mais inicia, recria nem é dado como quebrado.</summary>
+    private bool _encerrado;
     /// <summary>
     /// Recriar SOZINHO (falha na inicialização, falha que chegou ao Dispatcher) tem teto por hora
     /// (revisão 15/09). Sem teto, um PC em que o controle falha sempre recriava a cada abertura da
@@ -105,6 +107,7 @@ public sealed class HospedeWebView2
     public async Task<CoreWebView2> IniciarControleAsync()
     {
         _tela.VerifyAccess();
+        if (_encerrado) throw new OperationCanceledException("o PDV está fechando");
         // controle usado e parado pelo teto: nem encosta nele (outro Ensure num controle meio vivo
         // é justamente o que lança no layout depois)
         if (_parado)
@@ -141,7 +144,7 @@ public sealed class HospedeWebView2
         {
             _diag(FalhaWebView2.Linha($"{_nome} {onde}", ex, Environment.CurrentManagedThreadId, _tela.Thread.ManagedThreadId,
                 VersaoDoRuntime(PastaDoNavegador)));
-            if (!_tela.CheckAccess()) return tipo;
+            if (!_tela.CheckAccess() || _encerrado) return tipo;
             var (recriar, descartar) = FalhaWebView2.AposFalha(_ensureChamado, _ensureTerminou, tipo);
             if (descartar) _ambiente = null;
             if (recriar)
@@ -171,6 +174,7 @@ public sealed class HospedeWebView2
     public WebView2 Recriar(string motivo, bool descartarAmbiente)
     {
         _tela.VerifyAccess();
+        if (_encerrado) return _atual();
         var velho = _atual();
         var janelaVelha = IntPtr.Zero;
         try { janelaVelha = velho.Handle; } catch { }
@@ -227,12 +231,13 @@ public sealed class HospedeWebView2
     /// <summary>Recria depois, com o Dispatcher livre (quem chama está dentro do tratamento de uma exceção).</summary>
     public void RecriarDepois(string motivo)
     {
-        if (_recriacaoAgendada) return;
+        if (_recriacaoAgendada || _encerrado) return;
         _recriacaoAgendada = true;
         var alvo = _atual();
         _tela.BeginInvoke(DispatcherPriority.Background, () =>
         {
             _recriacaoAgendada = false;
+            if (_encerrado) return;
             // o "Tentar de novo" (ou outra recuperação) já trocou este controle: não troca o novo
             if (!ReferenceEquals(_atual(), alvo)) return;
             if (!_tetoAutomatico.Permitir(DateTime.UtcNow))
@@ -262,7 +267,7 @@ public sealed class HospedeWebView2
     /// </summary>
     public bool ControleQuebrado()
     {
-        if (!_tela.CheckAccess()) return false;
+        if (!_tela.CheckAccess() || _encerrado) return false;
         if (!_ensureChamado) return false;
         try
         {
@@ -301,6 +306,45 @@ public sealed class HospedeWebView2
     public void Desligar()
     {
         lock (_vivos) _vivos.RemoveAll(w => !w.TryGetTarget(out var h) || ReferenceEquals(h, this));
+    }
+
+    /// <summary>A camada já foi encerrada (o PDV está fechando).</summary>
+    public bool Encerrado => _encerrado;
+
+    /// <summary>
+    /// O PDV ESTÁ FECHANDO (erros.log do Castelo, 15/09/2026 13:57:32). Ao fechar a janela, o WPF tira a
+    /// árvore visual e avisa cada elemento que ele deixou de ser visível; o controle WebView2 repassa isso
+    /// ao controller (WebView2Base.SafeAccessController, CoreWebView2Controller.IsVisible). Com o controller
+    /// meio vivo, esse aviso lançava a frase "members can only be accessed from the UI thread" no meio do
+    /// fechamento, e a recuperação ainda tentava recriar o controle numa janela que estava sumindo.
+    /// Encerrar descarta o controle ANTES e o tira da árvore (sem controller, o aviso não chega a lugar
+    /// nenhum) e desliga tudo que recria. Na thread da tela; nunca lança; a segunda chamada não faz nada.
+    /// </summary>
+    public void Encerrar()
+    {
+        if (_encerrado || !_tela.CheckAccess()) return;
+        _encerrado = true;
+        try
+        {
+            var velho = _atual();
+            var janela = IntPtr.Zero;
+            try { janela = velho.Handle; } catch { }
+            DescartarControle(velho, janela);
+            // só DEPOIS do descarte: tirar da árvore um controle com controller meio vivo é, de novo, avisar
+            // que ele deixou de ser visível
+            if (velho.Parent is Panel pai) try { pai.Children.Remove(velho); } catch { }
+            _diag($"{_nome}: encerrado (o PDV está fechando) thread={Environment.CurrentManagedThreadId}");
+        }
+        catch (Exception ex) { try { _diag($"{_nome} encerrar: {ex.GetType().Name}"); } catch { } }
+        Desligar();
+    }
+
+    /// <summary>Encerra todas as camadas WebView2 vivas (MainWindow.OnClosing). Nunca lança.</summary>
+    public static void EncerrarTodos()
+    {
+        List<HospedeWebView2> vivos;
+        lock (_vivos) vivos = _vivos.Select(w => w.TryGetTarget(out var h) ? h : null).OfType<HospedeWebView2>().ToList();
+        foreach (var h in vivos) { try { h.Encerrar(); } catch { } }
     }
 
     /// <summary>

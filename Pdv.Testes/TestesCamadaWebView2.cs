@@ -220,6 +220,16 @@ public static class TestesCamadaWebView2
         var naTela = Regex.Matches(venda, @"Dispatcher\.Invoke\(\(\) => NotificarPedidoNovo\(tt\.Result\)\)").Count;
         checar(avisos >= 2 && avisos == naTela,
             $"TW-12 venda: as continuações do sino e da puxada do KDS (thread do pool) só tocam a tela por Dispatcher.Invoke ({naTela}/{avisos})");
+
+        // TW-14 fechar o PDV (erros.log do Castelo, 15/09 13:57:32): as camadas saem ANTES de o WPF tirar a
+        // árvore visual, e só quando o fechamento não foi cancelado.
+        var principal = Fonte("MainWindow.xaml.cs");
+        var fechando = Corpo(principal, "protected override void OnClosing(");
+        var iBase = fechando.IndexOf("base.OnClosing(e)", StringComparison.Ordinal);
+        var iCancel = fechando.IndexOf("if (e.Cancel) return;", StringComparison.Ordinal);
+        var iEncerra = fechando.IndexOf("HospedeWebView2.EncerrarTodos()", StringComparison.Ordinal);
+        checar(iBase >= 0 && iCancel > iBase && iEncerra > iCancel,
+            "TW-14 MainWindow: ao fechar (sem cancelamento) encerra as camadas WebView2 antes de o WPF tirar a árvore visual");
     }
 
     // ── 3. O HOSPEDEIRO COM O WEBVIEW2 DE VERDADE ──────────────────────────────
@@ -451,6 +461,54 @@ public static class TestesCamadaWebView2
                 try { await hF.IniciarControleAsync(); } catch (Exception ex) { depoisF = ex; }
                 checar(recriou && hF.Recriacoes == 7 && depoisF is null && atualF.CoreWebView2 is not null,
                     $"RW-19 o Tentar de novo (gesto de gente) passa do teto: recria e inicia (recriações={hF.Recriacoes})");
+            }
+
+            // RW-20..23 FECHAR O PDV COM O CONTROLE MEIO VIVO (erros.log do Castelo, 15/09 13:57:32).
+            // A pilha de lá: Window.WmClose, RootVisual nulo, UIElement.OnIsVisibleChanged em cascata,
+            // WebView2Base.SafeAccessController, CoreWebView2Controller.set_IsVisible, InvalidCastException.
+            // Recolher o pai do controle percorre o MESMO caminho, sem fechar a janela da bateria.
+            {
+                var subG = new Grid();
+                Grid.SetRow(subG, 1);
+                grade.Children.Add(subG);
+                var webG = new WebView2 { Visibility = Visibility.Collapsed };
+                subG.Children.Add(webG);
+                var atualG = webG; var diagG = new List<string>();
+                var hG = Hospede("fechando", () => atualG, w => atualG = w, diagG);
+                await hG.IniciarControleAsync();
+                atualG.Visibility = Visibility.Visible;
+                await Task.Delay(150);
+                var quebrouG = 0;
+                hG.Quebrou += _ => quebrouG++;
+                var desfazerG = QuebrarComoNoCastelo(atualG);
+
+                Exception? semEncerrar = null;
+                try { subG.Visibility = Visibility.Collapsed; } catch (Exception ex) { semEncerrar = ex; }
+                try { subG.Visibility = Visibility.Visible; } catch { }
+                checar(desfazerG is not null && semEncerrar is not null && FalhaWebView2.EhDoWebView2(semEncerrar),
+                    $"RW-20 (a pilha do Castelo) com o controller meio vivo, deixar de ser visível lança pelo SafeAccessController ({semEncerrar?.GetType().Name ?? "não lançou"}: {semEncerrar?.Message})");
+
+                var janelaG = IntPtr.Zero;
+                try { janelaG = atualG.Handle; } catch { }
+                var recriacoesG = hG.Recriacoes;
+                hG.Encerrar();
+                Exception? comEncerrar = null;
+                try { subG.Visibility = Visibility.Collapsed; } catch (Exception ex) { comEncerrar = ex; }
+                checar(hG.Encerrado && comEncerrar is null && !subG.Children.Contains(webG) && (janelaG == IntPtr.Zero || !IsWindow(janelaG)),
+                    $"RW-21 encerrada (o PDV fechando), a camada descarta o controle e o tira da árvore antes: sumir da tela não lança e a janela do controle não fica de pé ({comEncerrar?.GetType().Name ?? "sem exceção"}, na árvore={subG.Children.Contains(webG)})");
+
+                HospedeWebView2.AvisarFalhaForaDaCamada(new InvalidOperationException(FalhaWebView2.MensagemDoController));
+                hG.RecriarDepois("fechando");
+                await Task.Delay(300);
+                Exception? iniciarG = null;
+                try { await hG.IniciarControleAsync(); } catch (Exception ex) { iniciarG = ex; }
+                checar(quebrouG == 0 && hG.Recriacoes == recriacoesG && iniciarG is OperationCanceledException && !hG.ControleQuebrado() && ReferenceEquals(atualG, webG),
+                    $"RW-22 encerrada, nada recria nem inicia controle numa janela que está fechando (quebrou={quebrouG}, recriações={hG.Recriacoes - recriacoesG}, iniciar={iniciarG?.GetType().Name ?? "não recusou"})");
+
+                var webI = NovoControle(); var atualI = webI; var diagI = new List<string>();
+                var hI = Hospede("fechando-todos", () => atualI, w => atualI = w, diagI);
+                HospedeWebView2.EncerrarTodos();
+                checar(hI.Encerrado, "RW-23 EncerrarTodos (o que a MainWindow chama ao fechar) alcança toda camada viva");
             }
         }
         finally
