@@ -10,8 +10,13 @@ namespace Pdv.Nucleo;
 /// O QUE O PAINEL DEFINE E O CAIXA COPIA NO ATUALIZAR (12/09/2026, pedidos do dono):
 ///  · respostas prontas da aba Chat ("no painel vai ter opção de configurar as mensagens
 ///    pré-definidas?");
-///  · senha de administrador do caixa (a que abre a Configuração), definida no painel;
 ///  · música da loja (Spotify): playlist, aparelho e volume escolhidos no painel.
+///
+/// A SENHA DE ADMINISTRADOR POR LOJA NÃO DESCE MAIS (15/09/2026, revisão do usuário master).
+/// As colunas admin_pin_* de pdv_loja_config continuam na RPC, mas o caixa ignora: a política
+/// pdv_loja_config_write deixa o GERENTE (manager) gravar nelas pela API, e o painel não grava
+/// mais desde que a senha virou o usuário master da rede. Copiar para a `_admin_` deixava um
+/// gerente escolher a senha que abre a Configuração de um caixa ainda sem master.
 /// Vem tudo da RPC pdv_loja_config_caixa (uma linha por loja que o usuário alcança).
 ///
 /// Regras (puras, provadas na suíte):
@@ -19,9 +24,6 @@ namespace Pdv.Nucleo;
 ///    usuário alcança uma só, é ela;
 ///  · respostas: o painel manda texto = o caixa passa a usar esse texto; painel vazio =
 ///    o caixa mantém o que tem (nunca apaga o que a loja editou no próprio caixa);
-///  · senha: só é reescrita quando o painel a definiu DEPOIS da última que o caixa
-///    aplicou (mesma lógica do pin_nuvem_hash dos operadores: o ciclo de sincronização
-///    passa a toda hora, a troca de senha é um ato);
 ///  · música: o painel é a verdade (chave some quando o painel não tem valor).
 /// </summary>
 public static class ConfigLojaPainel
@@ -88,10 +90,6 @@ public static class ConfigLojaPainel
         return linhas.Count == 1 ? linhas[0] : null;
     }
 
-    /// <summary>A senha do painel é mais nova que a última aplicada aqui?</summary>
-    public static bool AdminPinNovo(DateTime? painelEm, DateTime? aplicadoEm)
-        => painelEm is { } p && (aplicadoEm is null || p > aplicadoEm.Value.AddSeconds(1));
-
     /// <summary>Respostas: o texto do painel vale (normalizado); vazio = mantém o local.</summary>
     public static string? RespostasAAplicar(string? doPainel, string? local)
     {
@@ -100,10 +98,6 @@ public static class ConfigLojaPainel
         var localNormal = string.IsNullOrWhiteSpace(local) ? "" : RespostasProntas.Escrever(RespostasProntas.Ler(local));
         return normal == localNormal ? null : normal;
     }
-
-    public static DateTime? UltimoAdminAplicado(SqliteConnection cx)
-        => DateTime.TryParse(Vendas.Config(cx, ChaveAdminAplicadoEm), CultureInfo.InvariantCulture,
-               DateTimeStyles.RoundtripKind, out var d) ? d : null;
 
     /// <summary>Aplica a linha no SQLite (fora de transação: cada passo é idempotente). Devolve o que mudou.</summary>
     public static string Aplicar(SqliteConnection cx, Linha l, DateTime agora)
@@ -118,17 +112,8 @@ public static class ConfigLojaPainel
             mudou.Add("respostas do chat");
         }
 
-        if (l.AdminHash is { Length: > 0 } && l.AdminSalt is { Length: > 0 } && AdminPinNovo(l.AdminEm, UltimoAdminAplicado(cx)))
-        {
-            cx.Execute("""
-                INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado)
-                VALUES ('_admin_','Administrador (painel)',@H,@S,'gerente',0,@Em)
-                ON CONFLICT(id) DO UPDATE SET pin_hash=@H, pin_salt=@S, atualizado=@Em
-                """, new { H = l.AdminHash, S = l.AdminSalt, Em = agora.ToString("o") });
-            Vendas.GravarConfig(cx, ChaveAdminAplicadoEm, l.AdminEm!.Value.ToString("o"));
-            Caixa.Auditar(cx, null, "senha_admin_do_painel", null, null, $"definida no painel em {l.AdminEm:dd/MM HH:mm}");
-            mudou.Add("senha de administrador");
-        }
+        // l.AdminHash/AdminSalt/AdminEm são lidos e IGNORADOS de propósito (15/09/2026): ver o
+        // resumo da classe. A senha das ações de admin desce só como usuário master (UsuarioMaster).
 
         var musicaAntes = string.Join("|", Vendas.Config(cx, ChavePlaylistUri), Vendas.Config(cx, ChaveDeviceId), Vendas.Config(cx, ChaveVolume));
         Gravar(cx, ChavePlaylistUri, l.PlaylistUri);

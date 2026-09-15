@@ -35,13 +35,6 @@ public static class TestesConfigLojaPainel
         checar(ConfigLojaPainel.EscolherLinha(linhas, "Centro") is null, "loja que não está na lista (e há mais de uma): nada");
         checar(ConfigLojaPainel.EscolherLinha(new[] { linhas[1] }, "Centro")?.Store == "Castelo", "só uma linha ao alcance (terminal da loja): é ela");
 
-        // ── senha: só quando o painel definiu depois da última aplicada ────────
-        var t = new DateTime(2026, 9, 12, 3, 0, 0);
-        checar(ConfigLojaPainel.AdminPinNovo(t, null), "nunca aplicada: aplica");
-        checar(ConfigLojaPainel.AdminPinNovo(t.AddMinutes(5), t), "painel mais novo: aplica");
-        checar(!ConfigLojaPainel.AdminPinNovo(t, t), "mesma data: não reescreve (o ciclo passa a toda hora)");
-        checar(!ConfigLojaPainel.AdminPinNovo(null, t) && !ConfigLojaPainel.AdminPinNovo(null, null), "painel sem senha: nada");
-
         // ── respostas: painel manda = vale; painel vazio = mantém ───────────────
         checar(ConfigLojaPainel.RespostasAAplicar(null, "Local\ntexto") is null && ConfigLojaPainel.RespostasAAplicar("  ", null) is null,
             "painel vazio não apaga o que a loja editou no caixa");
@@ -59,13 +52,15 @@ public static class TestesConfigLojaPainel
             cx.Execute("INSERT INTO operador (id,nome,pin_hash,pin_salt,perfil,ativo,atualizado) VALUES ('_admin_','Administrador','VELHO','SAL','gerente',0,'x')");
             var agora = new DateTime(2026, 9, 12, 8, 0, 0);
             var mudou = ConfigLojaPainel.Aplicar(cx, linhas[0], agora);
+            // 15/09/2026 (revisão do usuário master): gerente grava admin_pin_* pela API; o caixa
+            // não copia mais para a `_admin_`. A senha de admin é o usuário master da rede.
             var hash = cx.ExecuteScalar<string>("SELECT pin_hash FROM operador WHERE id='_admin_'");
-            checar(hash == "H1", $"a senha do painel entrou na linha _admin_ (hash={hash})");
-            checar(Vendas.Config(cx, ConfigLojaPainel.ChaveAdminAplicadoEm) is { Length: > 0 }, "a data da senha aplicada fica gravada");
+            checar(hash == "VELHO", $"a senha por loja do painel NÃO entra na linha _admin_ (hash={hash})");
+            checar(Vendas.Config(cx, ConfigLojaPainel.ChaveAdminAplicadoEm) is null, "nem a data da senha do painel é gravada");
             checar(RespostasProntas.Ler(Vendas.Config(cx, RespostasProntas.Chave))[0].Titulo == "Pedido frio", "as respostas do painel entraram");
             checar(Vendas.Config(cx, ConfigLojaPainel.ChavePlaylistUri) == "spotify:playlist:abc" && Vendas.Config(cx, ConfigLojaPainel.ChaveVolume) == "45"
                    && Vendas.Config(cx, ConfigLojaPainel.ChaveDeviceNome) == "Caixa Savassi", "a música do painel entrou");
-            checar(mudou.Contains("senha") && mudou.Contains("respostas") && mudou.Contains("música"), $"o resumo diz o que mudou ({mudou})");
+            checar(!mudou.Contains("senha") && mudou.Contains("respostas") && mudou.Contains("música"), $"o resumo diz o que mudou, sem senha ({mudou})");
 
             // segunda passada igual: nada muda, a senha não é reescrita
             cx.Execute("UPDATE operador SET pin_hash='MEXIDO' WHERE id='_admin_'");
@@ -79,8 +74,9 @@ public static class TestesConfigLojaPainel
             checar(Vendas.Config(cx, ConfigLojaPainel.ChavePlaylistUri) is null && Vendas.Config(cx, ConfigLojaPainel.ChaveDeviceId) is null,
                 "painel sem playlist/aparelho: as chaves somem (o painel é a verdade da música)");
             checar(RespostasProntas.Ler(Vendas.Config(cx, RespostasProntas.Chave))[0].Titulo == "Pedido frio", "painel sem respostas: as do caixa ficam");
-            checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento IN ('senha_admin_do_painel','respostas_chat_do_painel')") == 2,
-                "auditoria: senha e respostas vindas do painel, uma vez cada");
+            checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento = 'respostas_chat_do_painel'") == 1
+                   && cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento = 'senha_admin_do_painel'") == 0,
+                "auditoria: respostas vindas do painel uma vez, senha do painel nenhuma");
         }
         finally { try { File.Delete(db); } catch { } }
 

@@ -296,6 +296,15 @@ public static class TestesUsuarioMaster
         var iMaster = sinc.IndexOf("await nuvem.BaixarMasterAsync(cx)", StringComparison.Ordinal);
         checar(iCfg >= 0 && iMaster > iCfg, "o Atualizar (Sincronizacao) baixa o master junto da config da loja");
 
+        // revisão 15/09: a senha por loja do painel (admin_pin_*) é gravável por gerente pela API.
+        // Nenhum caminho da nuvem escreve na `_admin_`: um caixa ainda sem master abriria a
+        // Configuração com a senha que o gerente escolheu.
+        var cfgPainel = Fonte(Path.Combine("Pdv.Nucleo", "ConfigLojaPainel.cs")) ?? "";
+        var codigoNuvem = string.Join("\n", nuvem, sinc, cfgPainel)
+            .Split('\n').Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal));
+        checar(cfgPainel.Length > 0 && !codigoNuvem.Any(l => l.Contains("_admin_", StringComparison.Ordinal)),
+            "nada que desce do painel escreve na senha da instalação (_admin_)");
+
         var app = Fonte(Path.Combine("Pdv.Instalador", "App.xaml.cs")) ?? "";
         var janela = Fonte(Path.Combine("Pdv.Instalador", "JanelaInstalador.xaml.cs")) ?? "";
         var csproj = Fonte(Path.Combine("Pdv.Instalador", "Pdv.Instalador.csproj")) ?? "";

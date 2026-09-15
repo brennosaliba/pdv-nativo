@@ -284,8 +284,10 @@ public sealed class Nuvem
 
     // ── CONFIG DA LOJA definida no painel (12/09/2026) ─────────────────────────────
     /// <summary>
-    /// Respostas prontas do chat, senha de administrador e música da loja, como o painel
-    /// definiu (RPC pdv_loja_config_caixa). As regras de aplicação moram em ConfigLojaPainel.
+    /// Respostas prontas do chat e música da loja, como o painel definiu (RPC
+    /// pdv_loja_config_caixa). A senha de administrador por loja não desce mais (15/09/2026):
+    /// gerente grava aquela coluna, e a senha de admin é o usuário master. As regras moram em
+    /// ConfigLojaPainel.
     /// Devolve o que mudou ("" = nada; null = não deu para consultar).
     /// </summary>
     public async Task<string?> BaixarConfigLojaAsync(SqliteConnection cx)
