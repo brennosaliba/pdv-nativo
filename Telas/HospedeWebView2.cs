@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -41,6 +42,14 @@ public sealed class HospedeWebView2
     private bool _ensureChamado, _ensureTerminou;
     private int _geracao;
     private bool _recriacaoAgendada;
+    /// <summary>
+    /// Recriar SOZINHO (falha na inicialização, falha que chegou ao Dispatcher) tem teto por hora
+    /// (revisão 15/09). Sem teto, um PC em que o controle falha sempre recriava a cada abertura da
+    /// aba. O "Tentar de novo" é gesto de gente e passa do teto.
+    /// </summary>
+    private readonly TetoPorHora _tetoAutomatico = new(6);
+    /// <summary>O teto negou a troca: o controle usado fica parado até o "Tentar de novo".</summary>
+    private bool _parado;
 
     /// <param name="nome">Só para o diagnóstico ("chat", "whatsapp").</param>
     /// <param name="atual">O controle que está na grade agora (o campo x:Name da tela).</param>
@@ -96,6 +105,10 @@ public sealed class HospedeWebView2
     public async Task<CoreWebView2> IniciarControleAsync()
     {
         _tela.VerifyAccess();
+        // controle usado e parado pelo teto: nem encosta nele (outro Ensure num controle meio vivo
+        // é justamente o que lança no layout depois)
+        if (_parado)
+            throw new InvalidOperationException("o controle ficou parado pelo teto de recriações da hora; falta o Tentar de novo");
         if (VersaoDoRuntime(PastaDoNavegador) is null)
             throw new WebView2RuntimeNotFoundException("Couldn't find a compatible Webview2 Runtime installation to host WebViews.");
 
@@ -131,7 +144,11 @@ public sealed class HospedeWebView2
             if (!_tela.CheckAccess()) return tipo;
             var (recriar, descartar) = FalhaWebView2.AposFalha(_ensureChamado, _ensureTerminou, tipo);
             if (descartar) _ambiente = null;
-            if (recriar) Recriar(onde, descartar);
+            if (recriar)
+            {
+                if (_tetoAutomatico.Permitir(DateTime.UtcNow)) Recriar(onde, descartar);
+                else { _parado = true; _diag($"{_nome} {onde}: teto de recriações da hora; o controle fica parado até o Tentar de novo"); }
+            }
         }
         catch (Exception e2)
         {
@@ -144,11 +161,19 @@ public sealed class HospedeWebView2
     /// Troca o controle por um novo, recolhido, no MESMO lugar da grade, e descarta o velho. O
     /// velho sai recolhido primeiro (cada passo com o seu try: um controller meio vivo lança
     /// justamente ao mudar visível) e o Dispose vem por último.
+    ///
+    /// O DISPOSE DO SDK PARA NO MEIO num controller meio vivo (revisão 15/09, IL do SDK 1.0.4129.50):
+    /// WebView2.Dispose chama WebView2Base.Dispose e só DEPOIS HwndHost.Dispose, sem finally; o
+    /// Uninitialize zera o controller e lança ao tirar os eventos do núcleo. A janela do controle
+    /// ficava estacionada pelo WPF para sempre, uma a cada troca. A segunda passada do Dispose já
+    /// não tem controller (sai limpa e destrói a janela); se nem assim, DestroyWindow direto.
     /// </summary>
     public WebView2 Recriar(string motivo, bool descartarAmbiente)
     {
         _tela.VerifyAccess();
         var velho = _atual();
+        var janelaVelha = IntPtr.Zero;
+        try { janelaVelha = velho.Handle; } catch { }
         var novo = new WebView2 { Visibility = Visibility.Collapsed };
         Grid.SetRow(novo, Grid.GetRow(velho));
         Grid.SetColumn(novo, Grid.GetColumn(velho));
@@ -165,12 +190,31 @@ public sealed class HospedeWebView2
         _trocar(novo);
         _geracao++;
         _ensureChamado = false; _ensureTerminou = false;
+        _parado = false;
         if (descartarAmbiente) _ambiente = null;
         Recriacoes++;
-        try { velho.Dispose(); } catch (Exception ex) { _diag($"{_nome} recriar: descartar o velho: {ex.GetType().Name}"); }
+        DescartarControle(velho, janelaVelha);
         _diag($"{_nome}: controle recriado ({motivo}){(descartarAmbiente ? ", ambiente novo" : "")} thread={Environment.CurrentManagedThreadId}");
         return novo;
     }
+
+    private void DescartarControle(WebView2 velho, IntPtr janelaVelha)
+    {
+        try { velho.Dispose(); return; }
+        catch (Exception ex) { _diag($"{_nome} recriar: descartar o velho: {ex.GetType().Name} (o Dispose do SDK parou no meio)"); }
+        // segunda passada: o Uninitialize já zerou o controller, então esta chega ao HwndHost.Dispose
+        try { velho.Dispose(); }
+        catch (Exception ex) { _diag($"{_nome} recriar: segunda passada do Dispose: {ex.GetType().Name}"); }
+        if (janelaVelha == IntPtr.Zero || !IsWindow(janelaVelha)) return;
+        var destruiu = DestroyWindow(janelaVelha);
+        _diag($"{_nome} recriar: a janela do controle velho ficou de pé; DestroyWindow={destruiu}");
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyWindow(IntPtr hWnd);
 
     /// <summary>Recria só se o controle atual já foi usado (o "Tentar de novo" do painel). Devolve se recriou.</summary>
     public bool RecriarSeUsado(string motivo)
@@ -191,23 +235,39 @@ public sealed class HospedeWebView2
             _recriacaoAgendada = false;
             // o "Tentar de novo" (ou outra recuperação) já trocou este controle: não troca o novo
             if (!ReferenceEquals(_atual(), alvo)) return;
+            if (!_tetoAutomatico.Permitir(DateTime.UtcNow))
+            {
+                _parado = true;
+                _diag($"{_nome} recriar depois ({motivo}): teto de recriações da hora; o controle fica parado até o Tentar de novo");
+                return;
+            }
             try { Recriar(motivo, descartarAmbiente: true); }
             catch (Exception ex) { try { _diag($"{_nome} recriar depois: {ex.GetType().Name} {ex.Message}"); } catch { } }
         });
     }
 
     /// <summary>
-    /// O controle atual está quebrado? Init em curso ou falho, ou o núcleo lança ao ser tocado
-    /// (navegador morto). Controle nunca iniciado não está quebrado: não tem controller.
+    /// O controle atual está quebrado? Controle nunca iniciado não está: não tem controller.
+    ///
+    /// A leitura de WebView2.CoreWebView2 PASSA PELO CONTROLLER (IL do SDK 1.0.4129.50:
+    /// WebView2Base.get_CoreWebView2 confere thread, descarte e navegador morto e devolve
+    /// CoreWebView2Controller?.CoreWebView2, que chama a interface nativa do controller sem catch).
+    /// Então um controller meio vivo (a frase do Castelo) lança aqui, com a inicialização terminada
+    /// ou não, e o navegador morto também.
+    ///
+    /// Init em curso com o controller ainda sem lançar NÃO é quebrado (revisão 15/09): a exceção
+    /// que chegou é de outra camada, e se a inicialização desta falhar o catch dela cuida. Antes,
+    /// qualquer falha de WebView2 no Dispatcher durante o pré-aquecimento derrubava a camada que
+    /// ainda estava subindo.
     /// </summary>
     public bool ControleQuebrado()
     {
         if (!_tela.CheckAccess()) return false;
         if (!_ensureChamado) return false;
-        if (!_ensureTerminou) return true;
         try
         {
             var core = _atual().CoreWebView2;
+            if (!_ensureTerminou) return false;
             if (core is null) return true;
             _ = core.BrowserProcessId;
             return false;

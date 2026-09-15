@@ -173,7 +173,12 @@ public static class Autorizacao
     public const string DicaOutroAutenticador = "outro_autenticador";
 
     public const string AvisoCodigoInvalido = "Código inválido. Tente de novo.";
-    public const string AvisoCodigoVencido = "Esse código já venceu. Digite o que está na tela agora.";
+    // Revisão 15/09: "Digite o que está na tela agora" não servia a quem digita um código repassado
+    // por mensagem (o caixa não tem tela nenhuma), e com o relógio do celular atrasado mandava
+    // repetir exatamente o que tinha falhado. A primeira frase serve aos dois casos; a segunda vez
+    // seguida é o sinal do relógio.
+    public const string AvisoCodigoVencido = "Esse código já venceu. Pegue um código novo e digite logo.";
+    public const string AvisoCodigoVenceuDeNovo = "O código venceu de novo. Confira a hora do celular.";
     public const string AvisoCodigoDoGerente = "Esse código é do gerente. Aqui vale o do dono.";
 
     /// <summary>Só as dicas do contrato passam; qualquer outro valor vira null (a frase de hoje).</summary>
@@ -182,10 +187,12 @@ public static class Autorizacao
     /// <summary>
     /// A frase entre uma tentativa e outra. 'outro_autenticador' só existe no nível dono (o outro
     /// autenticador é o do gerente); no nível gerente o dono também vale e a RPC nunca manda essa
-    /// dica, então ali fica a frase de hoje.
+    /// dica, então ali fica a frase de hoje. 'vencido' pela segunda vez seguida vira a frase do
+    /// relógio do celular.
     /// </summary>
-    public static string AvisoDeNovaTentativa(string? dica, string? nivel) => DicaConhecida(dica) switch
+    public static string AvisoDeNovaTentativa(string? dica, string? nivel, int vencidosSeguidos = 1) => DicaConhecida(dica) switch
     {
+        DicaVencido when vencidosSeguidos >= 2 => AvisoCodigoVenceuDeNovo,
         DicaVencido => AvisoCodigoVencido,
         DicaOutroAutenticador when nivel != NivelGerente => AvisoCodigoDoGerente,
         _ => AvisoCodigoInvalido,
@@ -305,6 +312,7 @@ public static class Autorizacao
         if (remota is null) return Nao("Este caixa não tem nuvem configurada.");
 
         string? aviso = null;
+        var vencidosSeguidos = 0;
         for (var tentativa = 1; tentativa <= MaxTentativas; tentativa++)
         {
             var codigo = await tela.PedirCodigoAsync(aviso, pedido.Nivel);
@@ -327,7 +335,8 @@ public static class Autorizacao
 
             if (Normal(v.Motivo) == MotivoCodigoInvalido)
             {
-                aviso = AvisoDeNovaTentativa(v.Dica, pedido.Nivel);
+                vencidosSeguidos = DicaConhecida(v.Dica) == DicaVencido ? vencidosSeguidos + 1 : 0;
+                aviso = AvisoDeNovaTentativa(v.Dica, pedido.Nivel, vencidosSeguidos);
                 continue;
             }
 

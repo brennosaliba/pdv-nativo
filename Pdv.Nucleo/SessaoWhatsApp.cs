@@ -203,7 +203,7 @@ public sealed class SessaoWhatsApp
     /// <summary>Linha do aviso na venda. Uma frase, o que fazer na segunda.</summary>
     public static (string Titulo, string Acao) Aviso(EstadoWa e) => e switch
     {
-        EstadoWa.SemComponente => ("O WhatsApp não abre neste PC", "chame o suporte"),
+        EstadoWa.SemComponente => ("O WhatsApp não abre neste PC", "falta um componente da Microsoft: chame o suporte"),
         _ => ("WhatsApp pediu o QR de novo", "toque para ler com o celular da loja"),
     };
 
@@ -215,7 +215,7 @@ public sealed class SessaoWhatsApp
         EstadoWa.Carregando => "carregando…",
         EstadoWa.TelefoneSemConexao => "celular da loja sem internet: as mensagens chegam quando ele voltar",
         EstadoWa.PcSemInternet => "este PC está sem internet",
-        EstadoWa.SemComponente => "o componente de navegação não abriu neste PC",
+        EstadoWa.SemComponente => "falta um componente da Microsoft neste PC: chame o suporte",
         EstadoWa.SemLeitura => "a página parou de responder: toque em Recarregar",
         _ => "abrindo…",
     };

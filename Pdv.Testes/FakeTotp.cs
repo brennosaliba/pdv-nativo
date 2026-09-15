@@ -110,8 +110,12 @@ public sealed class FakeTotp : IDisposable
     /// <summary>false (padrão) = a RPC de hoje, sem dica: os cenários antigos continuam idênticos.</summary>
     public bool EmiteDica { get; set; }
 
-    /// <summary>Passos (em relação a T) que a sonda do 'vencido' varre; -1..+1 nunca entra.</summary>
-    public (int De, int Ate) PassosDaDica { get; set; } = (-20, 2);
+    /// <summary>
+    /// Passos (em relação a T) que a sonda do 'vencido' varre; -1..+1 nunca entra. Só para TRÁS,
+    /// como a migration 20260915180000 do ERP (revisão 15/09): um código em +2 ainda vai valer,
+    /// não venceu, e dar dica ali seria o "acerto agendado" que a contraprova tirou.
+    /// </summary>
+    public (int De, int Ate) PassosDaDica { get; set; } = (-20, -2);
 
     /// <summary>Força esta dica em toda recusa "codigo invalido" (servidor com valor que o caixa não conhece).</summary>
     public string? DicaForcada { get; set; }

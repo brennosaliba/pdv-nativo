@@ -98,6 +98,13 @@ public partial class App : Application
                 AtalhoAreaTrabalho: true), null);
             if (erro is not null) return erro;
             try { if (PayGo.Detectar().Instalado) PayGo.PrepararPastaTroca(); } catch { /* TEF fica como está */ }
+            // O COMPONENTE DA MICROSOFT DO CHAT E DO WHATSAPP (15/09/2026, Castelo). O caixa se
+            // atualiza por aqui, sem a janela, e só a janela punha o componente: o PC do Castelo
+            // continuava sem ele a cada versão nova. Com ele já na máquina a conferência é
+            // instantânea. Faltando, prazos curtos (o caixa está fechado) e nada de esperar depois
+            // do prazo; o instalador da Microsoft segue sozinho. Falha não desfaz a atualização.
+            var componente = WebView2Runtime.GarantirNaAtualizacao(WebView2Runtime.PassosDaAtualizacao(), Path.GetTempPath());
+            WebView2Runtime.Anotar("atualizacao", componente);
             return null;
         }
         catch (Exception ex) { return ex.Message; }

@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using Pdv.Nucleo;
@@ -100,11 +102,23 @@ public static class TestesCamadaWebView2
                                 && !p.Item3.Contains("Exception", StringComparison.Ordinal)),
             "FW-7 o painel diz em UMA linha curta o que fazer, sem travessão, sem 'WebView2' e sem detalhe técnico"
             + " (" + string.Join(" | ", paineis.Select(p => p.Item3).Distinct()) + ")");
-        checar(FalhaWebView2.Painel(TipoFalhaWeb.RuntimeAusente, "O chat").Contains("instalador", StringComparison.OrdinalIgnoreCase)
+        checar(FalhaWebView2.Painel(TipoFalhaWeb.RuntimeAusente, "O chat").Contains("suporte", StringComparison.OrdinalIgnoreCase)
                && new[] { TipoFalhaWeb.Outra, TipoFalhaWeb.NavegadorCaiu, TipoFalhaWeb.JaIniciadoComOutroAmbiente }
                    .All(t => FalhaWebView2.Painel(t, "O WhatsApp").StartsWith("O WhatsApp", StringComparison.Ordinal)
                           && FalhaWebView2.Painel(t, "O WhatsApp").Contains(FalhaWebView2.TentarDeNovo, StringComparison.Ordinal)),
-            "FW-8 só o runtime ausente manda rodar o instalador; qualquer outra falha diz o que não abriu e manda tocar em Tentar de novo");
+            "FW-8 só o runtime ausente manda chamar o suporte; qualquer outra falha diz o que não abriu e manda tocar em Tentar de novo");
+        // Revisão 15/09: a mesma falta aparecia com três instruções (rodar o instalador, chamar o
+        // suporte, "componente de navegação"), e depois de atualizar pelo botão não há instalador à mão.
+        var faltaDoComponente = new[]
+        {
+            FalhaWebView2.Painel(TipoFalhaWeb.RuntimeAusente, "O chat"),
+            SessaoWhatsApp.Aviso(EstadoWa.SemComponente).Acao,
+            SessaoWhatsApp.Cabecalho(EstadoWa.SemComponente),
+        };
+        checar(faltaDoComponente.All(t => t.Contains("componente da Microsoft", StringComparison.OrdinalIgnoreCase)
+                                          && t.Contains("chame o suporte", StringComparison.OrdinalIgnoreCase)
+                                          && !t.Contains("instalador", StringComparison.OrdinalIgnoreCase)),
+            "FW-14 a falta do componente diz a MESMA coisa no painel, no aviso da venda e no cabeçalho da aba (" + string.Join(" | ", faltaDoComponente) + ")");
         checar(FalhaWebView2.TentarDeNovo == "Tentar de novo", "FW-9 o botão se chama 'Tentar de novo'");
 
         checar(FalhaWebView2.AposFalha(ensureChamado: false, ensureTerminou: false, TipoFalhaWeb.RuntimeAusente) == (false, true)
@@ -199,6 +213,9 @@ public static class TestesCamadaWebView2
                && guarda.Contains("HospedeWebView2.Contexto(", StringComparison.Ordinal),
             "TW-11 App: exceção de WebView2 no Dispatcher vai para o erros.log (com thread e runtime) e para a camada, ANTES e no lugar da caixa de aviso");
 
+        checar(new[] { chat, wa }.All(cs => !Regex.IsMatch(cs, @"(TxtEstado|TxtErro)\.Text\s*=[^;]*ex\.Message")),
+            "TW-13 chat e whatsapp: texto cru de exceção nunca vai para a tela (o detalhe vai para o arquivo de diagnóstico)");
+
         var avisos = Regex.Matches(venda, @"NotificarPedidoNovo\(tt\.Result\)").Count;
         var naTela = Regex.Matches(venda, @"Dispatcher\.Invoke\(\(\) => NotificarPedidoNovo\(tt\.Result\)\)").Count;
         checar(avisos >= 2 && avisos == naTela,
@@ -225,6 +242,16 @@ public static class TestesCamadaWebView2
         janela.Show();
 
         var hospedes = new List<HospedeWebView2>();
+        // Como no App: exceção de WebView2 que escapa para o Dispatcher (layout, foco) não derruba o
+        // host da bateria. Conta, para o diagnóstico da suíte.
+        var webNoDispatcher = 0;
+        DispatcherUnhandledExceptionEventHandler engolir = (_, e) =>
+        {
+            if (!FalhaWebView2.EhDoWebView2(e.Exception)) return;
+            webNoDispatcher++;
+            e.Handled = true;
+        };
+        janela.Dispatcher.UnhandledException += engolir;
         WebView2 NovoControle()
         {
             var w = new WebView2 { Visibility = Visibility.Collapsed };
@@ -336,14 +363,139 @@ public static class TestesCamadaWebView2
                 checar(volta is null && atualA.CoreWebView2 is not null && hA.AmbientesCriados == 2 && !hA.ControleQuebrado(),
                     $"RW-12 recriar com ambiente novo depois do navegador morto volta a funcionar (ambientes={hA.AmbientesCriados}{(volta is null ? "" : ", lançou " + volta.GetType().Name + ": " + volta.Message)})");
             }
+
+            // RW-13..16 A FRASE DO CASTELO NUM CONTROLE QUE TERMINOU A INICIALIZAÇÃO (revisão 15/09).
+            // O SDK escreve "CoreWebView2Controller members can only be accessed from the UI thread."
+            // quando o cast do objeto nativo do CONTROLLER dá E_NOINTERFACE. A simulação faz exatamente
+            // isso (troca o objeto nativo por um que não implementa a interface): o controller lança a
+            // frase, e o CoreWebView2 (outro objeto) continua respondendo.
+            {
+                var webC = NovoControle(); var atualC = webC; var diagC = new List<string>();
+                var webD = NovoControle(); var atualD = webD; var diagD = new List<string>();
+                var hC = Hospede("castelo", () => atualC, w => atualC = w, diagC);
+                var hD = Hospede("vizinho", () => atualD, w => atualD = w, diagD);
+                var coreC = await hC.IniciarControleAsync();
+                await hD.IniciarControleAsync();
+                var quebrouC = 0; var quebrouD = 0;
+                hC.Quebrou += _ => quebrouC++;
+                hD.Quebrou += _ => quebrouD++;
+
+                var controllerC = ControllerPorReflexao(atualC) as CoreWebView2Controller;
+                var desfazer = QuebrarComoNoCastelo(atualC);
+                Exception? doController = null, doNucleoWpf = null; var navegadorDePe = false;
+                try { _ = controllerC!.IsVisible; } catch (Exception ex) { doController = ex; }
+                try { _ = atualC.CoreWebView2; } catch (Exception ex) { doNucleoWpf = ex; }
+                try { navegadorDePe = coreC.BrowserProcessId > 0; } catch { }
+                checar(desfazer is not null && doController is not null && FalhaWebView2.EhDoWebView2(doController) && doNucleoWpf is not null && navegadorDePe,
+                    $"RW-13 (a simulação) todo membro do controller lança; o CoreWebView2 do controle WPF lança junto, porque o SDK o lê PELO controller; e o navegador segue de pé ({doController?.GetType().Name ?? "não lançou"}/{doNucleoWpf?.GetType().Name ?? "não lançou"}, de pé={navegadorDePe})");
+
+                // Regressão (o achado P1 da revisão foi refutado por esta checagem e pelo IL): com a
+                // inicialização terminada, o controller meio vivo é reconhecido pela leitura do núcleo.
+                HospedeWebView2.AvisarFalhaForaDaCamada(new InvalidOperationException(FalhaWebView2.MensagemDoController));
+                checar(hC.ControleQuebrado() && !hD.ControleQuebrado() && quebrouC == 1 && quebrouD == 0,
+                    $"RW-14 controller meio vivo com a inicialização TERMINADA é atribuído ao controle dele (e só a ele): vira painel e recriação (C={quebrouC}, D={quebrouD})");
+
+                var velhoC = atualC;
+                var janelaVelha = IntPtr.Zero;
+                try { janelaVelha = velhoC.Handle; } catch { }
+                var existiaAntes = janelaVelha != IntPtr.Zero && IsWindow(janelaVelha);
+                Exception? recriar = null;
+                try { hC.Recriar("a frase do Castelo", descartarAmbiente: true); } catch (Exception ex) { recriar = ex; }
+                var existeDepois = janelaVelha != IntPtr.Zero && IsWindow(janelaVelha);
+                checar(recriar is null && existiaAntes && !existeDepois && !ReferenceEquals(atualC, velhoC),
+                    $"RW-15 trocar o controle meio vivo não deixa a janela dele estacionada: o Dispose do SDK para no meio e a janela é destruída (antes={existiaAntes}, depois={existeDepois}{(recriar is null ? "" : ", lançou " + recriar.GetType().Name)})");
+
+                desfazer?.Invoke();
+                try { controllerC?.Close(); } catch { }
+
+                Exception? voltaC = null;
+                try { await hC.IniciarControleAsync(); } catch (Exception ex) { voltaC = ex; }
+                checar(voltaC is null && atualC.CoreWebView2 is not null && !hC.ControleQuebrado() && !hD.ControleQuebrado(),
+                    $"RW-16 depois da troca o controle novo inicia, e o vizinho segue intacto{(voltaC is null ? "" : " (lançou " + voltaC.GetType().Name + ")")}");
+            }
+
+            // RW-17 falso positivo: exceção de OUTRA camada enquanto o Ensure desta está em curso
+            {
+                var webE = NovoControle(); var atualE = webE; var diagE = new List<string>();
+                var hE = Hospede("em-curso", () => atualE, w => atualE = w, diagE);
+                await hE.IniciarControleAsync();
+                hE.Recriar("preparar um Ensure pendente", descartarAmbiente: false);
+                var quebrouE = 0;
+                hE.Quebrou += _ => quebrouE++;
+                var recriacoesAntes = hE.Recriacoes;
+                var pendente = hE.IniciarControleAsync();
+                var estavaPendente = !pendente.IsCompleted;
+                HospedeWebView2.AvisarFalhaForaDaCamada(new InvalidOperationException(FalhaWebView2.MensagemDoController));
+                Exception? fimE = null;
+                try { await pendente; } catch (Exception ex) { fimE = ex; }
+                checar(estavaPendente && quebrouE == 0 && hE.Recriacoes == recriacoesAntes && fimE is null && atualE.CoreWebView2 is not null,
+                    $"RW-17 falha de outra camada com o Ensure desta em curso: esta não é dada como quebrada nem recriada, e a inicialização termina (quebrou={quebrouE}, pendente={estavaPendente})");
+            }
+
+            // RW-18/19 a recriação automática tem teto (o Tentar de novo, não)
+            {
+                var webF = NovoControle(); var atualF = webF; var diagF = new List<string>();
+                var hF = Hospede("teto", () => atualF, w => atualF = w, diagF);
+                for (var i = 0; i < 7; i++)
+                {
+                    await hF.IniciarControleAsync();
+                    hF.Falhou("teto " + i, new InvalidOperationException("a etapa depois do Ensure falhou"));
+                }
+                var parado = atualF;
+                Exception? recusou = null;
+                try { await hF.IniciarControleAsync(); } catch (Exception ex) { recusou = ex; }
+                checar(hF.Recriacoes == 6 && hF.ControleUsado && recusou is not null && ReferenceEquals(atualF, parado),
+                    $"RW-18 recriar sozinho tem teto de 6 por hora: a sétima falha deixa o controle parado e a inicialização recusa sem tocar nele (recriações={hF.Recriacoes}, recusou={recusou?.GetType().Name ?? "não"})");
+                var recriou = hF.RecriarSeUsado("tentar de novo");
+                Exception? depoisF = null;
+                try { await hF.IniciarControleAsync(); } catch (Exception ex) { depoisF = ex; }
+                checar(recriou && hF.Recriacoes == 7 && depoisF is null && atualF.CoreWebView2 is not null,
+                    $"RW-19 o Tentar de novo (gesto de gente) passa do teto: recria e inicia (recriações={hF.Recriacoes})");
+            }
         }
         finally
         {
+            janela.Dispatcher.UnhandledException -= engolir;
             foreach (var h in hospedes) h.Desligar();
             foreach (var w in grade.Children.OfType<WebView2>().ToList()) { try { w.Dispose(); } catch { } }
             try { janela.Close(); } catch { }
             await Task.Delay(500);
         }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+
+    /// <summary>O CoreWebView2Controller interno do controle WPF (WebView2Base.CoreWebView2Controller), por reflexão.</summary>
+    private static object? ControllerPorReflexao(WebView2 w)
+    {
+        const BindingFlags F = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+        try
+        {
+            var baseDoSdk = typeof(WebView2).GetField("m_webview2Base", F)?.GetValue(w);
+            return baseDoSdk?.GetType().GetProperty("CoreWebView2Controller", F)?.GetValue(baseDoSdk);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Deixa o controller como no Castelo: o objeto nativo dele vira um que não implementa
+    /// ICoreWebView2Controller, então todo membro dá E_NOINTERFACE e o SDK lança a frase. O
+    /// CoreWebView2 é outro objeto e continua de pé. Devolve como desfazer (null = o SDK mudou).
+    /// </summary>
+    private static Action? QuebrarComoNoCastelo(WebView2 w)
+    {
+        const BindingFlags F = BindingFlags.Instance | BindingFlags.NonPublic;
+        if (ControllerPorReflexao(w) is not { } controller) return null;
+        var tipo = controller.GetType();
+        var campoNativo = tipo.GetField("_rawNative", F);
+        var campoCache = tipo.GetField("_nativeICoreWebView2ControllerValue", F);
+        if (campoNativo is null || campoCache is null) return null;
+        var nativo = campoNativo.GetValue(controller);
+        var cache = campoCache.GetValue(controller);
+        campoCache.SetValue(controller, null);
+        campoNativo.SetValue(controller, new object());
+        return () => { campoNativo.SetValue(controller, nativo); campoCache.SetValue(controller, cache); };
     }
 
     private static string Corpo(string fonte, string assinatura)

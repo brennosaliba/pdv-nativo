@@ -177,6 +177,7 @@ public partial class JanelaInstalador : Window
         TxtTitulo.Text = "O chat e o WhatsApp";
         var componente = await Task.Run(() => WebView2Runtime.GarantirAsync(WebView2Runtime.PassosDeVerdade(), Progresso, BarraDoDownload, Path.GetTempPath()));
         _avisoComponente = componente.Aviso;
+        WebView2Runtime.Anotar("instalacao", componente);
         Barra.IsIndeterminate = true;
 
         // ---- o PayGo

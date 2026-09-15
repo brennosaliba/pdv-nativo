@@ -679,6 +679,19 @@ void Recusa(string nome, Action acao, string trechoEsperado)
     catch (Exception e) { Check(nome, e.Message.Contains(trechoEsperado, StringComparison.OrdinalIgnoreCase)); }
 }
 
+// MODO DE DESENVOLVIMENTO (15/09/2026): só as três suítes do caso do Castelo (2FA com dica,
+// camadas WebView2 e o componente no instalador), para iterar sem a bateria inteira.
+// NÃO é o gate: o gate continua sendo a bateria completa sem argumento.
+//   Pdv.Testes.exe --so-castelo
+if (args.Length >= 1 && args[0] == "--so-castelo")
+{
+    await TestesTotpDica.RodarAsync((cond, nome) => Check("totp-dica: " + nome, cond));
+    await TestesCamadaWebView2.RodarAsync((cond, nome) => Check("camada-web: " + nome, cond));
+    TestesWebView2Runtime.Rodar((cond, nome) => Check("runtime-web: " + nome, cond));
+    Console.WriteLine($"\n=== (so castelo) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 var arquivo = Path.Combine(Path.GetTempPath(), $"pdv-teste-{Guid.NewGuid():N}.db");
 Banco.Migrar(arquivo);
 

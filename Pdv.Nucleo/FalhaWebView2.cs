@@ -76,13 +76,16 @@ public static class FalhaWebView2
 
     /// <summary>
     /// A frase do painel de erro, em UMA linha: o que fazer. Sem código de erro, sem "detalhe
-    /// técnico" (o detalhe vai para o diagnóstico). Só o runtime ausente manda rodar o instalador:
-    /// o painel antigo mandava instalar para QUALQUER erro, e no Castelo o runtime podia estar lá.
+    /// técnico" (o detalhe vai para o diagnóstico). Só o runtime ausente fala do componente: o
+    /// painel antigo mandava instalar para QUALQUER erro, e no Castelo o runtime podia estar lá.
+    /// Revisão 15/09: a mesma falta tinha três instruções (painel, aviso na venda, cabeçalho da
+    /// aba), e "rode o instalador" não serve para quem atualiza pelo botão. Agora é uma só, igual à
+    /// de <see cref="SessaoWhatsApp"/>.
     /// </summary>
     /// <param name="oQue">"O chat" ou "O WhatsApp".</param>
     public static string Painel(TipoFalhaWeb tipo, string oQue) => tipo switch
     {
-        TipoFalhaWeb.RuntimeAusente => "Falta um componente da Microsoft. Rode o instalador do caixa de novo.",
+        TipoFalhaWeb.RuntimeAusente => "Falta um componente da Microsoft neste PC. Chame o suporte.",
         _ => $"{oQue} não abriu agora. Toque em {TentarDeNovo}.",
     };
 

@@ -42,7 +42,8 @@ public static class TestesTotpDica
 
     private const string TerminalUuid = "9a1c0c2e-0000-4000-8000-terminal0003";
     private const string TextoDeHoje = "Código inválido. Tente de novo.";
-    private const string TextoVencido = "Esse código já venceu. Digite o que está na tela agora.";
+    private const string TextoVencido = "Esse código já venceu. Pegue um código novo e digite logo.";
+    private const string TextoVenceuDeNovo = "O código venceu de novo. Confira a hora do celular.";
     private const string TextoDoGerente = "Esse código é do gerente. Aqui vale o do dono.";
 
     public static async Task RodarAsync(Action<bool, string> checar)
@@ -89,6 +90,13 @@ public static class TestesTotpDica
             var vReplay = await cli.ValidarTotpAsync(fake.CodigoAgora(), "estorno:d7", "estorno", null, "dono", CancellationToken.None);
             checar(vOk.Ok && vOk.Dica is null && !vReplay.Ok && vReplay.Motivo == "codigo invalido" && vReplay.Dica is null,
                 "DC-5 aprovado não tem dica, e o replay (o mesmo código de novo) é inválido SEM dica");
+
+            // revisão 15/09: o servidor olha só para trás (-20..-2). Um código em +2 ainda VAI valer;
+            // o fake dava 'vencido' ali e certificava um comportamento que o servidor não tem.
+            fake.ZerarBaldes(); ProximoPasso();
+            var vMais2 = await cli.ValidarTotpAsync(fake.CodigoAgora(2), "estorno:d18", "estorno", null, "dono", CancellationToken.None);
+            checar(!vMais2.Ok && vMais2.Motivo == "codigo invalido" && vMais2.Dica is null,
+                $"DC-18 código 2 passos ADIANTE (ainda vai valer): recusa sem dica, igual ao servidor (dica={vMais2.Dica ?? "null"})");
         }
 
         // DC-6 a dica conta no limite de tentativas como qualquer código inválido
@@ -112,6 +120,15 @@ public static class TestesTotpDica
             checar(d.Autorizado && d.Via == ViaAutorizacao.Totp && tela.VezesPediuCodigo == 2
                    && tela.Avisos.Count == 2 && tela.Avisos[0] is null && tela.Avisos[1] == TextoVencido,
                 $"DC-7 código vencido: a tela diz '{TextoVencido}' e o código de agora autoriza (aviso={tela.Avisos.ElementAtOrDefault(1)})");
+        }
+
+        // DC-19 vencido duas vezes seguidas: o relógio do celular está atrasado, e repetir não resolve
+        {
+            fake.ZerarBaldes(); ProximoPasso();
+            var tela = new TelaFalsa { AoPedirCodigo = _ => fake.CodigoAgora(-4) };
+            var d = await Autorizacao.ResolverAsync(cli, Estorno(419), tela);
+            checar(!d.Autorizado && tela.Avisos.Count == 3 && tela.Avisos[1] == TextoVencido && tela.Avisos[2] == TextoVenceuDeNovo,
+                $"DC-19 vencido duas vezes seguidas (relógio do celular atrasado): a segunda frase manda conferir a hora do celular (avisos={string.Join(" | ", tela.Avisos)})");
         }
 
         // DC-8 estorno com o código do gerente → a frase diz de quem é e qual vale
@@ -227,7 +244,7 @@ public static class TestesTotpDica
         }
 
         // ── 3. TEXTO E DIAGNÓSTICO ─────────────────────────────────────────────
-        foreach (var t in new[] { TextoVencido, TextoDoGerente })
+        foreach (var t in new[] { TextoVencido, TextoVenceuDeNovo, TextoDoGerente })
             checar(t.Length < 60 && !t.Contains('\n') && !t.Contains('—') && !t.Contains('–') && !t.Any(char.IsDigit),
                 $"DC-16 '{t}': uma linha, menos de 60 letras, sem travessão e sem número ({t.Length})");
 

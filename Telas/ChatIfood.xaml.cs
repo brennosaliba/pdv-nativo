@@ -540,7 +540,12 @@ public partial class ChatIfood : UserControl
                 $"url: {Web.CoreWebView2.Source}\ntitulo: {Web.CoreWebView2.DocumentTitle}\nquando: {DateTime.Now:dd/MM/yyyy HH:mm:ss}\n\n{texto}");
             TxtEstado.Text = "Diagnóstico gravado em " + caminho;
         }
-        catch (Exception ex) { TxtEstado.Text = "Diagnóstico falhou: " + ex.Message; }
+        catch (Exception ex)
+        {
+            // texto cru de exceção não vai para a tela (revisão 15/09): o detalhe fica no diagnóstico
+            Diag("diagnostico do gestor: " + ex.GetType().Name + " " + ex.Message);
+            TxtEstado.Text = "O diagnóstico não gravou agora. Toque de novo.";
+        }
     }
 
     private const string ScriptDiagnostico = """
