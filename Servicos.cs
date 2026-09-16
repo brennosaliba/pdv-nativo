@@ -871,6 +871,51 @@ public static class Servicos
         finally { UmaComandaPorVez.Release(); }
     }
 
+    private static readonly SemaphoreSlim UmaNotaIfoodPorVez = new(1, 1);
+
+    /// <summary>
+    /// Imprime as notas do iFood que o servidor marcou para sair no papel deste caixa.
+    ///
+    /// Pedido do dono (16/09/2026): "coloca pra emitir as 5 primeiras notas e imprimir no
+    /// caixa; depois das 5 a gente analisa e corrige, e volta pra emissao em nuvem". Quem
+    /// conta as 5 e desliga sozinho e o servidor; aqui so sai o papel.
+    ///
+    /// Roda junto com a comanda, a cada puxada do delivery, pelo mesmo motivo: a nota nao
+    /// pode depender de alguem ter deixado uma tela aberta. Imprime em QUALQUER politica
+    /// de cupom, inclusive "nao imprimir": este papel foi pedido nome a nome pelo dono
+    /// para conferencia, nao e o cupom de uma venda do balcao.
+    ///
+    /// Nunca lanca. Papel que nao sai vira recado no servidor e volta na proxima puxada.
+    /// </summary>
+    public static async Task<string?> ImprimirNotasDoIfoodAsync()
+    {
+        if (!TemContaDeNuvem()) return null;
+        if (!await UmaNotaIfoodPorVez.WaitAsync(0).ConfigureAwait(false)) return null;
+        try
+        {
+            string loja; string? impressora;
+            using (var cx = Banco.Abrir())
+            {
+                loja = (cx.QueryFirstOrDefault("SELECT loja_nome FROM terminal LIMIT 1")?.loja_nome as string) ?? "";
+                impressora = Vendas.Config(cx, "impressora");
+            }
+            if (string.IsNullOrWhiteSpace(loja)) return null;
+
+            var nuvem = Nuvem();
+            var papeis = Pdv.Nucleo.NotaIfoodPapel.Ler(await nuvem.PapeisDoIfoodAsync(loja).ConfigureAwait(false));
+            string? falha = null;
+            foreach (var papel in papeis)
+            {
+                var erro = await Impressao.ImprimirAsync(papel.Cupom, impressora).ConfigureAwait(false);
+                await nuvem.ConfirmarPapelIfoodAsync(papel.OrderId, erro).ConfigureAwait(false);
+                falha ??= erro is null ? null : "A nota do pedido do iFood não saiu";
+            }
+            return falha;
+        }
+        catch { return null; }
+        finally { UmaNotaIfoodPorVez.Release(); }
+    }
+
     /// <summary>
     /// De quem é a via que saiu da rede. <see cref="Unica"/> é o bloco que sobrou sem a rede
     /// dizer de quem ele é (via única 029, ou o cupom reduzido num 737 que só pediu a via da

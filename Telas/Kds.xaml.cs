@@ -274,6 +274,8 @@ public partial class Kds : UserControl
     private async Task ImprimirComandasAsync()
     {
         var falha = await Servicos.ImprimirComandasPendentesAsync();
+        // A nota do iFood da rodada de conferencia sai pelo mesmo caminho.
+        falha ??= await Servicos.ImprimirNotasDoIfoodAsync();
         if (falha is null) return;
         TxtStatus.Text = falha + ". Confira papel e impressora e toque no 🖨 do pedido.";
         Alerta.PedidoNovo();   // chama atencao: papel nao saiu

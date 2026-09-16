@@ -661,6 +661,45 @@ public sealed class Nuvem
         return resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync().ConfigureAwait(false) : null;
     }
 
+    /// <summary>
+    /// As notas do iFood desta loja que ainda tem de sair NO PAPEL do caixa (rodada de
+    /// conferencia ligada pelo dono na tela). O servidor reserva cada uma por 2 minutos,
+    /// entao dois caixas da mesma loja nao tiram o mesmo papel. Devolve o corpo cru para
+    /// NotaIfoodPapel.Ler transformar em cupom; null quando nao deu.
+    /// </summary>
+    public async Task<string?> PapeisDoIfoodAsync(string loja)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(loja) || !await SessaoOkAsync().ConfigureAwait(false)) return null;
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/nfce_ifood_papeis");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _loja = loja }), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            return resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync().ConfigureAwait(false) : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Confirma que o papel saiu, ou conta por que nao saiu (ai o servidor solta a
+    /// reserva e a proxima puxada tenta de novo). Falha de rede aqui apenas deixa a
+    /// reserva vencer sozinha: o papel volta, nao some.
+    /// </summary>
+    public async Task<bool> ConfirmarPapelIfoodAsync(string orderId, string? erro = null)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(orderId) || !await SessaoOkAsync().ConfigureAwait(false)) return false;
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/nfce_ifood_papel_impresso");
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _order_id = orderId, _erro = erro }), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
     /// <summary>Status atual (efetivo) de pedidos ESPECIFICOS - a reconciliacao
     /// dos tickets que ficaram fora da janela do feed. Falha devolve lista
     /// vazia: os tickets ficam como estao ate o proximo ciclo.</summary>

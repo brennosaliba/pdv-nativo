@@ -1824,6 +1824,7 @@ TestesInstaladorCastelo.Rodar((cond, nome) => Check("instalador-castelo: " + nom
 TestesRedePixDoTerminal.Rodar((cond, nome) => Check("rede-pix: " + nome, cond));
 TestesRecusasDoHost.Rodar((cond, nome) => Check("recusa-host: " + nome, cond));
 TestesNotaPelaNuvem.Rodar((cond, nome) => Check("nota-nuvem: " + nome, cond));
+TestesNotaIfoodPapel.Rodar((cond, nome) => Check("nota-ifood-papel: " + nome, cond));
 
 // -- 15/09/2026: usuario master da rede ---------------------------------------------
 // Decisao do dono (14/09): uma senha para a rede toda, criada no painel, e a unica das acoes
