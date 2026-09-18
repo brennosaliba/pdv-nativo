@@ -1,4 +1,4 @@
-<UserControl x:Class="Pdv.Telas.Configuracao"
+﻿<UserControl x:Class="Pdv.Telas.Configuracao"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="{DynamicResource Fundo}">
@@ -236,6 +236,20 @@
                     <ComboBox x:Name="CboPolViaLoja" Margin="0,4,0,4"/>
                     <TextBlock Text="Em Perguntar na tela a via não sai sozinha: tire no menu TEF, em Reimprimir o último comprovante."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                    <!-- ABERTURA E FECHAMENTO (18/09/2026, pedido do dono): os dois
+                         comprovantes do turno saem na bobina do cupom, com os valores, a
+                         data e espaço para assinar. Nascem imprimindo sozinhos. -->
+                    <TextBlock Text="ABERTURA E FECHAMENTO DO CAIXA" Foreground="{DynamicResource Marca}"
+                               FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
+                    <TextBlock Text="Um papel quando o turno abre e outro quando ele fecha, com os valores, a data e espaço para assinar e para o gerente conferir."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <TextBlock Text="Quando imprimir o papel da abertura" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolAbertura" Margin="0,4,0,8"/>
+                    <TextBlock Text="Quando imprimir o papel do fechamento" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboPolFechamento" Margin="0,4,0,4"/>
+                    <TextBlock Text="Em Perguntar na tela o caixa pergunta antes de imprimir."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
 
                     <!-- COMANDA DO DELIVERY — configuração INDIVIDUAL (pedido do dono,
                          29/08): a comanda pode sair na bobina da expedição e o cupom na

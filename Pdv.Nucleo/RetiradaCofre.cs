@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 
 namespace Pdv.Nucleo;
 
@@ -38,43 +38,24 @@ public static class RetiradaCofre
     public static IReadOnlyList<string> Papel(string loja, DateTime quando, string operador, string diaDoTurno,
         Dinheiro contado, Dinheiro fica, Dinheiro retirada, int colunas)
     {
-        var c = Math.Max(24, colunas);
-        string Centro(string s) { s = Corta(s, c); var sobra = (c - s.Length) / 2; return new string(' ', sobra) + s; }
-        string Par(string rotulo, string valor)
+        var c = PapelTexto.Largura(colunas);
+        var linhas = new List<string>
         {
-            valor = Corta(valor, c);
-            var espaco = c - valor.Length - 1;
-            rotulo = Corta(rotulo, Math.Max(0, espaco));
-            return rotulo + new string(' ', Math.Max(1, c - rotulo.Length - valor.Length)) + valor;
-        }
-        var traco = new string('-', c);
-        var dia = DateTime.TryParseExact(diaDoTurno, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
-            ? d.ToString("dd/MM/yyyy") : diaDoTurno;
-        return new[]
-        {
-            Centro("RETIRADA PARA O COFRE"),
-            Centro(loja),
-            traco,
-            Par("Data", quando.ToString("dd/MM/yyyy HH:mm")),
-            Par("Turno", dia),
-            Par("Operador", operador),
-            traco,
-            Par("Contado na gaveta", contado.Formatado()),
-            Par("Fica no caixa (troco)", fica.Formatado()),
-            Par("RETIRADO", retirada.Formatado()),
-            traco,
-            "",
-            "Assinatura:",
-            "",
-            Corta("________________________________", c),
-            "",
-            "Conferido por:",
-            "",
-            Corta("________________  em ___/___/______", c),
-            "",
-            Centro("Guarde este papel com o dinheiro."),
+            PapelTexto.Centro("RETIRADA PARA O COFRE", c),
+            PapelTexto.Centro(loja, c),
+            PapelTexto.Traco(c),
         };
+        linhas.AddRange(PapelTexto.Campo("Data", quando.ToString("dd/MM/yyyy HH:mm"), c));
+        linhas.AddRange(PapelTexto.Campo("Turno", PapelTexto.DiaDoTurno(diaDoTurno), c));
+        linhas.AddRange(PapelTexto.Campo("Operador", operador, c));
+        linhas.Add(PapelTexto.Traco(c));
+        linhas.AddRange(PapelTexto.Campo("Contado na gaveta", contado.Formatado(), c));
+        linhas.AddRange(PapelTexto.Campo("Fica no caixa (troco)", fica.Formatado(), c));
+        linhas.AddRange(PapelTexto.Campo("RETIRADO", retirada.Formatado(), c));
+        linhas.Add(PapelTexto.Traco(c));
+        linhas.AddRange(PapelTexto.BlocoDeAssinatura(c));
+        linhas.Add("");
+        linhas.Add(PapelTexto.Centro("Guarde este papel com o dinheiro.", c));
+        return linhas;
     }
-
-    private static string Corta(string s, int max) => s.Length <= max ? s : s[..Math.Max(0, max)];
 }

@@ -1,3 +1,4 @@
+﻿using Dapper;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -121,8 +122,14 @@ public partial class AberturaCaixa : UserControl
     /// o operador conta a gaveta de agora (o dinheiro de ontem continua nela), declara
     /// forma a forma, e o sistema mostra a diferença só depois.
     /// </summary>
-    private void FecharAntigo(object sender, RoutedEventArgs e)
+    private bool _fechandoAntigo;
+
+    private async void FecharAntigo(object sender, RoutedEventArgs e)
     {
+        if (_fechandoAntigo) return;
+        _fechandoAntigo = true;
+        try
+        {
         var dono = Window.GetWindow(this)!;
         using var cx = Banco.Abrir();
         var antiga = Caixa.SessaoAberta(cx);
@@ -152,7 +159,7 @@ public partial class AberturaCaixa : UserControl
         var tolerancia = new Dinheiro(200);
         try
         {
-            Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia), antiga, null);
+            await Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia), antiga, null);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
         {
@@ -160,7 +167,7 @@ public partial class AberturaCaixa : UserControl
             // "O que aconteceu?" aqui só fazia o operador ler a mesma coisa duas vezes.
             var just = PedirTexto.Justificativa(dono, "Diferença no caixa", ex.Message);
             if (string.IsNullOrWhiteSpace(just)) return;
-            try { Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia, just), antiga, just); }
+            try { await Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia, just), antiga, just); }
             catch (Exception e2) { NaoFechou(dono, e2); }
         }
         catch (Exception ex)
@@ -168,18 +175,36 @@ public partial class AberturaCaixa : UserControl
             NaoFechou(dono, ex);
         }
 
-        void Concluir(List<LinhaFechamento> linhas, Sessao sessao, string? justificativa)
+        async Task Concluir(List<LinhaFechamento> linhas, Sessao sessao, string? justificativa)
         {
+            // O PAPEL DO FECHAMENTO (18/09/2026): sai antes do relatório da tela, que é
+            // modal e seguraria a impressão até alguém fechar a janela.
+            string? folha = null;
+            if (PapelDeCaixa.SaiSozinho(Impressoes.Politica(cx, Impressoes.Fechamento), sessao.Teste))
+            {
+                var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
+                var destino = Impressao.DestinoCupom(Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"));
+                var papel = PapelDeCaixa.Fechamento(loja, DateTime.Now, sessao, _operador.Nome,
+                    ResumoFechamento.Linhas(linhas),
+                    new Dinheiro(linhas.Sum(l => l.DiferencaConferida.Abs.Centavos)),
+                    ResumoFechamento.SemConferencia(linhas), null, null, justificativa,
+                    semContagem: false, autorizador: null, destino.Papel.Colunas);
+                folha = await Papel(new() { ("Fechamento de caixa", papel) }, destino);
+            }
             // As linhas saem do Núcleo (ResumoFechamento), a MESMA montagem do fechamento
             // normal: crédito, débito e PIX partidos em TEF e POS, com R$ 0,00 na parte sem venda.
             // O Fechar daqui roda com o TEF dado como disponível (o padrão), e o resumo também.
             var texto = ResumoFechamento.Texto(linhas);
             // Venda de teste fica fora dos totais — mas aparece rotulada, aqui também.
             if (Caixa.ResumoDeTeste(cx, sessao) is string teste) texto += "\n\n" + teste;
+            if (folha is not null)
+                texto += "\n\nO papel do fechamento não saiu (" + folha + "). Anote à mão: operador, valores e data.";
             Dialogo.Relatorio(dono, $"Caixa de {DataBr(sessao.BusinessDate)} fechado", texto,
                 justificativa is null ? null : $"Justificativa: {justificativa}");
             Avisar();   // some o botão; a abertura de hoje fica livre
         }
+        }
+        finally { _fechandoAntigo = false; }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -192,11 +217,33 @@ public partial class AberturaCaixa : UserControl
         else if (e.Key == Key.Enter) { Abrir(this, new RoutedEventArgs()); e.Handled = true; }
     }
 
-    private void Abrir(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Abre o turno e IMPRIME o comprovante da abertura (18/09/2026, pedido do dono).
+    ///
+    /// A forma deste método existe por três motivos, e nenhum é estilo:
+    ///  · a conexão do SQLite fecha ANTES do primeiro await (o roteamento da janela abre
+    ///    outra logo em seguida, e conexão atravessando await é onde nasce banco travado);
+    ///  · o papel e o aviso saem ENTRE abrir e avisar quem escuta: depois do Abriu a tela
+    ///    já foi trocada e qualquer aviso sumiria antes de ser lido;
+    ///  · a trava impede abertura dupla, porque o botão e o Enter chamam este mesmo
+    ///    método e a segunda passada morreria dizendo que já existe caixa aberto.
+    /// </summary>
+    private bool _abrindo;
+
+    private async void Abrir(object sender, RoutedEventArgs e)
     {
+        if (_abrindo) return;
+        _abrindo = true;
+        try
+        {
+        Sessao? aberta = null;
+        var papeis = new List<(string Descricao, IReadOnlyList<string> Linhas)>();
+        var destino = default(Impressao.Destino);
         try
         {
             using var cx = Banco.Abrir();
+            destino = Impressao.DestinoCupom(Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"));
+            var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
 
             // Caixa de OUTRO DIA preso aberto: o "Abrir" confronta em vez de só falhar.
             // O caminho normal é fechar aquele turno (contagem cega de sempre); pular a
@@ -237,7 +284,15 @@ public partial class AberturaCaixa : UserControl
                         "Esse PIN não é de gerente, ou saiu errado. Peça para o gerente digitar de novo.", "erro");
                     return;
                 }
-                Caixa.FecharSemConferencia(cx, presa, _operador, sup);
+                var linhasSem = Caixa.FecharSemConferencia(cx, presa, _operador, sup);
+                // Fechamento sem contagem é o que mais precisa de assinatura: turno de
+                // outro dia, fechado por quem não estava lá. O papel diz isso com todas
+                // as letras e leva o nome de quem autorizou.
+                if (PapelDeCaixa.SaiSozinho(Impressoes.Politica(cx, Impressoes.Fechamento), presa.Teste))
+                    papeis.Add(("Fechamento de caixa", PapelDeCaixa.Fechamento(loja, DateTime.Now, presa,
+                        _operador.Nome, ResumoFechamento.Linhas(linhasSem), Dinheiro.Zero,
+                        ResumoFechamento.SemConferencia(linhasSem), null, null, null,
+                        semContagem: true, autorizador: sup.Nome, destino.Papel.Colunas)));
                 Avisar();   // some o aviso do caixa preso; a abertura segue normal
             }
 
@@ -272,12 +327,40 @@ public partial class AberturaCaixa : UserControl
             }
 
             var s = Caixa.Abrir(cx, _operador, new Dinheiro(_centavos));
-            Abriu?.Invoke(s);
+            aberta = s;
+            if (PapelDeCaixa.SaiSozinho(Impressoes.Politica(cx, Impressoes.Abertura), s.Teste))
+                papeis.Add(("Abertura de caixa", PapelDeCaixa.Abertura(loja, DateTime.Now, s, esperado, destino.Papel.Colunas)));
         }
         catch (Exception ex)
         {
             Aviso(ex.Message);
         }
+
+        if (aberta is null) return;                 // não abriu: não há o que imprimir
+        if (await Papel(papeis, destino) is string erro)
+            Dialogo.Avisar(Window.GetWindow(this)!, "Abertura de caixa",
+                "O caixa abriu, mas o papel não saiu (" + erro + "). Anote à mão: operador, fundo e data.", "ok");
+        Abriu?.Invoke(aberta);
+        }
+        finally { _abrindo = false; }
+    }
+
+    /// <summary>
+    /// Manda os papéis para a impressora do cupom, um a um. Devolve o primeiro erro, ou
+    /// null quando todos saíram. Impressora com problema nunca impede o caixa de abrir.
+    /// </summary>
+    private static async Task<string?> Papel(List<(string Descricao, IReadOnlyList<string> Linhas)> papeis,
+        Impressao.Destino destino)
+    {
+        foreach (var (descricao, linhas) in papeis)
+        {
+            try
+            {
+                if (await Impressao.ImprimirTextoAsync(descricao, new[] { linhas }, destino) is string erro) return erro;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+        return null;
     }
 
     private void Sair(object sender, RoutedEventArgs e) => Saiu?.Invoke();

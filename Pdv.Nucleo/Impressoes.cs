@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 
 namespace Pdv.Nucleo;
 
@@ -42,14 +42,19 @@ public enum PoliticaImpressao { Automatico, Perguntar, Nao }
 /// </summary>
 public static class Impressoes
 {
-    // ── os quatro papéis ────────────────────────────────────────────────────
+    // ── os papéis que o caixa sabe imprimir ─────────────────────────────────
     public const string Cupom = "cupom";
     public const string Comanda = "comanda";
     public const string ViaCliente = "via_cliente";
     public const string ViaEstabelecimento = "via_estabelecimento";
+    // 18/09/2026, pedido do dono: a abertura e o fechamento do turno também saem
+    // no papel, para assinar. Nasceram hoje, então não têm chave antiga nenhuma.
+    public const string Abertura = "abertura";
+    public const string Fechamento = "fechamento";
 
     /// <summary>Todos os documentos, na ordem em que aparecem na tela.</summary>
-    public static readonly string[] Documentos = { Cupom, Comanda, ViaCliente, ViaEstabelecimento };
+    public static readonly string[] Documentos =
+        { Cupom, Comanda, ViaCliente, ViaEstabelecimento, Abertura, Fechamento };
 
     /// <summary>Rótulos das três opções, na ordem do enum. É o que a tela mostra.</summary>
     public static readonly string[] Rotulos = { "Imprimir sozinho", "Perguntar na tela", "Não imprimir" };
@@ -58,6 +63,8 @@ public static class Impressoes
     public static string Chave(string documento) => documento switch
     {
         Cupom => "imp_cupom",
+        Abertura => "imp_abertura",
+        Fechamento => "imp_fechamento",
         Comanda => "imp_comanda",
         ViaCliente => "imp_via_cliente",
         ViaEstabelecimento => "imp_via_estabelecimento",
@@ -67,12 +74,17 @@ public static class Impressoes
     /// <summary>
     /// Chave ANTIGA de onde a política vem enquanto a nova não existe. As vias do cartão
     /// dividem a mesma: era um interruptor só para as duas.
+    ///
+    /// NULL quando o documento nasceu depois desta tela e nunca teve booleano próprio
+    /// (abertura e fechamento, 18/09/2026). Devolver null é melhor que inventar uma chave
+    /// que ninguém lê: <c>config</c> não ganha lixo e a sincronia simplesmente não roda.
     /// </summary>
-    public static string ChaveAntiga(string documento) => documento switch
+    public static string? ChaveAntiga(string documento) => documento switch
     {
         Cupom => "imprimir_automatico",
         Comanda => "kds_comanda_auto",
         ViaCliente or ViaEstabelecimento => "tef_paygo_imprimir_vias",
+        Abertura or Fechamento => null,
         _ => throw new ArgumentException($"documento desconhecido: {documento}", nameof(documento)),
     };
 
@@ -112,15 +124,22 @@ public static class Impressoes
             Comanda => cru == "1" ? PoliticaImpressao.Automatico : PoliticaImpressao.Perguntar,
             // A única que vira Nao: desligada, a via não saía e não havia botão na venda.
             ViaCliente or ViaEstabelecimento => cru == "0" ? PoliticaImpressao.Nao : PoliticaImpressao.Automatico,
+            // Sem passado: o papel sai sozinho, que é o pedido do dono. Esta linha é o que
+            // impede a loja que nunca abriu a tela de Configuração de morrer na primeira
+            // leitura da política, no dia 1, com a chave nova ainda inexistente.
+            Abertura or Fechamento => PoliticaImpressao.Automatico,
             _ => throw new ArgumentException($"documento desconhecido: {documento}", nameof(documento)),
         };
     }
 
     /// <summary>A política valendo agora para este documento.</summary>
     public static PoliticaImpressao Politica(SqliteConnection cx, string documento)
-        => Politica(documento,
+    {
+        var antiga = ChaveAntiga(documento);
+        return Politica(documento,
             Vendas.Config(cx, Chave(documento)),
-            Vendas.Config(cx, ChaveAntiga(documento)));
+            antiga is null ? null : Vendas.Config(cx, antiga));
+    }
 
     /// <summary>
     /// Grava a chave NOVA e mantém a antiga em sincronia.
@@ -141,10 +160,12 @@ public static class Impressoes
         {
             var outro = documento == ViaCliente ? ViaEstabelecimento : ViaCliente;
             var ambasNao = p == PoliticaImpressao.Nao && Politica(cx, outro) == PoliticaImpressao.Nao;
-            Vendas.GravarConfig(cx, ChaveAntiga(documento), ambasNao ? "0" : "1");
+            Vendas.GravarConfig(cx, ChaveAntiga(documento)!, ambasNao ? "0" : "1");
             return;
         }
-        Vendas.GravarConfig(cx, ChaveAntiga(documento), p == PoliticaImpressao.Automatico ? "1" : "0");
+        // Documento que nasceu com a chave nova não tem antiga para manter em sincronia.
+        if (ChaveAntiga(documento) is not { } antiga) return;
+        Vendas.GravarConfig(cx, antiga, p == PoliticaImpressao.Automatico ? "1" : "0");
     }
 
     // ── o que a tela faz com a política ─────────────────────────────────────

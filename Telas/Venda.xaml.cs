@@ -3773,8 +3773,9 @@ public partial class Venda : UserControl
                 var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                 var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
                 var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, null, tefDisponivel, fica);
+                var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, null);
                 var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
-                MostrarResultado(dono, linhasFech, null, divergencias, resumoTeste, papel, tefDisponivel);
+                MostrarResultado(dono, linhasFech, null, divergencias, resumoTeste, folha, papel, tefDisponivel);
                 FechouCaixa?.Invoke();
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
@@ -3789,8 +3790,9 @@ public partial class Venda : UserControl
                     var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                     var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
                     var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just, tefDisponivel, fica);
+                    var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, just);
                     var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
-                    MostrarResultado(dono, linhasFech, just, divergencias, resumoTeste, papel, tefDisponivel);
+                    MostrarResultado(dono, linhasFech, just, divergencias, resumoTeste, folha, papel, tefDisponivel);
                     FechouCaixa?.Invoke();
                 }
                 catch (Exception e2)
@@ -3875,7 +3877,7 @@ public partial class Venda : UserControl
     }
 
     private static void MostrarResultado(Window dono, List<LinhaFechamento> linhas, string? justificativa,
-        List<DivergenciaTef> divergencias, string? resumoTeste = null, string? retirada = null,
+        List<DivergenciaTef> divergencias, string? resumoTeste = null, string? folha = null, string? retirada = null,
         bool tefDisponivel = true)
     {
         // As linhas saem do Núcleo (ResumoFechamento), a MESMA montagem do caixa esquecido.
@@ -3906,6 +3908,10 @@ public partial class Venda : UserControl
         // desconfiança do fechamento inteiro.
         if (resumoTeste is not null) corpo += "\n\n" + resumoTeste;
 
+        // O papel do fechamento (18/09/2026): o comprovante que o operador assina e
+        // entrega ao gerente. Se ele não saiu, o resumo diz o que anotar à mão.
+        if (folha is not null) corpo += "\n\n" + folha;
+
         // A retirada para o cofre entra no resumo do fechamento: é o que o operador leva
         // ao cofre e o que a abertura de amanhã vai esperar na gaveta.
         if (retirada is not null) corpo += "\n\n" + retirada;
@@ -3920,6 +3926,56 @@ public partial class Venda : UserControl
 
         Dialogo.Relatorio(dono, "Caixa fechado", corpo,
             justificativa is null ? null : $"Justificativa: {justificativa}");
+    }
+
+    /// <summary>
+    /// O PAPEL DO FECHAMENTO (18/09/2026, pedido do dono: "na abertura e fechamento de
+    /// caixa, imprimir o relatório automático, com campo para assinatura e os valores e
+    /// data").
+    ///
+    /// Sai depois que <see cref="Caixa.Fechar"/> VOLTOU, porque só aí o turno está gravado:
+    /// fechar recusa quando falta justificativa e quando o turno já estava fechado, e papel
+    /// de um fechamento que não aconteceu é pior que papel nenhum. E sai ANTES do relatório
+    /// na tela, que é modal e segura tudo até o operador fechar a janela.
+    ///
+    /// Devolve a frase para o resumo: saiu, ou não saiu e o que anotar à mão. Impressora
+    /// com problema nunca trava o fechamento.
+    /// </summary>
+    private async Task<string?> ImprimirFechamentoAsync(Window dono, Microsoft.Data.Sqlite.SqliteConnection cx,
+        List<LinhaFechamento> linhasFech, Dictionary<string, Dinheiro> contagem, Dinheiro? fica,
+        bool tef, string? justificativa)
+    {
+        var politica = Impressoes.Politica(cx, Impressoes.Fechamento);
+        if (!PapelDeCaixa.SaiSozinho(politica, _sessao.Teste))
+        {
+            if (!PapelDeCaixa.PrecisaPerguntar(politica, _sessao.Teste)) return null;
+            if (!Dialogo.Confirmar(dono, "Fechamento de caixa", "Imprimir o papel do fechamento?",
+                    "Imprimir", "Agora não")) return null;
+        }
+        try
+        {
+            // O que foi para o cofre vem da MESMA conta do papel da retirada. Uma segunda
+            // conta do mesmo número é uma segunda chance de os dois papéis discordarem.
+            Dinheiro? retirada = null;
+            if (fica is { } ficou && contagem.TryGetValue("dinheiro", out var contado)
+                && RetiradaCofre.Calcular(contado, ficou) is { Erro: null } r) retirada = r.Retirada;
+
+            var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
+            var destino = Impressao.DestinoCupom(Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"));
+            var linhas = PapelDeCaixa.Fechamento(loja, DateTime.Now, _sessao, _operador.Nome,
+                ResumoFechamento.Linhas(linhasFech, tef),
+                new Dinheiro(linhasFech.Sum(l => l.DiferencaConferida.Abs.Centavos)),
+                ResumoFechamento.SemConferencia(linhasFech, tef),
+                fica, retirada, justificativa, semContagem: false, autorizador: null, destino.Papel.Colunas);
+            var erro = await Impressao.ImprimirTextoAsync("Fechamento de caixa", new[] { linhas }, destino);
+            return erro is null
+                ? "O papel do fechamento saiu na impressora: assine e entregue ao gerente."
+                : "O papel do fechamento NÃO saiu (" + erro + "). Anote à mão: operador, valores e data.";
+        }
+        catch (Exception ex)
+        {
+            return "O papel do fechamento NÃO saiu (" + ex.Message + "). Anote à mão: operador, valores e data.";
+        }
     }
 
     /// <summary>

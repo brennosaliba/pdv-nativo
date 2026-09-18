@@ -151,6 +151,47 @@ if (args.Length >= 4 && args[0] == "--foto-kds")
 if (args.Length >= 4 && args[0] == "--foto-codigo")
     return FotoCodigo.Rodar(args);
 
+// Mostra na tela os papeis de abertura e de fechamento do caixa, do jeito que eles
+// saem na bobina, com a regua de colunas em cima. Serve para conferir o desenho sem
+// gastar papel e sem precisar de impressora.
+//   Pdv.Testes.exe --papel-caixa [32|48]
+if (args.Length >= 1 && args[0] == "--papel-caixa")
+{
+    var colunas = args.Length >= 2 && int.TryParse(args[1], out var n) ? n : 32;
+    var quandoP = new DateTime(2026, 9, 18, 7, 12, 0);
+    var sessaoP = new Sessao("s1", "2026-09-18", "op1", "DAVID MATEUS", quandoP, Dinheiro.DeReais(300));
+    var linhasP = new List<LinhaFechamento>
+    {
+        new("dinheiro", Dinheiro.DeReais(521), Dinheiro.DeReais(519)),
+        new("credito", Dinheiro.DeReais(120), Dinheiro.DeReais(120), Contada: false, PeloTef: Dinheiro.DeReais(120)),
+    };
+    void Mostrar(string titulo, IReadOnlyList<string> papel)
+    {
+        Console.WriteLine();
+        Console.WriteLine(titulo + "  (" + colunas + " colunas)");
+        Console.WriteLine(new string('=', colunas));
+        foreach (var linha in papel) Console.WriteLine(linha);
+        Console.WriteLine(new string('=', colunas));
+        var maior = papel.Count == 0 ? 0 : papel.Max(x => x.Length);
+        Console.WriteLine("linha mais larga: " + maior + " de " + colunas);
+    }
+    Mostrar("ABERTURA, contagem batendo",
+        PapelDeCaixa.Abertura("American Day Savassi", quandoP, sessaoP, Dinheiro.DeReais(300), colunas));
+    Mostrar("ABERTURA, faltando na gaveta",
+        PapelDeCaixa.Abertura("American Day Savassi", quandoP, sessaoP, Dinheiro.DeReais(320), colunas));
+    Mostrar("FECHAMENTO com retirada para o cofre",
+        PapelDeCaixa.Fechamento("American Day Savassi", new DateTime(2026, 9, 18, 23, 41, 0), sessaoP,
+            "DAVID MATEUS", ResumoFechamento.Linhas(linhasP),
+            new Dinheiro(linhasP.Sum(x => x.DiferencaConferida.Abs.Centavos)),
+            ResumoFechamento.SemConferencia(linhasP), Dinheiro.DeReais(150), Dinheiro.DeReais(371),
+            "faltou troco no comeco do dia e peguei do cofre sem anotar", false, null, colunas));
+    Mostrar("FECHAMENTO sem contagem (caixa esquecido)",
+        PapelDeCaixa.Fechamento("American Day Savassi", new DateTime(2026, 9, 18, 23, 41, 0), sessaoP,
+            "DAVID MATEUS", ResumoFechamento.Linhas(linhasP), Dinheiro.Zero,
+            ResumoFechamento.SemConferencia(linhasP), null, null, null, true, "EDUARDO GERENTE", colunas));
+    return 0;
+}
+
 // Gera o icone do exe (mmtech, conceito B) num .ico multi-resolucao.
 //   Pdv.Testes.exe --gerar-icone saida.ico
 if (args.Length >= 2 && args[0] == "--gerar-icone")
@@ -1356,6 +1397,7 @@ TestesBuscaKds.Rodar((cond, nome) => Check("busca-kds: " + nome, cond));
 TestesRetomada.Rodar((cond, nome) => Check("retomada: " + nome, cond));
 TestesAjudaIfood.Rodar((cond, nome) => Check("ajuda-ifood: " + nome, cond));
 TestesLinhaPromocao.Rodar((cond, nome) => Check("promo-linha: " + nome, cond));
+TestesPapelDeCaixa.Rodar((cond, nome) => Check("papel-caixa: " + nome, cond));
 TestesRetiradaCofre.Rodar((cond, nome) => Check("retirada-cofre: " + nome, cond));
 TestesSpotifyNoCaixa.Rodar((cond, nome) => Check("spotify-caixa: " + nome, cond));
 TestesSubitensIfood.Rodar((cond, nome) => Check("subitens-ifood: " + nome, cond));

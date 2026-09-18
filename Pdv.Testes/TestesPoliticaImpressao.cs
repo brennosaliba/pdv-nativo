@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Pdv.Nucleo;
 
 namespace Pdv.Testes;
@@ -33,6 +33,16 @@ public static class TestesPoliticaImpressao
     {
         foreach (var doc in Impressoes.Documentos)
         {
+            // ⭐ O DIA 1 DE UMA LOJA: nenhuma das duas chaves existe ainda, porque ninguém
+            // abriu a tela de Configuração. Toda a bateria passava valor VÁLIDO na chave
+            // nova e saía cedo, então um documento sem resposta no fallback ficava verde
+            // aqui e derrubava o caixa lá. Perguntar sem chave nenhuma é a única forma de
+            // provar que cada papel sabe o que fazer antes de alguém escolher.
+            var semNada = PoliticaImpressao.Nao;
+            var respondeu = true;
+            try { semNada = Impressoes.Politica(doc, null, null); } catch { respondeu = false; }
+            checar(respondeu, $"⭐ {doc}: sem nenhuma chave gravada, a política responde em vez de lançar");
+
             checar(Impressoes.Politica(doc, "auto", null) == PoliticaImpressao.Automatico,
                 $"{doc}: 'auto' na chave nova é imprimir sozinho");
             checar(Impressoes.Politica(doc, "perguntar", null) == PoliticaImpressao.Perguntar,
@@ -419,6 +429,7 @@ public static class TestesPoliticaImpressao
             ("Venda.xaml.cs", new[] { "Telas", "Venda.xaml.cs" }),
             ("Kds.xaml.cs", new[] { "Telas", "Kds.xaml.cs" }),
             ("Servicos.cs", new[] { "Servicos.cs" }),
+            ("AberturaCaixa.xaml.cs", new[] { "Telas", "AberturaCaixa.xaml.cs" }),
         })
         {
             var fonte = Fonte(caminho);

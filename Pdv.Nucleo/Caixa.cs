@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Dapper;
 using Microsoft.Data.Sqlite;
 
@@ -764,7 +764,11 @@ public static class Caixa
     /// linhas e a auditoria guarda quem pulou e quem autorizou. Relatório que tratar
     /// este fechamento como caixa conferido está lendo errado de propósito.
     /// </summary>
-    public static void FecharSemConferencia(SqliteConnection cx, Sessao sessao,
+    /// Devolve as linhas (declarado = apurado, Contada e Conferida em falso, ou seja
+    /// situação "sem_conferencia") para o papel do fechamento poder sair também aqui.
+    /// Era o único fechamento que não devolvia nada, e é justamente o que mais precisa
+    /// de assinatura: turno de outro dia, fechado por quem não estava lá.
+    public static List<LinhaFechamento> FecharSemConferencia(SqliteConnection cx, Sessao sessao,
         Operador quemPula, Operador supervisor)
     {
         ExigirAberto(cx, sessao);
@@ -798,6 +802,8 @@ public static class Caixa
             justificativa = marca,
         });
         tx.Commit();
+        return apurado.Select(kv => new LinhaFechamento(kv.Key, kv.Value, kv.Value,
+            Contada: false, Conferida: false)).ToList();
     }
 
     /// <summary>

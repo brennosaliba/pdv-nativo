@@ -137,6 +137,8 @@ public partial class Configuracao : UserControl
         EncherPolitica(CboPolComanda, Impressoes.Politica(cx, Impressoes.Comanda));
         EncherPolitica(CboPolViaCliente, Impressoes.Politica(cx, Impressoes.ViaCliente));
         EncherPolitica(CboPolViaLoja, Impressoes.Politica(cx, Impressoes.ViaEstabelecimento));
+        EncherPolitica(CboPolAbertura, Impressoes.Politica(cx, Impressoes.Abertura));
+        EncherPolitica(CboPolFechamento, Impressoes.Politica(cx, Impressoes.Fechamento));
         // Caixinha DESMARCADA é o estado de quem nunca abriu a opção — e desmarcada
         // significa "a comanda sai onde o cupom sai". Quem já tinha escolhido uma
         // impressora de comanda antes de a caixinha existir reabre com ela MARCADA:
@@ -405,6 +407,8 @@ public partial class Configuracao : UserControl
         PoliticaComandaEscolhida = PoliticaDe(CboPolComanda),
         PoliticaViaCliente = PoliticaDe(CboPolViaCliente),
         PoliticaViaEstabelecimento = PoliticaDe(CboPolViaLoja),
+        PoliticaAbertura = PoliticaDe(CboPolAbertura),
+        PoliticaFechamento = PoliticaDe(CboPolFechamento),
         ComandaSeparada = ChkComandaSeparada.IsChecked == true,
         ComandaPapelMm = PapelComandaEscolhido(),
         Tef = TefModo,
@@ -1496,6 +1500,8 @@ public partial class Configuracao : UserControl
             // depender de o operador ter passado pelo passo da maquininha.
             Impressoes.Gravar(cx, Impressoes.ViaCliente, PoliticaDe(CboPolViaCliente));
             Impressoes.Gravar(cx, Impressoes.ViaEstabelecimento, PoliticaDe(CboPolViaLoja));
+            Impressoes.Gravar(cx, Impressoes.Abertura, PoliticaDe(CboPolAbertura));
+            Impressoes.Gravar(cx, Impressoes.Fechamento, PoliticaDe(CboPolFechamento));
             // A caixinha é gravada SEMPRE, inclusive desmarcada: gravar "0" é o que
             // distingue "o dono desligou a impressora separada" de "ninguém nunca abriu
             // isto" — e é a segunda que herda a impressora de comanda antiga (ver
@@ -2226,6 +2232,12 @@ public sealed record DadosAssistente
     /// <summary>Via do ESTABELECIMENTO do comprovante do cartão.</summary>
     public PoliticaImpressao PoliticaViaEstabelecimento { get; init; } = PoliticaImpressao.Automatico;
 
+    /// <summary>O papel da ABERTURA do turno. Nasce saindo sozinho: foi o pedido do dono.</summary>
+    public PoliticaImpressao PoliticaAbertura { get; init; } = PoliticaImpressao.Automatico;
+
+    /// <summary>O papel do FECHAMENTO do turno, o que vai assinado para o gerente.</summary>
+    public PoliticaImpressao PoliticaFechamento { get; init; } = PoliticaImpressao.Automatico;
+
     /// <summary>
     /// A comanda do delivery sai numa impressora PRÓPRIA. Falso = sai na mesma do cupom,
     /// que é o que a loja já faz hoje e o que quem nunca abrir a opção continua tendo.
@@ -2652,8 +2664,24 @@ public static class AssistenteConfig
             linhas.Insert(linhas.Count - 1, new LinhaResumo("Comprovante do cartão", ResumoVias(d),
                 d.PoliticaViaCliente != PoliticaImpressao.Automatico
                 || d.PoliticaViaEstabelecimento != PoliticaImpressao.Automatico));
+        // Escolha que some depois de gravada é escolha que ninguém confere. Os dois
+        // papéis do turno entram na revisão sempre, porque quem instala precisa ver que
+        // eles existem antes de a loja abrir.
+        linhas.Insert(linhas.Count - 1, new LinhaResumo("Papel do caixa",
+            $"Abertura: {ComoSai(d.PoliticaAbertura)} · fechamento: {ComoSai(d.PoliticaFechamento)}. "
+            + "Na impressora do cupom, com espaço para assinar.",
+            d.PoliticaAbertura != PoliticaImpressao.Automatico
+            || d.PoliticaFechamento != PoliticaImpressao.Automatico));
         return linhas;
     }
+
+    /// <summary>O desfecho de um papel do turno, em três palavras.</summary>
+    private static string ComoSai(PoliticaImpressao p) => p switch
+    {
+        PoliticaImpressao.Automatico => "sai sozinho",
+        PoliticaImpressao.Perguntar => "o caixa pergunta",
+        _ => "NÃO SAI",
+    };
 
     /// <summary>
     /// As duas vias do cartão em uma linha, cada uma com o seu desfecho. Separadas porque
