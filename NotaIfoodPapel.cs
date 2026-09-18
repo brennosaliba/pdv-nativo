@@ -126,14 +126,24 @@ public static class NotaIfoodPapel
                 var vUnit = Numero(it, "vUnit");
                 var vProd = Numero(it, "vProd");
                 if (vProd <= 0) vProd = Math.Round(vUnit * qtd, 2, MidpointRounding.AwayFromZero);
+                // ItemCupom.Total e LIQUIDO, ja sem o desconto: e assim que a venda do
+                // balcao monta (Pagamento.xaml.cs) e e o que Impressao confere contra o
+                // total da venda. Aqui vinha o vProd CHEIO, e o cupom do iFood, que tem
+                // cupom da loja por item, era recusado na hora de imprimir com "os itens
+                // somam R$ 21,90 e o total e R$ 16,90". Medido em 17/09/2026: 10 notas
+                // autorizadas na Receita e nenhuma impressa, todas com a diferenca igual
+                // ao desconto. O desconto continua indo separado, para sair na linha.
+                var vDesc = Numero(it, "vDesc");
+                if (vDesc < 0) vDesc = 0m;
+                if (vDesc > vProd) vDesc = vProd;
                 itens.Add(new ItemCupom(
                     Codigo: Texto(it, "codigo") ?? "",
                     Descricao: desc,
                     Qtd: Quantidade.DeDecimal(qtd),
                     Unidade: (Texto(it, "unidade") ?? "UN").Trim(),
                     Unitario: Dinheiro.DeReais(vUnit),
-                    Total: Dinheiro.DeReais(vProd),
-                    Desconto: Dinheiro.DeReais(Numero(it, "vDesc"))));
+                    Total: Dinheiro.DeReais(vProd - vDesc),
+                    Desconto: Dinheiro.DeReais(vDesc)));
             }
         }
 

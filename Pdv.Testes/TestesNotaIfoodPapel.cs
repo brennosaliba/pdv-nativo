@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using Pdv.Nucleo;
 
 namespace Pdv.Testes;
@@ -26,6 +28,25 @@ public static class TestesNotaIfoodPapel
       "itens":[{"codigo":"12","descricao":"DONUT HOMER","qtd":2,"vUnit":15.50,"vProd":31.00,"unidade":"UN"},
                {"codigo":"","descricao":"Seringa de Nutella","qtd":1,"vUnit":4.00}],
       "pagamentos":[{"tPag":"17","valor":30.00}]}]
+    """;
+
+    /// <summary>
+    /// O caso REAL que o caixa recusou em 17/09/2026. As dez primeiras notas do
+    /// iFood foram autorizadas na Receita e NENHUMA saiu no papel: o caixa dizia
+    /// "os itens do cupom somam R$ 21,90 e o total é R$ 16,90. Não imprimi um
+    /// cupom que não fecha". A diferença era exatamente o cupom da loja, que no
+    /// pedido do iFood vem por item (vDesc). ItemCupom.Total é LÍQUIDO, como a
+    /// venda do balcão monta; aqui ia o vProd cheio.
+    /// </summary>
+    private const string ComCupomDaLoja = """
+    [{"order_id":"desc-1","numero":91,"serie":2,
+      "chave":"31260912345678000199650020000000911000000911",
+      "protocolo":"131260000999999","autorizada_em":"2026-09-17T22:43:00+00:00","tp_amb":1,
+      "v_nf":16.90,"documento":null,
+      "emitente":{"nome":"MM FOOD SERVICE LTDA","cnpj":"62177839000238","ie":"0012345670012",
+                  "endereco":"Rua Antonio de Albuquerque, 100, Savassi, Belo Horizonte, MG"},
+      "itens":[{"codigo":"1","descricao":"DONUT HOMER","qtd":1,"vUnit":21.90,"vProd":21.90,"vDesc":5.00,"unidade":"UN"}],
+      "pagamentos":[{"tPag":"17","valor":16.90}]}]
     """;
 
     public static void Rodar(Action<bool, string> checar)
@@ -111,6 +132,28 @@ public static class TestesNotaIfoodPapel
         checar(nuvem.Contains("SessaoOkAsync") &&
                nuvem.IndexOf("SessaoOkAsync", nuvem.IndexOf("PapeisDoIfoodAsync", StringComparison.Ordinal), StringComparison.Ordinal) > 0,
                "sem sessão o caixa nem pergunta: a nota do iFood não é dado de chave pública");
+
+        // ── o cupom da loja: 17/09/2026 ─────────────────────────────────────
+        var comDesc = NotaIfoodPapel.Ler(ComCupomDaLoja);
+        var d = comDesc.Count == 1 ? comDesc[0].Cupom : null;
+        checar(d is not null && d.Itens.Count == 1 && d.Itens[0].Total.Centavos == 1690
+               && d.Itens[0].Desconto.Centavos == 500 && d.Itens[0].Unitario.Centavos == 2190,
+               "item com cupom da loja: o total do item ja vem sem o desconto, e o desconto sai separado");
+
+        checar(d is not null && d.Itens.Sum(i => i.Total.Centavos) == d.Total.Centavos,
+               "a soma dos itens fecha com o total da nota (era o que travava a impressao das 10 primeiras)");
+
+        checar(d is not null && d.Total.Centavos == 1690 && d.Pagamentos.Sum(p => p.Valor.Centavos) == 1690,
+               "o total e o pagamento continuam sendo o valor liquido da nota");
+
+        // desconto maior que o item, ou negativo, nao pode virar total negativo
+        var doido = NotaIfoodPapel.Ler(ComCupomDaLoja.Replace("\"vDesc\":5.00", "\"vDesc\":99.00"));
+        checar(doido.Count == 1 && doido[0].Cupom.Itens[0].Total.Centavos == 0,
+               "desconto maior que o item zera o item em vez de virar valor negativo");
+        var negativo = NotaIfoodPapel.Ler(ComCupomDaLoja.Replace("\"vDesc\":5.00", "\"vDesc\":-3.00"));
+        checar(negativo.Count == 1 && negativo[0].Cupom.Itens[0].Total.Centavos == 2190
+               && negativo[0].Cupom.Itens[0].Desconto.Centavos == 0,
+               "desconto negativo e ignorado, nao aumenta o item");
     }
 
     private static int ContaVezes(string texto, string trecho)
@@ -131,5 +174,6 @@ public static class TestesNotaIfoodPapel
                 return File.Exists(c) ? File.ReadAllText(c) : null;
             }
         return null;
+
     }
 }
