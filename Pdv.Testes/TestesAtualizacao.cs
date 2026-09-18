@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -53,6 +53,7 @@ public static class TestesAtualizacao
         {
             try { if (Directory.Exists(raiz)) Directory.Delete(raiz, recursive: true); } catch { }
         }
+        VersaoHonesta(checar);
     }
 
 
@@ -996,6 +997,52 @@ public static class TestesAtualizacao
         var outraVersao = m with { Versao = "9.9.8" };
         checar(Atualizacao.JaBaixado(outraVersao, pasta) is null,
             "já baixado: o pronto de OUTRA versão não serve para esta");
+    }
+
+    /// <summary>
+    /// A VERSÃO QUE O CAIXA DIZ QUE É (18/09/2026).
+    ///
+    /// Em 18/09 a loja leu "Versão 1.0.0" no rodapé de um caixa que estava na 1.0.13, e o
+    /// dono concluiu, com razão, que a versão tinha voltado atrás. Não tinha: o rodapé
+    /// lia o assembly com "1.0.0" de reserva, enquanto o painel lia o arquivo do exe.
+    /// Duas leituras do mesmo número sempre divergem, e a de reserva mentia com cara de
+    /// informação.
+    ///
+    /// Estas travas existem para isso não voltar, e são pré-requisito de qualquer trava
+    /// por versão: defesa que nasce de uma leitura que falhou para a loja por engano.
+    /// </summary>
+    private static void VersaoHonesta(Action<bool, string> checar)
+    {
+        checar(Atualizacao.Comparar(null, "1.0.14") < 0, "versão ilegível perde da versão legível");
+        checar(Atualizacao.Comparar("1.0.14.0", "1.0.14") == 0,
+            "⭐ 1.0.14.0 do terminal é a MESMA coisa que 1.0.14 da release (nunca comparar como texto)");
+        checar(Atualizacao.Comparar("1.0.9", "1.0.14") < 0, "1.0.9 é mais velha que 1.0.14, e não mais nova");
+        checar(Atualizacao.Comparar(null, null) == 0, "ilegível dos dois lados empata, e ninguém é reprovado");
+
+        var nucleo = Fonte(Path.Combine("Pdv.Nucleo", "Atualizacao.cs")) ?? "";
+        var venda = Fonte(Path.Combine("Telas", "Venda.xaml.cs")) ?? "";
+        checar(nucleo.Contains("public static string? VersaoInstalada()"),
+            "⭐ a leitura da versão pode devolver nada, em vez de inventar um número");
+        checar(!nucleo.Contains("return \"0.0.0\";") && !nucleo.Contains("?? \"0.0.0\""),
+            "⭐ nenhum caminho de falha fabrica 0.0.0");
+        checar(venda.Contains("Nucleo.Atualizacao.VersaoInstalada() ?? \"não lida\""),
+            "⭐ o rodapé lê a mesma versão que sobe para o painel, e diz quando não leu");
+        checar(!venda.Contains("typeof(Venda).Assembly.GetName().Version"),
+            "o rodapé não tem mais a segunda leitura, a que divergia");
+        checar(venda.Split("Atualizacao.VersaoInstalada()").Length >= 3,
+            "e o resto da tela usa a mesma leitura");
+    }
+
+    private static string? Fonte(string relativo)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "Pdv.csproj")))
+            {
+                var c = Path.Combine(dir.FullName, relativo);
+                return File.Exists(c) ? File.ReadAllText(c) : null;
+            }
+        return null;
     }
 
     // ═══ APOIO ═══════════════════════════════════════════════════════════════

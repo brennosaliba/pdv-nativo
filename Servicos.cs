@@ -254,6 +254,9 @@ public static class Servicos
                 var seg = Configuracao.LerSegredos();
                 var chave = seg.GetValueOrDefault("cpayChave", "");
                 if (string.IsNullOrWhiteSpace(chave)) return null;   // sem chave não existe provedor (a tela avisa)
+                // NÃO trocar por Atualizacao.VersaoInstalada(): esta é a versão da AUTOMAÇÃO
+                // declarada à rede da PayGo, homologada como MMFood 1.0.0 (certificado SETIS,
+                // 25/08/2026). Ela acompanha o certificado, não o exe.
                 var versao = typeof(Servicos).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
                 _tef = new ClienteControlPay(new OpcoesControlPay(
                         BaseUrl: OpcoesControlPay.UrlDoAmbiente(Vendas.Config(cx, "tef_cpay_ambiente")),
@@ -305,6 +308,9 @@ public static class Servicos
                 // existe aqui: a bateria roda o mesmo provedor contra uma DLL de mentira.
                 // Reaproveita tef_paygo_empresa/rede/rede_pix (a loja tem uma rede só) e lê
                 // tef_pgweb_dir / tef_pgweb_porta_pinpad / tef_pgweb_capacidades.
+                // NÃO trocar por Atualizacao.VersaoInstalada(): esta é a versão da AUTOMAÇÃO
+                // declarada à rede da PayGo, homologada como MMFood 1.0.0 (certificado SETIS,
+                // 25/08/2026). Ela acompanha o certificado, não o exe.
                 var versao = typeof(Servicos).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
                 string? Cfg(string chave) => Vendas.Config(cx, chave);
                 PGWebLibNativa.UsarPasta(ConfigPGWebLib.PastaDll(Cfg));   // tef_pgweb_dll: de onde carregar a PGWebLib.dll
@@ -369,6 +375,9 @@ public static class Servicos
 
             if (selecao == ProvedorTef.PayGo)
             {
+                // NÃO trocar por Atualizacao.VersaoInstalada(): esta é a versão da AUTOMAÇÃO
+                // declarada à rede da PayGo, homologada como MMFood 1.0.0 (certificado SETIS,
+                // 25/08/2026). Ela acompanha o certificado, não o exe.
                 var versao = typeof(Servicos).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
                 var caps = int.TryParse(Vendas.Config(cx, "tef_paygo_capacidades"), out var c)
                     ? c : ClientePayGo.CapacidadesPadrao;

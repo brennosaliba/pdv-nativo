@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -111,18 +111,26 @@ public static class Atualizacao
         return 0;
     }
 
-    /// <summary>Versão deste executável, como o Windows a vê. É a mesma que o
-    /// instalador grava no Adicionar/Remover Programas.</summary>
-    public static string VersaoInstalada()
+    /// <summary>
+    /// Versão deste executável, como o Windows a vê. É a mesma que o instalador grava no
+    /// Adicionar/Remover Programas, e a mesma que sobe para o painel.
+    ///
+    /// NULL quando não deu para ler, e isso é de propósito (18/09/2026). Antes ela
+    /// devolvia "0.0.0" nos três caminhos de falha, e um número inventado é pior que
+    /// não saber: ele vira dado. O servidor faz `coalesce(_versao, t.versao)`, então
+    /// null preserva a última versão boa em vez de carimbar uma troca que não houve; e
+    /// qualquer trava futura por versão nunca pode nascer de uma leitura que falhou.
+    /// </summary>
+    public static string? VersaoInstalada()
     {
         try
         {
             var exe = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(exe)) return "0.0.0";
+            if (string.IsNullOrEmpty(exe)) return null;
             var fv = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe);
-            return fv.FileVersion ?? fv.ProductVersion ?? "0.0.0";
+            return fv.FileVersion ?? fv.ProductVersion;
         }
-        catch { return "0.0.0"; }
+        catch { return null; }
     }
 
     // ══ MANIFESTO ════════════════════════════════════════════════════════════

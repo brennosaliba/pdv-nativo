@@ -512,7 +512,13 @@ public partial class Venda : UserControl
             catch { /* logo ilegível não pode impedir a loja de vender */ }
         }
 
-        var versao = typeof(Venda).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+        // A MESMA leitura que sobe para o painel (18/09/2026). Antes aqui era a versão do
+        // assembly com "1.0.0" de reserva, e no dia 18/09 a loja leu "Versão 1.0.0" num
+        // caixa que estava na 1.0.13: o rodapé mentiu com cara de informação e o dono
+        // concluiu, com razão, que o caixa tinha voltado de versão. Duas leituras
+        // diferentes do mesmo número sempre divergem; agora é uma só, e quando ela falha
+        // o rodapé diz que falhou em vez de inventar.
+        var versao = Nucleo.Atualizacao.VersaoInstalada() ?? "não lida";
         var serie = t is null ? "?" : Convert.ToString(t.serie_nfce);
         // Homologação precisa gritar: nota de teste não vale nada, e já vi caixa
         // rodando o dia inteiro em teste sem ninguém perceber.
