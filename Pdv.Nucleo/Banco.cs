@@ -434,6 +434,32 @@ public static class Banco
           payload       TEXT NOT NULL
         );
 
+        -- ── BRINDE DA RASPADINHA (21/09/2026) ─────────────────────────────────
+        -- Cada tentativa de entregar um brinde, com a client_key gravada ANTES da chamada.
+        -- NÃO é venda e não é dinheiro: não entra em venda, comanda, turno nem NFC-e. Serve
+        -- para o "Tentar de novo" reusar a MESMA chave e os mesmos itens, e para a fila
+        -- descobrir o desfecho quando a resposta se perdeu (Brindes.ResolverNaFilaAsync).
+        -- situacao: enviando (a tela está chamando) · entregue (o servidor confirmou) ·
+        -- recusado (o servidor disse não) · incerto (saiu e a resposta se perdeu) ·
+        -- nao_enviado (nada saiu do caixa) · nao_entregue (a fila confirmou que não chegou).
+        CREATE TABLE IF NOT EXISTS brinde (
+          client_key    TEXT PRIMARY KEY,
+          codigo        TEXT NOT NULL,
+          premio        TEXT,
+          payload       TEXT NOT NULL,             -- corpo da RPC sem a chave (código, itens, operador, terminal)
+          resumo        TEXT,                      -- "1 COOKIE NEW YORK": tela e auditoria
+          operador_id   TEXT,
+          sessao_id     TEXT,
+          situacao      TEXT NOT NULL DEFAULT 'enviando'
+                          CHECK (situacao IN ('enviando','entregue','recusado','incerto','nao_enviado','nao_entregue')),
+          erro          TEXT,
+          brinde_id     TEXT,                      -- id do brinde na nuvem
+          criado_em     TEXT NOT NULL,
+          tentado_em    TEXT NOT NULL,
+          resolvido_em  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_brinde_codigo ON brinde(codigo);
+
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────
         -- Chave/valor em vez de coluna nova em `terminal`: Migrar() só faz CREATE TABLE
         -- IF NOT EXISTS, não tem ALTER nem versionamento. Coluna nova só chegaria em

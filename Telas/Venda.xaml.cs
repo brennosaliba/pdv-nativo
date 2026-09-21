@@ -922,7 +922,10 @@ public partial class Venda : UserControl
         _quantosPorCategoria.Clear();
         ListaCategorias.Items.Clear();
         CarregarCatalogo();
-        if (_catalogo.Any(p => p.Categoria == antiga))
+        // A aba Promoções não tem produto com essa categoria: sem o segundo teste, um Atualizar
+        // (sino do painel) no meio da conferência da raspadinha jogava o operador para outra aba.
+        if (_catalogo.Any(p => p.Categoria == antiga)
+            || (antiga == CategoriaPromo && _quantosPorCategoria.ContainsKey(CategoriaPromo)))
         {
             _categoriaAtual = antiga;
             RepintarCategorias();
@@ -1130,12 +1133,16 @@ public partial class Venda : UserControl
     private void GradeRedimensionou(object sender, SizeChangedEventArgs e)
     {
         _larguraGrade = e.NewSize.Width;
-        AjustarColunas();
+        // As colunas da aba Promoções são montadas na pintura (ColunasDaPromocao), não por
+        // binding: mudou a conta, pinta de novo.
+        if (AjustarColunas() && _categoriaAtual == CategoriaPromo) PintarProdutos();
     }
 
-    private void AjustarColunas()
+    /// <summary>Recalcula as colunas pela largura. Devolve true quando a conta da aba Promoções mudou.</summary>
+    private bool AjustarColunas()
     {
-        if (_larguraGrade <= 0) return;
+        if (_larguraGrade <= 0) return false;
+        var antesPromo = (_colunasPromo, _colunasProdutosSecao);
         // ~178px por cartão: abaixo disso nome de produto longo quebra em 3 linhas.
         // Cartão menor = mais linha por tela = menos rolagem, que é o que trava a fila.
         // Na lista o item é uma faixa larga, então 2 colunas só a partir de tela grande.
@@ -1144,19 +1151,19 @@ public partial class Venda : UserControl
             ? Math.Clamp((int)(util / 420), 1, 3)
             : Math.Clamp((int)(util / 165), 2, 8);
         // aba PROMOCAO: secoes lado a lado (1-3 pela largura, pedido do dono
-        // no teste SaaS com 13 promocoes); a grade interna reparte o que sobra
-        if (_categoriaAtual == CategoriaPromo)
-        {
-            Colunas = Math.Clamp((int)(util / 520), 1, 3);
-            _colunasProdutosSecao = Math.Clamp((int)((util / Colunas - 28) / 165), 1, 4);
-        }
-        else
-        {
-            Colunas = _colunasProdutos;
-        }
+        // no teste SaaS com 13 promocoes); a grade interna reparte o que sobra.
+        // 21/09/2026: as secoes vao em COLUNAS INDEPENDENTES (ColunasDaPromocao), cada uma
+        // com a altura dela. A grade do ItemsControl recebe um item so e fica com 1 coluna.
+        _colunasPromo = Math.Clamp((int)(util / 520), 1, 3);
+        _colunasProdutosSecao = Math.Clamp((int)((util / _colunasPromo - 28) / 165), 1, 4);
+        Colunas = _categoriaAtual == CategoriaPromo ? 1 : _colunasProdutos;
+        return antesPromo != (_colunasPromo, _colunasProdutosSecao);
     }
 
     private int _colunasProdutosSecao = 2;
+
+    /// <summary>Quantas colunas independentes a aba Promoções usa (1 a 3, pela largura).</summary>
+    private int _colunasPromo = 1;
 
     private int _colunasProdutos = 3;
 
@@ -1196,6 +1203,9 @@ public partial class Venda : UserControl
         _promos = Nucleo.Promocoes.Carregar(cx);
         _promoVitrine = Nucleo.Promocoes.ProdutosEmPromocao(_promos, DateTime.Now);
         _combos = Nucleo.Combos.Carregar(cx);
+        // 21/09/2026: a loja ligou a raspadinha no painel? Aí a aba Promoções existe mesmo sem
+        // promoção vigente, com o cartão do brinde no topo.
+        _raspadinhaNoCaixa = Nucleo.Brindes.LigadoNaLoja(cx);
         // Sem ORDER BY: quem ordena é o Núcleo, em pt-BR. O SQLite compara texto por BYTE,
         // e com isso ÁGUA MINERAL COM GÁS aparecia no FIM de Bebidas, depois de SUCO UVA
         // (defeito que o dono viu no balcão) — ver Pdv.Nucleo/Categorias.cs.
@@ -1221,14 +1231,16 @@ public partial class Venda : UserControl
         // aqui. Loja só com ela precisa da categoria: foi onde o dono procurou.
         var naPromo = emPromo + Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now).Count;
         var nomesCat = _catalogo.Select(p => p.Categoria).ToList();
-        if (naPromo > 0) nomesCat.Add(CategoriaPromo);
+        var temAbaPromo = naPromo > 0 || _raspadinhaNoCaixa;
+        if (temAbaPromo) nomesCat.Add(CategoriaPromo);
 
         var cats = Nucleo.Categorias.Ordenar(nomesCat, CategoriaPromo);
         foreach (var c in cats) _quantosPorCategoria[c] = _catalogo.Count(p => p.Categoria == c);
         // PROMOÇÃO não é categoria de produto — a contagem dela é quantos produtos do
         // catálogo alguma promoção vigente alcança (mais os cards de promoção com código),
         // não quantos têm essa categoria (zero).
-        if (naPromo > 0) _quantosPorCategoria[CategoriaPromo] = naPromo;
+        // O cartão da raspadinha conta como um item da aba (igual aos cards com código).
+        if (temAbaPromo) _quantosPorCategoria[CategoriaPromo] = naPromo + (_raspadinhaNoCaixa ? 1 : 0);
         _categoriaMini = _estreita;   // 03/09: mini só em tela estreita (2 por linha, 3 linhas de nome)
         _quantasCategorias = cats.Count;
         AjustarColunasCategorias();
@@ -1456,7 +1468,10 @@ public partial class Venda : UserControl
             // funcionário). O toque pede o código do gerente/dono pelo mesmo portão do
             // botão ao lado do total; nada é aplicado sem ele.
             var comSenha = Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now);
-            foreach (var c in comSenha) ListaProdutos.Items.Add(CardPromoComSenha(c));
+            // 21/09/2026: os blocos (cards com código e seções) vão para COLUNAS INDEPENDENTES,
+            // não mais um por célula do UniformGrid. Ver ColunasDaPromocao.
+            var blocos = new List<FrameworkElement>();
+            foreach (var c in comSenha) blocos.Add(CardPromoComSenha(c));
             var grupos = lista
                 .GroupBy(p => _promoVitrine[p.Id].Nome)
                 .OrderByDescending(g => g.Any(p => _promoVitrine[p.Id].AtivaAgora))
@@ -1466,16 +1481,52 @@ public partial class Venda : UserControl
             {
                 var ativos = g.Where(p => _promoVitrine[p.Id].AtivaAgora).ToList();
                 visiveis += ativos.Count;
-                ListaProdutos.Items.Add(SecaoPromo(g.Key, ativos));
+                blocos.Add(SecaoPromo(g.Key, ativos));
             }
-            TxtContagem.Text = visiveis == 1 ? "1 item" : $"{visiveis} itens";
+            if (blocos.Count > 0) ListaProdutos.Items.Add(ColunasDaPromocao(blocos));
+            // aba só com o cartão da raspadinha: "0 itens" no cabeçalho só confundiria
+            TxtContagem.Text = visiveis == 0 && _raspadinhaNoCaixa ? ""
+                : visiveis == 1 ? "1 item" : $"{visiveis} itens";
         }
         else
         {
             foreach (var p in lista)
                 ListaProdutos.Items.Add(_modoLista ? LinhaProduto(p) : CartaoProduto(p));
         }
-        TxtSemProduto.Visibility = ListaProdutos.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        PintarCartaoRaspadinha();
+        // "Nada nesta categoria" não pode cobrir a aba que só tem o cartão da raspadinha
+        TxtSemProduto.Visibility = ListaProdutos.Items.Count == 0 && CartaoRaspadinha.Visibility != Visibility.Visible
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// A aba Promoções em COLUNAS INDEPENDENTES (21/09/2026, pedido do dono). Cada bloco (card de
+    /// promoção com código, seção de promoção) é medido na largura da coluna e entra na coluna
+    /// mais baixa até ali (Pdv.Nucleo/ColunasPorAltura). Cada um fica com a altura dele: acabou o
+    /// vão de 180 px que o UniformGrid abria, e o card do desconto de funcionário, que não tem
+    /// produto, volta a ter o tamanho de um card.
+    /// </summary>
+    private Grid ColunasDaPromocao(IReadOnlyList<FrameworkElement> blocos)
+    {
+        var colunas = Math.Max(1, _colunasPromo);
+        var grade = new Grid { VerticalAlignment = VerticalAlignment.Top };
+        var pilhas = new StackPanel[colunas];
+        for (var i = 0; i < colunas; i++)
+        {
+            grade.ColumnDefinitions.Add(new ColumnDefinition());
+            pilhas[i] = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
+            Grid.SetColumn(pilhas[i], i);
+            grade.Children.Add(pilhas[i]);
+        }
+        var largura = Math.Max(160, (_larguraGrade - 20) / colunas);
+        var alturas = blocos.Select(b =>
+        {
+            b.Measure(new Size(largura, double.PositiveInfinity));
+            return b.DesiredSize.Height;
+        }).ToList();
+        var destino = Nucleo.ColunasPorAltura.Distribuir(alturas, colunas);
+        for (var i = 0; i < blocos.Count; i++) pilhas[destino[i]].Children.Add(blocos[i]);
+        return grade;
     }
 
     /// <summary>
@@ -2664,6 +2715,251 @@ public partial class Venda : UserControl
         RemoverCortesia(this, new RoutedEventArgs());
         Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");
     }
+
+    // ── BRINDE DA RASPADINHA (21/09/2026) ───────────────────────────────────
+    // O validador da raspadinha no topo da aba Promoções (Venda.xaml, CartaoRaspadinha). Pedido
+    // do dono: "cliente ganha um cookie clássico, promoção é validada, cliente escolhe qual quer,
+    // funcionário coloca no PDV e ele não emite NF pois é promoção, mas abate do estoque".
+    //
+    // NADA DESTE BLOCO TOCA A COMANDA, O RASCUNHO OU A NOTA. O brinde é registro próprio no
+    // servidor (Pdv.Nucleo/Brindes): não vira item da comanda, não passa pelo Finalizar, não abre
+    // o Pagamento e não sai na NFC-e. Pode ser entregue antes ou depois da venda do cliente, e a
+    // venda segue a dela. A suíte vigia este bloco pelo fonte (TestesBrindes).
+
+    /// <summary>
+    /// SO A SUITE preenche, por reflexao: um Brindes apontado para a nuvem de mentira. Nulo no
+    /// caixa, e ai vale Servicos.Nuvem(), a sessao do terminal.
+    /// </summary>
+    private Nucleo.Brindes? _brindesDeTeste = null;
+    private Nucleo.Brindes? _brindes;
+    private Nucleo.Brindes ServicoDeBrindes() => _brindesDeTeste ?? (_brindes ??= new Nucleo.Brindes(Servicos.Nuvem()));
+
+    /// <summary>A loja ligou a raspadinha no painel (pdv_loja_config.raspadinha_no_caixa).</summary>
+    private bool _raspadinhaNoCaixa;
+    /// <summary>O último código conferido que vale (o prêmio e as regras).</summary>
+    private Nucleo.ConferenciaBrinde? _brindeConferido;
+    /// <summary>A tentativa que ficou sem desfecho: o "Tentar de novo" reusa a MESMA client_key.</summary>
+    private string? _brindePendente;
+    private bool _brindeOcupado;
+
+    private enum AcaoBrinde { Nenhuma, Escolher, TentarDeNovo }
+    private AcaoBrinde _acaoBrinde;
+
+    /// <summary>O cartão só existe na aba Promoções da loja que ligou; no caixa de homologação, travado.</summary>
+    private void PintarCartaoRaspadinha()
+    {
+        var naAba = _raspadinhaNoCaixa && _categoriaAtual == CategoriaPromo;
+        CartaoRaspadinha.Visibility = naAba ? Visibility.Visible : Visibility.Collapsed;
+        if (!naAba || !_homologacao) return;
+        TxtCodigoRaspadinha.IsEnabled = false;
+        BtnConferirRaspadinha.IsEnabled = false;
+        MostrarLinhaBrinde(Nucleo.Brindes.TextoHomologacao, "erro", AcaoBrinde.Nenhuma);
+    }
+
+    private void CodigoRaspadinhaFocou(object sender, RoutedEventArgs e) => PedirTexto.AbrirTecladoVirtualSeTouch();
+
+    /// <summary>O código a que o botão da linha se refere ("Escolher o brinde" ou "Tentar de novo").</summary>
+    private string? _codigoDaAcao;
+
+    /// <summary>
+    /// 21/09 (revisão): o botão da linha vale para o código CONFERIDO. O operador digitou o código
+    /// do próximo cliente e não conferiu: o botão sai, senão "Escolher o brinde" queimaria o código
+    /// do cliente anterior para o cliente novo (a pergunta de entrega não mostra o código).
+    /// </summary>
+    private void CodigoRaspadinhaMudou(object sender, TextChangedEventArgs e)
+    {
+        if (_acaoBrinde == AcaoBrinde.Nenhuma) return;
+        if (_codigoDaAcao is not null && Nucleo.Brindes.NormalizarCodigo(TxtCodigoRaspadinha.Text) == _codigoDaAcao) return;
+        _brindeConferido = null;
+        _brindePendente = null;
+        _acaoBrinde = AcaoBrinde.Nenhuma;
+        BtnBrinde.Visibility = Visibility.Collapsed;
+        LinhaRaspadinha.Visibility = Visibility.Collapsed;
+    }
+
+    private void CodigoRaspadinhaTecla(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        _ = ConferirRaspadinhaAsync();
+    }
+
+    private void ConferirRaspadinha(object sender, RoutedEventArgs e) => _ = ConferirRaspadinhaAsync();
+
+    /// <summary>Confere o código digitado (não queima nada) e mostra o prêmio, ou a recusa, numa linha.</summary>
+    private async Task ConferirRaspadinhaAsync()
+    {
+        if (_brindeOcupado) return;
+        if (_homologacao) { MostrarLinhaBrinde(Nucleo.Brindes.TextoHomologacao, "erro", AcaoBrinde.Nenhuma); return; }
+        if (string.IsNullOrWhiteSpace(TxtCodigoRaspadinha.Text))
+        {
+            MostrarLinhaBrinde(Nucleo.Brindes.TextoSemCodigo, "erro", AcaoBrinde.Nenhuma);
+            TxtCodigoRaspadinha.Focus();
+            return;
+        }
+        _brindeConferido = null;
+        _brindePendente = null;
+        _codigoDaAcao = null;
+        _brindeOcupado = true;
+        BtnConferirRaspadinha.IsEnabled = false;
+        // 21/09 (revisão): o campo não muda no meio da chamada (o resultado vale para o que saiu)
+        TxtCodigoRaspadinha.IsReadOnly = true;
+        MostrarLinhaBrinde("Conferindo o código…", "fraco", AcaoBrinde.Nenhuma);
+        Nucleo.ConferenciaBrinde c;
+        try { c = await ServicoDeBrindes().ConferirAsync(TxtCodigoRaspadinha.Text); }
+        catch
+        {
+            c = new Nucleo.ConferenciaBrinde(false, Nucleo.ErroBrinde.Desconhecido, "exceção", null, null, null,
+                null, null, Array.Empty<Nucleo.RegraBrinde>());
+        }
+        finally
+        {
+            _brindeOcupado = false;
+            BtnConferirRaspadinha.IsEnabled = !_homologacao;
+            TxtCodigoRaspadinha.IsReadOnly = false;
+        }
+
+        if (c.Codigo is { } codigo)
+        {
+            _codigoDaAcao = codigo;
+            TxtCodigoRaspadinha.Text = codigo;   // o operador vê o código como o sistema leu
+            // Tentativa deste caixa que ficou sem resposta para este código: a saída é "Tentar de
+            // novo" com a MESMA chave e os mesmos itens. Se a primeira tinha chegado, o servidor
+            // devolve o mesmo brinde; se não, entrega agora. Chave nova aqui é que daria erro.
+            using var cx = Banco.Abrir();
+            if (Nucleo.Brindes.Pendente(cx, codigo) is { } pendente)
+            {
+                _brindePendente = pendente.ClientKey;
+                MostrarLinhaBrinde(Nucleo.Brindes.TextoPendente(pendente.Resumo), "erro", AcaoBrinde.TentarDeNovo);
+                return;
+            }
+        }
+        if (!c.Ok)
+        {
+            MostrarLinhaBrinde(Nucleo.Brindes.TextoDaConferencia(c), "erro", AcaoBrinde.Nenhuma);
+            return;
+        }
+        _brindeConferido = c;
+        MostrarLinhaBrinde(Nucleo.Brindes.LinhaDoPremio(c), "ok", AcaoBrinde.Escolher);
+    }
+
+    /// <summary>
+    /// O botão da linha: "Escolher o brinde" (diálogo de combo, depois a pergunta de uma linha) ou
+    /// "Tentar de novo" (a mesma chave). Prêmio sem escolha ("Duo de Brownie") vai direto à pergunta.
+    /// </summary>
+    private async void AcaoDoBrinde(object sender, RoutedEventArgs e)
+    {
+        if (_brindeOcupado) return;
+        if (_acaoBrinde == AcaoBrinde.TentarDeNovo && _brindePendente is { } chave)
+        {
+            await EnviarBrindeAsync(() => ServicoDeBrindes().TentarDeNovoAsync(chave));
+            return;
+        }
+        if (_acaoBrinde != AcaoBrinde.Escolher || _brindeConferido is not { Ok: true } c) return;
+        var dono = Window.GetWindow(this)!;
+        var escolhas = Nucleo.Brindes.EscolhasFixas(c)
+            ?? DialogoCombo.Abrir(dono, Nucleo.Brindes.ParaCombo(c), Array.Empty<Nucleo.Combos.ProdutoLocal>(),
+                textoConfirmar: "Escolher");
+        if (escolhas is null || escolhas.Count == 0) return;
+        if (!Dialogo.Confirmar(dono, "Brinde da raspadinha", Nucleo.Brindes.PerguntaDeEntrega(escolhas),
+                "Entregar", "Voltar")) return;
+        await EntregarBrindeAsync(escolhas);
+    }
+
+    /// <summary>
+    /// Entrega o brinde já escolhido e confirmado. Separado do toque para a suíte chamar sem os
+    /// diálogos. Não mexe em item de venda: o brinde não é venda.
+    /// </summary>
+    private Task EntregarBrindeAsync(List<Escolha> escolhas)
+    {
+        var c = _brindeConferido;
+        if (c is null) return Task.CompletedTask;
+        return EnviarBrindeAsync(() => ServicoDeBrindes().EntregarAsync(c, escolhas, _operador, _sessao.Id));
+    }
+
+    private async Task EnviarBrindeAsync(Func<Task<Nucleo.EntregaBrinde>> chamada)
+    {
+        _brindeOcupado = true;
+        BtnBrinde.IsEnabled = false;
+        BtnConferirRaspadinha.IsEnabled = false;
+        TxtCodigoRaspadinha.IsReadOnly = true;   // 21/09 (revisão): o "Tentar de novo" que volta é deste código
+        MostrarLinhaBrinde("Entregando o brinde…", "fraco", AcaoBrinde.Nenhuma);
+        Nucleo.EntregaBrinde r;
+        try { r = await chamada(); }
+        catch (Exception ex)
+        {
+            // Exceção local (banco) depois de gravar: a linha pode ter ficado 'enviando'. A fila
+            // cuida dela sem criar nada; a tela oferece o "Tentar de novo" pela mesma linha.
+            var chave = _brindePendente;
+            try
+            {
+                if (_brindeConferido?.Codigo is { } cod)
+                {
+                    using var cx = Banco.Abrir();
+                    chave = Nucleo.Brindes.Pendente(cx, cod)?.ClientKey ?? chave;
+                }
+            }
+            catch { /* sem banco: fica sem o "Tentar de novo", e a fila resolve */ }
+            r = new Nucleo.EntregaBrinde(Nucleo.DesfechoBrinde.Incerto, Nucleo.ErroBrinde.NaoConfirmou, ex.Message,
+                chave, null, false, 0);
+        }
+        finally
+        {
+            _brindeOcupado = false;
+            BtnBrinde.IsEnabled = true;
+            BtnConferirRaspadinha.IsEnabled = !_homologacao;
+            TxtCodigoRaspadinha.IsReadOnly = false;
+        }
+
+        var texto = Nucleo.Brindes.TextoDaEntrega(r);
+        switch (r.Desfecho)
+        {
+            case Nucleo.DesfechoBrinde.Entregue:
+                _brindeConferido = null;
+                _brindePendente = null;
+                TxtCodigoRaspadinha.Text = "";
+                MostrarLinhaBrinde(texto, "ok", AcaoBrinde.Nenhuma);
+                break;
+            case Nucleo.DesfechoBrinde.Incerto:
+            case Nucleo.DesfechoBrinde.NaoEnviado:
+                // Não entregue. "Tentar de novo" reusa a MESMA chave (a linha local já existe).
+                _brindePendente = r.ClientKey;
+                MostrarLinhaBrinde(texto, "erro", r.ClientKey is null ? AcaoBrinde.Nenhuma : AcaoBrinde.TentarDeNovo);
+                break;
+            case Nucleo.DesfechoBrinde.Recusado when r.Erro is Nucleo.ErroBrinde.ItensForaDaRegra or Nucleo.ErroBrinde.QuantidadeErrada:
+                MostrarLinhaBrinde(texto, "erro", _brindeConferido is null ? AcaoBrinde.Nenhuma : AcaoBrinde.Escolher);
+                break;
+            default:
+                _brindeConferido = null;
+                _brindePendente = null;
+                MostrarLinhaBrinde(texto, "erro", AcaoBrinde.Nenhuma);
+                break;
+        }
+    }
+
+    /// <summary>A linha do cartão: um texto de uma linha, a cor do tom e, quando há, o botão da ação.</summary>
+    private void MostrarLinhaBrinde(string texto, string tom, AcaoBrinde acao)
+    {
+        _acaoBrinde = acao;
+        LinhaRaspadinha.Visibility = Visibility.Visible;
+        TxtRaspadinha.Text = texto;
+        TxtRaspadinha.SetResourceReference(TextBlock.ForegroundProperty, tom switch
+        {
+            "ok" => "Ok",
+            "erro" => "Erro",
+            "fraco" => "TextoFraco",
+            _ => "Texto",
+        });
+        BtnBrinde.Content = acao switch
+        {
+            AcaoBrinde.Escolher => "Escolher o brinde",
+            AcaoBrinde.TentarDeNovo => "Tentar de novo",
+            _ => "",
+        };
+        BtnBrinde.Visibility = acao == AcaoBrinde.Nenhuma ? Visibility.Collapsed : Visibility.Visible;
+        AutomationProperties.SetName(BtnBrinde, BtnBrinde.Content as string ?? "");
+    }
+    // ── fim do BRINDE DA RASPADINHA ─────────────────────────────────────────
 
     // ── CICLO DO DINHEIRO ───────────────────────────────────────────────────
     private void Sangria(object sender, RoutedEventArgs e) => Movimento("sangria");

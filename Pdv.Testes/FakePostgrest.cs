@@ -75,6 +75,32 @@ public sealed class FakePostgrest : IDisposable
     /// </summary>
     public volatile string? MasterDoPainel;
 
+    // ── BRINDE DA RASPADINHA (21/09/2026) ───────────────────────────────────
+    /// <summary>O corpo que brinde_raspadinha_conferir devolve para um código que vale (com as regras).</summary>
+    public ConcurrentDictionary<string, string> ConferirPorCodigo { get; } = new();
+    /// <summary>Código queimado → client_key do brinde que o queimou (o "banco" da raspadinha).</summary>
+    public ConcurrentDictionary<string, string> RaspadinhasUsadas { get; } = new();
+    /// <summary>client_key → brinde_id: a idempotência da RPC real (unique em brindes.client_key).</summary>
+    public ConcurrentDictionary<string, string> BrindesPorChave { get; } = new();
+    /// <summary>client_key → corpo recebido (itens, operador, terminal), para a suíte conferir o que subiu.</summary>
+    public ConcurrentDictionary<string, string> CorpoEntregarPorChave { get; } = new();
+    /// <summary>RPC → o último Authorization recebido (prova de que foi a sessão do terminal, não a chave pública).</summary>
+    public ConcurrentDictionary<string, string> BearerPorRpc { get; } = new();
+    /// <summary>Encena o servidor SEM o SQL 37: as duas RPCs respondem 404 PGRST202.</summary>
+    public volatile bool BrindeAusente;
+    /// <summary>
+    /// Encena a loja com raspadinha_no_caixa DESLIGADA, na ordem do SQL 37 (21/09, revisão):
+    /// conferir recusa 'loja_sem_raspadinha' antes de olhar o código; entregar devolve o brinde
+    /// da mesma chave (idempotência vem antes) e só depois recusa pela loja.
+    /// </summary>
+    public volatile bool LojaDesligada;
+    /// <summary>Quantas próximas entregas PROCESSAM (gravam e queimam) e respondem 502: a resposta que se perde.</summary>
+    public volatile int EntregarProcessaEPerde;
+    /// <summary>Quantas próximas entregas respondem 503 SEM processar: a chamada que não chegou a rodar.</summary>
+    public volatile int EntregarCaiAntes;
+    /// <summary>Chamado com a client_key quando a entrega chega, antes de processar (a suíte olha o SQLite nessa hora).</summary>
+    public Action<string>? AoReceberEntregar;
+
     // ── injeção de falhas ───────────────────────────────────────────────────
     /// <summary>% de respostas 503 nas rotas de DADOS (auth nunca falha).</summary>
     public volatile int PctErro503;
@@ -201,6 +227,10 @@ public sealed class FakePostgrest : IDisposable
                     else
                         Responder(ctx, 200, MasterDoPainel);
                     return;
+                case "/rest/v1/rpc/brinde_raspadinha_conferir":
+                case "/rest/v1/rpc/brinde_raspadinha_entregar":
+                    AtenderBrinde(ctx, caminho, corpo);
+                    return;
                 case "/rest/v1/rpc/pdv_vincular_nfce":
                     Interlocked.Increment(ref Vinculos);
                     Responder(ctx, 200, """{"ok":true}""");
@@ -277,7 +307,79 @@ public sealed class FakePostgrest : IDisposable
         }
     }
 
-    /// <summary>client_key do corpo: aceita "p_client_key" (RPCs) e "client_key" (tabelas).</summary>
+    /// <summary>
+    /// As duas RPCs do brinde, com a regra da real: conferir não queima; entregar é idempotente pela
+    /// client_key ANTES de olhar o código (a mesma chave devolve o mesmo brinde), recusa código
+    /// queimado e confere os itens contra as regras do código (produto real, soma por regra).
+    /// </summary>
+    private void AtenderBrinde(HttpListenerContext ctx, string caminho, string corpo)
+    {
+        var rpc = caminho[(caminho.LastIndexOf('/') + 1)..];
+        ChamadasPorRpc.AddOrUpdate(rpc, 1, (_, n) => n + 1);
+        BearerPorRpc[rpc] = ctx.Request.Headers["Authorization"] ?? "";
+        if (BrindeAusente)
+        {
+            Responder(ctx, 404, $$"""{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.{{rpc}} in the schema cache"}""");
+            return;
+        }
+        using var d = JsonDocument.Parse(string.IsNullOrWhiteSpace(corpo) ? "{}" : corpo);
+        var r = d.RootElement;
+        string? S(string k) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        var code = S("_code") ?? "";
+
+        if (rpc == "brinde_raspadinha_conferir")
+        {
+            if (LojaDesligada)
+                Responder(ctx, 200, """{"ok":false,"erro":"loja_sem_raspadinha"}""");
+            else if (RaspadinhasUsadas.ContainsKey(code))
+                Responder(ctx, 200, """{"ok":false,"erro":"already_redeemed","codigo":"__C__","quando":"2026-09-21T16:40:00-03:00","por":"Maria Souza"}""".Replace("__C__", code));
+            else if (ConferirPorCodigo.TryGetValue(code, out var ok))
+                Responder(ctx, 200, ok);
+            else
+                Responder(ctx, 200, """{"ok":false,"erro":"not_found"}""");
+            return;
+        }
+
+        var chave = S("_client_key") ?? "";
+        AoReceberEntregar?.Invoke(chave);
+        if (EntregarCaiAntes > 0) { EntregarCaiAntes--; Responder(ctx, 503, """{"message":"caiu antes"}"""); return; }
+        if (BrindesPorChave.TryGetValue(chave, out var ja))
+        {
+            Responder(ctx, 200, $$"""{"ok":true,"brinde_id":"{{ja}}","idempotente":true,"falhas":0}""");
+            return;
+        }
+        if (LojaDesligada) { Responder(ctx, 200, """{"ok":false,"erro":"loja_sem_raspadinha"}"""); return; }
+        if (RaspadinhasUsadas.ContainsKey(code)) { Responder(ctx, 200, """{"ok":false,"erro":"already_redeemed"}"""); return; }
+        if (!ConferirPorCodigo.TryGetValue(code, out var conferido)) { Responder(ctx, 200, """{"ok":false,"erro":"not_found"}"""); return; }
+
+        // itens contra as regras do código: produto listado e soma exata por regra
+        var regras = new Dictionary<string, (int Qtd, HashSet<string> Ids)>();
+        using (var dc = JsonDocument.Parse(conferido))
+            foreach (var g in dc.RootElement.GetProperty("regras").EnumerateArray())
+                regras[g.GetProperty("id").GetString()!] = (g.GetProperty("quantidade").GetInt32(),
+                    g.GetProperty("opcoes").EnumerateArray().Select(o => o.GetProperty("pdv_product_id").GetString()!).ToHashSet());
+        var somas = regras.Keys.ToDictionary(k => k, _ => 0);
+        if (!r.TryGetProperty("_itens", out var itens) || itens.ValueKind != JsonValueKind.Array || itens.GetArrayLength() == 0)
+        { Responder(ctx, 200, """{"ok":false,"erro":"quantidade_errada"}"""); return; }
+        foreach (var it in itens.EnumerateArray())
+        {
+            var regra = it.TryGetProperty("regra_id", out var rv) && rv.ValueKind == JsonValueKind.String ? rv.GetString()! : "";
+            var pid = it.TryGetProperty("pdv_product_id", out var pv) && pv.ValueKind == JsonValueKind.String ? pv.GetString()! : "";
+            if (!regras.TryGetValue(regra, out var g) || !g.Ids.Contains(pid))
+            { Responder(ctx, 200, """{"ok":false,"erro":"itens_fora_da_regra"}"""); return; }
+            somas[regra] += it.GetProperty("qtd").GetInt32();
+        }
+        if (somas.Any(kv => kv.Value != regras[kv.Key].Qtd)) { Responder(ctx, 200, """{"ok":false,"erro":"quantidade_errada"}"""); return; }
+
+        var id = Guid.NewGuid().ToString();
+        BrindesPorChave[chave] = id;
+        RaspadinhasUsadas[code] = chave;
+        CorpoEntregarPorChave[chave] = corpo;
+        if (EntregarProcessaEPerde > 0) { EntregarProcessaEPerde--; Responder(ctx, 502, """{"message":"bad gateway"}"""); return; }
+        Responder(ctx, 200, $$"""{"ok":true,"brinde_id":"{{id}}","idempotente":false,"falhas":0}""");
+    }
+
+    /// <summary>client_key do corpo: aceita "p_client_key" (RPCs), "client_key" (tabelas) e "_client_key" (brinde).</summary>
     private static string? ExtrairChave(string corpo)
     {
         if (string.IsNullOrWhiteSpace(corpo)) return null;
@@ -286,7 +388,7 @@ public sealed class FakePostgrest : IDisposable
             using var doc = JsonDocument.Parse(corpo);
             var r = doc.RootElement;
             if (r.ValueKind != JsonValueKind.Object) return null;
-            foreach (var nome in new[] { "p_client_key", "client_key" })
+            foreach (var nome in new[] { "p_client_key", "client_key", "_client_key" })
                 if (r.TryGetProperty(nome, out var v) && v.ValueKind == JsonValueKind.String)
                     return v.GetString();
             return null;

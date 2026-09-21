@@ -328,7 +328,7 @@ public static class TestesPromoComSenhaNaVitrine
             typeof(Pdv.Telas.Venda).GetField("_categoriaAtual", P)!.SetValue(venda, catPromo);
             Invocar(venda, "PintarProdutos");
             host.UpdateLayout();
-            return Campo<ItemsControl>(venda, "ListaProdutos").Items.OfType<Button>().FirstOrDefault(b => b.Tag as string == IdFunc);
+            return BlocosDaPromo(Campo<ItemsControl>(venda, "ListaProdutos")).OfType<Button>().FirstOrDefault(b => b.Tag as string == IdFunc);
         }
         void Tocar(Button b) => b.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
         bool Perguntando() => Campo<bool>(venda, "_perguntandoPromo");
@@ -346,7 +346,9 @@ public static class TestesPromoComSenhaNaVitrine
         var lista = Campo<ItemsControl>(venda, "ListaProdutos");
         var textos = lista.Items.OfType<DependencyObject>().SelectMany(Textos).ToList();
         Console.WriteLine($"      [medido] categoria PROMOCAO: {string.Join(" / ", textos)}");
-        checar(card is not null && lista.Items.IndexOf(card) == 0,
+        // 21/09/2026: a aba vai em colunas independentes (Venda.ColunasDaPromocao); "antes das seções"
+        // passa a ser "o primeiro bloco da primeira coluna".
+        checar(card is not null && BlocosDaPromo(lista).FirstOrDefault() == card,
             "TL-2 a categoria PROMOÇÃO mostra o card da Desconto Funcionario, antes das seções de produto");
         if (card is null) { Fechar(host, fecha, venda); return; }
         var textosCard = Textos(card).ToList();
@@ -477,6 +479,23 @@ public static class TestesPromoComSenhaNaVitrine
         fecha.Stop();
         host.Content = null;
         host.Close();
+    }
+
+    /// <summary>
+    /// Os blocos da aba Promoções na ordem em que se leem: desde 21/09/2026 a grade recebe um item
+    /// só (as colunas independentes), e os blocos moram nas colunas, uma depois da outra.
+    /// </summary>
+    private static IEnumerable<FrameworkElement> BlocosDaPromo(ItemsControl lista)
+    {
+        foreach (var item in lista.Items)
+        {
+            if (item is Grid colunas && colunas.Children.OfType<StackPanel>().Any())
+            {
+                foreach (var pilha in colunas.Children.OfType<StackPanel>().OrderBy(Grid.GetColumn))
+                    foreach (var b in pilha.Children.OfType<FrameworkElement>()) yield return b;
+            }
+            else if (item is FrameworkElement fe) yield return fe;
+        }
     }
 
     private static IEnumerable<string> Textos(DependencyObject o)

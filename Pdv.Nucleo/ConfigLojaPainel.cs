@@ -10,7 +10,8 @@ namespace Pdv.Nucleo;
 /// O QUE O PAINEL DEFINE E O CAIXA COPIA NO ATUALIZAR (12/09/2026, pedidos do dono):
 ///  · respostas prontas da aba Chat ("no painel vai ter opção de configurar as mensagens
 ///    pré-definidas?");
-///  · música da loja (Spotify): playlist, aparelho e volume escolhidos no painel.
+///  · música da loja (Spotify): playlist, aparelho e volume escolhidos no painel;
+///  · raspadinha no caixa (21/09/2026): liga o cartão do brinde na aba Promoções.
 ///
 /// A SENHA DE ADMINISTRADOR POR LOJA NÃO DESCE MAIS (15/09/2026, revisão do usuário master).
 /// As colunas admin_pin_* de pdv_loja_config continuam na RPC, mas o caixa ignora: a política
@@ -38,7 +39,8 @@ public static class ConfigLojaPainel
     public sealed record Linha(
         string Store, string? ChatRespostas,
         string? AdminHash, string? AdminSalt, DateTime? AdminEm,
-        string? PlaylistUri, string? PlaylistNome, string? DeviceId, string? DeviceNome, int? Volume);
+        string? PlaylistUri, string? PlaylistNome, string? DeviceId, string? DeviceNome, int? Volume,
+        bool? RaspadinhaNoCaixa = null);
 
     /// <summary>O JSON da RPC (array) em linhas; JSON estranho = lista vazia, nunca exceção.</summary>
     public static IReadOnlyList<Linha> Ler(string? json)
@@ -54,12 +56,19 @@ public static class ConfigLojaPainel
                 if (o.ValueKind != JsonValueKind.Object) continue;
                 string? S(string n) => o.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
                 int? I(string n) => o.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : null;
+                bool? B(string n) => o.TryGetProperty(n, out var v) ? v.ValueKind switch
+                {
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    _ => null,
+                } : null;
                 var store = S("store");
                 if (string.IsNullOrWhiteSpace(store)) continue;
                 DateTime? em = DateTime.TryParse(S("admin_pin_atualizado"), CultureInfo.InvariantCulture,
                     DateTimeStyles.RoundtripKind, out var d) ? d.ToLocalTime() : null;
                 saida.Add(new Linha(store, S("chat_respostas"), S("admin_pin_hash"), S("admin_pin_salt"), em,
-                    S("playlist_uri"), S("playlist_nome"), S("device_id"), S("device_nome"), I("volume")));
+                    S("playlist_uri"), S("playlist_nome"), S("device_id"), S("device_nome"), I("volume"),
+                    B("raspadinha_no_caixa")));
             }
         }
         catch { /* JSON ilegível: nada a aplicar */ }
@@ -123,6 +132,13 @@ public static class ConfigLojaPainel
         Gravar(cx, ChaveVolume, l.Volume?.ToString(CultureInfo.InvariantCulture));
         var musicaDepois = string.Join("|", Vendas.Config(cx, ChavePlaylistUri), Vendas.Config(cx, ChaveDeviceId), Vendas.Config(cx, ChaveVolume));
         if (musicaAntes != musicaDepois) mudou.Add("música");
+
+        // RASPADINHA NO CAIXA (21/09/2026): o painel é a verdade. Campo ausente (servidor sem o
+        // SQL 37) ou falso = desligado: sem a coluna o servidor também não tem as RPCs do brinde,
+        // e cartão que só dá "o painel ainda não tem" é pior que cartão nenhum.
+        var raspAntes = Vendas.Config(cx, Brindes.ChaveConfigLoja);
+        Gravar(cx, Brindes.ChaveConfigLoja, l.RaspadinhaNoCaixa == true ? "1" : null);
+        if (raspAntes != Vendas.Config(cx, Brindes.ChaveConfigLoja)) mudou.Add("raspadinha no caixa");
 
         return string.Join(", ", mudou);
     }

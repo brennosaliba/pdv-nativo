@@ -264,6 +264,41 @@ public sealed class Nuvem
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { return (0, ""); }
     }
 
+    // ── RPC com a sessão do TERMINAL (21/09/2026, brinde da raspadinha) ─────────────
+    /// <summary>
+    /// POST /rest/v1/rpc/{nome} com o Bearer da sessão do TERMINAL, nunca a chave pública: sem
+    /// sessão, a chamada NÃO sai. É o que separa esta porta do Montar, que cai para a chave anônima.
+    ///
+    /// Status devolvido: -1 = nada saiu do caixa (sem sessão, ou a conexão nem abriu: nome que não
+    /// resolve, conexão recusada); 0 = saiu e ficou sem resposta (prazo, conexão caída no meio);
+    /// senão, o HTTP e o corpo. A diferença entre -1 e 0 é a que o brinde precisa: -1 é certeza de
+    /// que o servidor não fez nada, 0 não é.
+    /// </summary>
+    public async Task<(int Status, string Corpo)> RpcAsync(string nome, string json, TimeSpan prazo,
+        CancellationToken ct = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(prazo);
+        string? token;
+        try { token = await TokenAsync(cts.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (-1, ""); }
+        if (token is null) return (-1, "");
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{_url}/rest/v1/rpc/{nome}");
+            req.Headers.TryAddWithoutValidation("apikey", AnonKey);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, cts.Token).ConfigureAwait(false);
+            return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (HttpRequestException ex) when (ex.HttpRequestError is HttpRequestError.NameResolutionError
+                                                  or HttpRequestError.ConnectionError
+                                                  or HttpRequestError.SecureConnectionError) { return (-1, ""); }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException) { return (0, ""); }
+    }
+
     // ── SPOTIFY (12/09/2026): o access_token de 1 h vem da função `spotify` ────────
     private string? _spotifyToken;
     private DateTime _spotifyExpira = DateTime.MinValue;

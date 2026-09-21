@@ -305,6 +305,7 @@
             <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
@@ -337,12 +338,64 @@
                     </Border>
                 </Grid>
 
-                <ScrollViewer Grid.Row="1" x:Name="RolagemProdutos" VerticalScrollBarVisibility="Auto"
+                <!-- ══ RASPADINHA (21/09/2026, pedido do dono) ══
+                     O validador do brinde no TOPO da aba Promoções. Mora FORA do ItemsControl
+                     ListaProdutos de propósito: como item do UniformGrid ele herdaria a altura da
+                     maior seção. E fora da rolagem: com 13 promoções o operador rola a lista e o
+                     campo do código continua à mão. Só aparece na aba Promoções da loja que ligou
+                     a raspadinha no painel. O brinde NUNCA entra na comanda (Venda.xaml.cs,
+                     bloco BRINDE DA RASPADINHA). -->
+                <Border x:Name="CartaoRaspadinha" Grid.Row="1" Visibility="Collapsed" Margin="18,0,16,10"
+                        CornerRadius="14" Padding="12,10,12,10" BorderThickness="2"
+                        Background="{DynamicResource VeuElevado}" BorderBrush="{DynamicResource Rosa}"
+                        AutomationProperties.Name="CartaoRaspadinha">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                                <TextBlock Text="🎟️" FontSize="20" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="Raspadinha" FontSize="17" FontWeight="Bold" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Texto}"/>
+                            </StackPanel>
+                            <!-- Tag = a dica cinza do campo vazio (estilo do TextBox em Estilos.xaml) -->
+                            <TextBox x:Name="TxtCodigoRaspadinha" Grid.Column="1" Tag="Código do cliente"
+                                     FontSize="17" MinHeight="46" Padding="12,6" MaxLength="20" CharacterCasing="Upper"
+                                     VerticalContentAlignment="Center"
+                                     GotFocus="CodigoRaspadinhaFocou" KeyDown="CodigoRaspadinhaTecla"
+                                     TextChanged="CodigoRaspadinhaMudou"
+                                     AutomationProperties.Name="Código do cliente"/>
+                            <Button x:Name="BtnConferirRaspadinha" Grid.Column="2" Content="Conferir"
+                                    Click="ConferirRaspadinha" Style="{StaticResource BotaoPrincipal}"
+                                    MinHeight="46" Padding="18,0" Margin="10,0,0,0" FontSize="16"/>
+                        </Grid>
+                        <!-- uma linha: o prêmio que vale, a recusa, ou o desfecho da entrega -->
+                        <Grid x:Name="LinhaRaspadinha" Visibility="Collapsed" Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="TxtRaspadinha" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource Texto}"/>
+                            <Button x:Name="BtnBrinde" Grid.Column="1" Visibility="Collapsed" Click="AcaoDoBrinde"
+                                    Style="{StaticResource BotaoPrincipal}" MinHeight="46" Padding="16,0"
+                                    Margin="10,0,0,0" FontSize="16"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <ScrollViewer Grid.Row="2" x:Name="RolagemProdutos" VerticalScrollBarVisibility="Auto"
                               Padding="10,0,10,10" SizeChanged="GradeRedimensionou">
                     <!-- Top é obrigatório: sem ele o ScrollViewer entrega a altura toda da
                          viewport e o UniformGrid divide igual entre as linhas — 2 linhas
                          ficam com meia tela cada e os cartões boiam, 3 linhas ficam justas.
-                         Ancorado no topo, toda linha vale a altura de um cartão. -->
+                         Ancorado no topo, toda linha vale a altura de um cartão.
+                         Na aba Promoções (21/09/2026) a grade recebe UM item só, as colunas da
+                         promoção (Venda.xaml.cs, ColunasDaPromocao): o UniformGrid dava a toda
+                         seção a altura da maior e abria vãos de 180 px. -->
                     <ItemsControl x:Name="ListaProdutos" VerticalAlignment="Top">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -354,7 +407,7 @@
                     </ItemsControl>
                 </ScrollViewer>
 
-                <TextBlock x:Name="TxtSemProduto" Grid.Row="1" Visibility="Collapsed"
+                <TextBlock x:Name="TxtSemProduto" Grid.Row="2" Visibility="Collapsed"
                            Text="Nada nesta categoria. Toque em Atualizar para baixar o cardápio."
                            Foreground="{DynamicResource TextoFraco}" TextWrapping="Wrap" TextAlignment="Center"
                            MaxWidth="360" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"/>

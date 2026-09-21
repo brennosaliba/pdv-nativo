@@ -63,6 +63,10 @@ public static class FotoVenda
         // do jeito que a vigia pinta; a vigia de verdade precisa de 60 s de tela de QR.
         var waCaido = args.Any(a => a.Equals("wa-caido", StringComparison.OrdinalIgnoreCase));
         args = args.Where(a => !a.Equals("wa-caido", StringComparison.OrdinalIgnoreCase)).ToArray();
+        // 21/09: "raspadinha" = a loja com a raspadinha ligada no caixa, para a foto
+        // mostrar o cartao do validador no topo da aba Promocoes.
+        var raspadinha = args.Any(a => a.Equals("raspadinha", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("raspadinha", StringComparison.OrdinalIgnoreCase)).ToArray();
         var modo = args.FirstOrDefault(a => a.Equals("tef", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("tef+pos", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("semtef", StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant();
@@ -123,6 +127,7 @@ public static class FotoVenda
             }
             if (semTef) Vendas.GravarConfig(cx, "tef_habilitado", "0");
             if (loja) Vendas.GravarConfig(cx, "homologacao", "0");
+            if (raspadinha) Vendas.GravarConfig(cx, Brindes.ChaveConfigLoja, "1");
         }
         var operador = new Operador(opId, opNome, "operador");
         var sessao = new Sessao("sessao-foto", Caixa.DiaOperacional(), opId, opNome,

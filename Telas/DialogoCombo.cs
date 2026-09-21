@@ -37,8 +37,11 @@ public static class DialogoCombo
 {
     private static Brush R(string chave) => (Brush)Application.Current.Resources[chave];
 
+    /// <param name="textoConfirmar">O botao que fecha com as escolhas. "Adicionar" na comanda; o
+    /// brinde da raspadinha (21/09/2026) passa "Escolher", porque ali nada entra na comanda.</param>
     public static List<Escolha>? Abrir(Window dono, Combos.ComboDef def,
-        IReadOnlyList<Combos.ProdutoLocal> catalogo, IReadOnlyList<Escolha>? atual = null)
+        IReadOnlyList<Combos.ProdutoLocal> catalogo, IReadOnlyList<Escolha>? atual = null,
+        string textoConfirmar = "Adicionar")
     {
         var estado = new Combos.Estado(def, atual, catalogo);
         var larguraDono = dono.ActualWidth > 0 ? dono.ActualWidth : SystemParameters.PrimaryScreenWidth;
@@ -95,7 +98,7 @@ public static class DialogoCombo
         Grid.SetColumn(voltar, 1);
         rodape.Children.Add(voltar);
 
-        var adicionar = Botao("Adicionar", true);
+        var adicionar = Botao(textoConfirmar, true);
         adicionar.MinWidth = 170;
         adicionar.Click += (_, _) => { resultado = estado.Escolhas(); janela.Close(); };
         Grid.SetColumn(adicionar, 2);

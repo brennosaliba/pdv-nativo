@@ -733,6 +733,16 @@ if (args.Length >= 1 && args[0] == "--so-castelo")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (21/09/2026): só a suíte do brinde da raspadinha. NÃO é o gate.
+//   Pdv.Testes.exe --so-brinde
+if (args.Length >= 1 && args[0] == "--so-brinde")
+{
+    await TestesBrindes.RodarAsync((cond, nome) => Check("brinde: " + nome, cond));
+    await TestesPromoComSenhaNaVitrine.RodarAsync((cond, nome) => Check("promo-card-senha: " + nome, cond));
+    Console.WriteLine($"\n=== (so brinde) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 var arquivo = Path.Combine(Path.GetTempPath(), $"pdv-teste-{Guid.NewGuid():N}.db");
 Banco.Migrar(arquivo);
 
@@ -1892,6 +1902,15 @@ await TestesCamadaWebView2.RodarAsync((cond, nome) => Check("camada-web: " + nom
 Console.WriteLine();
 Console.WriteLine("--- Instalador: o componente da Microsoft do chat e do WhatsApp ---");
 TestesWebView2Runtime.Rodar((cond, nome) => Check("runtime-web: " + nome, cond));
+
+// -- 21/09/2026: o BRINDE DA RASPADINHA no caixa ----------------------------------------
+// "Cliente ganha um cookie classico, promocao e validada, cliente escolhe qual quer, funcionario
+// coloca no PDV e ele nao emite NF pois e promocao mas abate do estoque." Registro proprio no
+// servidor, sem venda e sem nota; sem internet nao se entrega; a client_key gravada antes; a fila
+// que so descobre o desfecho e nunca cria brinde. E a aba Promocoes em colunas independentes.
+Console.WriteLine();
+Console.WriteLine("--- Brinde da raspadinha: validador no topo da aba Promocoes, sem venda e sem nota ---");
+await TestesBrindes.RodarAsync((cond, nome) => Check("brinde: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

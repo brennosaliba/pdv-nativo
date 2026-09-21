@@ -241,6 +241,13 @@ public sealed class Drenagem : IDisposable
             // ate a loja com o SQLite na mao.
             Autorizacao.TipoNaFila => await EnviarEstornoSemAprovacaoAsync(
                 (string)item.payload, (string)item.client_key, token, ct).ConfigureAwait(false),
+            // 21/09/2026: brinde da raspadinha cuja resposta se perdeu (ou o caixa caiu no meio).
+            // A fila só DESCOBRE o desfecho: confere o código antes e reenvia a MESMA chave apenas
+            // quando o código já está queimado, e aí a RPC não tem como criar nada. Nunca libera
+            // entrega sem internet. Tri-estado como os outros: ok/idempotente sai como enviado,
+            // rede é transitório, 404 PGRST202 espera a migration. Ver Brindes.ResolverNaFilaAsync.
+            Brindes.TipoNaFila => await Brindes.ResolverNaFilaAsync((string)item.client_key,
+                (nome, corpo) => RpcAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
             // para o dead-letter abaixo depois de poucas tentativas.
@@ -921,7 +928,7 @@ public sealed class Drenagem : IDisposable
     public static readonly string[] TiposComHandler =
         { "venda", "venda_composta", "nfce_vinculo", "venda_cancelada", "fechamento",
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
-          Autorizacao.TipoNaFila };
+          Autorizacao.TipoNaFila, Brindes.TipoNaFila };
 
     /// <summary>
     /// HISTORICO (04/09/2026): sobe para pdv_estornos_sem_aprovacao as linhas de estorno
