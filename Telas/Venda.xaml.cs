@@ -191,6 +191,9 @@ public partial class Venda : UserControl
             ServicoChat.Mudou -= AtualizarSeloChat; ServicoChat.Mudou += AtualizarSeloChat;
             ServicoChat.MensagemNova -= ChatMensagemNova; ServicoChat.MensagemNova += ChatMensagemNova;
             AtualizarSeloChat(ServicoChat.NaoLidas);
+            // BRINDE DA RASPADINHA PELO CHAT (22/09/2026): o servidor validou o código que o
+            // cliente mandou e a comanda saiu. O aviso na tela é a rede para quando falta papel.
+            ServicoRaspadinhaChat.Avisou -= BrindeDoChat; ServicoRaspadinhaChat.Avisou += BrindeDoChat;
             // O WhatsApp da loja segue o mesmo desenho do chat (selo ao vivo + aviso na subida).
             ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp; ServicoWhatsApp.Mudou += AtualizarSeloWhatsApp;
             ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova; ServicoWhatsApp.MensagemNova += WhatsAppMensagemNova;
@@ -209,6 +212,7 @@ public partial class Venda : UserControl
             Servicos.Sino(_loja ?? "").CatalogoMudou -= CatalogoTocou;
             ServicoChat.Mudou -= AtualizarSeloChat;
             ServicoChat.MensagemNova -= ChatMensagemNova;
+            ServicoRaspadinhaChat.Avisou -= BrindeDoChat;
             ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp;
             ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova;
             ServicoWhatsApp.SessaoMudou -= WhatsAppSessaoMudou;
@@ -274,6 +278,8 @@ public partial class Venda : UserControl
                 _ = Servicos.ImprimirComandasPendentesAsync();
                 // E a nota do iFood, quando o dono pediu conferencia no papel.
                 _ = Servicos.ImprimirNotasDoIfoodAsync();
+                // E a comanda do brinde da raspadinha resolvido pela fila.
+                _ = ServicoRaspadinhaChat.ImprimirPendentesAsync();
                 if (tt.Status == TaskStatus.RanToCompletion && tt.Result > 0)
                     Dispatcher.Invoke(() => NotificarPedidoNovo(tt.Result));
             });
@@ -352,8 +358,28 @@ public partial class Venda : UserControl
     private void AbrirChatPeloToast(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         ToastChat.Visibility = Visibility.Collapsed;
+        ToastBrinde.Visibility = Visibility.Collapsed;
         PediuChat?.Invoke();
     }
+
+    private DispatcherTimer? _toastBrindeSome;
+
+    /// <summary>
+    /// O aviso do brinde da raspadinha que chegou pelo chat. Mesmo desenho do aviso de mensagem
+    /// nova (60 s, um toque abre o chat), com o próprio ícone: o operador precisa saber que saiu
+    /// papel com um brinde para entregar, e saber disso mesmo que o papel não tenha saído.
+    /// </summary>
+    private void BrindeDoChat(string texto) => Dispatcher.Invoke(() =>
+    {
+        TxtToastBrinde.Text = texto;
+        ToastBrinde.Visibility = Visibility.Visible;
+        Alerta.MensagemChat();
+
+        _toastBrindeSome?.Stop();
+        _toastBrindeSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        _toastBrindeSome.Tick += (_, _) => { ToastBrinde.Visibility = Visibility.Collapsed; _toastBrindeSome?.Stop(); };
+        _toastBrindeSome.Start();
+    });
 
     // ── WhatsApp da loja: selo, aviso e som, no mesmo desenho do chat ────────
     private DispatcherTimer? _toastWhatsAppSome;
@@ -577,6 +603,10 @@ public partial class Venda : UserControl
                         _ = Servicos.ImprimirComandasPendentesAsync();
                         // E a nota do iFood, quando o dono pediu conferencia no papel.
                         _ = Servicos.ImprimirNotasDoIfoodAsync();
+                        // E a comanda do brinde da raspadinha cujo bônus nasceu na FILA (a
+                        // mensagem foi capturada sem internet): ninguém estava olhando a
+                        // resposta, então o papel sai aqui.
+                        _ = ServicoRaspadinhaChat.ImprimirPendentesAsync();
                         // Pedido novo com o CAIXA aberto: toast + som. Ninguém fica
                         // olhando badge pequeno com fila no balcão.
                         if (tt.Status == TaskStatus.RanToCompletion && tt.Result > 0)

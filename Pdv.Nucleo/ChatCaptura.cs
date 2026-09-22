@@ -5,8 +5,18 @@ using System.Text.RegularExpressions;
 namespace Pdv.Nucleo;
 
 /// <summary>Uma mensagem de chat já normalizada (modelo do "nativo depois").</summary>
+/// <summary>
+/// Uma fala do chat. <c>Minha</c> é TRI-ESTADO de propósito (22/09/2026): true = a loja falou,
+/// false = o protocolo disse que não foi a loja, null = NÃO SE SABE de que lado veio.
+///
+/// Antes disto o campo era <c>bool</c> e o desconhecido virava false, ou seja "é do cliente".
+/// Num caixa reiniciado com a sessão do Gestor já quente, o token do chat não é refeito, o id do
+/// usuário desta loja fica desconhecido o dia inteiro e TODO quadro recebido com texto passava a
+/// contar como fala do cliente: inclusive o eco do que a própria loja manda. A regra do DOM já
+/// era a certa (balão sem lado decidido fica de fora) e agora vale para o WebSocket também.
+/// </summary>
 public sealed record MensagemChat(
-    string? ConversaId, string? Autor, string Texto, DateTimeOffset? Quando, bool Minha);
+    string? ConversaId, string? Autor, string Texto, DateTimeOffset? Quando, bool? Minha);
 
 /// <summary>Uma conversa (agrupamento de mensagens por id).</summary>
 public sealed record ConversaChat(string Id, IReadOnlyList<MensagemChat> Mensagens);
@@ -37,7 +47,13 @@ public static class ChatCaptura
     private static readonly string[] CamposTexto = { "text", "message", "content", "body", "texto", "msg" };
     private static readonly string[] CamposAutor = { "author", "sender", "senderId", "from", "userId", "autor", "user" };
     private static readonly string[] CamposQuando = { "timestamp", "ts", "createdAt", "created_at", "date", "sentAt", "time" };
-    private static readonly string[] CamposConversa = { "conversationId", "chatId", "threadId", "conversation", "chat", "roomId", "groupId" };
+    private static readonly string[] CamposConversa = { "conversationId", "chatId", "threadId", "conversation", "chat", "roomId", "groupId", "channel_url", "channelUrl", "channel" };
+
+    // Quem escreveu costuma vir num OBJETO ao lado do texto ({"user":{"user_id":"..."}}), e não
+    // como campo solto. Sem isto a mensagem chega sem autor, e sem autor não dá para separar a
+    // fala da loja da fala do cliente (22/09/2026, código da raspadinha no chat).
+    private static readonly string[] ObjetosAutor = { "user", "sender", "author", "from", "participant" };
+    private static readonly string[] CamposIdDoAutor = { "user_id", "userId", "id", "nickname", "name" };
 
     // ── a regra do mascaramento (LISTA BRANCA, não lista negra) ─────────────
     //
@@ -89,6 +105,20 @@ public static class ChatCaptura
             using var doc = JsonDocument.Parse(frameJson);
             return DoElemento(doc.RootElement);
         }
+        catch { /* pode ser JSON atrás de um prefixo de comando: ver abaixo */ }
+
+        // QUADRO COM PREFIXO DE COMANDO (22/09/2026). Vários protocolos de chat mandam o
+        // comando antes do corpo ("MESG{...}", "42[...]", "a[...]"), e aí o JSON.Parse do
+        // quadro inteiro falha e a mensagem some. Tentar de novo a partir do primeiro "{"
+        // ou "[" custa nada e não relaxa nada: texto sem JSON dentro continua devolvendo
+        // null, e quadro de controle continua sem virar mensagem.
+        try
+        {
+            var i = frameJson.IndexOfAny(new[] { '{', '[' });
+            if (i <= 0) return null;
+            using var doc = JsonDocument.Parse(frameJson[i..]);
+            return DoElemento(doc.RootElement);
+        }
         catch { return null; }
     }
 
@@ -99,10 +129,13 @@ public static class ChatCaptura
             var texto = PrimeiroTexto(e, CamposTexto);
             if (texto is not null)
             {
-                var autor = PrimeiroTexto(e, CamposAutor) ?? PrimeiroNumeroComoTexto(e, CamposAutor);
+                var autor = PrimeiroTexto(e, CamposAutor) ?? PrimeiroNumeroComoTexto(e, CamposAutor)
+                            ?? AutorAninhado(e);
                 var conversa = PrimeiroTexto(e, CamposConversa) ?? PrimeiroNumeroComoTexto(e, CamposConversa);
                 var quando = PrimeiroInstante(e, CamposQuando);
-                var minha = LerBool(e, "mine") ?? LerBool(e, "isMine") ?? LerBool(e, "fromMe") ?? LerBool(e, "outgoing") ?? false;
+                // SEM `?? false`: quadro que não diz de que lado veio fica com o lado DESCONHECIDO,
+                // e quem decide o que fazer com isso é o ChatRaspadinha.DoCliente. Ver MensagemChat.
+                var minha = LerBool(e, "mine") ?? LerBool(e, "isMine") ?? LerBool(e, "fromMe") ?? LerBool(e, "outgoing");
                 return new MensagemChat(conversa, autor, texto, quando, minha);
             }
             // desce em payload/data/message aninhados
@@ -133,6 +166,22 @@ public static class ChatCaptura
             .Select(g => new ConversaChat(g.Key, g.ToList()))
             .OrderBy(c => c.Id, StringComparer.Ordinal)
             .ToList();
+
+    /// <summary>
+    /// Quem escreveu, quando ele vem dentro de um objeto ao lado do texto:
+    /// <c>{"message":"...","user":{"user_id":"cliente-77"}}</c>. Um nível só de propósito, para
+    /// não sair pescando id em qualquer canto do quadro.
+    /// </summary>
+    private static string? AutorAninhado(JsonElement obj)
+    {
+        foreach (var nome in ObjetosAutor)
+        {
+            if (!obj.TryGetProperty(nome, out var o) || o.ValueKind != JsonValueKind.Object) continue;
+            var id = PrimeiroTexto(o, CamposIdDoAutor) ?? PrimeiroNumeroComoTexto(o, CamposIdDoAutor);
+            if (id is not null) return id;
+        }
+        return null;
+    }
 
     private static string? PrimeiroTexto(JsonElement obj, string[] chaves)
     {
@@ -205,6 +254,31 @@ public static class ChatCaptura
             return new FormatoToken(true, 3, u is null ? null : "XXXX", v, e, exp);
         }
         catch { return new FormatoToken(true, 3, null, null, null, null); }
+    }
+
+    /// <summary>
+    /// O claim <c>u</c> do token, EM CLARO (22/09/2026, código da raspadinha no chat). É o id do
+    /// usuário desta loja no chat do iFood, e serve para uma pergunta só: a fala é da LOJA ou do
+    /// CLIENTE? Sem ela, a mensagem que a própria loja escreve poderia virar chamada da borda.
+    ///
+    /// ⚠️ Este valor NUNCA é gravado, logado nem enviado. Ele vive em memória e é usado só para
+    /// comparar com o autor do quadro. O diagnóstico continua vendo o mascarado
+    /// (<see cref="LerFormatoToken"/> devolve "XXXX"), e a rede de segurança do
+    /// <see cref="MascararTexto"/> continua valendo para tudo que chega ao disco.
+    /// </summary>
+    public static string? UserIdDoToken(string? jwt)
+    {
+        if (string.IsNullOrWhiteSpace(jwt)) return null;
+        var partes = jwt.Split('.');
+        if (partes.Length != 3) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(Base64UrlDecode(partes[1])));
+            if (!doc.RootElement.TryGetProperty("u", out var u)) return null;
+            var s = u.ValueKind == JsonValueKind.String ? u.GetString() : u.ToString();
+            return string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+        }
+        catch { return null; }
     }
 
     private static byte[] Base64UrlDecode(string s)
@@ -405,6 +479,12 @@ public static class ChatCaptura
         /// <summary>Token capturado (em memória), para o futuro parser nativo. Nunca logar.</summary>
         public string? TokenEmMemoria { get { lock (_trava) return _tokenRaw; } }
 
+        /// <summary>
+        /// O id do usuário DESTA loja no chat (claim <c>u</c> do token). Só para separar a fala da
+        /// loja da fala do cliente. Nunca é gravado nem enviado. Null enquanto o token não veio.
+        /// </summary>
+        public string? UserIdEmMemoria { get { lock (_trava) return UserIdDoToken(_tokenRaw); } }
+
         public void RegistrarWebSocket(string? url)
         {
             if (string.IsNullOrWhiteSpace(url)) return;
@@ -505,7 +585,8 @@ public static class ChatCaptura
                 var m = NormalizarFrame(payload);
                 if (m is not null)
                     sb.AppendLine($"    normalizado -> conversa={m.ConversaId ?? "?"} autor={m.Autor ?? "?"} "
-                        + $"quando={(m.Quando?.ToString("HH:mm:ss") ?? "?")} minha={m.Minha} texto=(len {m.Texto.Length})");
+                        + $"quando={(m.Quando?.ToString("HH:mm:ss") ?? "?")} "
+                        + $"minha={(m.Minha?.ToString() ?? "?")} texto=(len {m.Texto.Length})");
                 sb.AppendLine();
             }
 

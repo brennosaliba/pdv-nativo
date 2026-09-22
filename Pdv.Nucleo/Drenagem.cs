@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Dapper;
+using Microsoft.Data.Sqlite;
 
 namespace Pdv.Nucleo;
 
@@ -34,6 +35,71 @@ public sealed class Drenagem : IDisposable
     internal const int MaxTentativas = 12;
     /// <summary>Dias FALHANDO DE VERDADE (sessão de pé) antes de desistir de um transitório.</summary>
     internal const int DiasParaDesistir = 7;
+
+    /// <summary>
+    /// Tipos que NÃO disputam a janela principal, com o tamanho da janelinha de cada um.
+    ///
+    /// ⚠️ A VENDA NÃO PODE FICAR ATRÁS DO CHAT (22/09/2026). A janela é `ORDER BY id LIMIT 50` e
+    /// transitório não conta tentativa: com a borda `raspadinha-chat` ainda não publicada (são dois
+    /// deploys, e o caixa tem de funcionar sem ela) cada 404 devolve "espera". Uma conversa aberta
+    /// vira até 40 mensagens capturadas de uma vez, duas conversas passam de 50, e as vendas
+    /// gravadas depois têm id maior: elas simplesmente nunca entram na janela, o caixa continua
+    /// vendendo e o painel mostra faturamento parado. É o incidente que esta classe inteira existe
+    /// para não repetir, chegando pela porta de um recurso de conforto.
+    ///
+    /// A janelinha é pequena de propósito: a mensagem do chat sobe devagar, mas sobe, e nunca na
+    /// frente do dinheiro.
+    /// </summary>
+    internal static readonly (string Tipo, int Janela)[] JanelaPropria =
+        { (ChatRaspadinha.TipoNaFila, 5) };
+
+    /// <summary>
+    /// Quanto tempo um transitório espera antes de desistir, POR TIPO. Sete dias é o orçamento da
+    /// venda, que não pode se perder de jeito nenhum. Para a mensagem do chat, sete dias é a linha
+    /// morta ocupando espaço: passadas algumas horas sem a borda no ar, a captura daquele momento
+    /// não serve mais (a comanda sairia para um pedido que já foi embora) e o rastro da desistência
+    /// diz o que aconteceu.
+    /// </summary>
+    internal static TimeSpan PrazoDoTransitorio(string? tipo)
+        => tipo == ChatRaspadinha.TipoNaFila ? TimeSpan.FromHours(6) : TimeSpan.FromDays(DiasParaDesistir);
+
+    /// <summary>Tamanho da janela principal, a do dinheiro.</summary>
+    internal const int JanelaPrincipal = 50;
+
+    /// <summary>
+    /// O que esta varredura vai tentar: a janela principal (ORDER BY id, LIMIT 50) mais uma
+    /// janelinha por tipo de <see cref="JanelaPropria"/>, atrás dela.
+    ///
+    /// A VENDA VAI PRIMEIRO, e agora ela não divide a janela com o que não é dinheiro. Ver
+    /// JanelaPropria: com a borda do chat ainda não publicada, uma conversa aberta vira dezenas
+    /// de linhas transitórias de id baixo e a venda gravada depois nunca entrava no LIMIT 50.
+    /// </summary>
+    internal static List<dynamic> JanelaDaFila(SqliteConnection cx)
+    {
+        var principais = TiposComHandler.Except(JanelaPropria.Select(j => j.Tipo)).ToArray();
+        var fila = cx.Query($"""
+            SELECT id, tipo, ref_id, client_key, payload, tentativas, primeiro_erro_em
+              FROM outbox
+             WHERE enviado_em IS NULL
+               AND desistido_em IS NULL
+               AND descartado_em IS NULL
+               AND tipo IN ('{string.Join("','", principais)}')
+             ORDER BY id
+             LIMIT {JanelaPrincipal}
+            """).ToList();
+        foreach (var (tipo, janela) in JanelaPropria)
+            fila.AddRange(cx.Query("""
+                SELECT id, tipo, ref_id, client_key, payload, tentativas, primeiro_erro_em
+                  FROM outbox
+                 WHERE enviado_em IS NULL
+                   AND desistido_em IS NULL
+                   AND descartado_em IS NULL
+                   AND tipo = @T
+                 ORDER BY id
+                 LIMIT @N
+                """, new { T = tipo, N = janela }));
+        return fila;
+    }
 
     /// <summary>O que fazer com uma linha da fila depois de tentar enviá-la.</summary>
     internal enum AcaoFila
@@ -71,11 +137,12 @@ public sealed class Drenagem : IDisposable
     /// orçamento INTEIRO de dias contado a partir de quando começou a falhar de
     /// verdade (null = ainda nem falhou: Aguarda e o loop carimba agora).
     /// </summary>
-    internal static AcaoFila DecidirFila(bool? ok, long tentativas, DateTime? primeiroErroEm, DateTime agora)
+    internal static AcaoFila DecidirFila(bool? ok, long tentativas, DateTime? primeiroErroEm, DateTime agora,
+        TimeSpan? prazo = null)
     {
         if (ok == true) return AcaoFila.Enviado;
         if (ok == false) return tentativas + 1 >= MaxTentativas ? AcaoFila.DeadLetter : AcaoFila.ContaTentativa;
-        return primeiroErroEm is { } p && p < agora.AddDays(-DiasParaDesistir)
+        return primeiroErroEm is { } p && p < agora - (prazo ?? TimeSpan.FromDays(DiasParaDesistir))
             ? AcaoFila.ExpiraVelho
             : AcaoFila.Aguarda;
     }
@@ -137,17 +204,7 @@ public sealed class Drenagem : IDisposable
 
             var enviados = 0;
             List<dynamic> fila;
-            using (var cx = Banco.Abrir())
-                fila = cx.Query($"""
-                    SELECT id, tipo, ref_id, client_key, payload, tentativas, primeiro_erro_em
-                      FROM outbox
-                     WHERE enviado_em IS NULL
-                       AND desistido_em IS NULL
-                       AND descartado_em IS NULL
-                       AND tipo IN ('{string.Join("','", TiposComHandler)}')
-                     ORDER BY id
-                     LIMIT 50
-                    """).ToList();
+            using (var cx = Banco.Abrir()) fila = JanelaDaFila(cx);
 
             // as vendas vão primeiro: o vínculo da nota precisa do id que a venda ganha
             // no servidor, então a ordem por id da fila já resolve (a venda entra antes)
@@ -248,6 +305,13 @@ public sealed class Drenagem : IDisposable
             // rede é transitório, 404 PGRST202 espera a migration. Ver Brindes.ResolverNaFilaAsync.
             Brindes.TipoNaFila => await Brindes.ResolverNaFilaAsync((string)item.client_key,
                 (nome, corpo) => RpcAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
+            // 22/09/2026: mensagem do cliente no chat do iFood que o caixa capturou sem internet
+            // (ou cuja resposta se perdeu). Reenviar é seguro: esta chamada não ENTREGA nada, só
+            // conta ao servidor o que o cliente escreveu, e o resgate lá é um por raspadinha. A
+            // linha sai da fila sem chamada quando a loja desligou a captura. Ver
+            // ChatRaspadinha.ResolverNaFilaAsync.
+            ChatRaspadinha.TipoNaFila => await ChatRaspadinha.ResolverNaFilaAsync((string)item.client_key,
+                (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
             // para o dead-letter abaixo depois de poucas tentativas.
@@ -263,7 +327,7 @@ public sealed class Drenagem : IDisposable
         // Ver o topo da classe: client_key não é única, e escrever por ela já errou o
         // alvo. (RegistrarExcecao escreve também, pelo mesmo id, quando ISTO lança.)
         using var cx = Banco.Abrir();
-        switch (DecidirFila(ok, tentativas, primeiroErro, agora))
+        switch (DecidirFila(ok, tentativas, primeiroErro, agora, PrazoDoTransitorio(tipo)))
         {
             case AcaoFila.Enviado:
                 // erro aqui é uma NOTA de desfecho (ex.: "venda nunca subiu;
@@ -308,6 +372,8 @@ public sealed class Drenagem : IDisposable
             case AcaoFila.ExpiraVelho:
                 cx.Execute("UPDATE outbox SET desistido_em = @Em, ultimo_erro = @E WHERE id = @Id",
                     new { Em = agora.ToString("o"),
+                          // "dias falhando" é a marca que a Sincronizacao lê para classificar a
+                          // parada (Sincronizacao.SaidaDoErro). Não mexer sem mexer lá.
                           E = $"desistido: dias falhando sem conseguir enviar — {erro ?? "sem resposta"}",
                           Id = id });
                 return false;
@@ -928,7 +994,7 @@ public sealed class Drenagem : IDisposable
     public static readonly string[] TiposComHandler =
         { "venda", "venda_composta", "nfce_vinculo", "venda_cancelada", "fechamento",
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
-          Autorizacao.TipoNaFila, Brindes.TipoNaFila };
+          Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila };
 
     /// <summary>
     /// HISTORICO (04/09/2026): sobe para pdv_estornos_sem_aprovacao as linhas de estorno
@@ -1033,6 +1099,27 @@ public sealed class Drenagem : IDisposable
             System.IO.File.AppendAllText(caminho, $"{DateTime.Now:dd/MM HH:mm:ss}  {texto}{Environment.NewLine}");
         }
         catch { /* diagnostico nunca atrapalha o envio */ }
+    }
+
+    /// <summary>
+    /// Chama uma FUNÇÃO DE BORDA (/functions/v1/{nome}) com o mesmo contrato do RpcAsync daqui:
+    /// (status HTTP, corpo), status 0 = nem resposta. É por aqui que a mensagem do chat que ficou
+    /// na fila é reenviada, porque a raspadinha do chat mora numa borda e não numa RPC.
+    /// </summary>
+    private async Task<(int Status, string? Corpo)> FuncaoAsync(string nome, string corpoJson, string token, CancellationToken ct)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(20_000);
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{_urlNuvem}/functions/v1/{nome}");
+            req.Headers.TryAddWithoutValidation("apikey", Nuvem.AnonKey);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Content = new StringContent(corpoJson, Encoding.UTF8, "application/json");
+            using var resp = await Fiscal.Http.SendAsync(req, cts.Token).ConfigureAwait(false);
+            return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
+        }
+        catch { return (0, null); }
     }
 
     private async Task<(int Status, string? Corpo)> RpcAsync(string nome, string corpoJson, string token, CancellationToken ct)

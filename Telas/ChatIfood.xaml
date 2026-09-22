@@ -39,6 +39,13 @@
                             ToolTip="Mostrar o Gestor inteiro (ou só o chat)">
                         <TextBlock x:Name="TxtGestorInteiro" Text="Gestor inteiro"/>
                     </Button>
+                    <!-- BRINDE DA RASPADINHA (22/09/2026): a comanda sai sozinha quando o cliente
+                         manda o código no chat. Este botão existe para o papel que não saiu
+                         (bobina acabando, comanda caída atrás da impressora). -->
+                    <Button Click="ReimprimirBrinde" Style="{StaticResource BotaoBarra}"
+                            ToolTip="Imprime de novo a comanda do último brinde da raspadinha">
+                        <TextBlock Text="🎁 Reimprimir brinde"/>
+                    </Button>
                     <Button Click="Diagnostico" Style="{StaticResource BotaoBarra}"
                             ToolTip="Grava a estrutura desta tela num arquivo para o suporte">
                         <TextBlock Text="Diagnóstico"/>

@@ -67,9 +67,26 @@ public partial class ChatIfood : UserControl
         Hospede.Quebrou += AoQuebrar;
         Loaded += async (_, _) =>
         {
+            // O aviso do bônus na TELA DO CHAT. O toast mora na tela de venda, e quem está com o
+            // chat aberto respondendo o cliente (justamente quem está por perto quando o código
+            // chega) não via nada. O evento existia e ninguém assinava.
+            ServicoRaspadinhaChat.BonusNovo -= MostrarBonusNovo;
+            ServicoRaspadinhaChat.BonusNovo += MostrarBonusNovo;
             try { if (!_pronto) await IniciarAsync(); }
             catch (Exception ex) { Diag("loaded: " + ex.GetType().Name + " " + ex.Message); }
         };
+        Unloaded += (_, _) => ServicoRaspadinhaChat.BonusNovo -= MostrarBonusNovo;
+    }
+
+    /// <summary>Um bônus novo chegou com o chat aberto: a mesma linha que a venda mostra.</summary>
+    private void MostrarBonusNovo(Pdv.Nucleo.BonusRaspadinha b)
+    {
+        try
+        {
+            if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => MostrarBonusNovo(b)); return; }
+            TxtEstado.Text = Pdv.Nucleo.ChatRaspadinha.LinhaDoBonus(b);
+        }
+        catch (Exception ex) { DiagRaspadinha("aviso do bônus na tela: " + ex.GetType().Name); }
     }
 
     /// <summary>
@@ -156,6 +173,14 @@ public partial class ChatIfood : UserControl
             {
                 try { await core.ExecuteScriptAsync("window.pdvContar && window.pdvContar()"); }
                 catch { /* navegação em curso: o próximo tick tenta de novo */ }
+                // As falas VISÍVEIS da conversa aberta, para complementar os quadros do
+                // WebSocket. Só quando a loja ligou a captura: desligada, o script nem roda.
+                try
+                {
+                    if (ServicoRaspadinhaChat.Ligado())
+                        await core.ExecuteScriptAsync("window.pdvLerMensagens && window.pdvLerMensagens()");
+                }
+                catch { /* o quadro do WebSocket continua sendo o caminho principal */ }
             };
             _poll.Start();
         }
@@ -262,6 +287,15 @@ public partial class ChatIfood : UserControl
                 var modo = doc.RootElement.TryGetProperty("modo", out var v) ? v.GetString() : null;
                 TxtEstado.Text = modo == "gestor" ? "Gestor (chat na barra lateral)" : "painel do chat";
             }
+            else if (tipo == "chatmsgs")
+            {
+                // As falas que a página conseguiu ler da conversa aberta. O pedido e o cliente
+                // vêm junto quando dá para lê-los no cabeçalho: é o que liga o bônus ao pedido.
+                var leitura = ChatRaspadinha.MensagensDoDom(txt);
+                AprenderPedido(leitura);
+                foreach (var m in leitura.Mensagens)
+                    OuvirMensagem(m, "dom", leitura.Pedido, leitura.Cliente);
+            }
             else if (tipo == "ajuda")
             {
                 // a página conta como foi a busca do pedido; se desistiu, o Gestor inteiro
@@ -274,6 +308,172 @@ public partial class ChatIfood : UserControl
             }
         }
         catch { /* mensagem malformada não derruba nada */ }
+    }
+
+    // ── CÓDIGO DA RASPADINHA NO CHAT (22/09/2026, pedido do dono) ────────────
+    // "Capturar quando o cliente enviar o código de resgate da raspadinha, validar e
+    // gerar uma comanda avisando do bônus."
+    //
+    // Esta tela só ENTREGA a mensagem. Ela não procura código, não valida formato e não
+    // resgata nada: quem decide é o servidor (função de borda raspadinha-chat), e a
+    // resposta é que manda tirar papel. O caminho principal são os quadros do WebSocket,
+    // que já eram capturados pelo CDP; o DOM entra como complemento quando o chat está
+    // aberto, porque é de lá que sai o número do pedido.
+
+    /// <summary>
+    /// As chaves já entregues ao serviço. O leitor de DOM reenvia a conversa visível a cada 7 s, e
+    /// sem esta memória cada balão pagava, PARA SEMPRE e a cada tique, duas linhas de log em disco
+    /// (na thread da tela) e duas aberturas do SQLite, só para descobrir pela PK que a mensagem já
+    /// era conhecida. Com 30 balões visíveis dá cerca de 8 gravações em arquivo por segundo
+    /// disputando disco com a venda sendo gravada, e o chat-raspadinha.txt batia 1 MB em meia hora,
+    /// rotacionando justamente a PRIMEIRA captura, que é a que o dono precisa mandar.
+    /// </summary>
+    private readonly LinkedList<string> _vistasOrdem = new();
+    private readonly HashSet<string> _vistas = new(StringComparer.Ordinal);
+    private const int TetoDeVistas = 500;
+
+    /// <summary>
+    /// Conversa do quadro do WebSocket (channel_url) para o número do pedido, aprendido quando a
+    /// MESMA fala aparece nos dois caminhos. O quadro não traz o número, e sem ele a comanda sai
+    /// sem a única linha que diz em qual sacola pôr o brinde.
+    /// </summary>
+    private readonly Dictionary<string, (string Pedido, string? Cliente)> _pedidoPorConversa = new(StringComparer.Ordinal);
+
+    /// <summary>Fala lida no DOM (texto normalizado) para o pedido daquela conversa. Ver AprenderPedido.</summary>
+    private readonly Dictionary<string, string> _pedidoPorTexto = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Texto curto não identifica conversa nenhuma ("oi" está em todas).</summary>
+    private const int MinimoParaAprender = 12;
+
+    /// <summary>
+    /// Liga o canal do WebSocket ao número do pedido. O DOM sabe o número (lê do cabeçalho) e o
+    /// WebSocket sabe o canal; a ponte é uma fala que os dois viram. Texto curto não serve, e texto
+    /// que aparece em duas conversas deixa de servir: número errado na comanda é pior que nenhum.
+    /// </summary>
+    private void AprenderPedido(ChatRaspadinha.LeituraDoDom leitura)
+    {
+        if (string.IsNullOrWhiteSpace(leitura.Pedido)) return;
+        foreach (var m in leitura.Mensagens)
+        {
+            var t = ChatRaspadinha.CortarTexto(m.Texto);
+            if (t.Length < MinimoParaAprender) continue;
+            if (_pedidoPorTexto.TryGetValue(t, out var ja) && ja != leitura.Pedido) { _pedidoPorTexto[t] = ""; continue; }
+            _pedidoPorTexto[t] = leitura.Pedido!;
+        }
+        if (_pedidoPorTexto.Count > 400) _pedidoPorTexto.Clear();
+    }
+
+    /// <summary>O pedido que este quadro do WebSocket permite deduzir, ou null.</summary>
+    private (string? Pedido, string? Cliente) PedidoDoQuadro(MensagemChat m)
+    {
+        var canal = m.ConversaId;
+        if (canal is not null && _pedidoPorConversa.TryGetValue(canal, out var ja)) return (ja.Pedido, ja.Cliente);
+        var t = ChatRaspadinha.CortarTexto(m.Texto);
+        if (t.Length >= MinimoParaAprender && _pedidoPorTexto.TryGetValue(t, out var p) && p.Length > 0)
+        {
+            if (canal is not null) _pedidoPorConversa[canal] = (p, null);
+            return (p, null);
+        }
+        return (null, null);
+    }
+
+    /// <summary>
+    /// Uma mensagem capturada. Fala da própria loja não entra (o id do usuário desta loja sai do
+    /// token, em memória) e fala VELHA também não. Fora disso, vai inteira para o serviço, que
+    /// grava, enfileira, manda e age pela resposta. Fire-and-forget: a tela não espera a rede.
+    /// </summary>
+    private void OuvirMensagem(MensagemChat? m, string origem, string? pedido, string? cliente)
+    {
+        try
+        {
+            if (m is null) return;
+            var meu = _captura.UserIdEmMemoria;
+            var chave = ChatRaspadinha.Chave(m);
+            // JÁ VISTA: sai antes de qualquer log e de qualquer abertura de banco.
+            if (!_vistas.Add(chave)) return;
+            _vistasOrdem.AddLast(chave);
+            while (_vistasOrdem.Count > TetoDeVistas && _vistasOrdem.First is { } v)
+            { _vistas.Remove(v.Value); _vistasOrdem.RemoveFirst(); }
+
+            if (!ChatRaspadinha.DoCliente(m, meu))
+            {
+                DiagRaspadinha($"origem={origem} descartada (lado={(m.Minha?.ToString() ?? "?")}, "
+                    + $"autor_conhecido={(meu is not null && m.Autor is not null)})");
+                return;
+            }
+            if (!ChatRaspadinha.Recente(m, DateTime.Now))
+            {
+                DiagRaspadinha($"origem={origem} descartada (fala antiga ou sem hora) "
+                    + $"quando={(m.Quando?.ToString("dd/MM HH:mm:ss") ?? "?")}");
+                return;
+            }
+            if (pedido is null && origem == "ws") (pedido, cliente) = PedidoDoQuadro(m);
+            DiagRaspadinha($"origem={origem} chave={chave} texto=(len {ChatRaspadinha.CortarTexto(m.Texto).Length}) "
+                + $"pedido={pedido ?? "?"} quando={(m.Quando?.ToString("HH:mm:ss") ?? "?")}");
+            var p = pedido; var c = cliente;
+            _ = Task.Run(async () =>
+            {
+                var r = await ServicoRaspadinhaChat.OuvirAsync(m, meu, p, c);
+                DiagRaspadinha(r is null
+                    ? $"chave={chave} nada feito (desligada na loja, ou mensagem já vista)"
+                    : $"chave={chave} desfecho={r.Desfecho} motivo={r.MotivoCru ?? "-"} bonus={r.Bonus?.Id ?? "-"}");
+            });
+        }
+        catch (Exception ex) { DiagRaspadinha("falhou: " + ex.GetType().Name); }
+    }
+
+    /// <summary>
+    /// O MODO DE DIAGNÓSTICO que o dono roda na loja para confirmar o formato real
+    /// (ProgramData\PdvNativo\chat-raspadinha.txt). Uma linha por mensagem: de onde veio, a
+    /// chave, o TAMANHO do texto e o desfecho.
+    ///
+    /// ⚠️ O TEXTO DO CLIENTE NÃO É GRAVADO. Ele é a mensagem de uma pessoa, e o que o
+    /// diagnóstico precisa provar é se a captura vê mensagem, se separa cliente de loja e o que
+    /// o servidor respondeu. O código resgatado aparece na comanda e no painel, que é onde ele
+    /// tem função.
+    /// </summary>
+    internal static void DiagRaspadinha(string texto)
+        => HospedeWebView2.Anotar("chat-raspadinha.txt", texto, _relogio.Elapsed);
+
+    /// <summary>
+    /// "Reimprimir brinde": tira o papel de TODOS os brindes de hoje que ainda não estão na mão.
+    /// Existe porque papel falta, a bobina acaba e a comanda cai atrás da impressora.
+    ///
+    /// Era só o ÚLTIMO bônus. Numa noite sem bobina chegavam três códigos, a impressão falhava nos
+    /// três e o botão trazia um: os outros dois ficavam com o brinde queimado no servidor e sem
+    /// nenhuma tela que os mostrasse. Não havendo nenhum pendente, reimprime o último, que é o que
+    /// a pessoa quer quando a comanda caiu atrás da impressora.
+    /// </summary>
+    private async void ReimprimirBrinde(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            TxtEstado.Text = "Imprimindo a comanda do brinde…";
+            var (saiu, erro) = await ServicoRaspadinhaChat.ReimprimirPendentesDoDiaAsync();
+            if (saiu > 0)
+            {
+                TxtEstado.Text = saiu == 1
+                    ? "Comanda do brinde impressa."
+                    : $"{saiu} comandas de brinde impressas.";
+                return;
+            }
+            if (erro is not null)
+            {
+                TxtEstado.Text = "A comanda do brinde não saiu. Confira a impressora e tente de novo.";
+                return;
+            }
+            var b = Pdv.Nucleo.ChatRaspadinha.UltimoBonus();
+            if (b is null) { TxtEstado.Text = "Nenhum brinde da raspadinha por aqui ainda."; return; }
+            var e2 = await ServicoRaspadinhaChat.ReimprimirAsync(b);
+            TxtEstado.Text = e2 is null
+                ? "Comanda do brinde impressa: " + Pdv.Nucleo.ChatRaspadinha.LinhaDoBonus(b)
+                : "A comanda do brinde não saiu. Confira a impressora e tente de novo.";
+        }
+        catch (Exception ex)
+        {
+            Diag("reimprimir brinde: " + ex.GetType().Name);
+            TxtEstado.Text = "A comanda do brinde não saiu. Tente de novo.";
+        }
     }
 
     // ── captura de rede (CDP) — groundwork do parser nativo ──────────────────
@@ -296,7 +496,13 @@ public partial class ChatIfood : UserControl
             _wsRecv.DevToolsProtocolEventReceived += (_, e) => Seguro(() =>
             {
                 var p = PayloadDoFrame(e.ParameterObjectAsJson);
-                if (p is not null) { _captura.RegistrarFrame(p, enviado: false); AgendarDiagnostico(); }
+                if (p is null) return;
+                _captura.RegistrarFrame(p, enviado: false);
+                AgendarDiagnostico();
+                // CÓDIGO DA RASPADINHA (22/09/2026): só os quadros RECEBIDOS entram aqui. O que
+                // a loja envia sai pelo webSocketFrameSent, que continua só alimentando o
+                // diagnóstico. Ver OuvirMensagem: quem decide se há código é o servidor.
+                OuvirMensagem(ChatCaptura.NormalizarFrame(p), "ws", null, null);
             });
 
             _wsSent = core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameSent");
@@ -681,6 +887,108 @@ public partial class ChatIfood : UserControl
           }
         } catch (e) {}
         return false;
+      };
+
+      // (3.5) CODIGO DA RASPADINHA NO CHAT (22/09/2026). Le as falas VISIVEIS da conversa
+      // aberta e manda o TEXTO CRU para o C#. Aqui nao se procura codigo nenhum: quem
+      // decide e o servidor. O que esta pagina precisa acertar e UMA coisa so, quem falou.
+      //
+      // A autoria sai da GEOMETRIA: num chat a fala da loja fica de um lado e a do cliente
+      // do outro. Balao que atravessa o meio da coluna NAO decide, e vai com `minha` vazio
+      // — e o C# deixa de fora o que nao decidiu. Mandar a fala da propria loja para a
+      // borda e justamente o que o desenho proibe, entao a duvida cala.
+      //
+      // ⚠️ Este leitor e COMPLEMENTO. O caminho principal sao os quadros do WebSocket, que
+      // nao dependem de o operador abrir a conversa. Se os seletores do Gestor mudarem,
+      // aqui nao acha nada e a captura continua pelo WebSocket.
+      // O CONTEINER DOS BALOES, nao a tela inteira. Subindo so por tamanho, o primeiro ancestral
+      // com 280x320 costuma englobar tambem a COLUNA DAS CONVERSAS: ai os itens da lista entram
+      // na contagem e roubam as vagas dos baloes de verdade. O que separa os dois e a barra de
+      // rolagem: a conversa rola sozinha. Procura primeiro o ancestral que rola; so se nao houver
+      // nenhum e que cai na regra antiga de tamanho, para nao ficar sem leitura nenhuma.
+      function rolaSozinho(el){
+        try {
+          if (el.scrollHeight <= el.clientHeight + 40) return false;
+          var ov = getComputedStyle(el).overflowY;
+          return ov === 'auto' || ov === 'scroll' || ov === 'overlay';
+        } catch (e) { return false; }
+      }
+      function convPainel(){
+        try {
+          var c = respComposer(); if (!c) return null;   // a caixa de escrever marca a conversa aberta
+          var no = c, grande = null;
+          while (no && no !== document.body){
+            var r = no.getBoundingClientRect();
+            if (r.width >= 280 && r.height > 200 && rolaSozinho(no)) return no;
+            if (!grande && r.width >= 280 && r.height > 320) grande = no;
+            no = no.parentElement;
+          }
+          return grande;
+        } catch (e) {}
+        return null;
+      }
+      function textoProprio(el){
+        try {
+          var t = '';
+          for (var i = 0; i < el.childNodes.length; i++){ var n = el.childNodes[i]; if (n.nodeType === 3) t += n.textContent; }
+          return t.replace(/\s+/g, ' ').trim();
+        } catch (e) { return ''; }
+      }
+      // O QUE JA FOI MANDADO, por conversa. Sem isto o poll de 7 s reenviava a rolagem visivel
+      // inteira para sempre, e cada balao voltava ao C# a cada tique.
+      var pdvJaMandou = {};
+      window.pdvLerMensagens = function () {
+        try {
+          var p = convPainel(); if (!p) return false;
+          var rp = p.getBoundingClientRect();
+          var meio = rp.left + rp.width / 2;
+
+          // o NUMERO DO PEDIDO, quando ele aparece no cabecalho da conversa: e o que liga o
+          // bonus ao pedido sem o servidor ter de adivinhar pelo cliente.
+          var cab = (p.textContent || '').slice(0, 400);
+          var mp = cab.match(/#\s*(\d{3,10})/);
+          var pedido = mp ? mp[1] : null;
+          var conversa = pedido ? ('pedido-' + pedido) : '(sem numero)';
+          var vistos = pdvJaMandou[conversa];
+          if (!vistos) { vistos = pdvJaMandou[conversa] = {}; }
+
+          // ⚠️ DE TRAS PARA FRENTE. querySelectorAll devolve ordem de documento, que num chat vai
+          // do mais ANTIGO para o mais novo: parar nos primeiros 40 candidatos ficava com os baloes
+          // velhos (e com cada horario e cada rotulo que passa no teste de geometria) e o codigo
+          // que o cliente acabou de mandar, que esta sempre no fim, nunca era lido. Numa conversa
+          // longa o recurso simplesmente nao funcionava, em silencio.
+          var msgs = [];
+          var cands = p.querySelectorAll('div,span,p,li');
+          for (var i = cands.length - 1; i >= 0 && msgs.length < 25; i--){
+            var el = cands[i];
+            if (el.closest('#pdv-respostas') || el.closest('#pdv-ajuda') || el.closest('button,a,input,textarea,header')) continue;
+            var txt = textoProprio(el);
+            if (txt.length < 2 || txt.length > 800) continue;
+            var r = el.getBoundingClientRect();
+            // balao: mais estreito que a coluna e dentro da area visivel dela
+            if (r.width < 40 || r.height < 12 || r.width > rp.width * 0.85) continue;
+            if (r.bottom < rp.top || r.top > rp.bottom) continue;
+            var minha = null;
+            if (r.right < meio - 8) minha = false;
+            else if (r.left > meio + 8) minha = true;
+            if (minha === null) continue;
+            var hora = null;
+            var volta = (el.parentElement ? el.parentElement.textContent : '') || '';
+            var mh = volta.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+            if (mh) hora = mh[0];
+            var assinatura = (hora || '?') + '|' + minha + '|' + txt;
+            if (vistos[assinatura]) continue;          // ja mandado: nao volta a cada 7 s
+            vistos[assinatura] = 1;
+            msgs.push({ texto: txt, minha: minha, hora: hora });
+          }
+          msgs.reverse();                               // de volta a ordem do mais antigo ao mais novo
+          if (!msgs.length) return true;                // nada novo: nem mensagem para o C#
+          // memoria limitada: conversa muito longa recomeca em vez de crescer sem fim
+          if (Object.keys(vistos).length > 300) pdvJaMandou[conversa] = {};
+          envia({ tipo: 'chatmsgs', conversa: pedido ? ('pedido-' + pedido) : null,
+                  pedido: pedido, cliente: null, mensagens: msgs });
+          return true;
+        } catch (e) { return false; }
       };
 
       // ISOLAR o painel: "holofote" no chat, escondendo os irmãos na subida até o

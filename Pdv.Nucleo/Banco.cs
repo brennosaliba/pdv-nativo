@@ -460,6 +460,56 @@ public static class Banco
         );
         CREATE INDEX IF NOT EXISTS ix_brinde_codigo ON brinde(codigo);
 
+        -- ── CÓDIGO DA RASPADINHA NO CHAT DO iFOOD (22/09/2026) ────────────────
+        -- Uma linha por MENSAGEM do cliente capturada. A chave é o que impede a mesma
+        -- mensagem de virar duas chamadas: ela nasce da conversa, de quem escreveu, do
+        -- instante e do texto (ChatRaspadinha.Chave). A linha nasce JUNTO com a da fila,
+        -- na mesma transação, e por isso o caixa pode cair no meio da chamada sem perder
+        -- a mensagem: a fila descobre o desfecho depois.
+        CREATE TABLE IF NOT EXISTS raspadinha_chat (
+          chave          TEXT PRIMARY KEY,
+          texto          TEXT NOT NULL,             -- o que o cliente escreveu, cortado
+          loja           TEXT,
+          pedido         TEXT,                      -- número curto do iFood, quando dá para ler
+          ifood_order_id TEXT,
+          cliente        TEXT,
+          origem         TEXT NOT NULL DEFAULT 'caixa',
+          situacao       TEXT NOT NULL DEFAULT 'na_fila'
+                           CHECK (situacao IN ('na_fila','enviando','bonus','sem_codigo','recusado','nao_enviado')),
+          motivo         TEXT,
+          bonus_id       TEXT,
+          criado_em      TEXT NOT NULL,
+          tentado_em     TEXT,
+          resolvido_em   TEXT
+        );
+
+        -- Uma linha por BÔNUS, e é ela que vira papel. Separada da mensagem de propósito:
+        -- a mesma raspadinha pode chegar por dois caminhos (o quadro do WebSocket e o DOM,
+        -- ou o caixa e a extensão) com chaves de mensagem diferentes, e o servidor devolve
+        -- o MESMO bônus. A PK aqui é o que garante UMA comanda por resgate.
+        CREATE TABLE IF NOT EXISTS raspadinha_bonus (
+          id             TEXT PRIMARY KEY,
+          codigo         TEXT,
+          premio         TEXT,
+          premio_emoji   TEXT,
+          cliente        TEXT,
+          pedido         TEXT,
+          loja           TEXT,
+          ifood_order_id TEXT,
+          origem         TEXT,
+          criado_em      TEXT NOT NULL,
+          impresso_em    TEXT,                      -- claim da impressão (ver ReivindicarImpressao)
+          erro_impressao TEXT,
+          -- O SERVIDOR DISSE QUE ESTE BÔNUS JÁ EXISTIA e ele é novo NESTE disco: quem registrou
+          -- foi outro terminal (ou a extensão), e o papel é de lá. Sem isto, os dois caixas da
+          -- Savassi tiravam a MESMA comanda do mesmo brinde e a loja entregava dois cookies: a
+          -- única defesa era a PK, que é local a cada SQLite. Continua achável pelo Reimprimir.
+          de_outro_terminal INTEGER NOT NULL DEFAULT 0,
+          -- Tentativas de papel já gastas. O claim volta quando a impressão falha (senão a bobina
+          -- acabada engolia todo bônus menos o último), e este teto é o que impede a metralhadora.
+          tentativas_impressao INTEGER NOT NULL DEFAULT 0
+        );
+
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────
         -- Chave/valor em vez de coluna nova em `terminal`: Migrar() só faz CREATE TABLE
         -- IF NOT EXISTS, não tem ALTER nem versionamento. Coluna nova só chegaria em

@@ -264,6 +264,40 @@ public sealed class Nuvem
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { return (0, ""); }
     }
 
+    /// <summary>
+    /// A MESMA função de borda, com prazo e com a distinção que a fila precisa (22/09/2026,
+    /// código da raspadinha no chat): -1 = nada saiu do caixa (sem sessão, ou a conexão nem
+    /// abriu: nome que não resolve, conexão recusada); 0 = saiu e ficou sem resposta (prazo,
+    /// conexão caída no meio); senão, o HTTP e o corpo.
+    ///
+    /// A sobrecarga sem prazo continua devolvendo 401 sem sessão, porque quem a usa (Spotify)
+    /// trata o 401 como "não deu" e nada depende de saber se o servidor rodou.
+    /// </summary>
+    public async Task<(int Status, string Corpo)> FuncaoAsync(string nome, string json, TimeSpan prazo,
+        CancellationToken ct = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(prazo);
+        string? token;
+        try { token = await TokenAsync(cts.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (-1, ""); }
+        if (token is null) return (-1, "");
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{_url}/functions/v1/{nome}");
+            req.Headers.TryAddWithoutValidation("apikey", AnonKey);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, cts.Token).ConfigureAwait(false);
+            return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (HttpRequestException ex) when (ex.HttpRequestError is HttpRequestError.NameResolutionError
+                                                  or HttpRequestError.ConnectionError
+                                                  or HttpRequestError.SecureConnectionError) { return (-1, ""); }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or IOException) { return (0, ""); }
+    }
+
     // ── RPC com a sessão do TERMINAL (21/09/2026, brinde da raspadinha) ─────────────
     /// <summary>
     /// POST /rest/v1/rpc/{nome} com o Bearer da sessão do TERMINAL, nunca a chave pública: sem

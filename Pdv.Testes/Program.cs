@@ -1912,5 +1912,15 @@ Console.WriteLine();
 Console.WriteLine("--- Brinde da raspadinha: validador no topo da aba Promocoes, sem venda e sem nota ---");
 await TestesBrindes.RodarAsync((cond, nome) => Check("brinde: " + nome, cond));
 
+// -- 22/09/2026: o CODIGO DA RASPADINHA que o cliente manda NO CHAT do iFood ------------
+// "Capturar quando o cliente enviar o codigo de resgate da raspadinha, validar e gerar uma comanda
+// avisando do bonus." O caixa so ENTREGA a mensagem: quem acha o codigo, valida e resgata e o
+// servidor (a borda raspadinha-chat). Aqui se prova o que da para provar sem a pagina logada: quem
+// falou, a chave que impede repetir, o corpo que vai, a leitura da resposta, a comanda na bobina
+// estreita, o silencio quando nao havia codigo, e a fila que segura a mensagem sem internet.
+Console.WriteLine();
+Console.WriteLine("--- Codigo da raspadinha no chat: o servidor decide, o caixa escuta e imprime ---");
+await TestesRaspadinhaChat.RodarAsync((cond, nome) => Check("raspa-chat: " + nome, cond));
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

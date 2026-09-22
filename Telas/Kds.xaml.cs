@@ -276,6 +276,9 @@ public partial class Kds : UserControl
         var falha = await Servicos.ImprimirComandasPendentesAsync();
         // A nota do iFood da rodada de conferencia sai pelo mesmo caminho.
         falha ??= await Servicos.ImprimirNotasDoIfoodAsync();
+        // E a comanda do brinde da raspadinha que o chat capturou (inclusive o que ficou na
+        // fila sem internet): mesmo caminho, mesma bobina.
+        falha ??= await ServicoRaspadinhaChat.ImprimirPendentesAsync();
         if (falha is null) return;
         TxtStatus.Text = falha + ". Confira papel e impressora e toque no 🖨 do pedido.";
         Alerta.PedidoNovo();   // chama atencao: papel nao saiu

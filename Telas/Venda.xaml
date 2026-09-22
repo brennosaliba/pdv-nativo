@@ -691,6 +691,26 @@
             </StackPanel>
         </Border>
 
+        <!-- BRINDE DA RASPADINHA PELO CHAT (22/09/2026): o cliente mandou o codigo, o
+             servidor validou e a comanda saiu. O aviso fica porque papel falta: se a
+             bobina acabou, esta linha e a unica coisa que sobra. Um toque abre o chat,
+             que e onde esta o botao de reimprimir. Some sozinho em 60 s. -->
+        <Border x:Name="ToastBrinde" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,64,14,0"
+                Background="{DynamicResource PainelDegrade}" BorderBrush="{DynamicResource Rosa}"
+                BorderThickness="2" CornerRadius="14" Cursor="Hand" Panel.ZIndex="99"
+                MaxWidth="420" MouseLeftButtonUp="AbrirChatPeloToast">
+            <StackPanel Orientation="Horizontal" Margin="16,10,18,12">
+                <TextBlock Text="🎁" FontSize="22" VerticalAlignment="Center"/>
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtToastBrinde" Foreground="{DynamicResource Texto}"
+                               FontSize="15" FontWeight="Bold" TextWrapping="Wrap"/>
+                    <TextBlock Text="a comanda saiu na impressora" Foreground="{DynamicResource TextoFraco}"
+                               FontSize="12" Margin="0,2,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <!-- Aviso leve de uma linha (ex.: promocao nao aplicada depois de cancelar o
              codigo). Mesmo lugar dos outros toasts, sem toque: so informa e some em 8 s. -->
         <Border x:Name="ToastAviso" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"

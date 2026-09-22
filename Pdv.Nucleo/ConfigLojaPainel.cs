@@ -40,7 +40,9 @@ public static class ConfigLojaPainel
         string Store, string? ChatRespostas,
         string? AdminHash, string? AdminSalt, DateTime? AdminEm,
         string? PlaylistUri, string? PlaylistNome, string? DeviceId, string? DeviceNome, int? Volume,
-        bool? RaspadinhaNoCaixa = null);
+        bool? RaspadinhaNoCaixa = null,
+        /// <summary>22/09/2026: capturar o código da raspadinha no chat do iFood.</summary>
+        bool? RaspadinhaNoChat = null);
 
     /// <summary>O JSON da RPC (array) em linhas; JSON estranho = lista vazia, nunca exceção.</summary>
     public static IReadOnlyList<Linha> Ler(string? json)
@@ -68,7 +70,7 @@ public static class ConfigLojaPainel
                     DateTimeStyles.RoundtripKind, out var d) ? d.ToLocalTime() : null;
                 saida.Add(new Linha(store, S("chat_respostas"), S("admin_pin_hash"), S("admin_pin_salt"), em,
                     S("playlist_uri"), S("playlist_nome"), S("device_id"), S("device_nome"), I("volume"),
-                    B("raspadinha_no_caixa")));
+                    B("raspadinha_no_caixa"), B("raspadinha_no_chat")));
             }
         }
         catch { /* JSON ilegível: nada a aplicar */ }
@@ -139,6 +141,13 @@ public static class ConfigLojaPainel
         var raspAntes = Vendas.Config(cx, Brindes.ChaveConfigLoja);
         Gravar(cx, Brindes.ChaveConfigLoja, l.RaspadinhaNoCaixa == true ? "1" : null);
         if (raspAntes != Vendas.Config(cx, Brindes.ChaveConfigLoja)) mudou.Add("raspadinha no caixa");
+
+        // CÓDIGO DA RASPADINHA NO CHAT (22/09/2026): mesma regra do cartão do brinde. Campo
+        // ausente (painel sem a coluna) ou falso = desligado, e desligado é silêncio total: o
+        // caixa nem grava a mensagem do cliente, quanto mais manda para a nuvem.
+        var chatAntes = Vendas.Config(cx, ChatRaspadinha.ChaveConfigLoja);
+        Gravar(cx, ChatRaspadinha.ChaveConfigLoja, l.RaspadinhaNoChat == true ? "1" : null);
+        if (chatAntes != Vendas.Config(cx, ChatRaspadinha.ChaveConfigLoja)) mudou.Add("código da raspadinha no chat");
 
         return string.Join(", ", mudou);
     }
