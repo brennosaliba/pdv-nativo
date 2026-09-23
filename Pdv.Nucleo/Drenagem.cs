@@ -51,7 +51,7 @@ public sealed class Drenagem : IDisposable
     /// frente do dinheiro.
     /// </summary>
     internal static readonly (string Tipo, int Janela)[] JanelaPropria =
-        { (ChatRaspadinha.TipoNaFila, 5) };
+        { (ChatRaspadinha.TipoNaFila, 5), (EntregadorGestor.TipoNaFila, 3) };
 
     /// <summary>
     /// Quanto tempo um transitório espera antes de desistir, POR TIPO. Sete dias é o orçamento da
@@ -61,7 +61,9 @@ public sealed class Drenagem : IDisposable
     /// diz o que aconteceu.
     /// </summary>
     internal static TimeSpan PrazoDoTransitorio(string? tipo)
-        => tipo == ChatRaspadinha.TipoNaFila ? TimeSpan.FromHours(6) : TimeSpan.FromDays(DiasParaDesistir);
+        => tipo == ChatRaspadinha.TipoNaFila || tipo == EntregadorGestor.TipoNaFila
+            ? TimeSpan.FromHours(6)
+            : TimeSpan.FromDays(DiasParaDesistir);
 
     /// <summary>Tamanho da janela principal, a do dinheiro.</summary>
     internal const int JanelaPrincipal = 50;
@@ -311,6 +313,12 @@ public sealed class Drenagem : IDisposable
             // linha sai da fila sem chamada quando a loja desligou a captura. Ver
             // ChatRaspadinha.ResolverNaFilaAsync.
             ChatRaspadinha.TipoNaFila => await ChatRaspadinha.ResolverNaFilaAsync((string)item.client_key,
+                (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
+            // 23/09/2026: o NOME do entregador, lido do Gestor de Pedidos e mandado em lote. O
+            // payload da linha JÁ É o corpo da chamada (o lote inteiro numa linha só). Reenviar é
+            // seguro: nada é entregue e nada é criado no caixa, e aprender o mesmo nome duas vezes
+            // é o mesmo nome. O que o servidor aceitou sai da lista local e não volta nunca mais.
+            EntregadorGestor.TipoNaFila => await EntregadorGestor.ResolverNaFilaAsync((string)item.payload,
                 (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
@@ -994,7 +1002,8 @@ public sealed class Drenagem : IDisposable
     public static readonly string[] TiposComHandler =
         { "venda", "venda_composta", "nfce_vinculo", "venda_cancelada", "fechamento",
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
-          Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila };
+          Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila,
+          EntregadorGestor.TipoNaFila };
 
     /// <summary>
     /// HISTORICO (04/09/2026): sobe para pdv_estornos_sem_aprovacao as linhas de estorno

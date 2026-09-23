@@ -40,6 +40,8 @@ public partial class ChatIfood : UserControl
     /// <summary>Cada inicialização ganha um número; a que foi passada para trás (controle recriado no meio) não mexe mais na tela.</summary>
     private int _tentativa;
     private DispatcherTimer? _poll;
+    /// <summary>Relógio da leitura do nome do entregador (23/09/2026). Bem mais lento que o do chat.</summary>
+    private DispatcherTimer? _pollEntregadores;
     private readonly HospedeWebView2 Hospede;
     private readonly string _perfil;
     private readonly TetoPorHora _tetoRecriar = new TetoPorHora(6);
@@ -183,6 +185,15 @@ public partial class ChatIfood : UserControl
                 catch { /* o quadro do WebSocket continua sendo o caminho principal */ }
             };
             _poll.Start();
+
+            // O NOME DO ENTREGADOR (23/09/2026). Relógio próprio, e devagar: o que muda aqui é
+            // um pedido ganhando entregador, que acontece em minutos, não em segundos. Roda em
+            // silêncio, com ou sem alguém olhando a tela do chat (o Gestor fica vivo desde o
+            // pré-aquecimento), e a primeira leitura sai logo depois da página carregar.
+            _pollEntregadores = new DispatcherTimer { Interval = ServicoEntregadorGestor.Intervalo };
+            _pollEntregadores.Tick += async (_, _) => await LerEntregadoresAsync(core);
+            _pollEntregadores.Start();
+            _ = PrimeiraLeituraDeEntregadoresAsync(core);
         }
         catch (Exception ex)
         {
@@ -206,6 +217,7 @@ public partial class ChatIfood : UserControl
         {
             _pronto = false;
             _poll?.Stop(); _poll = null;
+            _pollEntregadores?.Stop(); _pollEntregadores = null;
             try { Web.Visibility = Visibility.Collapsed; } catch { }
             PainelErro.Visibility = Visibility.Visible;
             TxtEstado.Text = "";
@@ -258,6 +270,7 @@ public partial class ChatIfood : UserControl
             }
             Diag($"recriando o WebView2 ({motivo})");
             _poll?.Stop(); _poll = null;
+            _pollEntregadores?.Stop(); _pollEntregadores = null;
             _pronto = false; _tentativa++; _iniciando = false;
             Hospede.Recriar(motivo, descartarAmbiente: true);
             ServicoChat.Recomecar();
@@ -273,6 +286,30 @@ public partial class ChatIfood : UserControl
         try { txt = e.TryGetWebMessageAsString(); }
         catch { return; }
         if (string.IsNullOrEmpty(txt)) return;
+
+        // ⚠️ O PACOTE DOS ENTREGADORES NÃO É PARSEADO AQUI. Isto roda no Dispatcher, a MESMA
+        // thread de todas as janelas do caixa, e este é o único pacote que carrega os objetos
+        // CRUS dos pedidos do Gestor: podem ser centenas de milhares de caracteres. Parsear o
+        // documento inteiro só para ler o campo "tipo" fazia o operador ver a tela parar no
+        // meio de uma venda, e de cinco em cinco minutos, mesmo sem ninguém na tela do chat.
+        // Reconhecer pelo começo da string custa uma comparação curta.
+        //
+        // Quem acha o ASSIGN_DRIVER dentro deles é o núcleo (EntregadorGestor.DoPacote, com
+        // teste), e quem decide se o nome vale é o servidor. Aqui nada é impresso e nada é dito
+        // na tela: isto roda em silêncio.
+        if (EntregadorGestor.EhPacote(txt))
+        {
+            var pacote = txt;
+            _ = Task.Run(() =>
+            {
+                var lidos = EntregadorGestor.DoPacote(pacote);
+                if (lidos.Count == 0) return;
+                var quantos = ServicoEntregadorGestor.Ouvir(lidos);
+                DiagEntregador($"leitura: {lidos.Count} com entregador, {quantos} novos para mandar");
+            });
+            return;
+        }
+
         try
         {
             using var doc = JsonDocument.Parse(txt);
@@ -434,6 +471,46 @@ public partial class ChatIfood : UserControl
     /// </summary>
     internal static void DiagRaspadinha(string texto)
         => HospedeWebView2.Anotar("chat-raspadinha.txt", texto, _relogio.Elapsed);
+
+    // ── O NOME DO ENTREGADOR (23/09/2026, pedido do dono) ────────────────────
+    // "Ter o nome do entregador de cada pedido, para conferir o print da avaliação que o
+    // cliente manda." O nome está no localStorage do Gestor (ASSIGN_DRIVER), e esse evento
+    // nunca chegou pela API. Esta tela só PEDE a leitura e entrega o que veio; quem acha o
+    // evento é o núcleo, quem manda é a fila, e quem aprende o nome é o servidor.
+
+    /// <summary>
+    /// O rastro escreve CONTAGEM, nunca o nome de ninguém: é o mesmo cuidado do diagnóstico da
+    /// mensagem do cliente (o arquivo fica no disco da loja e ninguém precisa dele para nada
+    /// além de saber se a leitura está rodando).
+    /// </summary>
+    internal static void DiagEntregador(string texto)
+        => HospedeWebView2.Anotar("gestor-entregador.txt", texto, _relogio.Elapsed);
+
+    /// <summary>
+    /// Pede à página a leitura do localStorage. O script devolve o que achou pelo caminho normal
+    /// das mensagens (OnWebMessage), então aqui não há nada para esperar.
+    /// </summary>
+    private async Task LerEntregadoresAsync(CoreWebView2 core)
+    {
+        try { await core.ExecuteScriptAsync("window.pdvLerEntregadores && window.pdvLerEntregadores()"); }
+        catch { /* navegação em curso: daqui a alguns minutos o relógio tenta de novo */ }
+    }
+
+    /// <summary>
+    /// A primeira leitura, logo depois de a página carregar. O Gestor leva alguns segundos para
+    /// encher o localStorage: pedir antes disso devolveria uma lista vazia e o caixa esperaria o
+    /// relógio inteiro para tentar de novo.
+    /// </summary>
+    private async Task PrimeiraLeituraDeEntregadoresAsync(CoreWebView2 core)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(45));
+            if (!_pronto) return;
+            await HospedeWebView2.NaTela(Dispatcher, () => LerEntregadoresAsync(core));
+        }
+        catch { /* o relógio de cinco minutos continua valendo */ }
+    }
 
     /// <summary>
     /// "Reimprimir brinde": tira o papel de TODOS os brindes de hoje que ainda não estão na mão.
@@ -989,6 +1066,63 @@ public partial class ChatIfood : UserControl
                   pedido: pedido, cliente: null, mensagens: msgs });
           return true;
         } catch (e) { return false; }
+      };
+
+      // (3.6) O NOME DO ENTREGADOR (23/09/2026). O Gestor guarda cada pedido em
+      // localStorage['order/<uuid>'], e dentro dele o evento ASSIGN_DRIVER traz o nome do
+      // entregador ("Luis R.", igual ao print que o cliente manda) junto do identificador
+      // que a nossa integracao ja recebe. Esse evento nunca chega pela API: so existe aqui.
+      //
+      // ⚠️ ESTA FUNCAO NAO INTERPRETA NADA. Ela entrega o objeto CRU do pedido para o C#,
+      // que e quem acha o ASSIGN_DRIVER (EntregadorGestor.DoPedido, com teste). Aqui so
+      // moram os dois cortes baratos que evitam trafego a toa: pedido que nem tem a
+      // palavra ASSIGN_DRIVER dentro, e pedido que ja foi mandado com este mesmo tamanho.
+      // Guardar o tamanho, e nao um "ja mandei", e de proposito: reatribuicao de entregador
+      // muda o objeto, e ai ele volta.
+      //
+      // SO LE. Nada e escrito no localStorage e nada e escrito no Gestor.
+      var pdvOrdersMandados = {};    // o que JA foi oferecido NESTA volta (chave -> tamanho)
+      var pdvEntregadoresCursor = 0; // de onde a proxima rodada continua
+      window.pdvLerEntregadores = function () {
+        try {
+          // UMA VOLTA COMPLETA, E NAO UM RELOGIO. A rodada CONTINUA de onde a anterior
+          // parou e so esquece o que ofereceu quando termina a volta pelo localStorage.
+          //
+          // ⚠️ COMECAR SEMPRE DO INDICE 0 DAVA UM TETO DE 240 PEDIDOS. Sao 20 por rodada,
+          // e de hora em hora (12 rodadas de 5 min) o mapa era zerado e tudo recomecava do
+          // comeco: com o Gestor aberto por dias e algumas centenas de pedidos guardados,
+          // as posicoes 241 em diante NUNCA eram oferecidas. E o Chrome percorre o
+          // localStorage em ordem de INSERCAO, entao as que ficavam de fora eram justamente
+          // as dos pedidos MAIS NOVOS, que sao os que o dono quer conferir.
+          //
+          // Reoferecer continua sendo barato e continua acontecendo, a cada volta: quem nao
+          // repete o que ja foi ACEITO e o caixa, pela lista local.
+          var total = localStorage.length;
+          var itens = [];
+          var soma = 0;
+          var i = pdvEntregadoresCursor;
+          for (var passos = 0; passos < total && itens.length < 20; passos++, i++) {
+            if (i >= total) { i = 0; pdvOrdersMandados = {}; } // virou a volta: recomeca e reoferece
+            var k = localStorage.key(i);
+            if (!k || k.indexOf('order/') !== 0) continue;
+            var raw = null;
+            try { raw = localStorage.getItem(k); } catch (e) { raw = null; }
+            if (!raw || raw.length > 400000) continue;      // objeto absurdo: nao vale o trafego
+            if (raw.indexOf('ASSIGN_DRIVER') < 0) continue; // pedido sem entregador atribuido
+            if (pdvOrdersMandados[k] === raw.length) continue;
+            // ORCAMENTO DO PACOTE. Vinte pedidos de ate 400 mil caracteres davam um pacote
+            // de milhoes de caracteres atravessando o WebView2 de uma vez. Passou do
+            // orcamento, o resto vai na proxima rodada: o cursor fica parado nele.
+            if (itens.length && soma + raw.length > 600000) break;
+            pdvOrdersMandados[k] = raw.length;
+            soma += raw.length;
+            itens.push({ chave: k, bruto: raw });
+          }
+          pdvEntregadoresCursor = i;
+          if (!itens.length) return 0;
+          envia({ tipo: 'entregadores', itens: itens });
+          return itens.length;
+        } catch (e) { return -1; }
       };
 
       // ISOLAR o painel: "holofote" no chat, escondendo os irmãos na subida até o

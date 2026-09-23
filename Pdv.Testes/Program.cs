@@ -1922,5 +1922,16 @@ Console.WriteLine();
 Console.WriteLine("--- Codigo da raspadinha no chat: o servidor decide, o caixa escuta e imprime ---");
 await TestesRaspadinhaChat.RodarAsync((cond, nome) => Check("raspa-chat: " + nome, cond));
 
+// -- 23/09/2026: o NOME DO ENTREGADOR, lido do Gestor de Pedidos ------------------------
+// "Ter o nome do entregador de cada pedido, para conferir o print da avaliacao que o cliente
+// manda." O nome ("Luis R.") so existe dentro do navegador do Gestor, no evento ASSIGN_DRIVER do
+// localStorage: ele NUNCA chegou pela API (0 de 40.291 eventos medidos em 23/09). O caixa le em
+// silencio, manda em lote e guarda o que o servidor aceitou. Aqui se prova o que da para provar
+// sem a pagina logada: achar o evento no objeto do pedido, o lote que vai (sem telefone, sem
+// endereco), a leitura da resposta, a fila sem internet e o nao repetir.
+Console.WriteLine();
+Console.WriteLine("--- Nome do entregador pelo Gestor: leitura em silencio, lote e fila ---");
+await TestesEntregadorGestor.RodarAsync((cond, nome) => Check("entregador: " + nome, cond));
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

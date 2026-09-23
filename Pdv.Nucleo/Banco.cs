@@ -598,5 +598,26 @@ public static class Banco
         );
         CREATE INDEX IF NOT EXISTS ix_kds_aberto
           ON kds_ticket(criado_em) WHERE status IN ('recebido','preparando');
+
+        -- ── O NOME DO ENTREGADOR, LIDO DO GESTOR DE PEDIDOS (23/09/2026) ──────
+        -- Uma linha por FATO (este pedido, este entregador). Ela existe para uma coisa
+        -- só: não mandar de novo o que o servidor já aceitou. `aceito_em` preenchido é
+        -- assunto encerrado; `tentativas` conta as vezes em que o servidor recebeu mas
+        -- ainda não conseguiu tratar (o pedido não tinha chegado à integração dele).
+        -- O nome fica aqui só para o rastro de quem olhar o disco; quem guarda de
+        -- verdade é o servidor, e é ele quem confere se o pedido é desta loja.
+        CREATE TABLE IF NOT EXISTS ifood_entregador_visto (
+          chave       TEXT PRIMARY KEY,           -- order_id|worker_id (EntregadorGestor.Chave)
+          order_id    TEXT NOT NULL,
+          pedido      TEXT,                       -- número curto, quando o objeto do pedido traz
+          worker_id   TEXT NOT NULL,
+          nome        TEXT NOT NULL,
+          tentativas  INTEGER NOT NULL DEFAULT 0,
+          criado_em   TEXT NOT NULL,
+          -- quando entrou num lote e ainda não houve resposta. É o que impede a leitura
+          -- de cinco em cinco minutos criar um lote novo com o que já está esperando.
+          enfileirado_em TEXT,
+          aceito_em   TEXT
+        );
         """;
 }
