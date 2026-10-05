@@ -109,6 +109,30 @@ public static class Alerta
     }
 
     /// <summary>
+    /// Etiqueta do KDS bipada e o pedido virou PRONTO (05/10/2026): dois toques subindo,
+    /// curtos. É a confirmação para quem bipou de costas para a tela. Sem freio de tempo:
+    /// cada pedido bipado merece o seu (o bipe repetido nem chega aqui).
+    /// </summary>
+    public static void BipeOk()
+    {
+        _ = Task.Run(() =>
+        {
+            try { Console.Beep(1318, 90); Console.Beep(1760, 160); }
+            catch { /* sem som: o aviso grande e o card piscando continuam */ }
+        });
+    }
+
+    /// <summary>Bipe que não marcou nada (já estava pronto, não reconhecida): um toque grave.</summary>
+    public static void BipeRecusado()
+    {
+        _ = Task.Run(() =>
+        {
+            try { Console.Beep(330, 380); }
+            catch { /* sem som: o aviso grande continua na tela */ }
+        });
+    }
+
+    /// <summary>
     /// O WhatsApp CAIU (tela do QR): três toques descendentes, diferentes de "chegou
     /// mensagem" para o operador não confundir. A cadência (primeiro aviso, repetição)
     /// é da vigia no Núcleo; aqui só o freio de 6 s contra toque dobrado.

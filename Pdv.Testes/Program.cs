@@ -145,6 +145,12 @@ if (args.Length >= 4 && args[0] == "--foto-venda")
 if (args.Length >= 4 && args[0] == "--foto-kds")
     return FotoKds.Rodar(args);
 
+// Modo FOTO da comanda em ETIQUETA 10x15 (ver Pdv.Testes/FotoEtiqueta.cs). Puro desenho:
+// sem banco, sem impressora. Grava etiqueta-*.png na pasta pedida.
+//   Pdv.Testes.exe --foto-etiqueta docs/kds-fotos
+if (args.Length >= 2 && args[0] == "--foto-etiqueta")
+    return FotoEtiqueta.Rodar(args[1]);
+
 // Modo FOTO da tela do código do autenticador do dono, por cima da venda (ver
 // Pdv.Testes/FotoCodigo.cs). Cópia do banco do caixa, nuvem morta.
 //   Pdv.Testes.exe --foto-codigo saida.png 1024 768 [claro|escuro] [aviso]
@@ -1386,6 +1392,13 @@ TestesCardKds.Rodar((cond, nome) => Check("kds-card: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- KDS (detalhe do pedido) ---");
 TestesDetalhePedido.Rodar((cond, nome) => Check("kds-detalhe: " + nome, cond));
+
+// -- KDS: a comanda em ETIQUETA 10x15 e o PRONTO pelo bipe (05/10/2026) ------
+// Quadradinho no sabor e nao no combo, nome longo cortado, QR com prefixo, o leitor
+// USB (rapido sim, devagar nao, campo de texto nunca) e o bipe duplo liberando uma vez.
+Console.WriteLine();
+Console.WriteLine("--- KDS (etiqueta 10x15 e bipe) ---");
+TestesEtiquetaKds.Rodar((cond, nome) => Check("kds-etiqueta: " + nome, cond));
 
 // -- TEMA: decisao diurno/noturno + contraste da paleta clara ----------------
 // O teste de contraste le Temas/Claro.xaml de verdade: paleta ilegivel derruba

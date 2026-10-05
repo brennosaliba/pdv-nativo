@@ -145,6 +145,7 @@ public partial class Configuracao : UserControl
         // atualizar o PDV não pode calar uma configuração que a loja fez.
         ChkComandaSeparada.IsChecked =
             Impressao.ComandaSeparada(Vendas.Config(cx, "kds_comanda_separada"), impComandaGravada);
+        CarregarEtiqueta(cx);
 
         // Largura da bobina: as opções saem da MESMA tabela que a impressão usa para
         // montar o cupom, então o combo nunca oferece papel que o desenho não sabe fazer.
@@ -711,8 +712,95 @@ public partial class Configuracao : UserControl
     {
         if (BlocoComandaSeparada is null) return;
         var separada = ChkComandaSeparada.IsChecked == true;
-        BlocoComandaSeparada.Visibility = Se(separada);
-        TxtComandaJunto.Visibility = Se(!separada);
+        // Em ETIQUETA as opções da bobina somem: elas não valem para a comanda.
+        var bobina = CboFormatoComanda?.SelectedIndex != 1;
+        BlocoComandaSeparada.Visibility = Se(bobina && separada);
+        TxtComandaJunto.Visibility = Se(bobina && !separada);
+        ChkComandaSeparada.Visibility = Se(bobina);
+        BtnTesteComanda.Visibility = Se(bobina);
+        TxtStatusComanda.Visibility = Se(bobina);
+        if (BlocoEtiqueta is not null) BlocoEtiqueta.Visibility = Se(!bobina);
+    }
+
+    // ── COMANDA EM ETIQUETA 10x15 (05/10/2026) ───────────────────────────────
+
+    private static readonly int[] Giros = { 0, 90, 180, 270 };
+    /// <summary>True enquanto a tela põe nos combos o que está gravado: não é escolha do dono.</summary>
+    private bool _carregandoEtiqueta;
+
+    private void CarregarEtiqueta(Microsoft.Data.Sqlite.SqliteConnection cx)
+    {
+        _carregandoEtiqueta = true;
+        CboFormatoComanda.SelectedIndex =
+            EtiquetaKds.Formato(Vendas.Config(cx, EtiquetaKds.ChaveFormato)) == FormatoComanda.Etiqueta ? 1 : 0;
+        CboGiroEtiqueta.SelectedIndex =
+            Math.Max(0, Array.IndexOf(Giros, EtiquetaKds.Giro(Vendas.Config(cx, EtiquetaKds.ChaveGiro))));
+        _carregandoEtiqueta = false;
+        _ = CarregarImpressorasEtiquetaAsync(Vendas.Config(cx, EtiquetaKds.ChaveImpressora));
+        PintarComandaSeparada();
+    }
+
+    private async Task CarregarImpressorasEtiquetaAsync(string? escolhida)
+    {
+        _carregandoEtiqueta = true;
+        try
+        {
+            CboImpressoraEtiqueta.Items.Clear();
+            CboImpressoraEtiqueta.Items.Add("(padrão do Windows)");
+            CboImpressoraEtiqueta.SelectedIndex = 0;
+            IReadOnlyList<string> lista;
+            try { lista = await Impressao.ImpressorasAsync(); }
+            catch { lista = Array.Empty<string>(); }
+            foreach (var nome in lista) CboImpressoraEtiqueta.Items.Add(nome);
+            if (escolhida is { Length: > 0 })
+            {
+                if (!CboImpressoraEtiqueta.Items.Contains(escolhida)) CboImpressoraEtiqueta.Items.Add(escolhida);
+                CboImpressoraEtiqueta.SelectedItem = escolhida;
+            }
+        }
+        finally { _carregandoEtiqueta = false; }
+    }
+
+    private string? ImpressoraEtiquetaEscolhida()
+        => CboImpressoraEtiqueta.SelectedIndex <= 0 ? null : CboImpressoraEtiqueta.SelectedItem as string;
+
+    private int GiroEscolhido()
+        => CboGiroEtiqueta.SelectedIndex is >= 0 and < 4 ? Giros[CboGiroEtiqueta.SelectedIndex] : 0;
+
+    private void FormatoComandaMudou(object sender, SelectionChangedEventArgs e)
+    {
+        PintarComandaSeparada();
+        if (_carregandoEtiqueta || BlocoEtiqueta is null) return;
+        using var cx = Banco.Abrir();
+        Vendas.GravarConfig(cx, EtiquetaKds.ChaveFormato,
+            EtiquetaKds.TextoFormato(CboFormatoComanda.SelectedIndex == 1 ? FormatoComanda.Etiqueta : FormatoComanda.Bobina));
+    }
+
+    private void EtiquetaMudou(object sender, SelectionChangedEventArgs e)
+    {
+        if (_carregandoEtiqueta || TxtStatusEtiqueta is null) return;
+        using var cx = Banco.Abrir();
+        Vendas.GravarConfig(cx, EtiquetaKds.ChaveImpressora, ImpressoraEtiquetaEscolhida() ?? "");
+        Vendas.GravarConfig(cx, EtiquetaKds.ChaveGiro, GiroEscolhido().ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Etiqueta de exemplo (combo com sabores, observação) na impressora e posição da TELA.</summary>
+    private async void TestarEtiqueta(object sender, RoutedEventArgs e)
+    {
+        BtnTesteEtiqueta.IsEnabled = false;
+        TxtStatusEtiqueta.Text = "Imprimindo…";
+        try
+        {
+            var imp = ImpressoraEtiquetaEscolhida();
+            var erro = await Impressao.ImprimirEtiquetaKdsAsync(Servicos.ComandaDeExemplo(), imp, GiroEscolhido(),
+                "Etiqueta de teste");
+            var onde = imp ?? "impressora padrão do Windows";
+            TxtStatusEtiqueta.Text = erro is null
+                ? $"Mandei a etiqueta de teste para {onde}. O número tem que sair no alto e o QR embaixo, inteiro."
+                : $"Não imprimiu em {onde}. Confira se ela está ligada e com etiqueta. Detalhe: {erro}";
+            TxtStatusEtiqueta.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[erro is null ? "Ok" : "Erro"];
+        }
+        finally { BtnTesteEtiqueta.IsEnabled = true; }
     }
 
     private void ComandaSeparadaMudou(object sender, RoutedEventArgs e) => PintarComandaSeparada();

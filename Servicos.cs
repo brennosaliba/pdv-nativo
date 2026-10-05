@@ -816,7 +816,8 @@ public static class Servicos
     /// longa, combo com escolhas e observação de cozinha — é onde o corte aparece.
     /// </summary>
     public static Pdv.Nucleo.Ticket ComandaDeExemplo() => new(
-        Id: "exemplo", Origem: "ifood", RefId: "exemplo", Numero: "TESTE-1",
+        // RefId = o código da etiqueta de TESTE: bipar ela diz "leitor funcionando" (BipeKds).
+        Id: "exemplo", Origem: "ifood", RefId: Pdv.Nucleo.EtiquetaKds.IdTeste, Numero: "TESTE-1",
         Cliente: "CLIENTE DE TESTE",
         // Passa pelo MESMO ItensDeJson que a sincronização usa e serializa o resultado,
         // que é exatamente o que fica em kds_ticket.itens_json. Escrever o JSON final à
@@ -829,6 +830,48 @@ public static class Servicos
               "observacao":"sem granulado, embalar separado"}]
             """)),
         Status: Pdv.Nucleo.Kds.Recebido, CriadoEm: DateTime.Now, PreparoEm: null, ProntoEm: null);
+
+    /// <summary>
+    /// A comanda de UM pedido no formato que a loja escolheu (05/10/2026): bobina de 40
+    /// colunas (o de sempre) ou etiqueta 10x15 com QR. Um lugar só para os três caminhos
+    /// (automática, 🖨 do card, reimpressão): o formato não pode depender de quem pediu.
+    /// Mesmo contrato da impressão: null = saiu; string = mensagem; nunca lança.
+    /// </summary>
+    public static async Task<string?> ImprimirComandaAsync(Pdv.Nucleo.Ticket t, string descricao)
+    {
+        FormatoComanda formato; Impressao.Destino destino; string? impEtiqueta; int giro;
+        try
+        {
+            using var cx = Banco.Abrir();
+            formato = EtiquetaKds.Formato(Vendas.Config(cx, EtiquetaKds.ChaveFormato));
+            destino = DestinoDaComanda(cx);
+            impEtiqueta = Vendas.Config(cx, EtiquetaKds.ChaveImpressora);
+            giro = EtiquetaKds.Giro(Vendas.Config(cx, EtiquetaKds.ChaveGiro));
+        }
+        catch (Exception ex) { return $"Não li a configuração da comanda: {ex.Message}"; }
+
+        if (formato == FormatoComanda.Etiqueta)
+            return await Impressao.ImprimirEtiquetaKdsAsync(t,
+                string.IsNullOrWhiteSpace(impEtiqueta) ? null : impEtiqueta, giro, descricao).ConfigureAwait(false);
+        return await Impressao.ImprimirTextoAsync(descricao,
+            new[] { Pdv.Nucleo.Kds.ComandaLinhas(t, Pdv.Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
+            destino).ConfigureAwait(false);
+    }
+
+    /// <summary>O rótulo curto de onde a comanda sai, para o cabeçalho do KDS.</summary>
+    public static string RotuloDaComanda(SqliteConnection cx)
+    {
+        if (EtiquetaKds.Formato(Vendas.Config(cx, EtiquetaKds.ChaveFormato)) == FormatoComanda.Etiqueta)
+        {
+            var imp = Vendas.Config(cx, EtiquetaKds.ChaveImpressora);
+            return "etiqueta 10x15 em " + (string.IsNullOrWhiteSpace(imp) ? "padrão do Windows" : imp);
+        }
+        return Impressao.RotuloDestinoComanda(
+            Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"),
+            Vendas.Config(cx, "kds_comanda_separada"),
+            Vendas.Config(cx, "kds_comanda_impressora"),
+            Vendas.Config(cx, "kds_comanda_papel_mm"));
+    }
 
     private static readonly SemaphoreSlim UmaComandaPorVez = new(1, 1);
 
@@ -849,12 +892,9 @@ public static class Servicos
         if (!await UmaComandaPorVez.WaitAsync(0).ConfigureAwait(false)) return null;
         try
         {
-            Impressao.Destino destino; PoliticaImpressao politica;
+            PoliticaImpressao politica;
             using (var cx = Banco.Abrir())
-            {
                 politica = Impressoes.Politica(cx, Impressoes.Comanda);
-                destino = DestinoDaComanda(cx);
-            }
             // Só "imprimir sozinho" tira papel aqui. Em "perguntar" quem tira é o 🖨 do
             // card na tela Delivery, e em "não imprimir" nada sai e o 🖨 some.
             if (politica != PoliticaImpressao.Automatico) return null;
@@ -866,10 +906,8 @@ public static class Servicos
                 // e donut duplo. Falhou depois do claim -> o botao imprimir do card
                 // reimprime (impressora morta nao pode virar metralhadora).
                 if (!Pdv.Nucleo.Kds.ReivindicarImpressao(t.Id)) continue;
-                var erro = await Impressao.ImprimirTextoAsync(
-                    $"Comanda cozinha #{t.Numero}",
-                    new[] { Pdv.Nucleo.Kds.ComandaLinhas(t, Pdv.Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
-                    destino).ConfigureAwait(false);
+                // No formato escolhido (bobina ou etiqueta): ver ImprimirComandaAsync.
+                var erro = await ImprimirComandaAsync(t, $"Comanda cozinha #{t.Numero}").ConfigureAwait(false);
                 // Mesma frase que o botao de reimprimir da tela Delivery mostra: e o
                 // mesmo papel que nao saiu, entao nao pode ter dois textos diferentes.
                 falha ??= erro is null ? null : $"A comanda do #{t.Numero} não saiu";

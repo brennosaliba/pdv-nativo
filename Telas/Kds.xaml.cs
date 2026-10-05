@@ -52,6 +52,8 @@ public partial class Kds : UserControl
         };
         _timer.Start();
         Unloaded += (_, _) => { _timer?.Stop(); _timer = null; };
+        // O teclado (leitor da etiqueta) tem que ter dono assim que o quadro abre.
+        Loaded += (_, _) => GarantirFoco();
         // A largura do card só existe depois que o WPF mede a tela, e a loja tem
         // monitores de tamanhos diferentes. Aqui é onde a decisão de quantos cards
         // cabem lado a lado ganha o número de verdade.
@@ -73,6 +75,53 @@ public partial class Kds : UserControl
     }
 
     private void SinoTocou() => Dispatcher.Invoke(() => _ = PuxarAsync());
+
+    // ── O BIPE DA ETIQUETA (05/10/2026) ─────────────────────────────────────
+    // Quem lê o leitor USB é a MainWindow (ela vê as teclas antes de qualquer tela e
+    // engole a rajada da etiqueta, Enter incluído). Aqui só o que é do quadro: o card
+    // que virou PRONTO pisca verde, e o teclado nunca fica sem dono.
+
+    private string? _piscaId;
+    private DateTime _piscaAte;
+
+    /// <summary>Repinta o quadro com o card do pedido piscando em verde por 3 s.</summary>
+    public void PiscarPronto(string ticketId)
+    {
+        _piscaId = ticketId;
+        _piscaAte = DateTime.Now.AddSeconds(3);
+        Pintar();
+        var fim = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3.1) };
+        fim.Tick += (_, _) =>
+        {
+            fim.Stop();
+            if (_piscaId == ticketId) _piscaId = null;
+            Pintar();
+        };
+        fim.Start();
+    }
+
+    /// <summary>
+    /// O quadro se redesenha a cada 10 s, e o botão que tinha o foco do teclado (o último
+    /// rodapé tocado) sai da árvore junto. Teclado sem dono = o bipe do leitor não chega a
+    /// janela nenhuma. Aqui o foco volta para o quadro, MENOS quando alguém está digitando
+    /// (busca) ou quando a janela não está na frente (diálogo aberto).
+    /// </summary>
+    private void GarantirFoco()
+    {
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            try
+            {
+                var janela = Window.GetWindow(this);
+                if (janela is null || !janela.IsActive || !IsVisible) return;
+                var f = System.Windows.Input.Keyboard.FocusedElement as DependencyObject;
+                var vivo = f is Visual v && PresentationSource.FromVisual(v) is not null;
+                if (vivo) return;
+                Focus();
+            }
+            catch { /* foco é conforto: nunca derruba o quadro */ }
+        });
+    }
 
     // ── DETALHE DO PEDIDO (04/09, pedido do dono olhando o KDS na loja) ────
     // "criar no KDS do PDV um pop-up que quando clica ele visualiza o pedido, com
@@ -160,17 +209,21 @@ public partial class Kds : UserControl
     private string PintarDestinoComanda()
     {
         using var cx = Banco.Abrir();
-        var rotulo = Impressao.RotuloDestinoComanda(
-            Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"),
-            Vendas.Config(cx, "kds_comanda_separada"),
-            Vendas.Config(cx, "kds_comanda_impressora"),
-            Vendas.Config(cx, "kds_comanda_papel_mm"));
+        var rotulo = Servicos.RotuloDaComanda(cx);
         TxtDestinoComanda.Text = "Comanda: " + rotulo;
         return rotulo;
     }
 
     private async void TrocarDestinoComanda(object sender, RoutedEventArgs e)
     {
+        // Comanda em ETIQUETA: este seletor é o da bobina e não mexe nela. A etiqueta
+        // (impressora, giro, teste) se escolhe na Configuração.
+        using (var cxF = Banco.Abrir())
+            if (EtiquetaKds.Formato(Vendas.Config(cxF, EtiquetaKds.ChaveFormato)) == FormatoComanda.Etiqueta)
+            {
+                TxtStatus.Text = "A comanda sai em etiqueta 10x15. Troque em Configuração, Comanda da cozinha.";
+                return;
+            }
         // Enquanto o spooler não responde, o botão diz o que está fazendo em vez de
         // parecer travado — e fica desligado pra não abrir dois seletores.
         var textoAntes = TxtDestinoComanda.Text;
@@ -316,17 +369,35 @@ public partial class Kds : UserControl
         TxtQtdPreparar.Text = fila.Count.ToString();
         TxtQtdPreparo.Text  = abertos.Count(t => t.Status == Nucleo.Kds.Preparando).ToString();
         TxtQtdPronto.Text   = abertos.Count(t => t.Status == Nucleo.Kds.Pronto).ToString();
+        GarantirFoco();
     }
 
     private void BuscaMudou(object sender, TextChangedEventArgs e)
     {
+        // O leitor da etiqueta bipou COM O FOCO NA BUSCA: dentro de campo de texto o bipe
+        // não marca nada (LeitorKds), e a etiqueta virava filtro de pedido. Diz o que fazer.
+        if (EtiquetaKds.PareceEtiqueta(TxtBusca.Text))
+        {
+            _busca = "";
+            BtnLimparBusca.Visibility = Visibility.Visible;
+            TxtStatus.Text = "Etiqueta lida dentro da busca. Toque no ✕ e bipe de novo.";
+            return;
+        }
         _busca = TxtBusca.Text.Trim();
         BtnLimparBusca.Visibility = _busca.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         if (_busca.Length == 0) TxtStatus.Text = "";
         Pintar();
     }
 
-    private void LimparBusca(object sender, RoutedEventArgs e) { TxtBusca.Text = ""; TxtBusca.Focus(); }
+    private void LimparBusca(object sender, RoutedEventArgs e)
+    {
+        // Etiqueta caída na busca: o foco SAI do campo, senão o próximo bipe cai nele de novo.
+        var eraEtiqueta = EtiquetaKds.PareceEtiqueta(TxtBusca.Text);
+        TxtBusca.Text = "";
+        if (!eraEtiqueta) { TxtBusca.Focus(); return; }
+        TxtStatus.Text = "";
+        Focus();
+    }
 
     /// <summary>Caixa touch: o toque no campo abre o teclado do Windows, como na justificativa.</summary>
     private void BuscaFocou(object sender, RoutedEventArgs e) => PedirTexto.AbrirTecladoVirtualSeTouch();
@@ -517,6 +588,20 @@ public partial class Kds : UserControl
             b.SetResourceReference(Border.BackgroundProperty, "AgendadoFundo");
             b.SetResourceReference(Border.BorderBrushProperty, "Agendado");
             b.BorderThickness = new Thickness(2);
+        }
+        if (t.Id == _piscaId && DateTime.Now < _piscaAte)
+        {
+            // ACABOU DE SER BIPADO: verde, borda grossa e piscando, e rolado até a vista.
+            b.SetResourceReference(Border.BackgroundProperty, "ChipOkFundo");
+            b.SetResourceReference(Border.BorderBrushProperty, "Ok");
+            b.BorderThickness = new Thickness(4);
+            b.BeginAnimation(UIElement.OpacityProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(1.0, 0.35, TimeSpan.FromMilliseconds(260))
+                {
+                    AutoReverse = true,
+                    RepeatBehavior = new System.Windows.Media.Animation.RepeatBehavior(4),
+                });
+            b.Loaded += (_, _) => b.BringIntoView();
         }
 
         var raiz = new Grid();
@@ -710,12 +795,8 @@ public partial class Kds : UserControl
                 // MESMO destino da comanda automática (Servicos.DestinoDaComanda): a
                 // reimpressão tem que sair na bobina em que a original sairia, senão o
                 // 🖨 vira "saiu, mas noutra impressora" — que é pior que não sair.
-                Impressao.Destino destino;
-                using (var cx = Banco.Abrir()) destino = Servicos.DestinoDaComanda(cx);
-                var erro = await Impressao.ImprimirTextoAsync(
-                    $"Comanda cozinha #{t.Numero} (manual)",
-                    new[] { Nucleo.Kds.ComandaLinhas(t, Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
-                    destino);
+                // E no MESMO formato (bobina ou etiqueta 10x15, 05/10/2026).
+                var erro = await Servicos.ImprimirComandaAsync(t, $"Comanda cozinha #{t.Numero} (manual)");
                 // Na falha, primeiro o que fazer; a causa técnica vai no fim,
                 // entre parênteses, pra quem for atrás da impressora.
                 TxtStatus.Text = erro is null

@@ -266,6 +266,35 @@
                     <ComboBox x:Name="CboPolComanda" Margin="0,4,0,4"/>
                     <TextBlock Text="Em Perguntar na tela a comanda sai pelo 🖨 de cada pedido, na tela Delivery."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                    <!-- FORMATO DA COMANDA (05/10/2026, pedido do dono): a bobina de sempre ou a
+                         ETIQUETA 10x15 da Elgin, com QR que o leitor USB bipa para marcar PRONTO.
+                         Nasce em bobina: nada muda na loja sem o dono escolher. Grava NA HORA
+                         (como o tema): é escolha de papel desta máquina, não depende do Salvar. -->
+                    <TextBlock Text="Formato da comanda" Style="{StaticResource Rotulo}"/>
+                    <ComboBox x:Name="CboFormatoComanda" Margin="0,4,0,4" SelectionChanged="FormatoComandaMudou">
+                        <ComboBoxItem Content="Bobina 80 mm (o de sempre)"/>
+                        <ComboBoxItem Content="Etiqueta 10x15 com QR para bipar o pronto"/>
+                    </ComboBox>
+                    <StackPanel x:Name="BlocoEtiqueta" Visibility="Collapsed" Margin="24,2,0,8">
+                        <TextBlock Text="Impressora da etiqueta" Style="{StaticResource Rotulo}"/>
+                        <ComboBox x:Name="CboImpressoraEtiqueta" Margin="0,4,0,10" SelectionChanged="EtiquetaMudou"/>
+                        <TextBlock Text="Posição da etiqueta no papel" Style="{StaticResource Rotulo}"/>
+                        <ComboBox x:Name="CboGiroEtiqueta" Margin="0,4,0,4" SelectionChanged="EtiquetaMudou">
+                            <ComboBoxItem Content="Em pé (100 x 150)"/>
+                            <ComboBoxItem Content="Deitada, girada para a direita (150 x 100)"/>
+                            <ComboBoxItem Content="Em pé, de cabeça para baixo"/>
+                            <ComboBoxItem Content="Deitada, girada para a esquerda (150 x 100)"/>
+                        </ComboBox>
+                        <TextBlock Text="Imprima o teste. Saiu deitada ou cortada: troque a posição e teste de novo."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <Button x:Name="BtnTesteEtiqueta" Content="Imprimir etiqueta de teste" Click="TestarEtiqueta"
+                                Style="{StaticResource BotaoBase}" MinHeight="50" FontSize="16" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TxtStatusEtiqueta"
+                                   Text="O pronto se marca bipando o QR da etiqueta com o leitor USB, com a tela Delivery ou a venda aberta."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    </StackPanel>
+
                     <CheckBox x:Name="ChkComandaSeparada" Content="Usar outra impressora só para a comanda da cozinha"
                               IsChecked="False" FontSize="14" Margin="0,0,0,4"
                               Checked="ComandaSeparadaMudou" Unchecked="ComandaSeparadaMudou"/>

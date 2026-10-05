@@ -73,7 +73,98 @@ public partial class MainWindow : Window
                 e.Handled = true;
             }
         };
+        LigarLeitorEtiqueta();
         Roteia();
+    }
+
+    // ── LEITOR USB DA ETIQUETA DO KDS (05/10/2026, pedido do dono) ──────────────
+    // O leitor é um teclado: bipar a etiqueta "digita" ADKDS:<order_id> + Enter. A
+    // captura mora AQUI, na janela, e não na tela do quadro, por segurança: a Venda e
+    // o KDS dividem esta janela, e na Venda o foco costuma estar num BOTÃO. Um bipe que
+    // ninguém capturasse terminaria num Enter "apertando" o botão com foco (Pagar,
+    // Finalizar...). Capturado aqui, a rajada da etiqueta é engolida inteira em qualquer
+    // tela, e o PRONTO acontece tanto com o quadro na frente quanto com a venda (o
+    // ticket é local, o Liberar não depende de tela). Em campo de texto nada é capturado
+    // (o operador digitando CPF ou procurando pedido não perde tecla): LeitorKds.
+
+    private readonly LeitorKds _leitor = new();
+    private readonly BipeKds _bipe = BipeKds.Padrao();
+    private System.Windows.Threading.DispatcherTimer? _fimAvisoBipe;
+
+    private void LigarLeitorEtiqueta()
+    {
+        PreviewTextInput += (_, e) =>
+        {
+            if (!LeitorAtivo()) { _leitor.Zerar(); return; }
+            if (_leitor.Caractere(e.Text, (uint)e.Timestamp, EmCampoDeTexto())) e.Handled = true;
+        };
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key is not (Key.Enter or Key.Return)) return;
+            if (!LeitorAtivo()) { _leitor.Zerar(); return; }
+            if (_leitor.Enter((uint)e.Timestamp, EmCampoDeTexto()) is not { } codigo) return;
+            e.Handled = true;   // o Enter da etiqueta nunca chega a botão nenhum
+            Bipou(codigo);
+        };
+    }
+
+    /// <summary>Só com o operador numa tela de trabalho (quadro ou venda) e sem chat por cima.</summary>
+    private bool LeitorAtivo()
+        => Conteudo.Content is Telas.Kds or Venda
+           && CamadaChat.Visibility != Visibility.Visible
+           && !CamadaWhatsApp.IsHitTestVisible;
+
+    private static bool EmCampoDeTexto()
+        => Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase
+                                   or System.Windows.Controls.PasswordBox
+           || Keyboard.FocusedElement is System.Windows.Controls.ComboBox { IsEditable: true };
+
+    private void Bipou(string codigo)
+    {
+        ResultadoBipe r;
+        try { r = _bipe.Processar(codigo, DateTime.Now); }
+        catch (Exception ex)
+        {
+            Avisar("Não consegui marcar: " + ex.Message, "Erro", "ChipErroFundo", "ChipErroBorda");
+            return;
+        }
+        switch (r.Desfecho)
+        {
+            case DesfechoBipe.Repetido:
+                return;   // a mesma etiqueta lida duas vezes: o primeiro bipe já respondeu
+            case DesfechoBipe.Pronto:
+                // O aviso de PRONTO foi para a outbox: cutuca a fila agora, como o rodapé faz.
+                Servicos.Dreno()?.Cutucar();
+                Alerta.BipeOk();
+                Avisar(r.Mensagem, "Ok", "ChipOkFundo", "ChipOkBorda");
+                if (Conteudo.Content is Telas.Kds k && r.TicketId is { } id) k.PiscarPronto(id);
+                return;
+            case DesfechoBipe.Teste:
+                Alerta.BipeOk();
+                Avisar(r.Mensagem, "Ok", "ChipOkFundo", "ChipOkBorda");
+                return;
+            case DesfechoBipe.NaoReconhecida:
+                Alerta.BipeRecusado();
+                Avisar(r.Mensagem, "Erro", "ChipErroFundo", "ChipErroBorda");
+                return;
+            default:
+                Alerta.BipeRecusado();
+                Avisar(r.Mensagem, "Amarelo", "ChipAlertaFundo", "ChipAlertaBorda");
+                return;
+        }
+    }
+
+    private void Avisar(string texto, string cor, string fundo, string borda)
+    {
+        TxtAvisoBipe.Text = texto;
+        TxtAvisoBipe.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, cor);
+        AvisoBipe.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, fundo);
+        AvisoBipe.SetResourceReference(System.Windows.Controls.Border.BorderBrushProperty, borda);
+        AvisoBipe.Visibility = Visibility.Visible;
+        _fimAvisoBipe?.Stop();
+        _fimAvisoBipe = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+        _fimAvisoBipe.Tick += (_, _) => { _fimAvisoBipe?.Stop(); AvisoBipe.Visibility = Visibility.Collapsed; };
+        _fimAvisoBipe.Start();
     }
 
     /// <summary>

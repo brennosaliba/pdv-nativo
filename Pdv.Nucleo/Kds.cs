@@ -874,7 +874,7 @@ public static class Kds
         if (eventos is not null) AplicarEntregas(eventos);
     }
 
-    private static Ticket Ler(dynamic r) => new(
+    internal static Ticket Ler(dynamic r) => new(
         (string)r.id, (string)r.origem, (string)r.ref_id, (string)r.numero,
         r.cliente as string, (string)r.itens_json, (string)r.status,
         DateTime.Parse((string)r.criado_em),

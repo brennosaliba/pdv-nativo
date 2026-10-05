@@ -119,7 +119,7 @@ public sealed record DadosCupom(
 ///    não uma exceção que derruba a tela.
 ///  - nada aqui usa recurso do app (o tema é escuro): cupom é preto no branco, sempre.
 /// </summary>
-public static class Impressao
+public static partial class Impressao
 {
     /// <summary>1 mm em DIP — o WPF mede em 1/96 de polegada, a bobina em milímetros.</summary>
     private const double MM = 96.0 / 25.4;

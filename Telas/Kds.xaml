@@ -1,6 +1,7 @@
 <UserControl x:Class="Pdv.Telas.Kds"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="True" FocusVisualStyle="{x:Null}">
     <!-- KDS em QUADRO, espelhando o fluxo do KDS da Savassi
          (NEW → IN_PRODUCTION → READY → CONCLUDED):
 

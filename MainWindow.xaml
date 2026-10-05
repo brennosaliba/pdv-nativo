@@ -51,6 +51,17 @@
             </telas:ChatWhatsApp.RenderTransform>
         </telas:ChatWhatsApp>
 
+        <!-- O BIPE DA ETIQUETA (05/10/2026): a resposta do leitor USB, GRANDE, por cima de
+             qualquer tela (quadro ou venda). Não pega toque (IsHitTestVisible=False) e some
+             sozinha em 2,5 s. Cores do tema pela tela: verde = pronto, amarelo = já estava,
+             vermelho = não reconhecida. -->
+        <Border Grid.Row="1" x:Name="AvisoBipe" Visibility="Collapsed" IsHitTestVisible="False"
+                Panel.ZIndex="100" HorizontalAlignment="Center" VerticalAlignment="Top"
+                Margin="16,90,16,0" Padding="44,22" CornerRadius="18" BorderThickness="3">
+            <TextBlock x:Name="TxtAvisoBipe" FontSize="46" FontWeight="Bold" TextAlignment="Center"
+                       TextWrapping="Wrap"/>
+        </Border>
+
         <!-- Janela sem moldura (quiosque) precisa dos próprios botões de janela.
              Discretos de propósito: existem pro dono/suporte, não pro operador. -->
         <!-- Ficavam colados no "Sair" da barra do caixa: um toque errado fechava o
