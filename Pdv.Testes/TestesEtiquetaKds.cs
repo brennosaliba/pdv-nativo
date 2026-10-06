@@ -35,27 +35,61 @@ public static class TestesEtiquetaKds
         // ── 1. LAYOUT PURO ──────────────────────────────────────────────────
         {
             var e = EtiquetaKds.Montar(Exemplo(), new DateTime(2026, 10, 5));
-            var grupo = e.Linhas.FirstOrDefault(l => l.Tipo == TipoLinhaEtiqueta.Grupo);
-            checar(grupo is not null && !grupo.Caixa && grupo.Texto.Contains("Combo Box") && grupo.Qtd == "1×",
-                "combo vira TÍTULO do grupo, com a quantidade e SEM quadradinho");
+            // O PAI com subitens não sai (06/10, dono): só os subitens, cada um com caixa.
+            checar(e.Linhas.All(l => !l.Texto.Contains("Combo Box")) && e.Linhas.All(l => l.Tipo != TipoLinhaEtiqueta.Observacao || l.Texto != "Combo Box"),
+                "o nome do combo (produto pai) NÃO sai na etiqueta: " + string.Join(" | ", e.Linhas.Select(l => l.Lida)));
             var subs = e.Linhas.Where(l => l.Tipo == TipoLinhaEtiqueta.Subitem).ToList();
-            checar(subs.Count == 3 && subs.All(s => s.Caixa && s.Nivel == 1),
-                $"cada subitem do combo tem o PRÓPRIO quadradinho, recuado (achei {subs.Count})");
+            checar(subs.Count == 3 && subs.All(s => s.Caixa && s.Nivel == 0),
+                $"cada subitem do combo tem o PRÓPRIO quadradinho, como linha de conferência (achei {subs.Count})");
             checar(subs.Any(s => s.Qtd == "2×" && s.Texto.Contains("Donut Ninho")),
                 "subitem com grupo e quantidade sai como 2× Clássicos: Donut Ninho");
             var simples = e.Linhas.FirstOrDefault(l => l.Texto == "Cookie Duplo");
             checar(simples is { Tipo: TipoLinhaEtiqueta.Item, Caixa: true, Qtd: "2×" },
-                "item sem subitem tem quadradinho no próprio item");
+                "item sem subitem continua com quadradinho no próprio item");
             var obs = e.Linhas.FirstOrDefault(l => l.Tipo == TipoLinhaEtiqueta.Observacao);
             checar(obs is { Caixa: false, Nivel: 1, Texto: "sem granulado" },
-                "observação do item sai recuada e sem quadradinho");
-            var iObs = e.Linhas.ToList().IndexOf(obs!);
-            var iGrupo = e.Linhas.ToList().IndexOf(grupo!);
-            var iCookie = e.Linhas.ToList().IndexOf(simples!);
-            checar(iGrupo < iObs && iObs < iCookie, "a observação fica logo abaixo do item dela, antes do próximo item");
-            checar(e.Linhas.Count(l => l.Caixa) == 4, "4 caixas: 3 sabores + 1 item simples (o combo não conta)");
+                "observação do item pai sai recuada e sem quadradinho");
+            var lista = e.Linhas.ToList();
+            var iObs = lista.IndexOf(obs!);
+            var iUltSub = lista.IndexOf(subs[^1]);
+            var iCookie = lista.IndexOf(simples!);
+            checar(iUltSub == iObs - 1 && iObs < iCookie,
+                "a observação do combo fica logo abaixo dos subitens dele, antes do próximo item");
+            checar(e.Linhas.Count(l => l.Caixa) == 4, "4 caixas: 3 sabores + 1 item simples");
             checar(e.Numero == "8149" && e.Origem == "iFOOD", "número e origem iFOOD no topo");
             checar(e.Chegou == "Chegou 17:37", "hora de chegada vai na etiqueta");
+
+            // 2 combos: cada subitem vale 2 vezes (2 combos com 2 Homer = 4× Homer)
+            var dois = Exemplo() with
+            {
+                ItensJson = System.Text.Json.JsonSerializer.Serialize(new[]
+                {
+                    new TicketItem("Combo Box 4un", 2000, null, new[] { "2x Donut Homer", "Premium: 1x Donut Pistache", "Sem cobertura" }),
+                }),
+            };
+            var ed = EtiquetaKds.Montar(dois).Linhas;
+            checar(ed.Any(l => l.Qtd == "4×" && l.Texto == "Donut Homer"), "2 combos com 2 Homer = 4× Donut Homer: "
+                + string.Join(" | ", ed.Select(l => l.Lida)));
+            checar(ed.Any(l => l.Qtd == "2×" && l.Texto == "Premium: Donut Pistache"), "2 combos com 1 Pistache = 2×");
+            checar(ed.Any(l => l.Qtd == "2×" && l.Texto == "Sem cobertura"),
+                "escolha sem número, em 2 combos, ganha a quantidade dos combos (2×)");
+            checar(ed.Count == 3 && ed.All(l => l.Caixa), "2 combos: só as 3 linhas dos subitens, todas com caixa");
+            var um = EtiquetaKds.Montar(Exemplo() with
+            {
+                ItensJson = System.Text.Json.JsonSerializer.Serialize(new[] { new TicketItem("Combo", 1000, null, new[] { "Sem cobertura" }) }),
+            }).Linhas;
+            checar(um.Count == 1 && um[0].Qtd == "", "1 combo: escolha sem número não ganha 1× inventado");
+            // balcão já grava as escolhas multiplicadas (Kds.DoBalcao): não multiplica de novo
+            var balcao = dois with { Origem = "balcao" };
+            checar(EtiquetaKds.Montar(balcao).Linhas.Any(l => l.Qtd == "2×" && l.Texto == "Donut Homer"),
+                "no balcão a escolha já vem multiplicada e não é multiplicada de novo");
+            // escolhas vazias: o pai volta, para o item não sumir da etiqueta
+            var vazio = Exemplo() with
+            {
+                ItensJson = System.Text.Json.JsonSerializer.Serialize(new[] { new TicketItem("Combo X", 1000, null, new[] { " " }) }),
+            };
+            checar(EtiquetaKds.Montar(vazio).Linhas is [{ Tipo: TipoLinhaEtiqueta.Item, Texto: "Combo X" }],
+                "combo com escolhas em branco não some: sai o item");
 
             var cd = EtiquetaKds.Montar(Exemplo(numero: "CD-1234"));
             checar(cd.Origem == "CARDÁPIO WEB", "número CD- é CARDÁPIO WEB, como na comanda de bobina");
@@ -66,19 +100,40 @@ public static class TestesEtiquetaKds
                 "o que o QR carrega volta inteiro pelo parser do leitor (ida e volta)");
             checar(EtiquetaKds.QrLadoMm >= 35, "QR com pelo menos 35 mm de lado");
 
-            // nome do cliente
-            checar(e.Cliente.Count == 1 && e.Cliente[0] == "Ana Beatriz Souza", "nome curto sai inteiro numa linha");
-            var longo = EtiquetaKds.CortarNome("Maria Aparecida dos Santos Albuquerque Figueiredo", 18, 2);
-            checar(longo.Count == 2 && longo.All(l => l.Length <= 18) && longo[^1].EndsWith("…"),
-                "nome longo: no máximo 2 linhas de 18, a última com reticências: " + string.Join(" | ", longo));
-            checar(longo[0] == "Maria Aparecida", "quebra entre palavras, não no meio do nome: " + longo[0]);
-            var duas = EtiquetaKds.CortarNome("Maria Aparecida dos Santos", 18, 2);
-            checar(duas.Count == 2 && !duas[^1].EndsWith("…"), "nome que cabe em 2 linhas não ganha reticências");
-            var colado = EtiquetaKds.CortarNome("ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP", 18, 2);
-            checar(colado.Count == 2 && colado.All(l => l.Length <= 18) && colado[^1].EndsWith("…"),
-                "nome sem espaço maior que a linha é partido, não estoura o papel");
-            checar(EtiquetaKds.CortarNome(null, 18, 2).Count == 0 && EtiquetaKds.CortarNome("   ", 18, 2).Count == 0,
-                "sem nome: nenhuma linha de cliente");
+            // nome do cliente: o texto
+            checar(e.Cliente == "Ana Beatriz Souza", "nome curto vai inteiro");
+            checar(EtiquetaKds.NomeParaEtiqueta("  Ana   Souza ") == "Ana Souza", "espaços do nome normalizados");
+            var teto = EtiquetaKds.NomeParaEtiqueta("Maria Aparecida dos Santos Albuquerque Figueiredo de Andrade");
+            checar(teto is { Length: <= EtiquetaKds.ClienteMaxCaracteres } && teto.EndsWith("…") && !teto.Contains("Figueir…"),
+                "nome enorme cortado no teto entre palavras, com reticências: " + teto);
+            checar(EtiquetaKds.NomeParaEtiqueta(null) is null && EtiquetaKds.NomeParaEtiqueta("   ") is null,
+                "sem nome: nada de cliente");
+
+            // nome do cliente: o MAIOR tamanho que cabe (medida falsa: 0,5 em por letra)
+            static double Larg(string s) => s.Length * 0.5;
+            const double W = 200, H = 120;
+            var curto = EtiquetaKds.AjustarNome("Ana", W, H, Larg, 1.2);
+            var medio = EtiquetaKds.AjustarNome("Ana Beatriz Souza", W, H, Larg, 1.2);
+            var grande = EtiquetaKds.AjustarNome("Maria Aparecida dos Santos Albuquerque", W, H, Larg, 1.2);
+            bool Cabe(AjusteNome a) => a.Linhas.Count * 1.2 * a.Tamanho <= H + 0.01
+                                       && a.Linhas.Max(Larg) * a.Tamanho * a.EscalaX <= W + 0.01;
+            checar(Cabe(curto) && Cabe(medio) && Cabe(grande), "o nome ajustado sempre cabe na área (largura e altura)");
+            checar(curto.Linhas.Count == 1 && curto.Tamanho == H / 1.2, $"nome curto: uma linha, na altura inteira ({curto.Tamanho:0})");
+            checar(curto.Tamanho > medio.Tamanho && medio.Tamanho > grande.Tamanho,
+                $"nome curto fica enorme e o longo diminui ({curto.Tamanho:0} > {medio.Tamanho:0} > {grande.Tamanho:0})");
+            checar(medio.Linhas.Count == 2, "nome médio quebra em 2 linhas antes de diminuir: " + string.Join(" / ", medio.Linhas));
+            checar(grande.Linhas.Count == 2 && string.Join(" ", grande.Linhas) == "Maria Aparecida dos Santos Albuquerque",
+                "nome longo: 2 linhas, nenhuma letra cortada (as linhas juntas são o nome inteiro)");
+            checar(new[] { curto, medio, grande }.All(a => a.EscalaX >= 0.6 - 1e-9 && a.EscalaX <= 1),
+                "aperto horizontal nunca abaixo de 0,6");
+            var semEspaco = EtiquetaKds.AjustarNome("Aparecidaalbuquerquefigueiredo", W, H, Larg, 1.2);
+            checar(Cabe(semEspaco) && semEspaco.Linhas.Count == 1 && semEspaco.EscalaX >= 0.6 - 1e-9,
+                "nome sem espaço: uma linha só, cabe encolhendo, sem partir a palavra");
+
+            // com a fonte de verdade (Bahnschrift Condensed ou o substituto): cabe na área do cabeçalho
+            var real = Impressao.AjusteDoNome("Maria Aparecida dos Santos", 220, 113);
+            checar(real.Linhas.Count == 2 && real.Tamanho > 30 && real.EscalaX >= 0.6 - 1e-9,
+                $"fonte real: nome de 4 palavras em 2 linhas, letra {real.Tamanho:0} px, aperto {real.EscalaX:0.00}");
 
             // configuração: nasce em bobina
             checar(EtiquetaKds.Formato(null) == FormatoComanda.Bobina && EtiquetaKds.Formato("") == FormatoComanda.Bobina

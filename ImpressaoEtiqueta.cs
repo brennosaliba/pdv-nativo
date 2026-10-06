@@ -140,15 +140,14 @@ public static partial class Impressao
     /// <summary>
     /// O desenho da etiqueta, 100 x 150 mm, preto no branco:
     ///
-    ///   #8149                    [iFOOD]
-    ///   Chegou 17:37 · ENTREGA
+    ///   ANA BEATRIZ          [iFOOD]
+    ///   SOUZA           Chegou 17:37
+    ///   (o maior que cabe)     #8149
     ///   ─────────────────────────────────
-    ///   NOME DO CLIENTE GRANDE
-    ///   ─────────────────────────────────
+    ///   ☐ 2× Donut Ninho        (subitens do combo; o nome do combo não sai)
+    ///   ☐ 1× Donut Homer
+    ///       » sem granulado     (observação do combo, abaixo dos subitens)
     ///   ☐ 2× Cookie Duplo
-    ///   1× Combo Box                (sem caixa: título do grupo)
-    ///       ☐ 2× Donut Ninho
-    ///       » sem granulado
     ///   ─────────────────────────────────
     ///             [ QR 40 mm ]
     ///          ADKDS:&lt;order_id&gt;
@@ -177,30 +176,50 @@ public static partial class Impressao
         // linhas: 0 cabeçalho, 1 régua, 2 cliente, 3 régua, 4 itens (*), 5 rodapé com QR
         raiz.Children.Add(miolo);
 
-        // ── cabeçalho: número enorme à esquerda, origem em tarja preta à direita ──
-        var cab = new Grid();
-        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var numero = new Viewbox
-        {
-            // Número comprido ("CD-123456") encolhe para caber; o normal sai no tamanho cheio.
-            Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
-            HorizontalAlignment = HorizontalAlignment.Left, MaxHeight = 52,
-            Child = TextoEtq("#" + e.Numero, 44, negrito: true),
-        };
-        cab.Children.Add(numero);
-        var origem = new Border
+        // ── cabeçalho (06/10, esboço do dono): à ESQUERDA o nome do cliente no maior
+        // tamanho que couber (fonte estreita e alta), ocupando ~2/3 da largura e a altura de
+        // ~3 linhas; à DIREITA, empilhados, o selo da origem, "Chegou HH:MM" e o número
+        // grande. Empilhados e não sobrepostos: no esboço o "Chegou" saía cortado.
+        var largNome = util * 0.64;
+        var largDir = util - largNome - 3 * MM;
+        var cab = new Grid { Height = AlturaCabecalhoMm * MM };
+        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(largNome) });
+        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3 * MM) });
+        cab.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(largDir) });
+
+        if (e.Cliente is { } nome)
+            cab.Children.Add(NomeGrande(nome, largNome, AlturaCabecalhoMm * MM));
+        else
+            // Sem nome (balcão): o lugar do nome fica com o número, que é o que se grita.
+            cab.Children.Add(new Viewbox
+            {
+                Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                Child = TextoEtq("#" + e.Numero, 60, negrito: true),
+            });
+
+        var dir = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
+        dir.Children.Add(new Border
         {
             Background = Brushes.Black, CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(7, 3, 7, 4), Margin = new Thickness(8, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Child = TextoEtq(e.Origem, 15, negrito: true, cor: Brushes.White),
-        };
-        Grid.SetColumn(origem, 1);
-        cab.Children.Add(origem);
+            Padding = new Thickness(6, 2, 6, 3), HorizontalAlignment = HorizontalAlignment.Right,
+            Child = new Viewbox
+            {
+                Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly, MaxWidth = largDir - 12,
+                Child = TextoEtq(e.Origem, 14, negrito: true, cor: Brushes.White),
+            },
+        });
+        dir.Children.Add(Ajustado(TextoEtq(e.Chegou, 13), largDir, HorizontalAlignment.Right, new Thickness(0, 4, 0, 0)));
+        if (e.Retirada)
+            dir.Children.Add(Ajustado(TextoEtq("RETIRADA", 13, negrito: true), largDir, HorizontalAlignment.Right, new Thickness(0)));
+        if (e.Cliente is not null)
+            dir.Children.Add(Ajustado(TextoEtq("#" + e.Numero, 40, negrito: true), largDir,
+                                      HorizontalAlignment.Right, new Thickness(0, 2, 0, 0)));
+        Grid.SetColumn(dir, 2);
+        cab.Children.Add(dir);
+
         var topo = new StackPanel();
         topo.Children.Add(cab);
-        topo.Children.Add(TextoEtq(e.Chegou + (e.Retirada ? " · RETIRADA" : ""), 12));
         if (e.Agendado is { } ag)
             topo.Children.Add(TextoEtq(ag, 15, negrito: true, quebra: true));
         Grid.SetRow(topo, 0);
@@ -209,24 +228,6 @@ public static partial class Impressao
         var r1 = ReguaEtq();
         Grid.SetRow(r1, 1);
         miolo.Children.Add(r1);
-
-        // ── cliente: grande, negrito, até duas linhas já cortadas no Núcleo ──
-        var cli = new StackPanel();
-        foreach (var l in e.Cliente)
-        {
-            var tb = TextoEtq(l, 27, negrito: true);
-            // Rede de segurança: nome de letras largas (M, W) passa da conta de colunas.
-            tb.TextTrimming = TextTrimming.CharacterEllipsis;
-            cli.Children.Add(tb);
-        }
-        Grid.SetRow(cli, 2);
-        miolo.Children.Add(cli);
-        if (e.Cliente.Count > 0)
-        {
-            var r2 = ReguaEtq();
-            Grid.SetRow(r2, 3);
-            miolo.Children.Add(r2);
-        }
 
         // ── itens ──
         var lista = new StackPanel { Width = util };
@@ -252,20 +253,73 @@ public static partial class Impressao
         return raiz;
     }
 
+    /// <summary>Altura reservada ao cabeçalho (nome grande + coluna da direita).</summary>
+    private const double AlturaCabecalhoMm = 30;
+
+    /// <summary>
+    /// A fonte do nome: estreita e alta. Bahnschrift (Windows 10+) tem a largura Condensed
+    /// embutida; sem ela, Arial Narrow; sem as duas, Segoe UI e o aperto horizontal faz o
+    /// papel da fonte condensada (AjustarNome nunca passa de 0,6).
+    /// </summary>
+    private static readonly Lazy<Typeface> FonteNome = new(() =>
+    {
+        var nomes = Fonts.SystemFontFamilies.Select(f => f.Source).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (nomes.Contains("Bahnschrift"))
+            return new Typeface(new FontFamily("Bahnschrift"), FontStyles.Normal, FontWeights.Bold, FontStretches.Condensed);
+        if (nomes.Contains("Arial Narrow"))
+            return new Typeface(new FontFamily("Arial Narrow"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+        return new Typeface(Sans, FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+    });
+
+    /// <summary>O ajuste do nome com a fonte real (exposto para a suíte conferir que cabe).</summary>
+    public static AjusteNome AjusteDoNome(string nome, double largura, double altura)
+    {
+        var tf = FonteNome.Value;
+        double LarguraPorEm(string s) => new FormattedText(s, System.Globalization.CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight, tf, 100, Brushes.Black, 1.0).WidthIncludingTrailingWhitespace / 100;
+        return EtiquetaKds.AjustarNome(nome, largura, altura, LarguraPorEm, tf.FontFamily.LineSpacing);
+    }
+
+    /// <summary>O nome do cliente no maior tamanho que cabe em <paramref name="largura"/> x <paramref name="altura"/>.</summary>
+    private static FrameworkElement NomeGrande(string nome, double largura, double altura)
+    {
+        var a = AjusteDoNome(nome, largura, altura);
+        var tf = FonteNome.Value;
+        var pilha = new StackPanel
+        {
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+            LayoutTransform = new ScaleTransform(a.EscalaX, 1),
+        };
+        foreach (var l in a.Linhas)
+            pilha.Children.Add(new TextBlock
+            {
+                Text = l, FontFamily = tf.FontFamily, FontWeight = tf.Weight, FontStretch = tf.Stretch,
+                FontSize = a.Tamanho, Foreground = Brushes.Black, TextWrapping = TextWrapping.NoWrap,
+            });
+        return pilha;
+    }
+
+    /// <summary>Texto que encolhe (nunca cresce) para caber na largura dada, sem cortar.</summary>
+    private static FrameworkElement Ajustado(TextBlock tb, double largura, HorizontalAlignment lado, Thickness margem)
+        => new Viewbox
+        {
+            Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
+            MaxWidth = largura, HorizontalAlignment = lado, Margin = margem, Child = tb,
+        };
+
     /// <summary>Uma linha do miolo: quadradinho desenhado (retângulo, não caractere), quantidade em negrito e nome.</summary>
     private static FrameworkElement LinhaItem(LinhaEtiqueta l)
     {
         var (tam, recuo) = l.Tipo switch
         {
-            TipoLinhaEtiqueta.Item => (19.0, 0.0),
-            TipoLinhaEtiqueta.Grupo => (19.0, 0.0),
-            TipoLinhaEtiqueta.Subitem => (17.0, 22.0),
+            // Subitem do combo é linha de conferência como o item (o pai não sai mais).
+            TipoLinhaEtiqueta.Item or TipoLinhaEtiqueta.Subitem => (19.0, 0.0),
             _ => (15.0, 22.0),
         };
         var linha = new DockPanel
         {
             LastChildFill = true,
-            Margin = new Thickness(recuo, l.Tipo == TipoLinhaEtiqueta.Subitem ? 1 : 3, 0, 1),
+            Margin = new Thickness(recuo, l.Tipo == TipoLinhaEtiqueta.Observacao ? 0 : 3, 0, 1),
         };
         if (l.Caixa)
         {
@@ -293,11 +347,7 @@ public static partial class Impressao
         {
             if (l.Qtd.Length > 0)
                 tb.Inlines.Add(new System.Windows.Documents.Run(l.Qtd + " ") { FontWeight = FontWeights.Bold });
-            // O título do combo vai todo em negrito: ele é o cabeçalho do grupo de caixas logo abaixo.
-            tb.Inlines.Add(new System.Windows.Documents.Run(l.Texto)
-            {
-                FontWeight = l.Tipo == TipoLinhaEtiqueta.Grupo ? FontWeights.Bold : FontWeights.Normal,
-            });
+            tb.Inlines.Add(new System.Windows.Documents.Run(l.Texto));
         }
         linha.Children.Add(tb);
         return linha;

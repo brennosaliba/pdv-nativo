@@ -14,9 +14,10 @@ public enum TipoLinhaEtiqueta
 {
     /// <summary>Item simples: quadradinho na frente, porque ele é o que se confere.</summary>
     Item,
-    /// <summary>Item com subitens (combo): título do grupo com a quantidade, SEM quadradinho.</summary>
-    Grupo,
-    /// <summary>Subitem do combo (sabor, complemento): recuado, COM quadradinho.</summary>
+    /// <summary>
+    /// Subitem do combo (sabor, complemento), COM quadradinho. O nome do combo NÃO sai
+    /// (06/10, dono): a separação é por subitem e o nome do pai só gerava dúvida.
+    /// </summary>
     Subitem,
     /// <summary>Observação do item, recuada e sem quadradinho.</summary>
     Observacao,
@@ -30,18 +31,22 @@ public sealed record LinhaEtiqueta(TipoLinhaEtiqueta Tipo, string Qtd, string Te
     public bool Caixa => Tipo is TipoLinhaEtiqueta.Item or TipoLinhaEtiqueta.Subitem;
 
     /// <summary>0 = encostado na margem; 1 = recuado sob o item.</summary>
-    public int Nivel => Tipo is TipoLinhaEtiqueta.Subitem or TipoLinhaEtiqueta.Observacao ? 1 : 0;
+    public int Nivel => Tipo is TipoLinhaEtiqueta.Observacao ? 1 : 0;
 
     /// <summary>A linha como se lê, para teste e log.</summary>
     public string Lida => (Caixa ? "[ ] " : "") + (Qtd.Length == 0 ? Texto : Qtd + " " + Texto);
 }
 
 /// <summary>Tudo o que vai na etiqueta, já decidido. A tela só desenha.</summary>
-/// <param name="Cliente">O nome em até <see cref="EtiquetaKds.ClienteLinhas"/> linhas, já cortado.</param>
+/// <param name="Cliente">O nome do cliente (espaços normalizados, teto de <see cref="EtiquetaKds.ClienteMaxCaracteres"/>), ou null.</param>
 /// <param name="Qr">Conteúdo EXATO do QR (prefixo + id).</param>
-public sealed record Etiqueta(string Numero, string Origem, IReadOnlyList<string> Cliente,
+public sealed record Etiqueta(string Numero, string Origem, string? Cliente,
                               string? Agendado, string Chegou, bool Retirada,
                               IReadOnlyList<LinhaEtiqueta> Linhas, string Qr);
+
+/// <summary>Como o nome do cliente cabe na área dele: as linhas, o tamanho da fonte e o aperto horizontal.</summary>
+/// <param name="EscalaX">1 = letra natural; menor = apertada na horizontal (nunca abaixo do mínimo pedido).</param>
+public readonly record struct AjusteNome(IReadOnlyList<string> Linhas, double Tamanho, double EscalaX);
 
 /// <summary>A folha que o driver recebe: tamanho declarado e giro do desenho dentro dela.</summary>
 public readonly record struct FolhaEtiqueta(double LarguraMm, double AlturaMm, int Giro);
@@ -86,10 +91,11 @@ public static class EtiquetaKds
     /// <summary>Lado do QR no papel. O pedido do dono é no mínimo 35 mm.</summary>
     public const double QrLadoMm = 40;
 
-    /// <summary>Caracteres por linha do nome do cliente na fonte grande (cabe com folga em 92 mm).</summary>
-    public const int ClienteColunas = 18;
-    /// <summary>Linhas do nome do cliente. A terceira não existe: corta com reticências.</summary>
-    public const int ClienteLinhas = 2;
+    /// <summary>
+    /// Teto do nome do cliente, em caracteres, cortado entre palavras. Acima disso o nome
+    /// em duas linhas ficaria do tamanho do item; é raro (nome + sobrenome cabe com folga).
+    /// </summary>
+    public const int ClienteMaxCaracteres = 40;
 
     /// <summary>Lê a config. Qualquer coisa que não seja "etiqueta" é bobina: nada muda sem o dono escolher.</summary>
     public static FormatoComanda Formato(string? valorConfig)
@@ -135,17 +141,25 @@ public static class EtiquetaKds
         var linhas = new List<LinhaEtiqueta>();
         foreach (var i in t.Itens)
         {
-            var principal = CardKds.ItemPrincipal(i);
-            var temSub = i.Escolhas is { Count: > 0 };
-            linhas.Add(new LinhaEtiqueta(temSub ? TipoLinhaEtiqueta.Grupo : TipoLinhaEtiqueta.Item,
-                                         principal.Qtd, principal.Nome));
-            if (temSub)
-                foreach (var esc in i.Escolhas!)
-                {
-                    var s = CardKds.SubItem(esc);
-                    if (s.Nome.Length == 0 && s.Qtd.Length == 0) continue;
-                    linhas.Add(new LinhaEtiqueta(TipoLinhaEtiqueta.Subitem, s.Qtd, s.Nome));
-                }
+            // Item COM subitens (06/10, dono): o pai some e ficam só os subitens, cada um com
+            // o seu quadradinho. Com 2 combos, cada subitem vale 2 vezes (2 combos com 2 Homer
+            // = 4× Homer): é o que entra na sacola. Exceção: o BALCÃO já grava as escolhas
+            // multiplicadas pelas unidades da linha (Kds.DoBalcao -> Combos.LinhasKds); só o
+            // delivery (iFood e cardápio), que manda a quantidade por unidade, multiplica aqui.
+            var subs = new List<LinhaEtiqueta>();
+            if (i.Escolhas is { Count: > 0 })
+            {
+                var mult = t.Origem == "balcao" ? 1m : i.Qtd / 1000m;
+                foreach (var esc in i.Escolhas)
+                    if (Subitem(esc, mult) is { } sub) subs.Add(sub);
+            }
+            if (subs.Count > 0) linhas.AddRange(subs);
+            else
+            {
+                var principal = CardKds.ItemPrincipal(i);
+                linhas.Add(new LinhaEtiqueta(TipoLinhaEtiqueta.Item, principal.Qtd, principal.Nome));
+            }
+            // A observação do pai continua, logo abaixo dos subitens dele.
             if (i.Observacao is { Length: > 0 } obs)
                 linhas.Add(new LinhaEtiqueta(TipoLinhaEtiqueta.Observacao, "", obs.Trim()));
         }
@@ -154,42 +168,89 @@ public static class EtiquetaKds
             ? "AGENDADO para " + Kds.TextoHorario(p, t.AgendadoAte, hoje ?? DateTime.Now)
             : null;
 
-        return new Etiqueta(t.Numero, Origem(t), CortarNome(t.Cliente, ClienteColunas, ClienteLinhas),
+        return new Etiqueta(t.Numero, Origem(t), NomeParaEtiqueta(t.Cliente),
                             agendado, $"Chegou {t.CriadoEm:HH:mm}", t.Retirada, linhas, ConteudoQr(t));
     }
 
     /// <summary>
-    /// O nome do cliente em até <paramref name="linhas"/> linhas de <paramref name="colunas"/>
-    /// caracteres, quebrando entre palavras. O que não cabe some e a última linha ganha "…".
-    /// Palavra maior que a linha é partida (nome sem espaço não pode estourar o papel).
-    /// Nome vazio = lista vazia (a etiqueta não desenha a faixa do cliente).
+    /// Um subitem com a quantidade multiplicada pelas unidades do pai. Escolha sem número
+    /// legível ("Sem cobertura") fica sem quantidade quando o pai é 1 e ganha a do pai
+    /// quando é mais (a mesma escolha vale para cada combo). Null para escolha vazia.
     /// </summary>
-    public static IReadOnlyList<string> CortarNome(string? nome, int colunas, int linhas)
+    public static LinhaEtiqueta? Subitem(string? escolha, decimal multiplicador)
+    {
+        var s = CardKds.SubItem(escolha);
+        if (s.Nome.Length == 0 && s.Qtd.Length == 0) return null;
+        if (multiplicador == 1m) return new LinhaEtiqueta(TipoLinhaEtiqueta.Subitem, s.Qtd, s.Nome);
+        var q = CardKds.QtdDaEscolha(escolha) ?? 1m;
+        return new LinhaEtiqueta(TipoLinhaEtiqueta.Subitem, Numero(q * multiplicador) + CardKds.Vezes, s.Nome);
+    }
+
+    private static string Numero(decimal q)
+        => q % 1 == 0 ? ((long)q).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                      : q.ToString("0.###", new System.Globalization.CultureInfo("pt-BR"));
+
+    /// <summary>
+    /// O nome como vai para a etiqueta: espaços normalizados e, acima de
+    /// <see cref="ClienteMaxCaracteres"/>, cortado na última palavra inteira com "…". Nunca
+    /// corta no meio da palavra (a não ser a primeira, sozinha maior que o teto). Vazio = null.
+    /// </summary>
+    public static string? NomeParaEtiqueta(string? nome)
     {
         var s = string.Join(' ', (nome ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (s.Length == 0 || colunas < 2 || linhas < 1) return Array.Empty<string>();
+        if (s.Length == 0) return null;
+        if (s.Length <= ClienteMaxCaracteres) return s;
+        var corte = s.LastIndexOf(' ', ClienteMaxCaracteres - 1);
+        return (corte > 0 ? s[..corte] : s[..(ClienteMaxCaracteres - 1)]).TrimEnd() + "…";
+    }
 
-        var palavras = new Queue<string>();
-        foreach (var w in s.Split(' '))
-            for (var k = 0; k < w.Length; k += colunas)
-                palavras.Enqueue(w.Substring(k, Math.Min(colunas, w.Length - k)));
+    /// <summary>
+    /// O MAIOR tamanho em que o nome cabe na caixa (06/10, esboço do dono: nome enorme no
+    /// topo, letra estreita e alta). Tenta o nome numa linha e em cada quebra entre palavras
+    /// em duas linhas, e fica com o arranjo de letra maior: nome curto sai enorme numa linha,
+    /// nome longo vai para duas e só então diminui. Nunca corta letra: o tamanho sai da
+    /// medida, e a letra encolhe até caber.
+    ///
+    /// O aperto horizontal é o segundo recurso, em dois degraus: primeiro até
+    /// <paramref name="escalaPreferida"/> (quase não se nota numa fonte já condensada); só se
+    /// mesmo assim a letra ficar abaixo de <paramref name="tamanhoConfortavel"/>, até
+    /// <paramref name="escalaMin"/> (0,6, o limite do dono).
+    /// </summary>
+    /// <param name="larguraPorEm">Largura do texto com fonte de tamanho 1 (a tela mede com a fonte real).</param>
+    /// <param name="alturaLinhaPorEm">Altura de uma linha com fonte de tamanho 1.</param>
+    public static AjusteNome AjustarNome(string nome, double largura, double altura,
+        Func<string, double> larguraPorEm, double alturaLinhaPorEm,
+        double escalaPreferida = 0.85, double escalaMin = 0.6, double tamanhoConfortavel = 34)
+    {
+        var palavras = nome.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var arranjos = new List<string[]> { new[] { string.Join(' ', palavras) } };
+        for (var k = 1; k < palavras.Length; k++)
+            arranjos.Add(new[] { string.Join(' ', palavras[..k]), string.Join(' ', palavras[k..]) });
 
-        var saida = new List<string>();
-        while (palavras.Count > 0 && saida.Count < linhas)
+        AjusteNome Melhor(double apertoMax)
         {
-            var linha = palavras.Dequeue();
-            while (palavras.Count > 0 && linha.Length + 1 + palavras.Peek().Length <= colunas)
-                linha += " " + palavras.Dequeue();
-            saida.Add(linha);
+            AjusteNome? melhor = null;
+            var larguraDoMelhor = double.MaxValue;
+            foreach (var a in arranjos)
+            {
+                var porAltura = altura / (a.Length * alturaLinhaPorEm);
+                var maisLarga = a.Max(larguraPorEm);
+                if (maisLarga <= 0) continue;
+                var tam = Math.Min(porAltura, largura / (maisLarga * apertoMax));
+                var escala = Math.Min(1.0, largura / (maisLarga * tam));
+                // Empate de tamanho (menos de 2%): fica o de MENOS linhas (vem antes); com as
+                // mesmas linhas, o de linha mais curta: menos aperto e quebra equilibrada
+                // ("Ana Beatriz / Souza" e não "Ana / Beatriz Souza").
+                var b = melhor;
+                var ganha = b is null || tam > b.Value.Tamanho * 1.02
+                    || (tam >= b.Value.Tamanho * 0.98 && a.Length == b.Value.Linhas.Count && maisLarga < larguraDoMelhor);
+                if (ganha) { melhor = new AjusteNome(a, tam, escala); larguraDoMelhor = maisLarga; }
+            }
+            return melhor ?? new AjusteNome(new[] { nome }, 0, 1);
         }
-        if (palavras.Count > 0)
-        {
-            // Sobrou nome: a última linha cede o último caractere (ou o espaço) às reticências.
-            var ult = saida[^1];
-            ult = ult.Length + 1 <= colunas ? ult : ult[..(colunas - 1)];
-            saida[^1] = ult.TrimEnd() + "…";
-        }
-        return saida;
+
+        var primeiro = Melhor(escalaPreferida);
+        return primeiro.Tamanho >= tamanhoConfortavel ? primeiro : Melhor(escalaMin);
     }
 
     /// <summary>
