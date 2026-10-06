@@ -28,6 +28,13 @@ public enum TipoLinhaEtiqueta
     /// configurável <see cref="EtiquetaKds.ChaveEmbalagem"/>.
     /// </summary>
     Embalagem,
+    /// <summary>
+    /// ADICIONAL de um item que NÃO é combo ("Donut Ninho" + "Cobertura extra"). O item
+    /// fica com o nome e o quadradinho; o adicional vai embaixo, recuado e sem caixa
+    /// própria, como uma instrução do item (06/10: o donut não pode sumir e deixar só
+    /// "1× Cobertura extra" na etiqueta).
+    /// </summary>
+    Adicional,
 }
 
 /// <summary>Uma linha do miolo da etiqueta.</summary>
@@ -38,7 +45,7 @@ public sealed record LinhaEtiqueta(TipoLinhaEtiqueta Tipo, string Qtd, string Te
     public bool Caixa => Tipo is TipoLinhaEtiqueta.Item or TipoLinhaEtiqueta.Subitem;
 
     /// <summary>0 = encostado na margem; 1 = recuado sob o item.</summary>
-    public int Nivel => Tipo is TipoLinhaEtiqueta.Observacao or TipoLinhaEtiqueta.Embalagem ? 1 : 0;
+    public int Nivel => Tipo is TipoLinhaEtiqueta.Observacao or TipoLinhaEtiqueta.Embalagem or TipoLinhaEtiqueta.Adicional ? 1 : 0;
 
     /// <summary>A linha como se lê, para teste e log.</summary>
     public string Lida => (Caixa ? "[ ] " : "") + (Qtd.Length == 0 ? Texto : Qtd + " " + Texto);
@@ -100,6 +107,15 @@ public static class EtiquetaKds
 
     /// <summary>O que é embalagem quando a loja não configurou nada.</summary>
     public static readonly IReadOnlyList<string> EmbalagemPadrao = new[] { "Caixinha", "Embalagem", "Sacola" };
+
+    /// <summary>
+    /// Palavra INTEIRA no nome do item que o declara combo. "Caixa" é palavra inteira de
+    /// propósito: "Caixinha" é embalagem, não combo.
+    /// </summary>
+    public static readonly IReadOnlyList<string> PalavrasCombo = new[] { "Combo", "Box", "Caixa", "Kit", "Mix", "Duo", "Trio" };
+
+    /// <summary>Palavra inteira que marca um complemento como ADICIONAL ("Cobertura extra", "Adicional de Nutella").</summary>
+    public static readonly IReadOnlyList<string> PalavrasAdicional = new[] { "Extra", "Extras", "Adicional", "Adicionais" };
 
     public const double LarguraMm = 100;
     public const double AlturaMm = 150;
@@ -185,6 +201,35 @@ public static class EtiquetaKds
         return false;
     }
 
+    /// <summary>Alguma das palavras aparece INTEIRA no nome (sem acento, sem caixa)?</summary>
+    private static bool TemPalavra(string? nome, IReadOnlyList<string> palavras)
+    {
+        var n = SemAcento(nome ?? "");
+        if (n.Length == 0) return false;
+        foreach (var p in palavras)
+        {
+            var w = SemAcento(p);
+            if (w.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(n,
+                    @"(?<![\p{L}\p{N}])" + System.Text.RegularExpressions.Regex.Escape(w) + @"(?![\p{L}\p{N}])"))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// O item é COMBO, e então o nome dele some e os sabores viram as linhas? Combo é quem
+    /// se diz combo no nome (<see cref="PalavrasCombo"/>) ou quem tem 2 ou mais
+    /// complementos que não são embalagem nem adicional ("Leve 5 brownies, pague só 4"
+    /// com 2 sabores). Item normal com complemento ("Donut Ninho" + "Cobertura extra")
+    /// NÃO é: o donut fica com o nome e o quadradinho.
+    /// </summary>
+    /// <param name="sabores">Quantos complementos de produção (nem embalagem, nem adicional) o item tem.</param>
+    public static bool ECombo(string? nome, int sabores)
+        => sabores > 0 && (TemPalavra(nome, PalavrasCombo) || sabores >= 2);
+
+    /// <summary>O complemento é um adicional do item ("Cobertura extra")?</summary>
+    public static bool EAdicional(string? nome) => TemPalavra(nome, PalavrasAdicional);
+
     private static string SemAcento(string s)
     {
         var d = s.Normalize(System.Text.NormalizationForm.FormD);
@@ -216,10 +261,11 @@ public static class EtiquetaKds
     /// 4un" porque só a etiqueta seguia a regra; o card e a bobina mostravam o pai em
     /// destaque). Uma lista só para os três: a regra não pode valer num papel e no outro não.
     ///
-    /// Item com subitens: o pai some e ficam os subitens, cada um com quadradinho. A
-    /// embalagem (<see cref="EEmbalagem"/>) fica na lista SEM quadradinho, depois do que
-    /// se produz. Se o item só tem embalagem como subitem ("Donut Homer" + "Sacola"), o
-    /// pai FICA: sumir com ele seria sumir com o donut.
+    /// COMBO (<see cref="ECombo"/>): o pai some e ficam os sabores, cada um com
+    /// quadradinho. ITEM NORMAL com complemento: o item fica com nome e quadradinho, e o
+    /// complemento vai embaixo, recuado e sem caixa (<see cref="TipoLinhaEtiqueta.Adicional"/>);
+    /// sumir com o pai ali seria sumir com o donut. A embalagem (<see cref="EEmbalagem"/>)
+    /// fica na lista SEM quadradinho, depois do que se produz, nos dois casos.
     /// </summary>
     public static List<LinhaEtiqueta> Linhas(Ticket t, IReadOnlyList<string>? embalagem = null)
     {
@@ -234,6 +280,7 @@ public static class EtiquetaKds
             // delivery (iFood e cardápio), que manda a quantidade por unidade, multiplica aqui.
             var subs = new List<LinhaEtiqueta>();
             var embs = new List<LinhaEtiqueta>();
+            var sabores = 0;
             if (i.Escolhas is { Count: > 0 })
             {
                 var mult = t.Origem == "balcao" ? 1m : i.Qtd / 1000m;
@@ -241,17 +288,23 @@ public static class EtiquetaKds
                     if (Subitem(esc, mult) is { } sub)
                     {
                         if (EEmbalagem(sub.Texto, palavras)) embs.Add(sub with { Tipo = TipoLinhaEtiqueta.Embalagem });
-                        else subs.Add(sub);
+                        else
+                        {
+                            subs.Add(sub);
+                            if (!EAdicional(sub.Texto)) sabores++;
+                        }
                     }
             }
-            if (subs.Count > 0) linhas.AddRange(subs);
+            if (ECombo(i.Descricao, sabores)) linhas.AddRange(subs);
             else
             {
-                // Sem subitem de produção, o pai é o que se produz (ou, ele mesmo, embalagem).
+                // Item normal: ele é o que se produz (ou, ele mesmo, embalagem), com o nome
+                // e o quadradinho; os complementos vão embaixo, recuados, sem caixa.
                 var principal = CardKds.ItemPrincipal(i.Qtd, i.Descricao, null);
                 linhas.Add(new LinhaEtiqueta(
                     EEmbalagem(principal.Nome, palavras) ? TipoLinhaEtiqueta.Embalagem : TipoLinhaEtiqueta.Item,
                     principal.Qtd, principal.Nome));
+                linhas.AddRange(subs.Select(s => s with { Tipo = TipoLinhaEtiqueta.Adicional }));
             }
             linhas.AddRange(embs);
             // A observação do pai continua, logo abaixo dos subitens dele.

@@ -506,6 +506,7 @@ public static class Kds
                         linhas.Add(Esc("      " + parte, 1.3));
                     break;
                 case TipoLinhaEtiqueta.Embalagem:
+                case TipoLinhaEtiqueta.Adicional:
                     foreach (var parte in Quebra(texto, L - 6))
                         linhas.Add(Esc("      " + parte, 1.2));
                     break;

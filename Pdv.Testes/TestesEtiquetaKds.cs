@@ -77,6 +77,38 @@ public static class TestesEtiquetaKds
             checar(semCaixinha.Linhas.Single(l => l.Texto == "Caixinha Extra") is { Tipo: TipoLinhaEtiqueta.Subitem, Caixa: true },
                 "embalagem é configurável: com só \"Sacola\" a Caixinha Extra volta a ter quadradinho");
         }
+        // ── ITEM NORMAL com complemento NÃO é combo: o nome fica com a caixa ──
+        {
+            const string json =
+                "[{\"qtd\":1,\"descricao\":\"Donut Ninho\",\"complements\":[{\"qtd\":1,\"nome\":\"Cobertura extra\"}],\"valor_unitario\":12.9}," +
+                "{\"qtd\":2,\"descricao\":\"Cookie\",\"complements\":[{\"qtd\":1,\"nome\":\"Nutella extra\"}],\"valor_unitario\":14.9}]";
+            var t = new Ticket("t-adic", "ifood", "ref-adic", "7002", "Cliente",
+                System.Text.Json.JsonSerializer.Serialize(Kds.ItensDeJson(json)), Kds.Recebido,
+                new DateTime(2026, 10, 6, 16, 0, 0), null, null);
+            var e = EtiquetaKds.Montar(t, new DateTime(2026, 10, 6));
+            var lidas = string.Join(" | ", e.Linhas.Select(l => l.Lida));
+            checar(e.Linhas.Count == 4
+                   && e.Linhas[0] is { Tipo: TipoLinhaEtiqueta.Item, Texto: "Donut Ninho", Qtd: "1×", Caixa: true }
+                   && e.Linhas[1] is { Tipo: TipoLinhaEtiqueta.Adicional, Texto: "Cobertura extra", Qtd: "1×", Caixa: false, Nivel: 1 },
+                "Donut Ninho + Cobertura extra: o donut fica com nome e caixa, o adicional embaixo sem caixa: " + lidas);
+            checar(e.Linhas[2] is { Tipo: TipoLinhaEtiqueta.Item, Texto: "Cookie", Qtd: "2×", Caixa: true }
+                   && e.Linhas[3] is { Tipo: TipoLinhaEtiqueta.Adicional, Texto: "Nutella extra", Qtd: "2×", Caixa: false },
+                "2 Cookies + Nutella extra: o adicional vale para cada cookie (2×) e não ganha caixa: " + lidas);
+            var bob = Kds.ComandaLinhas(t, 40, new DateTime(2026, 10, 6)).Select(LinhaEscala.Limpa).ToList();
+            checar(bob.Any(l => l.Contains("[ ] 1x Donut Ninho")) && bob.Any(l => l.Contains("1x Cobertura extra") && !l.Contains("[ ]"))
+                   && bob.Count(l => l.Contains("[ ]")) == 2,
+                "bobina: Donut Ninho e Cookie com quadradinho, adicionais sem");
+
+            checar(EtiquetaKds.ECombo("Leve 5 brownies, pague só 4", 2) && EtiquetaKds.ECombo("Kit Festa", 1)
+                   && EtiquetaKds.ECombo("COMBO 10 DONUTS", 1) && EtiquetaKds.ECombo("Caixa 6 donuts", 1),
+                "é combo: nome com Combo/Kit/Caixa, ou 2+ sabores");
+            checar(!EtiquetaKds.ECombo("Donut Ninho", 1) && !EtiquetaKds.ECombo("Combo Box", 0)
+                   && !EtiquetaKds.ECombo("Caixinha de presente", 1) && !EtiquetaKds.ECombo("Boxer", 1),
+                "não é combo: item com 1 complemento, combo sem sabor, Caixinha e palavra só parecida");
+            checar(EtiquetaKds.EAdicional("Cobertura extra") && EtiquetaKds.EAdicional("Adicional de Nutella")
+                   && !EtiquetaKds.EAdicional("Donut Extraordinário"),
+                "adicional casa a palavra inteira Extra/Adicional");
+        }
         {
             checar(EtiquetaKds.PalavrasEmbalagem(null).SequenceEqual(new[] { "Caixinha", "Embalagem", "Sacola" })
                    && EtiquetaKds.PalavrasEmbalagem("  ; , ").SequenceEqual(EtiquetaKds.EmbalagemPadrao),

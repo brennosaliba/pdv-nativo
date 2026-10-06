@@ -420,7 +420,7 @@ public static partial class Impressao
         var obs = l.Tipo == TipoLinhaEtiqueta.Observacao;
         // EMBALAGEM (06/10): recuada até o texto, como a observação, um pouco menor e sem
         // quadradinho. Vai na sacola, mas não se confere como sabor.
-        var emb = l.Tipo == TipoLinhaEtiqueta.Embalagem;
+        var emb = l.Tipo is TipoLinhaEtiqueta.Embalagem or TipoLinhaEtiqueta.Adicional;
         var fonte = obs || emb ? fonteItem * 0.82 : fonteItem;
         var linha = new DockPanel
         {

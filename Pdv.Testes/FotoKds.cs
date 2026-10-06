@@ -152,6 +152,10 @@ public static class FotoKds
         Card("6066", "ifood", Kds.Recebido, 2, "coxa killer",
             Kds.ItensDeJson(TestesEtiquetaKds.Itens6066).Cast<object>().ToArray());
 
+        // NA FILA: item NORMAL com adicional (nao e combo): o donut fica com o nome.
+        Card("7002", "ifood", Kds.Recebido, 1, "Teste Adicional",
+            Kds.ItensDeJson("[{\"qtd\":1,\"descricao\":\"Donut Ninho\",\"complements\":[{\"qtd\":1,\"nome\":\"Cobertura extra\"}]}]").Cast<object>().ToArray());
+
         // NA FILA — prazo daqui a 2 min e pouco: "faltam 2 min" em atenção, com o
         // entregador já a caminho (o pedido nem começou: é o card que mais precisa
         // da linha).

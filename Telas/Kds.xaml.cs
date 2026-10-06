@@ -885,7 +885,8 @@ public partial class Kds : UserControl
                 corpo.Children.Add(obs);
                 continue;
             }
-            var emb = l.Tipo == TipoLinhaEtiqueta.Embalagem;
+            // Adicional ("Cobertura extra") e embalagem: recuados, menores, sem peso de item.
+            var emb = l.Tipo is TipoLinhaEtiqueta.Embalagem or TipoLinhaEtiqueta.Adicional;
             var linha = new TextBlock
             {
                 FontSize = emb ? 13 : 16, TextWrapping = TextWrapping.Wrap,
