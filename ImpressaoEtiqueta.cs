@@ -2,6 +2,7 @@ using System.Printing;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using System.Windows.Xps;
 using Pdv.Nucleo;
 
@@ -124,7 +125,7 @@ public static partial class Impressao
     /// <summary>A etiqueta (sempre desenhada em pé, 100 x 150) girada para a folha que o driver espera.</summary>
     private static FrameworkElement FolhaGirada(Etiqueta e, FolhaEtiqueta folha)
     {
-        var etiqueta = MontarEtiqueta(e);
+        var etiqueta = MontarEtiqueta(e, out _);
         if (folha.Giro == 0) return etiqueta;
         return new Border
         {
@@ -156,7 +157,7 @@ public static partial class Impressao
     /// melhor letra menor do que item cortado no fim da etiqueta. O QR e o número nunca
     /// encolhem.
     /// </summary>
-    private static FrameworkElement MontarEtiqueta(Etiqueta e)
+    private static FrameworkElement MontarEtiqueta(Etiqueta e, out TamanhoItens tamanho)
     {
         const double margem = 4 * MM;
         var util = (EtiquetaKds.LarguraMm - 8) * MM;
@@ -229,28 +230,124 @@ public static partial class Impressao
         Grid.SetRow(r1, 1);
         miolo.Children.Add(r1);
 
-        // ── itens ──
-        var lista = new StackPanel { Width = util };
-        foreach (var l in e.Linhas) lista.Children.Add(LinhaItem(l));
+        // ── itens (06/10, dono): o MAIOR tamanho que faça todos caberem entre a régua do
+        // cabeçalho e a do QR. Teto de 2x o tamanho base (pedido curto não vira cartaz) e piso
+        // legível; abaixo do piso o QR desce de 40 para 35 mm, e só então o miolo encolhe
+        // (Viewbox só para baixo) em vez de cortar item. Cabeçalho e QR não mudam de tamanho
+        // por causa dos itens.
+        double Altura(FrameworkElement el)
+        {
+            el.Measure(new Size(util, double.PositiveInfinity));
+            return el.DesiredSize.Height;
+        }
+        var fixo = Altura(topo) + Altura(r1);
+        var tam = EscolherTamanho(e, util,
+            qrMm => EtiquetaKds.AlturaMm * MM - 2 * margem - fixo - Altura(Rodape(e, qrMm)) - 2);
+        tamanho = tam;
+
         var itens = new Viewbox
         {
             Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
             HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
-            Child = lista,
+            Child = ListaItens(e, tam.Escala, util),
         };
         Grid.SetRow(itens, 4);
         miolo.Children.Add(itens);
 
-        // ── rodapé: QR grande + o mesmo código em texto pequeno ──
-        var pe = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
-        pe.Children.Add(ReguaEtq());
-        if (Qr(e.Qr, EtiquetaKds.QrLadoMm * MM) is { } qr) pe.Children.Add(qr);
-        else pe.Children.Add(TextoEtq("QR indisponível: marque pronto pelo quadro", 12, negrito: true, centro: true, quebra: true));
-        pe.Children.Add(TextoEtq(e.Qr, 8, centro: true, quebra: true, fonte: Mono));
+        var pe = Rodape(e, tam.QrMm);
         Grid.SetRow(pe, 5);
         miolo.Children.Add(pe);
 
         return raiz;
+    }
+
+    /// <summary>Tamanho base da linha de item (escala 1).</summary>
+    private const double FonteItemBase = 19;
+    /// <summary>Teto: pedido curto sai no dobro do base, não maior.</summary>
+    public const double EscalaItensMax = 2.0;
+    /// <summary>Piso legível (≈ 14 px, 3,8 mm de letra). Abaixo disso o miolo encolhe pelo Viewbox.</summary>
+    public const double EscalaItensMin = 0.75;
+
+    /// <summary>O tamanho escolhido para os itens: escala, fonte, lado do quadradinho e o QR.</summary>
+    public readonly record struct TamanhoItens(double Escala, double Fonte, double LadoCaixa, double Traco, double QrMm);
+
+    /// <summary>
+    /// Mede a etiqueta de um ticket e devolve o tamanho que os itens ganharam (para a suíte:
+    /// pedido curto tem letra maior que pedido grande; o quadradinho acompanha a letra).
+    /// </summary>
+    public static Task<TamanhoItens> MedirItensAsync(Ticket ticket)
+    {
+        var tcs = new TaskCompletionSource<TamanhoItens>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var th = new Thread(() =>
+        {
+            try { MontarEtiqueta(EtiquetaKds.Montar(ticket), out var t); tcs.TrySetResult(t); }
+            catch (Exception ex) { tcs.TrySetException(ex); }
+            finally { try { Dispatcher.CurrentDispatcher.InvokeShutdown(); } catch { } }
+        }) { IsBackground = true };
+        th.SetApartmentState(ApartmentState.STA);
+        th.Start();
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// Busca binária da maior escala em que a lista cabe na altura disponível. Não cabe nem
+    /// no piso com QR de 40 mm: tenta com 35 mm (o mínimo do dono). Não cabe nem assim: fica
+    /// no piso e o Viewbox encolhe o resto.
+    /// </summary>
+    private static TamanhoItens EscolherTamanho(Etiqueta e, double largura, Func<double, double> disponivel)
+    {
+        double Altura(double s)
+        {
+            var l = ListaItens(e, s, largura);
+            l.Measure(new Size(largura, double.PositiveInfinity));
+            return l.DesiredSize.Height;
+        }
+        TamanhoItens Com(double s, double qr)
+        {
+            var f = FonteItemBase * s;
+            return new TamanhoItens(s, f, LadoDaCaixa(f), TracoDaCaixa(f), qr);
+        }
+
+        var qrMm = EtiquetaKds.QrLadoMm;
+        var livre = disponivel(qrMm);
+        if (Altura(EscalaItensMin) > livre)
+        {
+            var livre35 = disponivel(EtiquetaKds.QrLadoMinMm);
+            qrMm = EtiquetaKds.QrLadoMinMm;
+            livre = livre35;
+            if (Altura(EscalaItensMin) > livre) return Com(EscalaItensMin, qrMm);
+        }
+        if (Altura(EscalaItensMax) <= livre) return Com(EscalaItensMax, qrMm);
+        double lo = EscalaItensMin, hi = EscalaItensMax;
+        for (var k = 0; k < 14; k++)
+        {
+            var meio = (lo + hi) / 2;
+            if (Altura(meio) <= livre) lo = meio; else hi = meio;
+        }
+        return Com(lo, qrMm);
+    }
+
+    /// <summary>Lado do quadradinho ≈ altura das maiúsculas da Segoe UI (0,7 em).</summary>
+    public static double LadoDaCaixa(double fonte) => fonte * 0.72;
+    /// <summary>Traço do quadradinho: grosso o bastante para a térmica (≥ 2 pontos a 203 dpi) e proporcional.</summary>
+    public static double TracoDaCaixa(double fonte) => Math.Max(1.6, fonte * 0.09);
+
+    private static StackPanel ListaItens(Etiqueta e, double escala, double largura)
+    {
+        var lista = new StackPanel { Width = largura };
+        foreach (var l in e.Linhas) lista.Children.Add(LinhaItem(l, escala));
+        return lista;
+    }
+
+    /// <summary>Rodapé: régua, QR do lado pedido e o código em texto pequeno embaixo.</summary>
+    private static FrameworkElement Rodape(Etiqueta e, double qrMm)
+    {
+        var pe = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+        pe.Children.Add(ReguaEtq());
+        if (Qr(e.Qr, qrMm * MM) is { } qr) pe.Children.Add(qr);
+        else pe.Children.Add(TextoEtq("QR indisponível: marque pronto pelo quadro", 12, negrito: true, centro: true, quebra: true));
+        pe.Children.Add(TextoEtq(e.Qr, 8, centro: true, quebra: true, fonte: Mono));
+        return pe;
     }
 
     /// <summary>Altura reservada ao cabeçalho (nome grande + coluna da direita).</summary>
@@ -307,38 +404,43 @@ public static partial class Impressao
             MaxWidth = largura, HorizontalAlignment = lado, Margin = margem, Child = tb,
         };
 
-    /// <summary>Uma linha do miolo: quadradinho desenhado (retângulo, não caractere), quantidade em negrito e nome.</summary>
-    private static FrameworkElement LinhaItem(LinhaEtiqueta l)
+    /// <summary>
+    /// Uma linha do miolo na escala escolhida: quadradinho desenhado (retângulo, não
+    /// caractere) do tamanho das maiúsculas, centrado na PRIMEIRA linha do texto; a quebra
+    /// do nome continua alinhada sob o texto, não sob o quadradinho (DockPanel). Observação
+    /// em itálico um pouco menor, recuada até o texto do item.
+    /// </summary>
+    private static FrameworkElement LinhaItem(LinhaEtiqueta l, double escala)
     {
-        var (tam, recuo) = l.Tipo switch
-        {
-            // Subitem do combo é linha de conferência como o item (o pai não sai mais).
-            TipoLinhaEtiqueta.Item or TipoLinhaEtiqueta.Subitem => (19.0, 0.0),
-            _ => (15.0, 22.0),
-        };
+        var fonteItem = FonteItemBase * escala;
+        var lado = LadoDaCaixa(fonteItem);
+        var vao = fonteItem * 0.4;
+        var obs = l.Tipo == TipoLinhaEtiqueta.Observacao;
+        var fonte = obs ? fonteItem * 0.82 : fonteItem;
         var linha = new DockPanel
         {
             LastChildFill = true,
-            Margin = new Thickness(recuo, l.Tipo == TipoLinhaEtiqueta.Observacao ? 0 : 3, 0, 1),
+            Margin = new Thickness(obs ? lado + vao : 0, obs ? 0 : 3 * escala, 0, 1 * escala),
         };
         if (l.Caixa)
         {
-            var lado = tam * 0.8;
+            var alturaLinha = Sans.LineSpacing * fonte;
             var caixa = new Border
             {
                 Width = lado, Height = lado, BorderBrush = Brushes.Black,
-                BorderThickness = new Thickness(1.8), Background = Brushes.White,
-                Margin = new Thickness(0, tam * 0.18, 7, 0), VerticalAlignment = VerticalAlignment.Top,
+                BorderThickness = new Thickness(TracoDaCaixa(fonte)), Background = Brushes.White,
+                Margin = new Thickness(0, Math.Max(0, (alturaLinha - lado) / 2), vao, 0),
+                VerticalAlignment = VerticalAlignment.Top,
             };
             DockPanel.SetDock(caixa, Dock.Left);
             linha.Children.Add(caixa);
         }
         var tb = new TextBlock
         {
-            FontFamily = Sans, FontSize = tam, Foreground = Brushes.Black,
+            FontFamily = Sans, FontSize = fonte, Foreground = Brushes.Black,
             TextWrapping = TextWrapping.Wrap,
         };
-        if (l.Tipo == TipoLinhaEtiqueta.Observacao)
+        if (obs)
         {
             tb.FontStyle = FontStyles.Italic;
             tb.Inlines.Add(new System.Windows.Documents.Run("» " + l.Texto) { FontWeight = FontWeights.SemiBold });

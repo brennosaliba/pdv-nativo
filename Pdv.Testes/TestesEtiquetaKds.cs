@@ -168,6 +168,28 @@ public static class TestesEtiquetaKds
             finally { try { File.Delete(png); File.Delete(png90); } catch { } }
         }
 
+        // ── 1c. O TAMANHO DOS ITENS (06/10, dono): o maior que cabe no miolo ──
+        {
+            Ticket ComItens(int n) => Exemplo() with
+            {
+                ItensJson = System.Text.Json.JsonSerializer.Serialize(Enumerable.Range(1, n)
+                    .Select(k => new TicketItem($"Donut Sabor Numero {k}", 1000, null)).ToArray()),
+            };
+            var t3 = Impressao.MedirItensAsync(ComItens(3)).GetAwaiter().GetResult();
+            var t8 = Impressao.MedirItensAsync(ComItens(8)).GetAwaiter().GetResult();
+            var t40 = Impressao.MedirItensAsync(ComItens(40)).GetAwaiter().GetResult();
+            checar(t3.Fonte > t8.Fonte, $"fonte dos itens MAIOR com 3 itens que com 8 ({t3.Fonte:0.0} > {t8.Fonte:0.0})");
+            checar(t3.Fonte > 19 * 1.3, $"pedido curto ganha letra bem maior que a antiga de 19 px ({t3.Fonte:0.0})");
+            checar(t3.Escala <= Impressao.EscalaItensMax + 1e-9 && t8.Escala >= Impressao.EscalaItensMin - 1e-9,
+                "a escala fica entre o piso e o teto");
+            checar(Math.Abs(t3.LadoCaixa / t3.Fonte - t8.LadoCaixa / t8.Fonte) < 1e-9 && t3.LadoCaixa > t8.LadoCaixa,
+                $"quadradinho proporcional à fonte ({t3.LadoCaixa:0.0} px com {t3.Fonte:0.0}; {t8.LadoCaixa:0.0} com {t8.Fonte:0.0})");
+            checar(t3.Traco > t8.Traco && t8.Traco >= 1.6, "traço do quadradinho engrossa com a fonte e nunca fica fino");
+            checar(t3.QrMm == EtiquetaKds.QrLadoMm && t40.QrMm == EtiquetaKds.QrLadoMinMm && t40.QrMm >= 35,
+                $"QR de 40 mm; só pedido enorme o leva a 35 mm, nunca menos ({t40.QrMm})");
+            checar(t40.Escala == Impressao.EscalaItensMin, "pedido enorme fica no piso legível (o resto encolhe, não corta)");
+        }
+
         // ── 2. O LEITOR USB (teclado) ──────────────────────────────────────
         {
             string? Rajada(LeitorKds l, string texto, int passoMs, bool campo = false, long t0 = 1000)

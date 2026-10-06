@@ -92,6 +92,12 @@ public static class EtiquetaKds
     public const double QrLadoMm = 40;
 
     /// <summary>
+    /// Piso do QR: só quando o pedido não cabe nem com a letra no mínimo legível, o QR
+    /// cede de 40 para 35 mm (o mínimo que o dono pediu) antes de o miolo encolher.
+    /// </summary>
+    public const double QrLadoMinMm = 35;
+
+    /// <summary>
     /// Teto do nome do cliente, em caracteres, cortado entre palavras. Acima disso o nome
     /// em duas linhas ficaria do tamanho do item; é raro (nome + sobrenome cabe com folga).
     /// </summary>
