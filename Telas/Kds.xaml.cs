@@ -344,11 +344,17 @@ public partial class Kds : UserControl
     /// não por card: são vários cards por vez.
     /// </summary>
     private PoliticaImpressao _politicaComanda = PoliticaImpressao.Perguntar;
+    /// <summary>Palavras de embalagem da loja, lidas a cada pintura (ver <see cref="EtiquetaKds.ChaveEmbalagem"/>).</summary>
+    private IReadOnlyList<string> _embalagem = EtiquetaKds.EmbalagemPadrao;
 
     // ── pintura do quadro ───────────────────────────────────────────────────
     private void Pintar()
     {
-        using (var cxp = Banco.Abrir()) _politicaComanda = Impressoes.Politica(cxp, Impressoes.Comanda);
+        using (var cxp = Banco.Abrir())
+        {
+            _politicaComanda = Impressoes.Politica(cxp, Impressoes.Comanda);
+            _embalagem = EtiquetaKds.PalavrasEmbalagem(Vendas.Config(cxp, EtiquetaKds.ChaveEmbalagem));
+        }
         _porLinha = CabemPorLinha();
 
         var todos = Nucleo.Kds.Abertos();
@@ -856,76 +862,40 @@ public partial class Kds : UserControl
             aviso.SetResourceReference(TextBlock.ForegroundProperty, "Agendado");
             corpo.Children.Add(aviso);
         }
-        // ── os três níveis do corpo (04/09, foto do dono) ───────────────────
-        // 1. ITEM: quantidade em NEGRITO + nome em peso normal, cor Texto, 16 px.
-        //    O negrito só na quantidade porque é ela que o cozinheiro varre antes
-        //    de ler nome nenhum; o nome inteiro em negrito não destacava nada.
-        // 2. SUBITEM: 14 px em TextoSubItem (cor PRÓPRIA, não mais o cinza do
-        //    rodapé), recuado por MARGIN e marcado por uma régua vertical.
+        // ── o corpo do card (06/10, pedido iFood #6066) ─────────────────────
+        // As MESMAS linhas da etiqueta e da bobina (EtiquetaKds.Linhas): combo com sabores
+        // não mostra mais o nome do combo, mostra os sabores, cada um como item. O dono via
+        // "1× Combo Box 4un" em destaque e os donuts miúdos embaixo, e pediu os itens.
+        // 1. ITEM e SUBITEM: quantidade em NEGRITO + nome em peso normal, cor Texto, 16 px.
+        //    O negrito só na quantidade porque é ela que o cozinheiro varre antes de ler
+        //    nome nenhum.
+        // 2. EMBALAGEM ("Caixinha Extra"): 13 px, recuada, cor de subitem. Vai na sacola,
+        //    mas não é produção e não pode parecer mais um sabor.
         // 3. OBSERVAÇÃO: amarelo itálico, como já era.
-        //
-        // O prefixo "    - " morreu aqui. Ele gastava ~6 caracteres de largura em
-        // card de ~250 px, e era metade da causa das quebras que a foto mostrava
-        // ("1× Combo 1 Cookies - 4 / unidades"). Recuo é geometria, não texto.
-        foreach (var i in t.Itens)
+        foreach (var l in EtiquetaKds.Linhas(t, _embalagem))
         {
-            var principal = CardKds.ItemPrincipal(i);
-            var linha = new TextBlock
-            {
-                FontSize = 16, TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 2, 0, 1),
-            };
-            linha.Inlines.Add(new Run(principal.Qtd + " ") { FontWeight = FontWeights.Bold });
-            linha.Inlines.Add(new Run(principal.Nome));
-            linha.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
-            corpo.Children.Add(linha);
-            // As escolhas do combo aparecem aqui pelo mesmo motivo da comanda: sem
-            // elas o card diz "1× Combo Box" e o cozinheiro não sabe o que fazer.
-            // Elas vão TODAS dentro de uma régua só: a linha vertical amarra o grupo
-            // ao item de cima e diz "isto é o de dentro daquele" sem gastar largura.
-            if (i.Escolhas is { Count: > 0 })
-            {
-                var dentro = new StackPanel();
-                foreach (var esc in i.Escolhas)
-                {
-                    var s = CardKds.SubItem(esc);
-                    var sub = new TextBlock
-                    {
-                        FontSize = 14, TextWrapping = TextWrapping.Wrap,
-                        Margin = new Thickness(0, 0, 0, 1),
-                    };
-                    // Quantidade em semibold aqui também: o mesmo olhar que varre as
-                    // quantidades do item varre as do combo. Semibold e não bold para
-                    // o subitem não competir com o item que ele pertence.
-                    if (s.Qtd.Length > 0)
-                        sub.Inlines.Add(new Run(s.Qtd + " ") { FontWeight = FontWeights.SemiBold });
-                    sub.Inlines.Add(new Run(s.Nome));
-                    sub.SetResourceReference(TextBlock.ForegroundProperty, "TextoSubItem");
-                    dentro.Children.Add(sub);
-                }
-                var regua = new Border
-                {
-                    BorderThickness = new Thickness(2, 0, 0, 0),
-                    Margin = new Thickness(3, 1, 0, 3),
-                    Padding = new Thickness(7, 0, 0, 0),
-                    Child = dentro,
-                };
-                // A régua fica em TextoFraco de propósito: o cinza de legenda serve
-                // bem para um traço de 2 px, e nesse papel ele não volta a se
-                // confundir com texto nenhum.
-                regua.SetResourceReference(Border.BorderBrushProperty, "TextoFraco");
-                corpo.Children.Add(regua);
-            }
-            if (i.Observacao is { Length: > 0 })
+            if (l.Tipo == TipoLinhaEtiqueta.Observacao)
             {
                 var obs = new TextBlock
                 {
-                    Text = "· " + i.Observacao, FontSize = 12, FontStyle = FontStyles.Italic,
+                    Text = "· " + l.Texto, FontSize = 12, FontStyle = FontStyles.Italic,
                     TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12, 0, 0, 2),
                 };
                 obs.SetResourceReference(TextBlock.ForegroundProperty, "Amarelo");
                 corpo.Children.Add(obs);
+                continue;
             }
+            var emb = l.Tipo == TipoLinhaEtiqueta.Embalagem;
+            var linha = new TextBlock
+            {
+                FontSize = emb ? 13 : 16, TextWrapping = TextWrapping.Wrap,
+                Margin = emb ? new Thickness(12, 0, 0, 2) : new Thickness(0, 2, 0, 1),
+            };
+            if (l.Qtd.Length > 0)
+                linha.Inlines.Add(new Run(l.Qtd + " ") { FontWeight = emb ? FontWeights.SemiBold : FontWeights.Bold });
+            linha.Inlines.Add(new Run(l.Texto));
+            linha.SetResourceReference(TextBlock.ForegroundProperty, emb ? "TextoSubItem" : "Texto");
+            corpo.Children.Add(linha);
         }
         Grid.SetRow(corpo, 1);
         raiz.Children.Add(corpo);

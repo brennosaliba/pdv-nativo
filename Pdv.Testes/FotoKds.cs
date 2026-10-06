@@ -147,6 +147,11 @@ public static class FotoKds
             Item("Café Coado 300ml", 1),
         }, retirada: true, agendadoPara: agora.AddMinutes(85), agendadoAte: agora.AddMinutes(115));
 
+        // NA FILA — o PEDIDO REAL iFood #6066 (Castelo, 06/10/2026), pelo MESMO ItensDeJson
+        // da sincronização: Combo Box 4un com 4 donuts e a Caixinha Extra.
+        Card("6066", "ifood", Kds.Recebido, 2, "coxa killer",
+            Kds.ItensDeJson(TestesEtiquetaKds.Itens6066).Cast<object>().ToArray());
+
         // NA FILA — prazo daqui a 2 min e pouco: "faltam 2 min" em atenção, com o
         // entregador já a caminho (o pedido nem começou: é o card que mais precisa
         // da linha).

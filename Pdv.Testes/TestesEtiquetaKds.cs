@@ -17,6 +17,15 @@ namespace Pdv.Testes;
 /// </summary>
 public static class TestesEtiquetaKds
 {
+    /// <summary>
+    /// O pedido REAL iFood #6066 (Castelo, 06/10/2026), exatamente como está em
+    /// ifood_orders.itens e como a RPC pdv_kds_pedidos entrega ao caixa.
+    /// </summary>
+    public const string Itens6066 =
+        "[{\"qtd\":1,\"descricao\":\"Combo Box 4un\",\"complements\":[{\"qtd\":1,\"nome\":\"Donut Brigadeiro\"}," +
+        "{\"qtd\":1,\"nome\":\"Donut Ovomaltine\"},{\"qtd\":1,\"nome\":\"Donut Morango c/ Ninho\"}," +
+        "{\"qtd\":1,\"nome\":\"Donut Ninho c/ Nutella\"},{\"qtd\":1,\"nome\":\"Caixinha Extra\"}],\"valor_unitario\":74.9}]";
+
     private static Ticket Exemplo(string numero = "8149", string? cliente = "Ana Beatriz Souza",
                                   string status = Kds.Recebido, string refId = "0b1f6c2e-aaaa-4bbb-8ccc-1234567890ab")
     {
@@ -32,6 +41,70 @@ public static class TestesEtiquetaKds
 
     public static void Rodar(Action<bool, string> checar)
     {
+        // ── 0. O PEDIDO REAL #6066 (06/10, "ainda está mostrando o nome do combo") ──
+        // O JSON EXATO de ifood_orders.itens, pelo MESMO caminho da sincronização:
+        // ItensDeJson -> Serialize (é o que fica em kds_ticket.itens_json) -> Ticket.Itens.
+        {
+            var itens = Kds.ItensDeJson(Itens6066);
+            checar(itens.Count == 1 && itens[0].Escolhas is { Count: 5 },
+                "#6066: os 5 complements chegam como escolhas do combo (nada se perde no parser)");
+            var t = new Ticket("t-6066", "ifood", "8dbd41e5-551f-4842-ba2c-cf1e0d93d0d1", "6066", "coxa killer",
+                System.Text.Json.JsonSerializer.Serialize(itens), Kds.Recebido,
+                new DateTime(2026, 10, 6, 15, 56, 0), null, null);
+            var e = EtiquetaKds.Montar(t, new DateTime(2026, 10, 6));
+            var lidas = string.Join(" | ", e.Linhas.Select(l => l.Lida));
+            checar(e.Linhas.All(l => !l.Texto.Contains("Combo Box")), "#6066: o Combo Box 4un NÃO sai na etiqueta: " + lidas);
+            var donuts = new[] { "Donut Brigadeiro", "Donut Ovomaltine", "Donut Morango c/ Ninho", "Donut Ninho c/ Nutella" };
+            checar(donuts.All(d => e.Linhas.Any(l => l.Texto == d && l.Tipo == TipoLinhaEtiqueta.Subitem && l.Caixa && l.Qtd == "1×")),
+                "#6066: os 4 donuts saem, cada um com o próprio quadradinho e 1×: " + lidas);
+            var caixinha = e.Linhas.SingleOrDefault(l => l.Texto == "Caixinha Extra");
+            checar(caixinha is { Tipo: TipoLinhaEtiqueta.Embalagem, Caixa: false, Nivel: 1, Qtd: "1×" },
+                "#6066: a Caixinha Extra sai como EMBALAGEM, sem quadradinho e recuada");
+            checar(e.Linhas.Count == 5 && e.Linhas.Count(l => l.Caixa) == 4 && e.Linhas[^1].Texto == "Caixinha Extra",
+                "#6066: 5 linhas, 4 quadradinhos, a embalagem por último: " + lidas);
+
+            // a bobina e o card usam a MESMA lista: o combo também some da comanda de texto
+            var bob = Kds.ComandaLinhas(t, 40, new DateTime(2026, 10, 6)).Select(LinhaEscala.Limpa).ToList();
+            var bobTxt = string.Join(" | ", bob);
+            checar(!bobTxt.Contains("Combo Box"), "#6066: a comanda de bobina não imprime o Combo Box 4un");
+            checar(donuts.All(d => bob.Any(l => l.Contains("[ ] 1x " + d))),
+                "#6066: a bobina tem os 4 donuts com quadradinho: " + string.Join(" / ", bob.Where(l => l.Contains("Donut") || l.Contains("Caixinha")).Select(l => l.Trim())));
+            checar(bob.Any(l => l.Contains("1x Caixinha Extra") && !l.Contains("[ ]")),
+                "#6066: a Caixinha Extra sai na bobina sem quadradinho");
+
+            // a configuração: sem palavra de embalagem que case, a caixinha vira item comum
+            var semCaixinha = EtiquetaKds.Montar(t, new DateTime(2026, 10, 6), EtiquetaKds.PalavrasEmbalagem("Sacola"));
+            checar(semCaixinha.Linhas.Single(l => l.Texto == "Caixinha Extra") is { Tipo: TipoLinhaEtiqueta.Subitem, Caixa: true },
+                "embalagem é configurável: com só \"Sacola\" a Caixinha Extra volta a ter quadradinho");
+        }
+        {
+            checar(EtiquetaKds.PalavrasEmbalagem(null).SequenceEqual(new[] { "Caixinha", "Embalagem", "Sacola" })
+                   && EtiquetaKds.PalavrasEmbalagem("  ; , ").SequenceEqual(EtiquetaKds.EmbalagemPadrao),
+                "config de embalagem ausente ou vazia = Caixinha, Embalagem, Sacola");
+            checar(EtiquetaKds.PalavrasEmbalagem(" Sacola ; Fita,Laço ").SequenceEqual(new[] { "Sacola", "Fita", "Laço" }),
+                "config de embalagem aceita vírgula e ponto e vírgula e apara espaços");
+            checar(EtiquetaKds.EEmbalagem("CAIXINHA extra") && EtiquetaKds.EEmbalagem("Caixinhas de presente")
+                   && EtiquetaKds.EEmbalagem("Sacola kraft") && EtiquetaKds.EEmbalagem("Laco de fita", new[] { "Laço" }),
+                "embalagem casa sem caixa, sem acento e pelo começo da palavra");
+            checar(!EtiquetaKds.EEmbalagem("Donut Ninho") && !EtiquetaKds.EEmbalagem("Recaixinha") && !EtiquetaKds.EEmbalagem(""),
+                "sabor não é embalagem, e a palavra não casa no meio de outra");
+
+            // item cujo ÚNICO subitem é embalagem: o pai FICA (sumir com ele seria sumir com o donut)
+            var json = System.Text.Json.JsonSerializer.Serialize(new[]
+            {
+                new TicketItem("Donut Homer", 2000, null, new[] { "1x Sacola" }),
+                new TicketItem("Sacola Kraft", 1000, null),
+            });
+            var t = new Ticket("t-emb", "ifood", "ref-emb", "7001", null, json, Kds.Recebido,
+                               new DateTime(2026, 10, 6, 15, 0, 0), null, null);
+            var e = EtiquetaKds.Montar(t, new DateTime(2026, 10, 6));
+            var lidas = string.Join(" | ", e.Linhas.Select(l => l.Lida));
+            checar(e.Linhas.Any(l => l is { Tipo: TipoLinhaEtiqueta.Item, Texto: "Donut Homer", Qtd: "2×", Caixa: true }),
+                "item com só embalagem de subitem continua saindo, com quadradinho: " + lidas);
+            checar(e.Linhas.Count(l => l.Tipo == TipoLinhaEtiqueta.Embalagem && !l.Caixa) == 2,
+                "a sacola do donut (2× pelo pai) e a sacola avulsa saem sem quadradinho: " + lidas);
+        }
+
         // ── 1. LAYOUT PURO ──────────────────────────────────────────────────
         {
             var e = EtiquetaKds.Montar(Exemplo(), new DateTime(2026, 10, 5));

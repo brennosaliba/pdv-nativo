@@ -840,6 +840,7 @@ public static class Servicos
     public static async Task<string?> ImprimirComandaAsync(Pdv.Nucleo.Ticket t, string descricao)
     {
         FormatoComanda formato; Impressao.Destino destino; string? impEtiqueta; int giro;
+        IReadOnlyList<string> embalagem;
         try
         {
             using var cx = Banco.Abrir();
@@ -847,14 +848,16 @@ public static class Servicos
             destino = DestinoDaComanda(cx);
             impEtiqueta = Vendas.Config(cx, EtiquetaKds.ChaveImpressora);
             giro = EtiquetaKds.Giro(Vendas.Config(cx, EtiquetaKds.ChaveGiro));
+            embalagem = EtiquetaKds.PalavrasEmbalagem(Vendas.Config(cx, EtiquetaKds.ChaveEmbalagem));
         }
         catch (Exception ex) { return $"Não li a configuração da comanda: {ex.Message}"; }
 
         if (formato == FormatoComanda.Etiqueta)
             return await Impressao.ImprimirEtiquetaKdsAsync(t,
-                string.IsNullOrWhiteSpace(impEtiqueta) ? null : impEtiqueta, giro, descricao).ConfigureAwait(false);
+                string.IsNullOrWhiteSpace(impEtiqueta) ? null : impEtiqueta, giro, descricao,
+                embalagem: embalagem).ConfigureAwait(false);
         return await Impressao.ImprimirTextoAsync(descricao,
-            new[] { Pdv.Nucleo.Kds.ComandaLinhas(t, Pdv.Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
+            new[] { Pdv.Nucleo.Kds.ComandaLinhas(t, Pdv.Nucleo.Kds.ColunasComanda(destino.Papel.Colunas), embalagem: embalagem) },
             destino).ConfigureAwait(false);
     }
 

@@ -28,11 +28,13 @@ public static partial class Impressao
     /// </summary>
     /// <param name="impressora">Vazio/null = impressora padrão do Windows.</param>
     /// <param name="giro">0, 90, 180 ou 270 (ver <see cref="EtiquetaKds.Folha"/>).</param>
+    /// <param name="embalagem">Palavras de embalagem da loja (<see cref="EtiquetaKds.PalavrasEmbalagem"/>); null = padrão.</param>
     public static Task<string?> ImprimirEtiquetaKdsAsync(Ticket ticket, string? impressora, int giro,
-        string descricao, PrioridadeImpressao prioridade = PrioridadeImpressao.Alta)
+        string descricao, PrioridadeImpressao prioridade = PrioridadeImpressao.Alta,
+        IReadOnlyList<string>? embalagem = null)
     {
         Etiqueta e;
-        try { e = EtiquetaKds.Montar(ticket); }
+        try { e = EtiquetaKds.Montar(ticket, embalagem: embalagem); }
         catch (Exception ex) { return Task.FromResult<string?>($"Pedido inconsistente, não imprimi a etiqueta: {ex.Message}"); }
         var folha = EtiquetaKds.Folha(giro);
         // Nome único por tentativa: a vigia casa o trabalho pelo nome (ver Imprimir).
@@ -416,11 +418,14 @@ public static partial class Impressao
         var lado = LadoDaCaixa(fonteItem);
         var vao = fonteItem * 0.4;
         var obs = l.Tipo == TipoLinhaEtiqueta.Observacao;
-        var fonte = obs ? fonteItem * 0.82 : fonteItem;
+        // EMBALAGEM (06/10): recuada até o texto, como a observação, um pouco menor e sem
+        // quadradinho. Vai na sacola, mas não se confere como sabor.
+        var emb = l.Tipo == TipoLinhaEtiqueta.Embalagem;
+        var fonte = obs || emb ? fonteItem * 0.82 : fonteItem;
         var linha = new DockPanel
         {
             LastChildFill = true,
-            Margin = new Thickness(obs ? lado + vao : 0, obs ? 0 : 3 * escala, 0, 1 * escala),
+            Margin = new Thickness(obs || emb ? lado + vao : 0, obs ? 0 : 3 * escala, 0, 1 * escala),
         };
         if (l.Caixa)
         {

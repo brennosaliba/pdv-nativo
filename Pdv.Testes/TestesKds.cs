@@ -39,9 +39,13 @@ public static class TestesKds
 
             // 1. o conteúdo do combo TEM que sair: sem isto a cozinha lê
             //    "1x Combo Box 4un" e não tem o que produzir.
-            checar(puro.Contains("2x Donut Ninho", StringComparison.Ordinal)
-                   && puro.Contains("2x Donut Nutella", StringComparison.Ordinal),
+            // (06/10, pedido iFood #6066) a quantidade vem na frente e o grupo fica no
+            // nome, como na etiqueta e no card: "2x Clássicos: Donut Ninho".
+            checar(puro.Contains("2x Clássicos: Donut Ninho", StringComparison.Ordinal)
+                   && puro.Contains("2x Premium: Donut Nutella", StringComparison.Ordinal),
                 "a comanda mostra o que o cliente montou dentro do combo");
+            checar(!puro.Contains("Combo Box", StringComparison.Ordinal),
+                "o nome do combo NÃO sai na comanda: ficam os sabores (mesma regra da etiqueta)");
             checar(puro.Contains("Clássicos:", StringComparison.Ordinal),
                 "cada escolha vem com o grupo, para a cozinha separar");
 
@@ -50,10 +54,10 @@ public static class TestesKds
                 "a observação do cliente sai na comanda");
 
             // 3. quadradinho de conferência em CADA item (e só nos itens)
-            // Quadradinho no item E em cada sabor do combo: quem monta a caixa
-            // confere donut a donut. 2 itens + 2 sabores = 4.
+            // Quadradinho em cada sabor do combo e no item simples; o combo em si não
+            // sai (06/10): quem monta a caixa confere donut a donut. 2 sabores + 1 item = 3.
             var comBox = limpas.Count(l => l.Contains("[ ]", StringComparison.Ordinal));
-            checar(comBox == 4, $"quadradinho no item E em cada sabor do combo (achei {comBox}, esperado 4)");
+            checar(comBox == 3, $"quadradinho em cada sabor do combo e no item simples (achei {comBox}, esperado 3)");
             var linhaSabor = limpas.FirstOrDefault(l => l.Contains("Donut Ninho", StringComparison.Ordinal));
             checar(linhaSabor is not null && linhaSabor.Contains("[ ]", StringComparison.Ordinal),
                 "o sabor do combo tem o proprio quadradinho");
@@ -79,8 +83,9 @@ public static class TestesKds
             var eEscolha = EscalaDe("Donut Ninho");
             checar(eNumero > eItem, $"o número do pedido é o maior da comanda ({eNumero} vs {eItem})");
             checar(eItem > 1.0, $"os itens saem maiores que o corpo ({eItem})");
-            checar(eEscolha > 1.0 && eEscolha < eItem,
-                $"a escolha do combo fica menor que o item e maior que o corpo ({eEscolha})");
+            // Sem o pai na comanda, o sabor É a linha de conferência: mesmo tamanho do item.
+            checar(eEscolha == eItem,
+                $"o sabor do combo sai do tamanho do item, porque é ele que se confere ({eEscolha} vs {eItem})");
 
             // 6. a marca de escala é INVISÍVEL para quem só lê o texto
             checar(!puro.Contains(LinhaEscala.Marca),
@@ -255,9 +260,10 @@ public static class TestesKds
                        && lidoCombo.Itens[0].Escolhas[1] == "Donuts: 8x Ninho",
                     "DoBalcao: escolhas_json vira TicketItem.Escolhas 'Donuts: 2x Ovomaltine' / 'Donuts: 8x Ninho'");
                 var comanda = Kds.ComandaLinhas(lidoCombo).Select(LinhaEscala.Limpa).ToList();
-                checar(comanda.Count(l => l.Contains("[ ]", StringComparison.Ordinal)) == 3
-                       && comanda.Any(l => l.Contains("[ ]", StringComparison.Ordinal) && l.Contains("8x Ninho", StringComparison.Ordinal)),
-                    "a comanda de cozinha do combo do balcao tem um [ ] por sabor (1 item + 2 sabores = 3)");
+                checar(comanda.Count(l => l.Contains("[ ]", StringComparison.Ordinal)) == 2
+                       && comanda.Any(l => l.Contains("[ ]", StringComparison.Ordinal) && l.Contains("8x Donuts: Ninho", StringComparison.Ordinal))
+                       && !comanda.Any(l => l.Contains("COMBO 10 DONUTS", StringComparison.Ordinal)),
+                    "a comanda de cozinha do combo do balcao tem um [ ] por sabor e não repete o combo (2 sabores = 2)");
                 Kds.CancelarPorVenda(vCombo);
             }
 

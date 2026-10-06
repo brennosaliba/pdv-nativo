@@ -65,8 +65,17 @@ public static class FotoEtiqueta
             ItensJson = Json(new TicketItem("Donut Ninho com Nutella", 6000, null)),
         };
 
+        // PEDIDO REAL iFood #6066 (Castelo, 06/10/2026): o JSON EXATO de ifood_orders.itens,
+        // pelo MESMO ItensDeJson da sincronizacao. Combo Box 4un com 4 donuts + Caixinha Extra.
+        var real6066 = combo with
+        {
+            Id = "t-6066", RefId = "8dbd41e5-551f-4842-ba2c-cf1e0d93d0d1", Numero = "6066", Cliente = "coxa killer",
+            ItensJson = System.Text.Json.JsonSerializer.Serialize(Kds.ItensDeJson(TestesEtiquetaKds.Itens6066)),
+        };
+
         var fotos = new (string Nome, Ticket T, int Giro)[]
         {
+            ("etiqueta-6066.png", real6066, 0),
             ("etiqueta-combo.png", combo, 0),
             ("etiqueta-nome-longo.png", nomeLongo, 0),
             ("etiqueta-pedido-grande.png", grande, 0),

@@ -21,6 +21,13 @@ public enum TipoLinhaEtiqueta
     Subitem,
     /// <summary>Observação do item, recuada e sem quadradinho.</summary>
     Observacao,
+    /// <summary>
+    /// EMBALAGEM (06/10, pedido iFood #6066: "Caixinha Extra" dentro do Combo Box 4un).
+    /// Sai na lista, porque vai junto na sacola, mas SEM quadradinho e recuada: não é
+    /// produção e não pode ser contada como sabor. Quem é embalagem decide a palavra
+    /// configurável <see cref="EtiquetaKds.ChaveEmbalagem"/>.
+    /// </summary>
+    Embalagem,
 }
 
 /// <summary>Uma linha do miolo da etiqueta.</summary>
@@ -31,7 +38,7 @@ public sealed record LinhaEtiqueta(TipoLinhaEtiqueta Tipo, string Qtd, string Te
     public bool Caixa => Tipo is TipoLinhaEtiqueta.Item or TipoLinhaEtiqueta.Subitem;
 
     /// <summary>0 = encostado na margem; 1 = recuado sob o item.</summary>
-    public int Nivel => Tipo is TipoLinhaEtiqueta.Observacao ? 1 : 0;
+    public int Nivel => Tipo is TipoLinhaEtiqueta.Observacao or TipoLinhaEtiqueta.Embalagem ? 1 : 0;
 
     /// <summary>A linha como se lê, para teste e log.</summary>
     public string Lida => (Caixa ? "[ ] " : "") + (Qtd.Length == 0 ? Texto : Qtd + " " + Texto);
@@ -84,6 +91,15 @@ public static class EtiquetaKds
     public const string ChaveImpressora = "kds_etiqueta_impressora";
     /// <summary>Config: giro do desenho (0, 90, 180, 270). Ausente = 0.</summary>
     public const string ChaveGiro = "kds_etiqueta_giro";
+
+    /// <summary>
+    /// Config: palavras que marcam EMBALAGEM, separadas por vírgula ou ponto e vírgula.
+    /// Ausente ou vazia = <see cref="EmbalagemPadrao"/>. Vale para etiqueta, card e bobina.
+    /// </summary>
+    public const string ChaveEmbalagem = "kds_embalagem_palavras";
+
+    /// <summary>O que é embalagem quando a loja não configurou nada.</summary>
+    public static readonly IReadOnlyList<string> EmbalagemPadrao = new[] { "Caixinha", "Embalagem", "Sacola" };
 
     public const double LarguraMm = 100;
     public const double AlturaMm = 150;
@@ -140,10 +156,74 @@ public static class EtiquetaKds
          : t.Origem == "ifood" ? "iFOOD"
          : "BALCÃO";
 
+    /// <summary>Lê a config de embalagem. Ausente ou só separadores = <see cref="EmbalagemPadrao"/>.</summary>
+    public static IReadOnlyList<string> PalavrasEmbalagem(string? valorConfig)
+    {
+        var palavras = (valorConfig ?? "")
+            .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p => p.Length > 0).ToList();
+        return palavras.Count > 0 ? palavras : EmbalagemPadrao;
+    }
+
+    /// <summary>
+    /// O nome é de embalagem? Compara sem acento e sem caixa, pelo COMEÇO de palavra:
+    /// "Caixinha Extra" e "Sacola Kraft" são; "Recaixinha" não. Só o começo, para
+    /// "Caixinha" pegar "Caixinhas" e "Sacola" pegar "Sacolas".
+    /// </summary>
+    public static bool EEmbalagem(string? nome, IReadOnlyList<string>? palavras = null)
+    {
+        var n = SemAcento(nome ?? "");
+        if (n.Length == 0) return false;
+        foreach (var p in palavras ?? EmbalagemPadrao)
+        {
+            var w = SemAcento((p ?? "").Trim());
+            if (w.Length == 0) continue;
+            if (System.Text.RegularExpressions.Regex.IsMatch(n,
+                    @"(?<![\p{L}\p{N}])" + System.Text.RegularExpressions.Regex.Escape(w)))
+                return true;
+        }
+        return false;
+    }
+
+    private static string SemAcento(string s)
+    {
+        var d = s.Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder(d.Length);
+        foreach (var c in d)
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(char.ToLowerInvariant(c));
+        return sb.ToString();
+    }
+
     /// <summary>Monta a etiqueta inteira de um ticket.</summary>
     /// <param name="hoje">O "hoje" de quem imprime (decide se a hora marcada sai com data). Só os testes cravam.</param>
-    public static Etiqueta Montar(Ticket t, DateTime? hoje = null)
+    /// <param name="embalagem">Palavras de embalagem (<see cref="PalavrasEmbalagem"/>); null = padrão.</param>
+    public static Etiqueta Montar(Ticket t, DateTime? hoje = null, IReadOnlyList<string>? embalagem = null)
     {
+        var linhas = Linhas(t, embalagem);
+
+        string? agendado = t.Agendado && t.AgendadoPara is { } p
+            ? "AGENDADO para " + Kds.TextoHorario(p, t.AgendadoAte, hoje ?? DateTime.Now)
+            : null;
+
+        return new Etiqueta(t.Numero, Origem(t), NomeParaEtiqueta(t.Cliente),
+                            agendado, $"Chegou {t.CriadoEm:HH:mm}", t.Retirada, linhas, ConteudoQr(t));
+    }
+
+    /// <summary>
+    /// AS LINHAS DE CONFERÊNCIA de um pedido: a MESMA lista para a etiqueta, o card do
+    /// KDS e a comanda de bobina (06/10, pedido iFood #6066: o dono ainda via o "Combo Box
+    /// 4un" porque só a etiqueta seguia a regra; o card e a bobina mostravam o pai em
+    /// destaque). Uma lista só para os três: a regra não pode valer num papel e no outro não.
+    ///
+    /// Item com subitens: o pai some e ficam os subitens, cada um com quadradinho. A
+    /// embalagem (<see cref="EEmbalagem"/>) fica na lista SEM quadradinho, depois do que
+    /// se produz. Se o item só tem embalagem como subitem ("Donut Homer" + "Sacola"), o
+    /// pai FICA: sumir com ele seria sumir com o donut.
+    /// </summary>
+    public static List<LinhaEtiqueta> Linhas(Ticket t, IReadOnlyList<string>? embalagem = null)
+    {
+        var palavras = embalagem ?? EmbalagemPadrao;
         var linhas = new List<LinhaEtiqueta>();
         foreach (var i in t.Itens)
         {
@@ -153,29 +233,32 @@ public static class EtiquetaKds
             // multiplicadas pelas unidades da linha (Kds.DoBalcao -> Combos.LinhasKds); só o
             // delivery (iFood e cardápio), que manda a quantidade por unidade, multiplica aqui.
             var subs = new List<LinhaEtiqueta>();
+            var embs = new List<LinhaEtiqueta>();
             if (i.Escolhas is { Count: > 0 })
             {
                 var mult = t.Origem == "balcao" ? 1m : i.Qtd / 1000m;
                 foreach (var esc in i.Escolhas)
-                    if (Subitem(esc, mult) is { } sub) subs.Add(sub);
+                    if (Subitem(esc, mult) is { } sub)
+                    {
+                        if (EEmbalagem(sub.Texto, palavras)) embs.Add(sub with { Tipo = TipoLinhaEtiqueta.Embalagem });
+                        else subs.Add(sub);
+                    }
             }
             if (subs.Count > 0) linhas.AddRange(subs);
             else
             {
-                var principal = CardKds.ItemPrincipal(i);
-                linhas.Add(new LinhaEtiqueta(TipoLinhaEtiqueta.Item, principal.Qtd, principal.Nome));
+                // Sem subitem de produção, o pai é o que se produz (ou, ele mesmo, embalagem).
+                var principal = CardKds.ItemPrincipal(i.Qtd, i.Descricao, null);
+                linhas.Add(new LinhaEtiqueta(
+                    EEmbalagem(principal.Nome, palavras) ? TipoLinhaEtiqueta.Embalagem : TipoLinhaEtiqueta.Item,
+                    principal.Qtd, principal.Nome));
             }
+            linhas.AddRange(embs);
             // A observação do pai continua, logo abaixo dos subitens dele.
             if (i.Observacao is { Length: > 0 } obs)
                 linhas.Add(new LinhaEtiqueta(TipoLinhaEtiqueta.Observacao, "", obs.Trim()));
         }
-
-        string? agendado = t.Agendado && t.AgendadoPara is { } p
-            ? "AGENDADO para " + Kds.TextoHorario(p, t.AgendadoAte, hoje ?? DateTime.Now)
-            : null;
-
-        return new Etiqueta(t.Numero, Origem(t), NomeParaEtiqueta(t.Cliente),
-                            agendado, $"Chegou {t.CriadoEm:HH:mm}", t.Retirada, linhas, ConteudoQr(t));
+        return linhas;
     }
 
     /// <summary>

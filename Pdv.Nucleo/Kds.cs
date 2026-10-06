@@ -465,7 +465,9 @@ public static class Kds
     /// O "hoje" de quem imprime: decide se a hora marcada do agendado sai com a data.
     /// Só os testes cravam; a operação usa o relógio.
     /// </param>
-    public static IReadOnlyList<string> ComandaLinhas(Ticket t, int colunas = ColunasPadrao, DateTime? hoje = null)
+    /// <param name="embalagem">Palavras de embalagem da loja (<see cref="EtiquetaKds.PalavrasEmbalagem"/>); null = padrão.</param>
+    public static IReadOnlyList<string> ComandaLinhas(Ticket t, int colunas = ColunasPadrao, DateTime? hoje = null,
+                                                      IReadOnlyList<string>? embalagem = null)
     {
         var L = ColunasComanda(colunas);
         var eCardapio = t.Numero.StartsWith("CD-", StringComparison.OrdinalIgnoreCase);
@@ -488,30 +490,37 @@ public static class Kds
         // e duas horas na mesma linha só competiam pela atenção.
         linhas.Add($"Chegou: {t.CriadoEm:HH:mm}");
         linhas.Add(new string('-', L));
-        foreach (var i in t.Itens)
+        // AS MESMAS linhas da etiqueta e do card (06/10, pedido iFood #6066): combo some e
+        // ficam os sabores, cada um com quadradinho, porque é donut a donut que a caixa sai
+        // errada; embalagem ("Caixinha Extra") vai sem quadradinho. Antes a bobina punha
+        // "[ ] 1x Combo Box 4un" no alto e o dono via o nome do combo no lugar dos donuts.
+        // "×" vira "x": a térmica não garante o caractere na página de código dela.
+        foreach (var l in EtiquetaKds.Linhas(t, embalagem))
         {
-            var qtd = i.Qtd % 1000 == 0 ? (i.Qtd / 1000).ToString() : (i.Qtd / 1000m).ToString("0.###");
-            // Quadradinho pra conferência: quem monta risca item a item antes de
-            // fechar a sacola. É o que evita pedido sair faltando uma unidade.
-            linhas.Add(Esc(Corta($"[ ] {qtd}x {i.Descricao}", L), 1.5));
-            // O QUE o cliente montou dentro do combo. Sem estas linhas a cozinha
-            // lê "1x Combo Box 4un" e não tem o que produzir.
-            // Quadradinho no SABOR tambem: quem monta a caixa confere donut a
-            // donut, nao "o combo" — item so no pai deixa a conferencia pela
-            // metade justamente onde ela importa (combo de 4 sabores).
-            if (i.Escolhas is { Count: > 0 })
-                foreach (var esc in i.Escolhas)
-                {
+            var qtd = l.Qtd.Replace(CardKds.Vezes, "x");
+            var texto = qtd.Length == 0 ? l.Texto : qtd + " " + l.Texto;
+            switch (l.Tipo)
+            {
+                case TipoLinhaEtiqueta.Observacao:
+                    foreach (var parte in Quebra(">> " + l.Texto, L - 6))
+                        linhas.Add(Esc("      " + parte, 1.3));
+                    break;
+                case TipoLinhaEtiqueta.Embalagem:
+                    foreach (var parte in Quebra(texto, L - 6))
+                        linhas.Add(Esc("      " + parte, 1.2));
+                    break;
+                default:
+                    // Quadradinho pra conferência: quem monta risca item a item antes de
+                    // fechar a sacola. É o que evita pedido sair faltando uma unidade.
+                    // Nome comprido QUEBRA (não corta): sabor cortado é sabor adivinhado.
                     var primeira = true;
-                    foreach (var parte in Quebra(esc, L - 8))
+                    foreach (var parte in Quebra(texto, L - 4))
                     {
-                        linhas.Add(Esc("    " + (primeira ? "[ ] " : "    ") + parte, 1.2));
+                        linhas.Add(Esc((primeira ? "[ ] " : "    ") + parte, 1.5));
                         primeira = false;
                     }
-                }
-            if (i.Observacao is { Length: > 0 })
-                foreach (var parte in Quebra(">> " + i.Observacao, L - 6))
-                    linhas.Add(Esc("      " + parte, 1.3));
+                    break;
+            }
         }
         linhas.Add(new string('-', L));
         linhas.Add("");
