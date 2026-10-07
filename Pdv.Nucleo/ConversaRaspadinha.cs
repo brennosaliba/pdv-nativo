@@ -38,8 +38,23 @@ public enum StatusConversa
 }
 
 /// <summary>Uma resposta pronta para o cliente, como o ERP a devolve (seção 4.3).</summary>
+/// <param name="PeloDono">
+/// 1.0.20 (aprovação pelo WhatsApp do dono): a saída passou pelo OK do dono. Ela só sai pelo SDK,
+/// reservada a este terminal; NUNCA vira texto para a pessoa colar, nem quando o envio falha.
+/// </param>
 public sealed record SaidaConversa(long Id, string Etapa, int Ordem, string Texto, string Como, string Estado,
-    string? Canal, string? IfoodOrderId, string? PedidoNumero);
+    string? Canal, string? IfoodOrderId, string? PedidoNumero, bool PeloDono = false);
+
+/// <summary>O que o caixa faz com uma saída que o ERP mandou (1.0.20).</summary>
+public enum DestinoDaSaida
+{
+    /// <summary>Fica quieta: sombra, a proposta esperando o dono, ou o caixa mudo.</summary>
+    Nada,
+    /// <summary>Vai para a fila de envio pelo SDK, e o portão decide.</summary>
+    Enviar,
+    /// <summary>Vira aviso com o texto para a pessoa colar (Assistido).</summary>
+    Colar,
+}
 
 /// <summary>Um aviso de uma linha para o operador (seção 2.2), já escrito pelo ERP.</summary>
 public sealed record AvisoConversa(string Tipo, string Texto, string? IfoodOrderId, string? PedidoNumero);
@@ -64,13 +79,33 @@ public sealed record ComandaDoSinal(BonusRaspadinha Bonus, string Cabecalho);
 /// que merchants são as conversas desta loja, e o que o ERP guardou para este terminal.
 /// <see cref="Legivel"/> false = sinal ausente ou ilegível, e isso conta como DESLIGADO.
 /// </summary>
+/// <param name="Aprovacao">
+/// 1.0.20: a aprovação pelo WhatsApp do dono (<c>nenhuma</c>, <c>prova</c> ou <c>dono</c>). Valor
+/// desconhecido ou ausente é <c>nenhuma</c>. É uma chave à parte do modo: a loja continua
+/// <c>assistido</c>, e um caixa velho continua lendo um modo que conhece.
+/// </param>
+/// <param name="DonoFora">
+/// 1.0.20 (revisão 07/10): o WhatsApp do dono parou de receber (o ERP gravou o aviso
+/// <c>dono_fora</c> e nada chegou a ele depois). A aprovação continua ligada, mas os pedidos de ajuda
+/// voltam ao caixa: sem isso, com o caixa mudo, o cliente que pede uma pessoa não chegava a ninguém.
+/// Só <c>true</c> do JSON conta.
+/// </param>
 public sealed record SinalConversa(
     bool Legivel, string Modo, string PalavraModo, string Envio, string ComandaOnde,
     IReadOnlyList<string> MerchantIds, int IntervaloS, string? Pausado,
-    IReadOnlyList<AvisoConversa> Avisos, IReadOnlyList<SaidaConversa> Saidas, IReadOnlyList<ComandaDoSinal> Comandas)
+    IReadOnlyList<AvisoConversa> Avisos, IReadOnlyList<SaidaConversa> Saidas, IReadOnlyList<ComandaDoSinal> Comandas,
+    string Aprovacao = ConversaRaspadinha.AprovacaoNenhuma, bool DonoFora = false)
 {
     /// <summary>O chat novo está valendo nesta loja (Sombra, Assistido ou Automático)?</summary>
     public bool Ativo => Legivel && Modo is not ConversaRaspadinha.ModoDesligado;
+
+    /// <summary>
+    /// O caixa fica MUDO para o chat (1.0.20, D10): com a aprovação do dono valendo para todos, nada
+    /// de som, de aviso na tela nem de texto para colar. A comanda de resgate continua saindo.
+    /// Revisão 07/10: com o WhatsApp do dono fora (<see cref="DonoFora"/>) o caixa volta a falar,
+    /// porque ele é o único que ainda pode ver um pedido de ajuda.
+    /// </summary>
+    public bool CaixaMudo => Ativo && Aprovacao == ConversaRaspadinha.AprovacaoDono && !DonoFora;
 
     public static SinalConversa Desligado { get; } = new(false, ConversaRaspadinha.ModoDesligado,
         ConversaRaspadinha.ModoDesligado, "nenhum", "caixa", Array.Empty<string>(), 60, null,
@@ -131,6 +166,13 @@ public static class ConversaRaspadinha
     public const string ComoSdk = "sdk";
     public const string ComoOperador = "operador";
     public const string ComoSombra = "sombra";
+    /// <summary>1.0.20: a proposta esperando o OK do dono no WhatsApp. O caixa não faz nada com ela.</summary>
+    public const string ComoDono = "dono";
+
+    /// <summary>1.0.20: a aprovação pelo WhatsApp do dono (coluna <c>raspadinha_chat_loja.aprovacao</c>).</summary>
+    public const string AprovacaoNenhuma = "nenhuma";
+    public const string AprovacaoProva = "prova";
+    public const string AprovacaoDono = "dono";
 
     public const string CabecalhoNormal = "normal";
     public const string CabecalhoReservaDoCaixa = "reserva_do_caixa";
@@ -474,7 +516,8 @@ public static class ConversaRaspadinha
             return new SinalConversa(true, Modo(modoCru), Modo(Texto(r, "palavra_modo")),
                 envio is ComoSdk or ComoOperador ? envio : "nenhum",
                 onde == "kds" ? "kds" : "caixa", // 'ambos' = a copia do caixa
-                merchants, intervalo, pausado, Avisos(r, "avisos"), Saidas(r, "saidas"), comandas);
+                merchants, intervalo, pausado, Avisos(r, "avisos"), Saidas(r, "saidas"), comandas,
+                Aprovacao(Texto(r, "aprovacao")), Bool(r, "dono_fora"));
         }
         catch { return SinalConversa.Desligado; }
     }
@@ -564,7 +607,8 @@ public static class ConversaRaspadinha
             if (Numero(s, "id") is not { } id || Texto(s, "texto") is not { } texto) continue;
             lista.Add(new SaidaConversa(id, Texto(s, "etapa") ?? "", (int)(Numero(s, "ordem") ?? 1), texto,
                 (Texto(s, "como") ?? "").ToLowerInvariant(), (Texto(s, "estado") ?? "").ToLowerInvariant(),
-                Texto(s, "canal"), Texto(s, "ifood_order_id"), TextoOuNumero(s, "pedido_numero")));
+                Texto(s, "canal"), Texto(s, "ifood_order_id"), TextoOuNumero(s, "pedido_numero"),
+                Bool(s, "pelo_dono")));
         }
         return lista;
     }
@@ -596,6 +640,56 @@ public static class ConversaRaspadinha
         ModoAutomatico => ModoAutomatico,
         _ => ModoDesligado,
     };
+
+    /// <summary>A aprovação do sinal. Qualquer valor que esta versão não conhece é <c>nenhuma</c>.</summary>
+    private static string Aprovacao(string? a) => (a ?? "").Trim().ToLowerInvariant() switch
+    {
+        AprovacaoProva => AprovacaoProva,
+        AprovacaoDono => AprovacaoDono,
+        _ => AprovacaoNenhuma,
+    };
+
+    // ── A APROVAÇÃO DO DONO NO CAIXA (puro, 1.0.20) ──────────────────────────
+
+    /// <summary>
+    /// O que o caixa faz com uma saída (desenho da aprovação pelo WhatsApp, seções 4.5 e 4.8):
+    ///  · "sdk" reservada a este terminal vai para a fila de envio, e o portão decide o resto. É por
+    ///    aqui que sai a aprovada pelo dono (<c>pelo_dono</c>), com a confirmação pelo eco de hoje;
+    ///  · com o caixa mudo (aprovação <c>dono</c>, tudo passa pelo dono) só sai pelo SDK a saída que
+    ///    tem o <c>pelo_dono</c>: uma "sdk" sem ele seria texto ao cliente sem o OK do dono;
+    ///  · a saída do dono (<c>pelo_dono</c>) em qualquer outro estado fica quieta: o texto dela só
+    ///    vai ao cliente pelo SDK, depois do OK, e nunca vira texto para colar;
+    ///  · a proposta esperando o dono (<c>como='dono'</c>) fica quieta;
+    ///  · "operador" vira aviso para a pessoa colar (o Assistido de hoje, e o <c>prova</c> para os
+    ///    clientes de fora da lista). Revisão 07/10: mesmo com o caixa mudo, porque com
+    ///    <c>aprovacao='dono'</c> o ERP nunca cria "operador"; quando cria, a aprovação foi desligada
+    ///    (152d) depois do último sinal deste caixa, e calar perdia a resposta (o sinal seguinte não
+    ///    entrega "operador" de novo e ela vence em 10 min);
+    ///  · sombra e qualquer valor desconhecido ficam quietos.
+    /// </summary>
+    public static DestinoDaSaida Destino(SaidaConversa s, SinalConversa sinal)
+    {
+        if (s.Como == ComoSdk && s.Estado == "reservada")
+            return sinal.CaixaMudo && !s.PeloDono ? DestinoDaSaida.Nada : DestinoDaSaida.Enviar;
+        if (s.PeloDono || s.Como == ComoDono) return DestinoDaSaida.Nada;
+        return s.Como == ComoOperador ? DestinoDaSaida.Colar : DestinoDaSaida.Nada;
+    }
+
+    /// <summary>
+    /// Uma saída cujo envio falhou pode virar aviso com o texto para a pessoa colar? Nunca a do dono
+    /// (D8: o dono recebe o texto no WhatsApp para mandar pelo app do Gestor), e nunca com o caixa
+    /// mudo. Vale para a reserva que o ERP devolve e para o aviso que o caixa monta sem rede.
+    /// </summary>
+    public static bool FalhaVaiParaPessoa(bool saidaDoDono, SinalConversa sinal)
+        => !saidaDoDono && !sinal.CaixaMudo;
+
+    /// <summary>
+    /// De quantos em quantos segundos vai o próximo sinal. Com a aprovação ligada (prova ou dono) o
+    /// teto é 30 s, mesmo que o ERP mande mais: é o sinal que entrega a aprovada a este caixa, e o
+    /// cliente espera o tempo do sinal depois do OK do dono (seção 1.2).
+    /// </summary>
+    public static int IntervaloDoSinal(SinalConversa s)
+        => s.Aprovacao is AprovacaoProva or AprovacaoDono ? Math.Min(s.IntervaloS, 30) : s.IntervaloS;
 
     // ── O AVISO NA TELA (puro) ───────────────────────────────────────────────
 
@@ -636,10 +730,13 @@ public static class ConversaRaspadinha
         var sdk = new JsonObject();
         if (sdkDaPagina is not null)
         {
-            foreach (var k in new[] { "achou", "user_id_igual_ws", "tem_order_uuid" })
+            // 1.0.20: por onde achou (o módulo do webpack ou a árvore do React), quantos runtimes do
+            // webpack e quantos módulos casaram com a assinatura do SDK. Só contagens, para o teste
+            // na loja dizer por que o sdk.achou deu falso sem ninguém abrir o caixa.
+            foreach (var k in new[] { "achou", "user_id_igual_ws", "tem_order_uuid", "via_webpack", "via_react" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<bool>(out var b))
                     sdk[k] = b;
-            foreach (var k in new[] { "instancias", "congeladas", "conferidos" })
+            foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<int>(out var n))
                     sdk[k] = Math.Clamp(n, 0, 100_000);
         }

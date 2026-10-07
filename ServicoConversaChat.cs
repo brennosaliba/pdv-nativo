@@ -45,6 +45,13 @@ public sealed class PonteDoChat
 /// TUDO NASCE DESLIGADO. Sem linha da loja no ERP, o sinal volta "desligado" e o caixa só manda o
 /// próprio sinal. Nada fala com o cliente sem passar pelo <see cref="PortaoDeEnvio"/>.
 ///
+/// 1.0.20, A APROVAÇÃO PELO WHATSAPP DO DONO (desenho de 07/10, seções 4.5 e 4.8): a resposta nasce
+/// como proposta para o dono (<c>como='dono'</c>), e o caixa não faz nada com ela. Aprovada, ela
+/// chega pelo sinal (30 s) como "sdk" reservada a este terminal, com <c>pelo_dono</c>, e sai pelo
+/// mesmo portão e pela mesma confirmação pelo eco. A do dono nunca vira texto para colar, nem quando
+/// falha. Com a aprovação valendo para todos (<c>aprovacao='dono'</c>) o caixa fica mudo para o chat:
+/// sem som, sem aviso e sem "Abrir e colar". A comanda de resgate continua saindo.
+///
 /// Nunca lança: chat não derruba caixa.
 /// </summary>
 public static class ServicoConversaChat
@@ -249,36 +256,72 @@ public static class ServicoConversaChat
 
         if (r.Bonus is not null)
         {
+            // a comanda continua saindo com o caixa mudo (D10: 'ambos' = cozinha e caixa)
             if (r.ImprimirAqui) _ = ServicoRaspadinhaChat.ImprimirPendentesAsync();
-            if (!r.Repetida && r.Acao == "resgatou") Alerta.Resgate();
+            // 1.0.20: com a aprovação do dono valendo para todos, o caixa não toca o som do resgate
+            if (!r.Repetida && r.Acao == "resgatou" && !_ultimo.Sinal.CaixaMudo) Alerta.Resgate();
         }
 
         var mandarDoErp = r.Aviso is { Tipo: "mandar" } a0 ? a0.Texto : null;
         var mandou = false;
         foreach (var s in r.Saidas) mandou |= TratarSaida(s, agora, mandarDoErp);
-        if (r.Aviso is { } a && !(a.Tipo == "mandar" && mandou))
-            Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero));
+        // a resposta que espera o OK do dono não vira "mande esta resposta" na tela, nem sem o texto
+        var doDono = r.Saidas.Any(s => s.PeloDono || s.Como == ConversaRaspadinha.ComoDono);
+        // revisão 07/10: o aviso da resposta passa pela trava do mudo. Com aprovacao=dono o ERP não
+        // devolve aviso na resposta; quando devolve, a aprovação foi desligada depois do último sinal
+        // deste caixa, ou o WhatsApp do dono está fora: o sinal seguinte não traz este aviso de novo.
+        if (r.Aviso is { } a && !(a.Tipo == "mandar" && (mandou || doDono)))
+            Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero), doErp: true);
     }
 
-    /// <summary>Uma saída: "sdk" reservada vai para a fila de envio; "operador" vira aviso com o texto; "sombra" fica quieta.</summary>
+    /// <summary>
+    /// Uma saída, pela regra pura do núcleo (<see cref="ConversaRaspadinha.Destino"/>): "sdk"
+    /// reservada vai para a fila de envio (é por ali que sai a aprovada pelo dono, pelo portão e com
+    /// a confirmação pelo eco); "operador" vira aviso com o texto; a do dono, a sombra e qualquer
+    /// coisa com o caixa mudo ficam quietas.
+    /// </summary>
     private static bool TratarSaida(SaidaConversa s, DateTime agora, string? textoDoErp)
     {
-        if (s.Como == ConversaRaspadinha.ComoSdk && s.Estado == "reservada")
+        switch (ConversaRaspadinha.Destino(s, _ultimo.Sinal))
         {
-            FilaDeEnvio.Writer.TryWrite((s, agora));
-            return false;
+            case DestinoDaSaida.Enviar:
+                if (s.PeloDono) LembrarDoDono(s.Id, agora);
+                FilaDeEnvio.Writer.TryWrite((s, agora));
+                return false;
+            case DestinoDaSaida.Colar:
+                Emitir(new AvisoDoChat("mandar", textoDoErp ?? ConversaRaspadinha.TextoMandar(s.PedidoNumero),
+                    s.Texto, s.IfoodOrderId, s.PedidoNumero), doErp: true);
+                return true;
+            default:
+                if (s.PeloDono || s.Como == ConversaRaspadinha.ComoDono || s.Como == ConversaRaspadinha.ComoSdk)
+                    Diag($"saida={s.Id} como={s.Como} estado={s.Estado} dono={s.PeloDono}: o caixa nao mexe");
+                return false;
         }
-        if (s.Como == ConversaRaspadinha.ComoOperador)
-        {
-            Emitir(new AvisoDoChat("mandar", textoDoErp ?? ConversaRaspadinha.TextoMandar(s.PedidoNumero),
-                s.Texto, s.IfoodOrderId, s.PedidoNumero));
-            return true;
-        }
-        return false;
     }
 
-    private static void Emitir(AvisoDoChat a)
+    /// <summary>
+    /// As saídas do dono que passaram por este caixa (2 h). O relato de uma delas que chega sem a
+    /// saída na mão (a confirmação pelo quadro) também não pode virar texto para colar.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, DateTime> SaidasDoDono = new();
+
+    private static void LembrarDoDono(long id, DateTime agora)
     {
+        if (SaidasDoDono.Count > 2000)
+            foreach (var k in SaidasDoDono.Where(x => x.Value < agora.AddHours(-2)).Select(x => x.Key).ToList())
+                SaidasDoDono.TryRemove(k, out _);
+        SaidasDoDono[id] = agora;
+    }
+
+    private static bool EraDoDono(long id) => SaidasDoDono.ContainsKey(id);
+
+    private static void Emitir(AvisoDoChat a, bool doErp = false)
+    {
+        // 1.0.20 (D10): com a aprovação do dono valendo para todos, o caixa fica fora do chat. Os
+        // avisos vão ao WhatsApp do dono pelo ERP; aqui não toca som nem aparece nada.
+        // Revisão 07/10: o que o ERP mandou na resposta da fala (doErp) passa: com o dono ele não
+        // manda, e quando manda é porque a aprovação foi desligada ou o WhatsApp do dono caiu.
+        if (_ultimo.Sinal.CaixaMudo && !doErp) { Diag($"aviso {a.Tipo} calado (aprovacao do dono)"); return; }
         // ⚠️ Regra da casa: nada com travessão chega na tela, nem se vier do ERP.
         if (!ConversaRaspadinha.TextoLimpo(a.Texto, 160)) { Diag($"aviso {a.Tipo} recusado (texto fora da regra)"); return; }
         if (a.TextoParaColar is not null && !ConversaRaspadinha.TextoLimpo(a.TextoParaColar, ConversaRaspadinha.TetoTexto))
@@ -343,11 +386,14 @@ public static class ServicoConversaChat
     /// Conta ao ERP o que aconteceu com uma saída (<c>chat_saida</c>). Quando o envio falhou, o ERP
     /// devolve a saída para a pessoa, e a tela mostra o aviso com "Abrir e colar". Sem rede, o próprio
     /// caixa mostra o aviso com o texto que tinha.
+    /// 1.0.20: a saída do dono que falhou NUNCA vira texto para colar, nem pela reserva do ERP nem
+    /// sem rede (D8: quem recebe o texto é o dono, no WhatsApp). Com o caixa mudo, nenhuma vira.
     /// </summary>
     private static async Task RelatarAsync(long saidaId, string resultado, string? erro, string? msgId, SaidaConversa? s)
     {
         try
         {
+            var doDono = s?.PeloDono == true || EraDoDono(saidaId);
             var corpo = ConversaRaspadinha.CorpoSaida(Terminal, saidaId, resultado, erro, msgId);
             for (var i = 0; i < 3; i++)
             {
@@ -356,19 +402,24 @@ public static class ServicoConversaChat
                 if (st is >= 200 and < 300)
                 {
                     var rr = ConversaRaspadinha.LerSaidaResultado(st, resp);
-                    Diag($"saida={saidaId} resultado={resultado} erp={rr.Estado ?? "-"}");
+                    Diag($"saida={saidaId} resultado={resultado} erp={rr.Estado ?? "-"} dono={doDono}");
                     if (rr.Reserva is { } res)
-                        Emitir(new AvisoDoChat("falha_envio",
-                            ConversaRaspadinha.TextoFalhaEnvio(res.PedidoNumero ?? s?.PedidoNumero), res.Texto,
-                            res.IfoodOrderId ?? s?.IfoodOrderId, res.PedidoNumero ?? s?.PedidoNumero));
+                    {
+                        if (ConversaRaspadinha.FalhaVaiParaPessoa(doDono, _ultimo.Sinal))
+                            Emitir(new AvisoDoChat("falha_envio",
+                                ConversaRaspadinha.TextoFalhaEnvio(res.PedidoNumero ?? s?.PedidoNumero), res.Texto,
+                                res.IfoodOrderId ?? s?.IfoodOrderId, res.PedidoNumero ?? s?.PedidoNumero));
+                        else Diag($"saida={saidaId} reserva do ERP sem texto na tela (saida do dono ou caixa mudo)");
+                    }
                     return;
                 }
                 if (st is >= 400 and < 500 and not (408 or 425 or 429)) break;
                 await Task.Delay(TimeSpan.FromSeconds(2 * (i + 1))).ConfigureAwait(false);
             }
-            if (resultado == "falhou" && s is not null)
+            if (resultado == "falhou" && s is not null && ConversaRaspadinha.FalhaVaiParaPessoa(doDono, _ultimo.Sinal))
                 Emitir(new AvisoDoChat("falha_envio", ConversaRaspadinha.TextoFalhaEnvio(s.PedidoNumero), s.Texto,
                     s.IfoodOrderId, s.PedidoNumero));
+            else if (resultado == "falhou") Diag($"saida={saidaId} falhou sem rede: sem texto na tela (dono={doDono})");
         }
         catch (Exception ex) { Diag("relatar: " + ex.GetType().Name); }
     }
@@ -420,9 +471,11 @@ public static class ServicoConversaChat
                 var s = ConversaRaspadinha.LerSinal(resp, DateTime.Now);
                 using (var cx = Banco.Abrir()) ConversaRaspadinha.GravarSinal(cx, resp, DateTime.Now);
                 var antes = _ultimo.Sinal.Modo;
+                var aprovacaoAntes = _ultimo.Sinal.Aprovacao;
                 _ultimo = new UltimoSinal(s, DateTime.Now);
-                proximo = TimeSpan.FromSeconds(s.IntervaloS);
+                proximo = TimeSpan.FromSeconds(ConversaRaspadinha.IntervaloDoSinal(s));
                 if (antes != s.Modo) Diag($"modo {antes} -> {s.Modo} envio={s.Envio} comanda={s.ComandaOnde}");
+                if (aprovacaoAntes != s.Aprovacao) Diag($"aprovacao {aprovacaoAntes} -> {s.Aprovacao} mudo={s.CaixaMudo}");
 
                 foreach (var a in s.Avisos) Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero));
                 foreach (var sd in s.Saidas) TratarSaida(sd, DateTime.Now, null);

@@ -1941,6 +1941,10 @@ public partial class ChatIfood : UserControl
     // Roda a cada carga, separado do painel. Duas funcoes e nada mais:
     //  · diag(): SO contagens (achou o SDK, quantas instancias, se o usuario bate com o do
     //    WebSocket, se as conversas tem orderUuid, quantas congeladas). O uid fica em memoria no C#.
+    //    1.0.20: a instancia e achada pelo require do webpack em req.m (a fabrica do @sendbird/chat
+    //    reconhecida pelo texto do corpo, sem executar as outras), com o id guardado para a pagina
+    //    toda; a arvore do React, descendo em shadowRoot aberto, ficou de segunda via. A prova contra
+    //    um runtime falso do webpack 5 esta em Pdv.Testes/TestesScriptSendbird.cs (roda no node).
     //  · enviar(): manda UMA resposta numa conversa, pelo mesmo metodo do botao Enviar. Recusa sem o
     //    token de uso unico que o C# poe em window.__pdvEnvioToken imediatamente antes; confere o
     //    canal (orderUuid igual, nao congelada, com cliente); 20 por minuto no maximo; sem focus()
@@ -1951,6 +1955,7 @@ public partial class ChatIfood : UserControl
       function envia(o){ try { window.chrome.webview.postMessage(JSON.stringify(o)); } catch (e) {} }
       var enviados = [];
       var cache = null, cacheEm = 0;
+      var via = { webpack: false, react: false };
 
       // instancia valida: tem groupChannel.getChannel e um usuario conectado
       function valida(x){
@@ -1959,36 +1964,116 @@ public partial class ChatIfood : UserControl
       }
       function junta(lista, x){ if (valida(x) && lista.indexOf(x) < 0) lista.push(x); }
 
-      // 1) o singleton do modulo (SendbirdChat.instance), varrendo os modulos do webpack
-      function doWebpack(lista){
+      // 1) O MODULO DO @sendbird/chat NO WEBPACK (1.0.20).
+      // O runtime do Gestor nao expoe o cache de modulos (req.c): o 1.0.19 parava ali e o sinal
+      // dizia instancias=0. Ele expoe req.m, as fabricas dos modulos. A do SDK e reconhecida pelo
+      // texto do corpo (o getter instance junto com a marca sendbird.com), e
+      // req(id) devolve os exports que o Gestor ja carregou, sem criar outra instancia. Fabrica que
+      // nao casou com a assinatura NUNCA e executada. O id achado fica guardado para a pagina toda:
+      // o toString do bundle de 11 MB roda uma vez por fabrica, e uma procura seguinte (so quando a
+      // instancia deixou de valer) le apenas as fabricas que chegaram depois.
+      var reqs = {};      // nome do webpackChunk: o require daquele runtime
+      var vistas = {};    // nome: { id: true } das fabricas ja lidas
+      var achados = [];   // { nome, id } das fabricas que casaram com a assinatura
+      var toStr = Function.prototype.toString;
+      var temInstance = /get\s+instance\s*\(|["']instance["']\s*,\s*\{[^}]{0,60}?\bget\b|key\s*:\s*["']instance["']\s*,\s*get\b/;
+
+      // o require vem pelo mesmo push do 1.0.19, na hora da procura: o runtime do Gestor so trata o
+      // push depois da carga. Fila ainda sem runtime guarda o pedido, e o runtime chama a funcao
+      // quando subir.
+      function pedeRequire(nome, fila, i){
+        try {
+          fila.push([['pdvsb' + Date.now() + '_' + i], {}, function (r) {
+            if (!reqs[nome] && typeof r === 'function' && r.m) reqs[nome] = r;
+          }]);
+        } catch (e) {}
+      }
+      function capturar(){
         try {
           var nomes = Object.keys(self).filter(function (k) { return k.indexOf('webpackChunk') === 0; });
           for (var i = 0; i < nomes.length; i++) {
+            if (reqs[nomes[i]]) continue;
             var fila = self[nomes[i]];
-            if (!fila || typeof fila.push !== 'function') continue;
-            var req = null;
-            try { fila.push([['pdvsb' + Date.now() + '_' + i], {}, function (r) { req = r; }]); } catch (e) {}
-            if (!req || !req.c) continue;
-            var mods = req.c;
-            for (var k in mods) {
-              var ex = null;
-              try { ex = mods[k] && mods[k].exports; } catch (e) { ex = null; }
-              if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) continue;
-              var cands = [ex];
-              try { if (ex.default) cands.push(ex.default); } catch (e) {}
-              try { for (var p in ex) { var v = ex[p]; if (v && (typeof v === 'object' || typeof v === 'function')) cands.push(v); } } catch (e) {}
-              for (var j = 0; j < cands.length; j++) {
-                try { if (cands[j] && cands[j].instance) junta(lista, cands[j].instance); } catch (e) {}
-              }
+            if (fila && typeof fila.push === 'function') pedeRequire(nomes[i], fila, i);
+          }
+        } catch (e) {}
+      }
+
+      // a assinatura do SDK no texto da fabrica (so le, nao executa): o getter instance junto com a
+      // marca do Sendbird (o host sendbird.com). Revisao 07/10: no Gestor de verdade
+      // (order-manager-web 9.346.3-0, @sendbird/chat 4.19.9) o SDK vem repartido. A classe
+      // SendbirdChat, com o getter escrito como Object.defineProperty(..,"instance",{get:..}) e o
+      // apiHost/websocketHost em sendbird.com, fica num modulo; a versao fica no nucleo e o
+      // sendUserMessage no canal. Pedir a versao ou o envio no mesmo corpo do getter nao casava
+      // com nenhuma das 2416 fabricas, e o sinal seguia achou=false. A marca nao depende da versao.
+      function casa(f){
+        var s = '';
+        try { s = toStr.call(f); } catch (e) { return false; }
+        if (s.indexOf('sendbird.com') < 0) return false;
+        return temInstance.test(s);
+      }
+
+      // exports.instance, exports.default.instance ou o export que tiver .instance
+      function deModulo(ex, lista){
+        if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) return;
+        var cands = [ex];
+        try { if (ex.default) cands.push(ex.default); } catch (e) {}
+        try { for (var p in ex) { var v = ex[p]; if (v && (typeof v === 'object' || typeof v === 'function')) cands.push(v); } } catch (e) {}
+        for (var j = 0; j < cands.length; j++) {
+          try { if (cands[j] && cands[j].instance) junta(lista, cands[j].instance); } catch (e) {}
+        }
+      }
+
+      function exportsDe(nome, id){
+        var r = reqs[nome];
+        if (!r) return null;
+        try { return r(id); } catch (e) { return null; }
+      }
+
+      function doWebpack(lista){
+        try {
+          capturar();
+          // a) pelo id guardado: so o require, sem ler fabrica nenhuma
+          for (var a = 0; a < achados.length; a++) deModulo(exportsDe(achados[a].nome, achados[a].id), lista);
+          if (lista.length) return;
+          // b) ainda nao achou, ou a instancia deixou de valer: le so as fabricas que nao leu
+          for (var nome in reqs) {
+            var m = reqs[nome].m;
+            if (!m) continue;
+            var v = vistas[nome] || (vistas[nome] = {});
+            for (var id in m) {
+              if (!Object.prototype.hasOwnProperty.call(m, id) || v[id]) continue;
+              v[id] = true;
+              if (typeof m[id] !== 'function' || !casa(m[id])) continue;
+              achados.push({ nome: nome, id: id });
+              deModulo(exportsDe(nome, id), lista);
             }
           }
         } catch (e) {}
       }
 
-      // 2) a arvore do React a partir da caixa do chat (stores.sdkStore.sdk do UIKit)
+      // 2) SEGUNDA VIA: a arvore do React a partir da caixa do chat (stores.sdkStore.sdk do UIKit),
+      // descendo nos shadowRoot abertos, porque o chat do Gestor pode morar num deles.
+      function acharNo(raiz, sel, prof, conta){
+        var el = null;
+        try { el = raiz.querySelector(sel); } catch (e) {}
+        if (el || prof >= 4) return el;
+        var todos = [];
+        try { todos = raiz.querySelectorAll('*'); } catch (e) {}
+        for (var i = 0; i < todos.length && i < 20000 && conta.n < 300; i++) {
+          var sr = null;
+          try { sr = todos[i].shadowRoot; } catch (e) {}
+          if (!sr) continue;
+          conta.n++;
+          var x = acharNo(sr, sel, prof + 1, conta);
+          if (x) return x;
+        }
+        return null;
+      }
       function doReact(lista){
         try {
-          var el = document.querySelector('[class*="sendbird-"]') || document.querySelector('textarea,[contenteditable="true"]');
+          var el = acharNo(document, '[class*="sendbird-"]', 0, { n: 0 })
+                || acharNo(document, 'textarea,[contenteditable="true"]', 0, { n: 0 });
           if (!el) return;
           var chave = Object.keys(el).filter(function (k) { return k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0; })[0];
           var f = chave ? el[chave] : null, n = 0;
@@ -2005,10 +2090,15 @@ public partial class ChatIfood : UserControl
       }
 
       function instancias(){
-        if (cache && cache.length && Date.now() - cacheEm < 60000) return cache.filter(valida);
+        if (cache && cache.length && Date.now() - cacheEm < 60000) {
+          var ainda = cache.filter(valida);
+          if (ainda.length) return ainda;
+        }
         var lista = [];
         doWebpack(lista);
-        doReact(lista);
+        via.webpack = lista.length > 0;
+        if (!lista.length) doReact(lista);
+        via.react = !via.webpack && lista.length > 0;
         cache = lista; cacheEm = Date.now();
         return lista;
       }
@@ -2038,6 +2128,11 @@ public partial class ChatIfood : UserControl
             r.achou = lista.length > 0;
             r.instancias = lista.length;
             r.user_id_igual_ws = !!(ws && lista.some(function (x) { try { return x.currentUser && String(x.currentUser.userId) === String(ws); } catch (e) { return false; } }));
+            // 1.0.20: so contagens de por onde achou, para o teste na loja
+            r.via_webpack = via.webpack;
+            r.via_react = via.react;
+            r.modulos = achados.length;
+            r.runtimes = Object.keys(reqs).length;
             if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
             var canais = (a && a.canais) || [], conferidos = 0, comUuid = 0, congeladas = 0;
             for (var i = 0; i < canais.length && i < 5; i++) {

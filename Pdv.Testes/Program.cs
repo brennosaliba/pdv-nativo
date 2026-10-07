@@ -749,6 +749,17 @@ if (args.Length >= 1 && args[0] == "--so-brinde")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (07/10/2026): so as suites da aprovacao pelo WhatsApp do dono. NAO e o gate.
+//   Pdv.Testes.exe --so-aprovacao
+if (args.Length >= 1 && args[0] == "--so-aprovacao")
+{
+    TestesAprovacaoDono.Rodar((cond, nome) => Check("aprovacao: " + nome, cond));
+    TestesScriptSendbird.Rodar((cond, nome) => Check("script-sb: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so aprovacao) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 var arquivo = Path.Combine(Path.GetTempPath(), $"pdv-teste-{Guid.NewGuid():N}.db");
 Banco.Migrar(arquivo);
 
@@ -1957,6 +1968,17 @@ TestesQuadroSendbird.Rodar((cond, nome) => Check("quadro-sb: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Resgate pelo chat: a conversa, o portao de envio, o papel e a fila ---");
 await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, cond));
+
+// -- 07/10/2026: APROVACAO PELO WHATSAPP DO DONO (caixa 1.0.20) --------------------------
+// O dono aprova pelo WhatsApp pessoal e a resposta sai sozinha no chat do iFood, pelo SDK que o
+// caixa acha no webpack do Gestor. O caixa ignora a proposta, manda a aprovada pelo portao de hoje,
+// nunca devolve a do dono para a pessoa colar e fica mudo com a aprovacao valendo para todos.
+Console.WriteLine();
+Console.WriteLine("--- Aprovacao do dono: a saida do dono, o caixa mudo e o portao de hoje ---");
+TestesAprovacaoDono.Rodar((cond, nome) => Check("aprovacao: " + nome, cond));
+Console.WriteLine();
+Console.WriteLine("--- Aprovacao do dono: o script do SDK no node, contra um runtime falso do webpack 5 ---");
+TestesScriptSendbird.Rodar((cond, nome) => Check("script-sb: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;
