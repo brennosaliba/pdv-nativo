@@ -711,6 +711,33 @@
             </StackPanel>
         </Border>
 
+        <!-- RESGATE PELO CHAT DO iFOOD (07/10/2026): os avisos do chat novo, uma linha ja escrita
+             pelo ERP (resgate feito, cliente escolhendo, precisa de ajuda...). Quando a pessoa tem
+             de mandar a resposta (modo Assistido, ou o envio automatico nao deu), aparecem
+             "Abrir e colar" e "Copiar". Terceira faixa, para nao cobrir os outros avisos. -->
+        <Border x:Name="ToastConversa" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,204,14,0"
+                Background="{DynamicResource PainelDegrade}" BorderBrush="{DynamicResource Rosa}"
+                BorderThickness="2" CornerRadius="14" Panel.ZIndex="99" MaxWidth="460">
+            <StackPanel Margin="16,10,12,12">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="TxtToastConversaIcone" Text="🎁" FontSize="22" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtToastConversa" Foreground="{DynamicResource Texto}"
+                               FontSize="15" FontWeight="Bold" TextWrapping="Wrap" MaxWidth="350"
+                               Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    <Button Content="✕" Style="{StaticResource BotaoTexto}" Click="FecharToastConversa"
+                            Margin="8,0,0,0" Padding="6,2" VerticalAlignment="Top" ToolTip="Fechar"/>
+                </StackPanel>
+                <StackPanel x:Name="BotoesToastConversa" Orientation="Horizontal" Margin="34,8,0,0"
+                            Visibility="Collapsed">
+                    <Button x:Name="BtnConversaColar" Content="Abrir e colar" Style="{StaticResource BotaoTexto}"
+                            Click="AbrirEColarDoToast" Padding="10,4"/>
+                    <Button x:Name="BtnConversaCopiar" Content="Copiar" Style="{StaticResource BotaoTexto}"
+                            Click="CopiarDoToast" Margin="10,0,0,0" Padding="10,4"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <!-- Aviso leve de uma linha (ex.: promocao nao aplicada depois de cancelar o
              codigo). Mesmo lugar dos outros toasts, sem toque: so informa e some em 8 s. -->
         <Border x:Name="ToastAviso" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"

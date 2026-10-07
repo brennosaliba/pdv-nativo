@@ -416,6 +416,9 @@ public static class TestesRaspadinhaChat
     }
 
     // ── 6. A COMANDA ─────────────────────────────────────────────────────────
+    // LAYOUT NOVO (07/10/2026, desenho "resgate-final", seção 9), igual no caixa e no KDS: o NÚMERO
+    // do pedido em 3x na primeira linha de destaque, o nome inteiro do cliente, uma linha por item,
+    // e as linhas pequenas sem acento. Toda linha ampliada cabe no papel depois de ampliada.
     private static void AComanda(Action<bool, string> checar)
     {
         var b = new BonusRaspadinha("bn-1", "AD-WKJNRF", "Cookie Classico", "🍪", "Maria", "5592",
@@ -423,49 +426,71 @@ public static class TestesRaspadinhaChat
         var linhas = ChatRaspadinha.ComandaLinhas(b, 40, new DateTime(2026, 9, 22, 14, 32, 0));
         var limpas = linhas.Select(LinhaEscala.Limpa).ToList();
         var texto = string.Join("\n", limpas);
+        double Escala(IEnumerable<string> ls, string trecho) => ls.Select(LinhaEscala.Le)
+            .Where(x => x.Texto.Contains(trecho, StringComparison.Ordinal)).Select(x => x.Escala).FirstOrDefault();
 
-        checar(texto.Contains("BRINDE DA RASPADINHA"), "CM-1 o papel diz o que é logo no cabeçalho");
-        checar(texto.Contains("COOKIE CLASSICO"), "CM-2 o prêmio sai no papel, em maiúsculas");
-        checar(texto.Contains("Cliente: Maria"), "CM-3 o cliente sai no papel");
-        checar(texto.Contains("Pedido: #5592"), "CM-4 o pedido sai no papel");
-        checar(texto.Contains("Codigo: AD-WKJNRF"), "CM-5 o código queimado sai no papel (é o que o gerente confere)");
-        checar(texto.Contains("Hora: 14:32"), "CM-6 a hora sai no papel");
+        checar(limpas[0].Contains("RESGATE DA RASPADINHA"), "CM-1 o papel diz o que é logo no cabeçalho");
+        var destaque = linhas.Select(LinhaEscala.Le).First(x => x.Escala > 1.0);
+        checar(destaque.Texto.Trim() == "#5592" && destaque.Escala == 3.0,
+            $"CM-2 o NÚMERO do pedido em 3x é a primeira linha de destaque ({destaque.Texto.Trim()} {destaque.Escala})");
+        checar(texto.Contains("MARIA") && Escala(linhas, "MARIA") == 1.5, "CM-3 o cliente sai em 1,5x");
+        checar(texto.Contains("COOKIE CLASSICO") && Escala(linhas, "COOKIE CLASSICO") >= 2.0,
+            "CM-4 bônus antigo (sem itens) sai com o prêmio em 2x, em maiúsculas");
+        checar(texto.Contains("Codigo AD-WKJNRF  14:32"), "CM-5 o código queimado e a hora saem numa linha só");
+        checar(texto.Contains("Vai junto com o pedido.") && texto.Contains("Brinde sem valor fiscal."),
+            "CM-6 o papel diz o que fazer e que não é venda");
         checar(!texto.Contains('—') && !texto.Contains('–'), "CM-7 o papel não tem travessão");
+        checar(!texto.Contains("Resgate:"), "CM-8 sem assinatura, não imprime rótulo vazio");
 
-        var escalaDoPremio = linhas.Select(LinhaEscala.Le).Where(x => x.Texto.Contains("COOKIE CLASSICO"))
-            .Select(x => x.Escala).FirstOrDefault();
-        checar(escalaDoPremio >= 2.0, $"CM-8 o prêmio sai grande, para ser lido de longe ({escalaDoPremio})");
+        // o chat novo: itens com o sabor, nome inteiro, assinatura
+        var novo = b with
+        {
+            Cliente = "Ana Paula Souza", Pedido = "#5971", Premio = "1 Donut Clássico", Codigo = "AD-7KQ2MX",
+            Itens = new[] { new ItemBonus("Donut Homer", 1), new ItemBonus("Donut Churros", 2) },
+            Assinatura = "Automatizado", ComandaOnde = "caixa", Cabecalho = "normal", Origem = ChatRaspadinha.OrigemAutomatico,
+        };
+        var n = ChatRaspadinha.ComandaLinhas(novo, 40, new DateTime(2026, 10, 7, 19, 42, 0));
+        var nl = n.Select(LinhaEscala.Limpa).ToList();
+        checar(nl.Any(l => l.Trim() == "#5971"), "CM-9 o número sai sem o # dobrado");
+        checar(nl.Any(l => l.Trim() == "ANA PAULA SOUZA"), "CM-10 o nome INTEIRO do cliente (no balcão tem duas Anas)");
+        checar(nl.Count(l => l.Trim() is "1 DONUT HOMER" or "2 DONUT CHURROS") == 2 && Escala(n, "1 DONUT HOMER") == 2.0,
+            "CM-11 uma linha por item, em 2x, com a quantidade");
+        checar(!nl.Any(l => l.Contains("DONUT CLASSICO") || l.Contains("DONUT CLÁSSICO")),
+            "CM-12 com itens, o nome do prêmio não ocupa linha (o que vai na sacola é o item)");
+        checar(nl.Contains("Codigo AD-7KQ2MX  19:42") && nl.Contains("Resgate: Automatizado"),
+            "CM-13 código, hora e a assinatura 'Automatizado'");
 
-        // bobina estreita: encolhe junto, não sai cortado
-        foreach (var colunas in new[] { 32, 40, 48 })
+        // cabe no papel: largura ampliada nunca passa das colunas
+        foreach (var colunas in new[] { 32, 40, 42, 48 })
         {
             var L = Nucleo.Kds.ColunasComanda(colunas);
-            var estreitas = ChatRaspadinha.ComandaLinhas(b, colunas).Select(LinhaEscala.Limpa).ToList();
-            checar(estreitas.All(l => l.Length <= L),
-                $"CM-9 em {colunas} colunas nenhuma linha passa de {L} (nada sai cortado)");
+            foreach (var bb in new[] { b, novo, novo with { Cliente = "MARIA APARECIDA DOS SANTOS FERREIRA DE OLIVEIRA LIMA" } })
+            {
+                var cabe = ChatRaspadinha.ComandaLinhas(bb, colunas).Select(LinhaEscala.Le)
+                    .All(x => x.Texto.TrimEnd().Length * x.Escala <= L + 0.001);
+                checar(cabe, $"CM-14 em {colunas} colunas nenhuma linha ampliada passa de {L} ({bb.Cliente})");
+            }
         }
-
-        // prêmio comprido: quebra em vez de sumir
-        var comprido = ChatRaspadinha.ComandaLinhas(b with { Premio = "CAIXA COM 6 DONUTS SORTIDOS DA CASA E BROWNIE" }, 32)
+        var comprido = ChatRaspadinha.ComandaLinhas(novo with { Cliente = "MARIA APARECIDA DOS SANTOS FERREIRA DE OLIVEIRA LIMA" }, 32)
+            .Select(LinhaEscala.Le).Where(x => x.Escala == 1.5).ToList();
+        checar(comprido.Count == 2 && comprido[1].Texto.EndsWith("…"), "CM-15 nome comprido vai em até 2 linhas, cortado para caber");
+        var premioLongo = ChatRaspadinha.ComandaLinhas(b with { Premio = "CAIXA COM 6 DONUTS SORTIDOS DA CASA E BROWNIE" }, 32)
             .Select(LinhaEscala.Limpa).ToList();
-        checar(string.Concat(comprido.Select(l => l.Trim())).Contains("BROWNIE"),
-            "CM-10 prêmio comprido quebra em mais linhas em vez de perder o fim");
+        checar(string.Join(" ", premioLongo).Contains("BROWNIE"), "CM-16 prêmio comprido quebra em mais linhas em vez de perder o fim");
 
-        // o que não existe não vira linha vazia
+        // reserva do caixa, e o bônus antigo sem número
+        var reserva = ChatRaspadinha.ComandaLinhas(novo with { Cabecalho = "reserva_do_caixa" }, 40).Select(LinhaEscala.Limpa).First();
+        checar(reserva.Contains("RESGATE (RESERVA DO CAIXA)"), "CM-17 a comanda que o caixa imprime por reserva diz isso no título");
         var magro = ChatRaspadinha.ComandaLinhas(
             new BonusRaspadinha("bn-2", null, null, null, null, null, null, null, ChatRaspadinha.OrigemExtensao,
-                new DateTime(2026, 9, 22, 15, 0, 0)), 40, new DateTime(2026, 9, 22, 15, 0, 0))
-            .Select(LinhaEscala.Limpa).ToList();
-        var textoMagro = string.Join("\n", magro);
-        checar(textoMagro.Contains("BRINDE DA RASPADINHA") && textoMagro.Contains("BRINDE"),
-            "CM-11 bônus sem prêmio ainda tira papel (alguém tem de saber que existe)");
-        checar(!textoMagro.Contains("Cliente:") && !textoMagro.Contains("Codigo:"),
-            "CM-12 sem cliente ou código, o papel não imprime rótulo vazio");
-        // O NÚMERO DO PEDIDO É O QUE FAZ O PAPEL SERVIR. Sem ele a linha não some: ela DIZ que
-        // falta, senão quem pega a comanda com oito sacolas na bancada não sabe nem o que procurar.
-        checar(textoMagro.Contains("Pedido: confira no chat"),
-            "CM-14 sem o número do pedido, o papel manda conferir no chat em vez de omitir a linha");
-        checar(textoMagro.Contains("Hora: 15:00"), "CM-13 a hora sai sempre");
+                new DateTime(2026, 9, 22, 15, 0, 0)), 40, new DateTime(2026, 9, 22, 15, 0, 0));
+        var textoMagro = string.Join("\n", magro.Select(LinhaEscala.Limpa));
+        checar(textoMagro.Contains("PEDIDO: CONFIRA NO CHAT") && Escala(magro, "PEDIDO: CONFIRA") == 1.5,
+            "CM-18 sem o número do pedido, o papel manda conferir no chat (1,5x) em vez de omitir");
+        checar(textoMagro.Contains("BRINDE") && !textoMagro.Contains("Codigo"), "CM-19 sem prêmio nem código, o papel sai assim mesmo e sem rótulo vazio");
+        checar(textoMagro.Contains("15:00"), "CM-20 a hora sai sempre");
+        var acento = ChatRaspadinha.ComandaLinhas(novo with { Assinatura = "Gerência Ação" }, 40).Select(LinhaEscala.Limpa);
+        checar(acento.Contains("Resgate: Gerencia Acao"), "CM-21 as linhas pequenas saem sem acento");
     }
 
     // ── 7. O DOM (complemento) ───────────────────────────────────────────────

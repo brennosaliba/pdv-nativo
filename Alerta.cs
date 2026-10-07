@@ -108,6 +108,37 @@ public static class Alerta
         });
     }
 
+    private static DateTime _ultimoResgate = DateTime.MinValue;
+
+    /// <summary>
+    /// RESGATE DA RASPADINHA PELO CHAT (07/10/2026): o ERP queimou o código e o prêmio vai junto do
+    /// pedido. Quatro toques SUBINDO, em arpejo, e repetidos: não se confunde com o "dois toques
+    /// descendo" do chat nem com os três do pedido novo, porque aqui alguém tem de pôr um brinde na
+    /// sacola. Ou sons\resgate.wav, que a loja escolhe.
+    /// </summary>
+    public static void Resgate()
+    {
+        if ((DateTime.Now - _ultimoResgate).TotalSeconds < 4) return;
+        _ultimoResgate = DateTime.Now;
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (TocarDaLoja(Pdv.Nucleo.SomDaLoja.Resgate)) return;
+                for (var vez = 0; vez < 2; vez++)
+                {
+                    Console.Beep(784, 120);
+                    Console.Beep(988, 120);
+                    Console.Beep(1175, 120);
+                    Console.Beep(1568, 260);
+                    Thread.Sleep(140);
+                }
+            }
+            catch { /* sem som: o aviso na tela e a comanda continuam */ }
+        });
+    }
+
     /// <summary>
     /// Etiqueta do KDS bipada e o pedido virou PRONTO (05/10/2026): dois toques subindo,
     /// curtos. É a confirmação para quem bipou de costas para a tela. Sem freio de tempo:

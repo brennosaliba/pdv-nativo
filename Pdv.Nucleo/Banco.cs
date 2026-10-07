@@ -174,6 +174,14 @@ public static class Banco
             // É ela que autoriza fechar o turno sem contagem e sem mandar nada para a
             // nuvem — coisa que jamais pode acontecer com um turno de verdade.
             "ALTER TABLE caixa_sessao ADD COLUMN homologacao INTEGER NOT NULL DEFAULT 0",
+            // 07/10/2026: RESGATE PELO CHAT DO iFOOD (desenho "resgate-final", seção 4.9). O bônus
+            // do chat novo traz os itens com o sabor, a assinatura "Automatizado", quem imprime
+            // (caixa ou kds) e, quando o papel é DESTE terminal, o cabeçalho da comanda (normal ou
+            // reserva_do_caixa). Bônus sem cabeçalho e com comanda_onde não sai sozinho daqui.
+            "ALTER TABLE raspadinha_bonus ADD COLUMN itens_json TEXT",
+            "ALTER TABLE raspadinha_bonus ADD COLUMN assinatura TEXT",
+            "ALTER TABLE raspadinha_bonus ADD COLUMN comanda_onde TEXT",
+            "ALTER TABLE raspadinha_bonus ADD COLUMN cabecalho TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }
@@ -509,6 +517,30 @@ public static class Banco
           -- acabada engolia todo bônus menos o último), e este teto é o que impede a metralhadora.
           tentativas_impressao INTEGER NOT NULL DEFAULT 0
         );
+
+        -- ── RESGATE PELO CHAT DO iFOOD: AS FALAS DA CONVERSA (07/10/2026) ──────
+        -- Uma linha por FALA lida do quadro MESG do Sendbird (cliente, ou loja numa conversa
+        -- viva). A chave é a do ERP (sb:<msg_id> ou h:<sha256>), igual em todos os terminais. A
+        -- linha nasce JUNTO com a da fila (tipo raspadinha_conversa, ref = canal), na mesma
+        -- transação: sem internet a fala espera e sai quando a rede volta. O TEXTO SAI quando a
+        -- fala tem desfecho, e a linha inteira some em 2 dias (ConversaRaspadinha.Faxina).
+        -- estado: pendente · enviada (o ERP respondeu) · descartada (recusa, ou loja desligada).
+        CREATE TABLE IF NOT EXISTS raspadinha_conversa_fala (
+          chave          TEXT PRIMARY KEY,
+          canal          TEXT NOT NULL,
+          ifood_order_id TEXT NOT NULL,
+          merchant_id    TEXT NOT NULL,
+          lado           TEXT NOT NULL,
+          autor_id       TEXT,
+          msg_id         TEXT,
+          texto          TEXT,
+          quando         TEXT NOT NULL,
+          estado         TEXT NOT NULL DEFAULT 'pendente',
+          tentativas     INTEGER DEFAULT 0,
+          criado_em      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_raspadinha_conversa_pendente
+          ON raspadinha_conversa_fala(canal) WHERE estado = 'pendente';
 
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────
         -- Chave/valor em vez de coluna nova em `terminal`: Migrar() só faz CREATE TABLE

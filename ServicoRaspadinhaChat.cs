@@ -25,6 +25,13 @@ namespace Pdv;
 /// não a primeira.
 ///
 /// DESLIGADO NA LOJA = NADA ACONTECE. A chave vem do painel; sem ela, nem a mensagem é gravada.
+///
+/// ⚠️ CHAT NOVO LIGADO = ESTE FLUXO PARA (07/10/2026, tarefa P8). Com a loja em Sombra, Assistido ou
+/// Automático no ERP (o sinal do ServicoConversaChat diz), quem lê o chat é o caminho novo e este
+/// aqui não manda nada, nem o que esperava na fila (ver ChatRaspadinha.LigadoNaLoja). O PAPEL
+/// continua daqui para os dois: <see cref="ImprimirPendentesAsync"/> respeita quem imprime
+/// (<c>comanda_onde</c>), reserva de novo no ERP quando é uma nova tentativa e avisa
+/// <c>impresso</c> só depois do papel.
 /// </summary>
 public static class ServicoRaspadinhaChat
 {
@@ -200,17 +207,33 @@ public static class ServicoRaspadinhaChat
             if (politica == PoliticaImpressao.Nao) return null;
 
             string? falha = null;
+            var quem = ConversaRaspadinha.NomeDoTerminal();
             foreach (var b in pendentes)
             {
+                // Nova tentativa de um bônus do chat novo: a reserva de 2 min no ERP já pode ter
+                // passado para outro (o KDS, outro caixa). TirarPapelAsync reserva de novo antes.
+                var repetida = ChatRaspadinha.TentativasDeImpressao(b.Id) > 0;
                 // claim ANTES do papel: a puxada do delivery e a volta da rede se sobrepõem, e
                 // comanda dobrada é brinde dobrado. Falhou depois do claim, o claim VOLTA (com a
                 // tentativa contada, ver ChatRaspadinha.AnotarFalhaDeImpressao) e a varredura
                 // seguinte tenta de novo até o teto; passado o teto, o botão Reimprimir recupera.
                 if (!ChatRaspadinha.ReivindicarImpressao(b.Id)) continue;
-                var erro = await ImprimirAsync(b, destino).ConfigureAwait(false);
-                if (erro is null) { ChatRaspadinha.ConfirmarImpressao(b.Id); continue; }
-                ChatRaspadinha.AnotarFalhaDeImpressao(b.Id, erro);
-                falha ??= "A comanda do brinde não saiu. Anote o código e fale com o gerente.";
+                var r = await ConversaRaspadinha.TirarPapelAsync(b, repetida, quem,
+                    () => ImprimirAsync(b, destino), FuncaoDaBorda).ConfigureAwait(false);
+                switch (r.Desfecho)
+                {
+                    case DesfechoPapel.Saiu:
+                        ChatRaspadinha.ConfirmarImpressao(b.Id);
+                        if (!r.ImpressoAvisado) LembrarImpresso(b.Id);
+                        break;
+                    case DesfechoPapel.NaoEraMeu:
+                        ChatRaspadinha.MarcarDeOutro(b.Id, r.Erro);
+                        break;
+                    default:
+                        ChatRaspadinha.AnotarFalhaDeImpressao(b.Id, r.Erro);
+                        falha ??= "A comanda do brinde não saiu. Anote o código e fale com o gerente.";
+                        break;
+                }
             }
             if (falha is not null) Avisou?.Invoke(falha);
             return falha;
@@ -240,12 +263,33 @@ public static class ServicoRaspadinhaChat
             foreach (var b in lista)
             {
                 var e = await ImprimirAsync(b, destino).ConfigureAwait(false);
-                if (e is null) { saiu++; ChatRaspadinha.ConfirmarImpressao(b.Id); }
+                if (e is null) { saiu++; await PapelSaiuNaMaoAsync(b).ConfigureAwait(false); }
                 else erro ??= e;
             }
             return (saiu, erro);
         }
         catch { return (0, "A comanda do brinde não saiu. Tente de novo."); }
+    }
+
+    /// <summary>
+    /// 07/10/2026 (revisão): o papel que saiu pelo botão conta como papel. Grava o claim local (a
+    /// varredura automática não tira a mesma comanda de novo neste caixa) e, no chat novo, avisa o
+    /// ERP com o "impresso" (outro caixa não tira pelo sinal). Antes o botão só apagava a falha.
+    /// </summary>
+    private static async Task PapelSaiuNaMaoAsync(BonusRaspadinha b)
+    {
+        ChatRaspadinha.MarcarImpressoAqui(b.Id);
+        // só o papel que é DESTE caixa (tem cabeçalho) vai ao ERP: o "último bônus" reimpresso na
+        // mão pode ser a comanda da cozinha, e o "impresso" daqui calaria a TV
+        if (b.ComandaOnde is null || b.Cabecalho is null) return;
+        try
+        {
+            var (st, _) = await FuncaoDaBorda(ConversaRaspadinha.Edge,
+                ConversaRaspadinha.CorpoImpresso(b.Id, ConversaRaspadinha.NomeDoTerminal())).ConfigureAwait(false);
+            if (st is >= 200 and < 300) return;
+        }
+        catch { /* vai para a fila do sinal */ }
+        LembrarImpresso(b.Id);
     }
 
     /// <summary>
@@ -258,9 +302,45 @@ public static class ServicoRaspadinhaChat
         {
             Impressao.Destino destino;
             using (var cx = Banco.Abrir()) destino = Servicos.DestinoDaComanda(cx);
-            return await ImprimirAsync(b, destino).ConfigureAwait(false);
+            var erro = await ImprimirAsync(b, destino).ConfigureAwait(false);
+            // 07/10/2026 (revisão): saiu na mão, conta como papel (a varredura não tira de novo)
+            if (erro is null) await PapelSaiuNaMaoAsync(b).ConfigureAwait(false);
+            return erro;
         }
         catch { return "A comanda do brinde não saiu. Tente de novo."; }
+    }
+
+    /// <summary>A borda raspadinha-chat com a sessão do terminal, no contrato (status, corpo).</summary>
+    private static async Task<(int Status, string? Corpo)> FuncaoDaBorda(string nome, string corpo)
+    {
+        var (st, resp) = await Servicos.Nuvem().FuncaoAsync(nome, corpo, ConversaRaspadinha.Prazo).ConfigureAwait(false);
+        return (st, resp);
+    }
+
+    /// <summary>
+    /// Os "impresso" que não chegaram ao ERP (rede caiu logo depois do papel). Sem eles o ERP acha que
+    /// a comanda não saiu e, passada a reserva, entrega o papel a outro terminal. Tentados de novo a
+    /// cada sinal (ServicoConversaChat), no máximo 10 vezes cada.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> ImpressosPendentes = new();
+
+    private static void LembrarImpresso(string bonusId) => ImpressosPendentes.TryAdd(bonusId, 0);
+
+    /// <summary>Manda de novo os "impresso" que ficaram para trás. Nunca lança.</summary>
+    public static async Task RepetirImpressosAsync()
+    {
+        foreach (var id in ImpressosPendentes.Keys.ToList())
+        {
+            try
+            {
+                var (st, corpo) = await FuncaoDaBorda(ConversaRaspadinha.Edge,
+                    ConversaRaspadinha.CorpoImpresso(id, ConversaRaspadinha.NomeDoTerminal())).ConfigureAwait(false);
+                if (st is >= 200 and < 300) { ImpressosPendentes.TryRemove(id, out _); continue; }
+            }
+            catch { /* tenta no próximo sinal */ }
+            ImpressosPendentes.AddOrUpdate(id, 1, (_, n) => n + 1);
+            if (ImpressosPendentes.TryGetValue(id, out var vezes) && vezes >= 10) ImpressosPendentes.TryRemove(id, out _);
+        }
     }
 
     /// <summary>O papel em si: mesma largura e mesmo caminho da comanda de cozinha.</summary>

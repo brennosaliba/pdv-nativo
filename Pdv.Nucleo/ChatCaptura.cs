@@ -53,7 +53,9 @@ public static class ChatCaptura
     // como campo solto. Sem isto a mensagem chega sem autor, e sem autor não dá para separar a
     // fala da loja da fala do cliente (22/09/2026, código da raspadinha no chat).
     private static readonly string[] ObjetosAutor = { "user", "sender", "author", "from", "participant" };
-    private static readonly string[] CamposIdDoAutor = { "user_id", "userId", "id", "nickname", "name" };
+    // guest_id PRIMEIRO (07/10/2026): é onde o Sendbird do iFood põe o id de quem escreveu. Sem ele
+    // o autor caía no "nickname"/"name", que é o nome da pessoa, e a autoria virava palpite.
+    private static readonly string[] CamposIdDoAutor = { "guest_id", "user_id", "userId", "id", "nickname", "name" };
 
     // ── a regra do mascaramento (LISTA BRANCA, não lista negra) ─────────────
     //
@@ -360,15 +362,30 @@ public static class ChatCaptura
     public static string MascararJson(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return "(vazio)";
+        // O quadro do Sendbird vem com o comando colado ("MESG{...}"): sem tirar o prefixo, todo
+        // quadro de mensagem virava "não-JSON" e o diagnóstico não mostrava nada do que importa.
+        var (prefixo, corpo) = SemPrefixoDeComando(json);
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(corpo);
             using var ms = new MemoryStream();
             using (var wr = new Utf8JsonWriter(ms))
                 EscreverMascarado(doc.RootElement, wr, chavePai: null);
-            return Encoding.UTF8.GetString(ms.ToArray());
+            return prefixo + Encoding.UTF8.GetString(ms.ToArray());
         }
         catch { return "(quadro não-JSON; omitido por segurança)"; }
+    }
+
+    /// <summary>
+    /// Separa o comando de 4 letras maiúsculas ("MESG", "ADMM", "LOGI") do JSON que vem colado nele.
+    /// Sem prefixo, devolve ("", o texto inteiro). O prefixo não é segredo: são só 4 letras.
+    /// </summary>
+    public static (string Prefixo, string Json) SemPrefixoDeComando(string texto)
+    {
+        var cmd = QuadroSendbird.Comando(texto);
+        return cmd is not null && texto.Length > 4 && texto[4] is '{' or '['
+            ? (cmd, texto[4..])
+            : ("", texto);
     }
 
     private static void EscreverMascarado(JsonElement e, Utf8JsonWriter w, string? chavePai)
@@ -449,14 +466,16 @@ public static class ChatCaptura
     public static string DescreverShape(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return "(vazio)";
+        var (prefixo, corpo) = SemPrefixoDeComando(json);
+        var antes = prefixo.Length > 0 ? prefixo + " " : "";
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(corpo);
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return doc.RootElement.ValueKind.ToString().ToLowerInvariant();
+                return antes + doc.RootElement.ValueKind.ToString().ToLowerInvariant();
             var campos = doc.RootElement.EnumerateObject()
                 .Select(p => $"{p.Name}:{p.Value.ValueKind.ToString().ToLowerInvariant()}");
-            return "{ " + string.Join(", ", campos) + " }";
+            return antes + "{ " + string.Join(", ", campos) + " }";
         }
         catch { return "(não-JSON)"; }
     }
@@ -469,10 +488,18 @@ public static class ChatCaptura
     /// </summary>
     public sealed class Acumulador
     {
-        private const int TetoFrames = 40;
+        /// <summary>
+        /// Quadros guardados POR CONEXÃO (07/10/2026). O teto era um só para tudo, e o WebSocket que
+        /// fala mais (o firefly do Gestor, os pulsos) enchia as 40 vagas antes de o Sendbird mandar a
+        /// primeira mensagem: o diagnóstico nunca mostrava um MESG.
+        /// </summary>
+        public const int TetoFrames = 40;
+        /// <summary>Teto do total, para a memória não crescer com conexões que vêm e vão.</summary>
+        public const int TetoTotal = 400;
         private readonly object _trava = new();
         private readonly HashSet<string> _wsUrls = new();
         private readonly List<(string Payload, bool Enviado)> _frames = new();
+        private readonly Dictionary<string, int> _porConexao = new(StringComparer.Ordinal);
         private string? _tokenRaw;          // SEGREDO: só em memória, nunca gravado em claro
         private string? _authRespostaRaw;   // idem
 
@@ -503,14 +530,24 @@ public static class ChatCaptura
             lock (_trava) _authRespostaRaw = corpo;
         }
 
-        public void RegistrarFrame(string? payload, bool enviado)
+        public void RegistrarFrame(string? payload, bool enviado, string? conexao = null)
         {
             if (string.IsNullOrWhiteSpace(payload)) return;
             lock (_trava)
             {
-                if (_frames.Count >= TetoFrames) return;
+                if (_frames.Count >= TetoTotal) return;
+                var k = conexao ?? "";
+                _porConexao.TryGetValue(k, out var n);
+                if (n >= TetoFrames) return;
+                _porConexao[k] = n + 1;
                 _frames.Add((payload, enviado));
             }
+        }
+
+        /// <summary>Quantos quadros desta conexão estão guardados (para o teste do teto por conexão).</summary>
+        public int QuadrosDaConexao(string? conexao)
+        {
+            lock (_trava) return _porConexao.TryGetValue(conexao ?? "", out var n) ? n : 0;
         }
 
         /// <summary>Mensagens normalizadas dos quadros capturados (para o "nativo depois").</summary>
@@ -598,6 +635,128 @@ public static class ChatCaptura
             // daqui. Caminho novo (seção nova, campo novo, cabeçalho novo) não fura
             // a promessa do cabeçalho, porque nenhum deles escapa desta linha.
             return MascararTexto(sb.ToString());
+        }
+    }
+
+    /// <summary>
+    /// OS CONTADORES DO DIAGNÓSTICO DO SINAL (07/10/2026, seção 4.9 e 16). O que a loja precisa
+    /// provar antes de sair da Sombra (onde vem o autor, se vem msg_id, que tipos de usuário
+    /// aparecem, se o autor da loja é o id da URL do WebSocket) vira CONTAGEM e NOME DE CAMPO aqui.
+    ///
+    /// ⚠️ Só chaves e contagens: nunca o texto de ninguém, nunca um id. Nome de campo só entra se for
+    /// um identificador curto ([A-Za-z0-9_], até 40), e os mapas têm teto.
+    /// </summary>
+    public sealed class ContadoresSendbird
+    {
+        private const int TetoCampos = 60;
+        private const int TetoMapa = 30;
+        private const int TetoCanais = 500;
+        private static readonly Regex NomeDeCampo = new("^[A-Za-z0-9_]{1,40}$", RegexOptions.Compiled);
+
+        private readonly object _trava = new();
+        private int _mesg, _autorIgualWs, _autorDiferenteWs, _whisper;
+        private readonly SortedSet<string> _camposRaiz = new(StringComparer.Ordinal);
+        private readonly SortedSet<string> _camposUser = new(StringComparer.Ordinal);
+        private readonly SortedDictionary<string, int> _userTypes = new(StringComparer.Ordinal);
+        private readonly SortedDictionary<string, int> _comandos = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, HashSet<string>> _canais = new(StringComparer.Ordinal);
+        private DateTime? _ultimoQuadro;
+
+        public DateTime? UltimoQuadro { get { lock (_trava) return _ultimoQuadro; } }
+
+        /// <summary>Conta um quadro recebido. Nunca lança.</summary>
+        public void Registrar(string? payload, string? wsUserId, DateTime agora)
+        {
+            if (string.IsNullOrEmpty(payload)) return;
+            try
+            {
+                var cmd = QuadroSendbird.Comando(payload);
+                if (cmd is null) return;
+                // ws_vivo é do WebSocket do SENDBIRD: o pulso de outra conexão do Gestor (firefly)
+                // não pode dizer que o chat está vivo (seção 16, item 4).
+                lock (_trava) { _ultimoQuadro = agora; Somar(_comandos, cmd); }
+                if (cmd != QuadroSendbird.ComandoMensagem) return;
+
+                var m = QuadroSendbird.Ler(payload);
+                var (_, json) = SemPrefixoDeComando(payload);
+                using var doc = JsonDocument.Parse(json);
+                var r = doc.RootElement;
+                lock (_trava)
+                {
+                    _mesg++;
+                    if (r.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var p in r.EnumerateObject()) Campo(_camposRaiz, p.Name);
+                        if (r.TryGetProperty("user", out var u) && u.ValueKind == JsonValueKind.Object)
+                            foreach (var p in u.EnumerateObject()) Campo(_camposUser, p.Name);
+                    }
+                    if (m is null) return;
+                    if (m.Whisper) _whisper++;
+                    if (m.UserType is { Length: > 0 } ut && NomeDeCampo.IsMatch(ut)) Somar(_userTypes, ut);
+                    if (!string.IsNullOrWhiteSpace(wsUserId) && m.AutorId is not null)
+                    {
+                        if (string.Equals(m.AutorId.Trim(), wsUserId.Trim(), StringComparison.OrdinalIgnoreCase)) _autorIgualWs++;
+                        else _autorDiferenteWs++;
+                    }
+                    if (CanalIfood.Ler(m.Canal) is { } ids)
+                    {
+                        var k = ids.MerchantId.Length >= 4 ? ids.MerchantId[..4] : ids.MerchantId;
+                        if (!_canais.TryGetValue(k, out var set))
+                        {
+                            if (_canais.Count >= TetoMapa) return;
+                            _canais[k] = set = new HashSet<string>(StringComparer.Ordinal);
+                        }
+                        if (set.Count < TetoCanais) set.Add(m.Canal!);
+                    }
+                }
+            }
+            catch { /* diagnóstico nunca atrapalha a captura */ }
+        }
+
+        /// <summary>Quantas conversas de pedido (_cm_) já apareceram, pelos 4 primeiros caracteres do merchant.</summary>
+        public IReadOnlyDictionary<string, int> CanaisPorMerchant()
+        {
+            lock (_trava) return _canais.ToDictionary(x => x.Key, x => x.Value.Count, StringComparer.Ordinal);
+        }
+
+        /// <summary>Alguns canais de pedido que já apareceram (para o script conferir no SDK). Só memória.</summary>
+        public IReadOnlyList<string> AlgunsCanais(int max)
+        {
+            lock (_trava) return _canais.Values.SelectMany(x => x).Take(max).ToList();
+        }
+
+        /// <summary>O nó <c>quadros</c> do estado do sinal.</summary>
+        public System.Text.Json.Nodes.JsonObject Quadros()
+        {
+            lock (_trava)
+            {
+                var ut = new System.Text.Json.Nodes.JsonObject();
+                foreach (var (k, v) in _userTypes) ut[k] = v;
+                var cm = new System.Text.Json.Nodes.JsonObject();
+                foreach (var (k, v) in _comandos) cm[k] = v;
+                return new System.Text.Json.Nodes.JsonObject
+                {
+                    ["mesg"] = _mesg,
+                    ["campos_raiz"] = new System.Text.Json.Nodes.JsonArray(_camposRaiz.Select(x => (System.Text.Json.Nodes.JsonNode?)x).ToArray()),
+                    ["campos_user"] = new System.Text.Json.Nodes.JsonArray(_camposUser.Select(x => (System.Text.Json.Nodes.JsonNode?)x).ToArray()),
+                    ["user_types"] = ut,
+                    ["autor_igual_ws"] = _autorIgualWs,
+                    ["autor_diferente_ws"] = _autorDiferenteWs,
+                    ["whisper"] = _whisper,
+                    ["comandos"] = cm,
+                };
+            }
+        }
+
+        private static void Campo(SortedSet<string> s, string nome)
+        {
+            if (s.Count < TetoCampos && NomeDeCampo.IsMatch(nome)) s.Add(nome);
+        }
+
+        private static void Somar(SortedDictionary<string, int> d, string k)
+        {
+            if (d.TryGetValue(k, out var n)) d[k] = n + 1;
+            else if (d.Count < TetoMapa) d[k] = 1;
         }
     }
 }

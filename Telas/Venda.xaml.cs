@@ -194,6 +194,8 @@ public partial class Venda : UserControl
             // BRINDE DA RASPADINHA PELO CHAT (22/09/2026): o servidor validou o código que o
             // cliente mandou e a comanda saiu. O aviso na tela é a rede para quando falta papel.
             ServicoRaspadinhaChat.Avisou -= BrindeDoChat; ServicoRaspadinhaChat.Avisou += BrindeDoChat;
+            // RESGATE PELO CHAT (07/10/2026): os avisos do chat novo, com Abrir e colar e Copiar.
+            ServicoConversaChat.Avisou -= AvisoDaConversa; ServicoConversaChat.Avisou += AvisoDaConversa;
             // O WhatsApp da loja segue o mesmo desenho do chat (selo ao vivo + aviso na subida).
             ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp; ServicoWhatsApp.Mudou += AtualizarSeloWhatsApp;
             ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova; ServicoWhatsApp.MensagemNova += WhatsAppMensagemNova;
@@ -213,6 +215,7 @@ public partial class Venda : UserControl
             ServicoChat.Mudou -= AtualizarSeloChat;
             ServicoChat.MensagemNova -= ChatMensagemNova;
             ServicoRaspadinhaChat.Avisou -= BrindeDoChat;
+            ServicoConversaChat.Avisou -= AvisoDaConversa;
             ServicoWhatsApp.Mudou -= AtualizarSeloWhatsApp;
             ServicoWhatsApp.MensagemNova -= WhatsAppMensagemNova;
             ServicoWhatsApp.SessaoMudou -= WhatsAppSessaoMudou;
@@ -380,6 +383,79 @@ public partial class Venda : UserControl
         _toastBrindeSome.Tick += (_, _) => { ToastBrinde.Visibility = Visibility.Collapsed; _toastBrindeSome?.Stop(); };
         _toastBrindeSome.Start();
     });
+
+    // ── RESGATE PELO CHAT DO iFOOD: os avisos do chat novo (07/10/2026) ──────
+    private DispatcherTimer? _toastConversaSome;
+    private AvisoDoChat? _avisoConversa;
+
+    /// <summary>
+    /// Um aviso do chat novo (seção 2.2 do desenho). O texto vem pronto do ERP, em uma linha. Com
+    /// resposta para mandar à mão, aparecem "Abrir e colar" (abre a conversa do pedido pelo uuid,
+    /// confere o número e cola) e "Copiar". O som é do serviço, não daqui: toca com qualquer tela.
+    /// </summary>
+    private void AvisoDaConversa(AvisoDoChat a) => Dispatcher.BeginInvoke(() =>
+    {
+        // Aviso que só informa não cobre o que pede ação: com "Abrir e colar" na tela, o texto
+        // para colar sumiria (o sinal traz os avisos dos outros caixas a cada minuto). Ele sai
+        // no aviso leve, e o toast com os botões fica.
+        if (ToastConversa.Visibility == Visibility.Visible
+            && !string.IsNullOrWhiteSpace(_avisoConversa?.TextoParaColar)
+            && string.IsNullOrWhiteSpace(a.TextoParaColar))
+        {
+            AvisoLeve(a.Texto);
+            return;
+        }
+        _avisoConversa = a;
+        TxtToastConversa.Text = a.Texto;
+        TxtToastConversaIcone.Text = a.Tipo switch
+        {
+            "resgatou" => "🎁",
+            "mandar" or "falha_envio" or "humano" => "💬",
+            _ => "🔔",
+        };
+        var colar = !string.IsNullOrWhiteSpace(a.TextoParaColar);
+        var temPedido = !string.IsNullOrWhiteSpace(a.OrderUuid);
+        BtnConversaColar.Visibility = colar && temPedido ? Visibility.Visible : Visibility.Collapsed;
+        // falha_envio leva só o Abrir e colar (seção 2.2); sem o pedido, o Copiar é a saída
+        BtnConversaCopiar.Visibility = colar && (a.Tipo != "falha_envio" || !temPedido) ? Visibility.Visible : Visibility.Collapsed;
+        BotoesToastConversa.Visibility = colar ? Visibility.Visible : Visibility.Collapsed;
+        ToastConversa.Visibility = Visibility.Visible;
+
+        _toastConversaSome?.Stop();
+        _toastConversaSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(colar ? 120 : 30) };
+        _toastConversaSome.Tick += (_, _) => { ToastConversa.Visibility = Visibility.Collapsed; _toastConversaSome?.Stop(); };
+        _toastConversaSome.Start();
+    });
+
+    private void FecharToastConversa(object sender, RoutedEventArgs e)
+    {
+        _toastConversaSome?.Stop();
+        ToastConversa.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>"Abrir e colar": a camada do chat vem para a frente e a página faz o resto.</summary>
+    private async void AbrirEColarDoToast(object sender, RoutedEventArgs e)
+    {
+        var a = _avisoConversa;
+        if (a?.TextoParaColar is not { Length: > 0 } texto) return;
+        FecharToastConversa(sender, e);
+        PediuChat?.Invoke();
+        try { await ServicoConversaChat.AbrirEColarAsync(a.OrderUuid, a.Numero, texto); }
+        catch { /* a barra do chat já disse o que fazer */ }
+    }
+
+    private void CopiarDoToast(object sender, RoutedEventArgs e)
+    {
+        var a = _avisoConversa;
+        if (a?.TextoParaColar is not { Length: > 0 } texto) return;
+        try
+        {
+            Clipboard.SetText(texto);
+            FecharToastConversa(sender, e);
+            AvisoLeve("Resposta copiada. Cole na conversa do pedido.");
+        }
+        catch { AvisoLeve("Não deu para copiar agora. Toque de novo."); }
+    }
 
     // ── WhatsApp da loja: selo, aviso e som, no mesmo desenho do chat ────────
     private DispatcherTimer? _toastWhatsAppSome;

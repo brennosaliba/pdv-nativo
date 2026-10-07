@@ -1946,5 +1946,17 @@ Console.WriteLine();
 Console.WriteLine("--- Nome do entregador pelo Gestor: leitura em silencio, lote e fila ---");
 await TestesEntregadorGestor.RodarAsync((cond, nome) => Check("entregador: " + nome, cond));
 
+// -- 07/10/2026: RESGATE PELO CHAT DO iFOOD (caixa 1.0.19) -----------------------------
+// Desenho "resgate-final": quem le o chat e o caixa, quem decide e o ERP (raspadinha_chat_mensagem).
+// O caixa le o quadro MESG do Sendbird, separa a fala do cliente, manda em lote, executa o que volta
+// (papel, resposta pelo SDK, aviso) e manda o sinal de 60 s. Tudo nasce desligado; nada sai para o
+// cliente sem passar pelo portao. Aqui se prova o que da sem a pagina logada.
+Console.WriteLine();
+Console.WriteLine("--- Resgate pelo chat: o leitor do quadro do Sendbird e o diagnostico ---");
+TestesQuadroSendbird.Rodar((cond, nome) => Check("quadro-sb: " + nome, cond));
+Console.WriteLine();
+Console.WriteLine("--- Resgate pelo chat: a conversa, o portao de envio, o papel e a fila ---");
+await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, cond));
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

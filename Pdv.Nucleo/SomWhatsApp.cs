@@ -51,6 +51,8 @@ public static class SomDaLoja
     public const string WhatsApp = "whatsapp";
     public const string ChatIfood = "ifood-chat";
     public const string PedidoNovo = "pedido";
+    /// <summary>Resgate da raspadinha pelo chat (07/10/2026): sons\resgate.wav.</summary>
+    public const string Resgate = "resgate";
 
     public static string Pasta(string pastaDados) => Path.Combine(pastaDados, "sons");
     public static string Caminho(string pastaDados, string nome) => Path.Combine(Pasta(pastaDados), nome + ".wav");

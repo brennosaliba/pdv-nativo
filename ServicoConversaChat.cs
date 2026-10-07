@@ -1,0 +1,477 @@
+using System.Text.Json.Nodes;
+using System.Threading.Channels;
+using Pdv.Nucleo;
+
+namespace Pdv;
+
+/// <summary>Um aviso do chat novo para a tela de venda (seção 2.2). O texto já vem pronto.</summary>
+/// <param name="Tipo">resgatou, aguardando, mandar, humano, expirou, validador, saiu_sem_premio, desfeito, falha_envio, pausado.</param>
+/// <param name="TextoParaColar">A resposta ao cliente, quando a pessoa tem de mandar à mão (Abrir e colar, Copiar).</param>
+public sealed record AvisoDoChat(string Tipo, string Texto, string? TextoParaColar, string? OrderUuid, string? Numero);
+
+/// <summary>O que o script de envio contou: mandou, ou o erro do contrato (sdk_ausente, canal_errado...).</summary>
+public sealed record ResultadoDoScript(bool Ok, string? Erro, string? MsgId);
+
+/// <summary>
+/// O que a tela do chat oferece ao serviço. O serviço não encosta no WebView2: tudo que roda na
+/// página passa por estas quatro portas, e a de envio só aceita uma <see cref="PermissaoDeEnvio"/>,
+/// que só o portão cria.
+/// </summary>
+public sealed class PonteDoChat
+{
+    public required Func<PermissaoDeEnvio, Task<ResultadoDoScript>> EnviarPeloSdk { get; init; }
+    /// <summary>(uuid do pedido, número curto, texto) → colou na conversa certa?</summary>
+    public required Func<string, string?, string, Task<bool>> AbrirEColar { get; init; }
+    /// <summary>(canais para conferir, id da loja no WebSocket) → contagens do SDK, ou null.</summary>
+    public required Func<IReadOnlyList<string>, string?, Task<JsonObject?>> DiagSdk { get; init; }
+    /// <summary>"logado", "login" ou "ausente".</summary>
+    public required Func<string> Gestor { get; init; }
+}
+
+/// <summary>
+/// RESGATE PELO CHAT DO iFOOD, O SERVIÇO VIVO DO CAIXA (07/10/2026, desenho "resgate-final",
+/// tarefa P7). O caixa lê o chat e EXECUTA o que o ERP decide:
+///
+///  1. a tela do chat entrega cada quadro do WebSocket (<see cref="Quadro"/>);
+///  2. a triagem (ConversaRaspadinha.Triagem) separa a fala que importa: conversa de pedido desta
+///     loja, cliente (ou a loja numa conversa viva), de agora, que não é eco;
+///  3. a fala é gravada e enfileirada na mesma transação, e as falas do mesmo canal são juntadas
+///     por até 6 s numa chamada só (<c>chat_mensagens</c>);
+///  4. a resposta diz o que fazer: imprimir a comanda (só se <c>comanda.imprimir_aqui</c>), mandar
+///     a resposta pelo SDK (Automático), mostrar a resposta para a pessoa colar (Assistido), avisar;
+///  5. o sinal de 60 s (<c>chat_sinal</c>) leva o diagnóstico (só contagens) e traz o modo da
+///     loja, os avisos dos outros terminais, as saídas e as comandas reservadas para este.
+///
+/// TUDO NASCE DESLIGADO. Sem linha da loja no ERP, o sinal volta "desligado" e o caixa só manda o
+/// próprio sinal. Nada fala com o cliente sem passar pelo <see cref="PortaoDeEnvio"/>.
+///
+/// Nunca lança: chat não derruba caixa.
+/// </summary>
+public static class ServicoConversaChat
+{
+    /// <summary>Um aviso para a tela de venda (toast). Pode vir de qualquer thread.</summary>
+    public static event Action<AvisoDoChat>? Avisou;
+
+    private static PonteDoChat? _ponte;
+    private static int _iniciado;
+
+    private static readonly ChatCaptura.ContadoresSendbird Contadores = new();
+    private static readonly CacheDeCanais Canais = new();
+    private static readonly MemoriaDeEco Eco = new();
+    private static readonly LimiteDeEnvio Limite = new();
+    private static readonly PortaoDeEnvio Portao = new(Eco, Limite);
+    private static readonly Agrupador Lotes = new();
+    private static readonly ConfirmacaoDeEnvio Confirmacoes = new();
+    private static readonly Channel<(SaidaConversa Saida, DateTime Recebida)> FilaDeEnvio =
+        Channel.CreateUnbounded<(SaidaConversa, DateTime)>(new UnboundedChannelOptions { SingleReader = true });
+    private static readonly SemaphoreSlim UmaChamadaPorVez = new(1, 1);
+    private static readonly SemaphoreSlim UmSinalPorVez = new(1, 1);
+
+    private static readonly object TravaVistas = new();
+    private static readonly HashSet<string> Vistas = new(StringComparer.Ordinal);
+    private static readonly Queue<string> VistasOrdem = new();
+    private const int TetoDeVistas = 2000;
+
+    /// <summary>O último sinal e quando chegou, trocados juntos (lidos na thread da tela e na do envio).</summary>
+    private sealed record UltimoSinal(SinalConversa Sinal, DateTime? Em);
+    private static volatile UltimoSinal _ultimo = new(SinalConversa.Desligado, null);
+    private static string? _sdkUserId;
+    private static string? _wsUserId;
+    private static DateTime _proximaFaxina = DateTime.MinValue;
+
+    private static System.Threading.Timer? _tique;
+    private static System.Threading.Timer? _relogioSinal;
+    private static readonly System.Diagnostics.Stopwatch Relogio = System.Diagnostics.Stopwatch.StartNew();
+
+    private static string Terminal => ConversaRaspadinha.NomeDoTerminal();
+
+    private static string Versao
+    {
+        get
+        {
+            var v = typeof(ServicoConversaChat).Assembly.GetName().Version;
+            return v is null ? "?" : $"{v.Major}.{v.Minor}.{v.Build}";
+        }
+    }
+
+    /// <summary>O último sinal lido (para a tela e para os testes de fumaça).</summary>
+    public static SinalConversa Sinal => _ultimo.Sinal;
+
+    /// <summary>
+    /// Liga o serviço com a ponte da tela do chat. Idempotente: a ponte é trocada quando a tela é
+    /// recriada (WebView2 que caiu), e os relógios nascem uma vez só.
+    /// </summary>
+    public static void Ligar(PonteDoChat ponte)
+    {
+        _ponte = ponte;
+        if (Interlocked.Exchange(ref _iniciado, 1) == 1) return;
+        try
+        {
+            using var cx = Banco.Abrir();
+            var (s, em) = ConversaRaspadinha.SinalGravado(cx);
+            _ultimo = new UltimoSinal(s, em);
+        }
+        catch { _ultimo = new UltimoSinal(SinalConversa.Desligado, null); }
+        ConversaRaspadinha.ResolvidaNaFila += r => Seguro(() => Processar(r, null));
+        _tique = new System.Threading.Timer(_ => Tique(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        _relogioSinal = new System.Threading.Timer(_ => _ = SinalAsync(), null, TimeSpan.FromSeconds(8), Timeout.InfiniteTimeSpan);
+        _ = Task.Run(LoopDeEnvioAsync);
+        Diag("ligado");
+    }
+
+    // ── 1. O QUADRO QUE CHEGA ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Um quadro do WebSocket capturado pelo CDP. Chamado na thread da tela, então é barato: conta
+    /// para o diagnóstico, confere se é a volta de uma resposta que este caixa mandou, faz a triagem
+    /// e passa a fala adiante para o banco fora da tela. Só o quadro RECEBIDO vira fala; o que sai da
+    /// página serve só para confirmar envio.
+    /// </summary>
+    public static void Quadro(string? payload, bool enviado, string? conexao, string? wsUserId)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(payload) || _iniciado == 0) return;
+            var agora = DateTime.Now;
+            if (!enviado) Contadores.Registrar(payload, wsUserId, agora);
+            if (QuadroSendbird.Comando(payload) != QuadroSendbird.ComandoMensagem) return;
+            var m = QuadroSendbird.Ler(payload);
+            if (m is null) return;
+            if (!string.IsNullOrWhiteSpace(wsUserId)) _wsUserId = wsUserId;
+
+            if (Confirmacoes.Ver(m, enviado) is { } conf)
+                _ = RelatarAsync(conf.SaidaId, "enviada", null, conf.MsgId, null);
+            if (enviado) return;
+
+            var t = ConversaRaspadinha.Triagem(m, _ultimo.Sinal, Canais, Eco, wsUserId ?? _wsUserId, _sdkUserId, agora);
+            if (!t.Entra) return;
+            if (!Nova(t.Fala!.Chave)) return;
+            var canal = t.Canal!; var fala = t.Fala!;
+            _ = Task.Run(() => Guardar(canal, fala, agora));
+        }
+        catch (Exception ex) { Diag("quadro: " + ex.GetType().Name); }
+    }
+
+    private static bool Nova(string chave)
+    {
+        lock (TravaVistas)
+        {
+            if (!Vistas.Add(chave)) return false;
+            VistasOrdem.Enqueue(chave);
+            while (VistasOrdem.Count > TetoDeVistas) Vistas.Remove(VistasOrdem.Dequeue());
+            return true;
+        }
+    }
+
+    private static void Guardar(CanalDaFala canal, FalaConversa fala, DateTime agora)
+    {
+        try
+        {
+            using (var cx = Banco.Abrir())
+            {
+                if (!ConversaRaspadinha.Registrar(cx, canal, fala, agora)) return;
+            }
+            // o rastro diz O QUE aconteceu, nunca o que a pessoa escreveu
+            Diag($"fala {fala.Lado} chave={Curta(fala.Chave)} canal={Curta(canal.OrderId)} texto=(len {fala.Texto.Length})");
+            if (Lotes.Adicionar(canal.Canal, fala.Chave, agora)) _ = DescarregarAsync();
+        }
+        catch (Exception ex) { Diag("guardar: " + ex.GetType().Name); }
+    }
+
+    // ── 2. O RELÓGIO DE 1 s: lotes prontos e confirmações vencidas ───────────
+
+    private static int _noTique;
+
+    private static void Tique()
+    {
+        if (Interlocked.Exchange(ref _noTique, 1) == 1) return;
+        try
+        {
+            var agora = DateTime.Now;
+            foreach (var (id, vistoSaindo) in Confirmacoes.Vencidas(agora))
+                _ = RelatarAsync(id, vistoSaindo ? "enviada" : "incerta", vistoSaindo ? null : "sem_confirmacao", null, null);
+            _ = DescarregarAsync();
+        }
+        catch { }
+        finally { Interlocked.Exchange(ref _noTique, 0); }
+    }
+
+    private static async Task DescarregarAsync()
+    {
+        try
+        {
+            foreach (var (canal, chaves) in Lotes.Prontos(DateTime.Now))
+                await EnviarLoteAsync(canal, chaves).ConfigureAwait(false);
+        }
+        catch (Exception ex) { Diag("descarregar: " + ex.GetType().Name); }
+    }
+
+    // ── 3. A CHAMADA chat_mensagens ──────────────────────────────────────────
+
+    private static async Task EnviarLoteAsync(string canal, IReadOnlyList<string> chaves)
+    {
+        await UmaChamadaPorVez.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            string corpo; IReadOnlyList<string> incluidas;
+            using (var cx = Banco.Abrir())
+            {
+                var (c, falas) = ConversaRaspadinha.Pendentes(cx, canal, chaves.ToList());
+                if (c is null || falas.Count == 0) return;
+                (corpo, incluidas) = ConversaRaspadinha.CorpoMensagens(Terminal, c, falas);
+            }
+            var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
+                .ConfigureAwait(false);
+            var agora = DateTime.Now;
+            var r = ConversaRaspadinha.LerResposta(st, resp, agora);
+            using (var cx = Banco.Abrir()) ConversaRaspadinha.Aplicar(cx, incluidas.ToList(), r, agora);
+            Diag($"lote {incluidas.Count} fala(s) canal={Curta(canal)} http={st} status={r.Status} modo={r.Modo} "
+                 + $"acao={r.Acao} motivo={r.Motivo ?? r.MotivoCru ?? "-"} repetida={r.Repetida} saidas={r.Saidas.Count} "
+                 + $"bonus={(r.Bonus is null ? "-" : Curta(r.Bonus.Id))}");
+            // fala que não coube no corpo continua pendente e volta para o próximo lote
+            foreach (var k in chaves.Except(incluidas)) Lotes.Adicionar(canal, k, agora);
+            if (r.Status == StatusConversa.Ok) Processar(r, canal);
+        }
+        catch (Exception ex) { Diag("lote: " + ex.GetType().Name); }
+        finally { UmaChamadaPorVez.Release(); }
+    }
+
+    /// <summary>
+    /// Executa o que o ERP decidiu: papel, envio, aviso. Vale para a resposta da tela e para a que a
+    /// fila resolveu sozinha (<see cref="ConversaRaspadinha.ResolvidaNaFila"/>).
+    /// </summary>
+    private static void Processar(RespostaConversa r, string? canal)
+    {
+        var agora = DateTime.Now;
+        canal ??= r.Saidas.Select(s => s.Canal).FirstOrDefault(c => c is not null);
+        if (canal is not null && r.Conversa?.Estado is { } est && est is not ("sombra" or "aberta" or "expirada" or "desfeito"))
+            Canais.MarcarEmConversa(canal, agora);
+
+        if (r.Bonus is not null)
+        {
+            if (r.ImprimirAqui) _ = ServicoRaspadinhaChat.ImprimirPendentesAsync();
+            if (!r.Repetida && r.Acao == "resgatou") Alerta.Resgate();
+        }
+
+        var mandarDoErp = r.Aviso is { Tipo: "mandar" } a0 ? a0.Texto : null;
+        var mandou = false;
+        foreach (var s in r.Saidas) mandou |= TratarSaida(s, agora, mandarDoErp);
+        if (r.Aviso is { } a && !(a.Tipo == "mandar" && mandou))
+            Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero));
+    }
+
+    /// <summary>Uma saída: "sdk" reservada vai para a fila de envio; "operador" vira aviso com o texto; "sombra" fica quieta.</summary>
+    private static bool TratarSaida(SaidaConversa s, DateTime agora, string? textoDoErp)
+    {
+        if (s.Como == ConversaRaspadinha.ComoSdk && s.Estado == "reservada")
+        {
+            FilaDeEnvio.Writer.TryWrite((s, agora));
+            return false;
+        }
+        if (s.Como == ConversaRaspadinha.ComoOperador)
+        {
+            Emitir(new AvisoDoChat("mandar", textoDoErp ?? ConversaRaspadinha.TextoMandar(s.PedidoNumero),
+                s.Texto, s.IfoodOrderId, s.PedidoNumero));
+            return true;
+        }
+        return false;
+    }
+
+    private static void Emitir(AvisoDoChat a)
+    {
+        // ⚠️ Regra da casa: nada com travessão chega na tela, nem se vier do ERP.
+        if (!ConversaRaspadinha.TextoLimpo(a.Texto, 160)) { Diag($"aviso {a.Tipo} recusado (texto fora da regra)"); return; }
+        if (a.TextoParaColar is not null && !ConversaRaspadinha.TextoLimpo(a.TextoParaColar, ConversaRaspadinha.TetoTexto))
+            a = a with { TextoParaColar = null };
+        if (a.Tipo is "mandar" or "falha_envio" or "humano") Alerta.MensagemChat();
+        Diag($"aviso {a.Tipo} pedido={a.Numero ?? "-"}");
+        try { Avisou?.Invoke(a); } catch { }
+    }
+
+    // ── 4. O ENVIO (um por vez, 3 s entre mensagens) ─────────────────────────
+
+    private static async Task LoopDeEnvioAsync()
+    {
+        await foreach (var (s, recebida) in FilaDeEnvio.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            try { await EnviarUmaAsync(s, recebida).ConfigureAwait(false); }
+            catch (Exception ex) { Diag("envio: " + ex.GetType().Name); }
+            await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task EnviarUmaAsync(SaidaConversa s, DateTime recebida)
+    {
+        var ultimo = _ultimo;
+        var (permissao, motivo) = Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now);
+        Diag($"saida={s.Id} etapa={s.Etapa} portao={motivo}");
+        if (permissao is null)
+        {
+            if (PortaoDeEnvio.Relato(motivo) is { } rel)
+                await RelatarAsync(s.Id, rel.Resultado, rel.Erro, null, s).ConfigureAwait(false);
+            return;
+        }
+        var ponte = _ponte;
+        if (ponte is null)
+        {
+            await RelatarAsync(s.Id, "falhou", "sdk_ausente", null, s).ConfigureAwait(false);
+            return;
+        }
+        // A confirmação é PELO QUADRO (seção 0, decisão 9), e a espera nasce ANTES do script: o SDK
+        // só responde depois que o servidor devolve a mensagem, e a essa altura o quadro que saiu e
+        // a volta com o msg_id já passaram pelo CDP. Esperando só depois, nada nunca casava e toda
+        // resposta mandada virava "incerta".
+        Confirmacoes.Aguardar(s.Id, permissao.Canal, permissao.Texto, DateTime.Now);
+        ResultadoDoScript res;
+        try { res = await ponte.EnviarPeloSdk(permissao).ConfigureAwait(false); }
+        catch { res = new ResultadoDoScript(false, "sem_resposta", null); }
+        Diag($"saida={s.Id} script ok={res.Ok} erro={res.Erro ?? "-"}");
+        // Mandou, ou não respondeu (pode ter saído): quem decide é o quadro, em até 15 s. Sem ele,
+        // "incerta" (ConfirmacaoDeEnvio.Vencidas), e nunca de novo.
+        if (res.Ok || res.Erro is "sem_resposta") return;
+        // O script disse que não mandou. Se o quadro já confirmou, vale o quadro; se o quadro foi
+        // visto saindo, é dúvida e vira incerta. Só sem quadro nenhum é "falhou" (vai para a pessoa).
+        var visto = Confirmacoes.Cancelar(s.Id);
+        if (visto is null) return;
+        if (visto == true) { await RelatarAsync(s.Id, "incerta", "erro_envio", null, s).ConfigureAwait(false); return; }
+        var erro = res.Erro is "sdk_ausente" or "canal_errado" or "congelada" or "sem_cliente" or "erro_envio"
+            ? res.Erro : "erro_envio";
+        await RelatarAsync(s.Id, "falhou", erro, null, s).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Conta ao ERP o que aconteceu com uma saída (<c>chat_saida</c>). Quando o envio falhou, o ERP
+    /// devolve a saída para a pessoa, e a tela mostra o aviso com "Abrir e colar". Sem rede, o próprio
+    /// caixa mostra o aviso com o texto que tinha.
+    /// </summary>
+    private static async Task RelatarAsync(long saidaId, string resultado, string? erro, string? msgId, SaidaConversa? s)
+    {
+        try
+        {
+            var corpo = ConversaRaspadinha.CorpoSaida(Terminal, saidaId, resultado, erro, msgId);
+            for (var i = 0; i < 3; i++)
+            {
+                var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
+                    .ConfigureAwait(false);
+                if (st is >= 200 and < 300)
+                {
+                    var rr = ConversaRaspadinha.LerSaidaResultado(st, resp);
+                    Diag($"saida={saidaId} resultado={resultado} erp={rr.Estado ?? "-"}");
+                    if (rr.Reserva is { } res)
+                        Emitir(new AvisoDoChat("falha_envio",
+                            ConversaRaspadinha.TextoFalhaEnvio(res.PedidoNumero ?? s?.PedidoNumero), res.Texto,
+                            res.IfoodOrderId ?? s?.IfoodOrderId, res.PedidoNumero ?? s?.PedidoNumero));
+                    return;
+                }
+                if (st is >= 400 and < 500 and not (408 or 425 or 429)) break;
+                await Task.Delay(TimeSpan.FromSeconds(2 * (i + 1))).ConfigureAwait(false);
+            }
+            if (resultado == "falhou" && s is not null)
+                Emitir(new AvisoDoChat("falha_envio", ConversaRaspadinha.TextoFalhaEnvio(s.PedidoNumero), s.Texto,
+                    s.IfoodOrderId, s.PedidoNumero));
+        }
+        catch (Exception ex) { Diag("relatar: " + ex.GetType().Name); }
+    }
+
+    // ── 5. O SINAL (60 s) ────────────────────────────────────────────────────
+
+    private static async Task SinalAsync()
+    {
+        var proximo = TimeSpan.FromSeconds(60);
+        if (!await UmSinalPorVez.WaitAsync(0).ConfigureAwait(false)) return;
+        try
+        {
+            if (!Servicos.TemContaDeNuvem()) return;
+            var agora = DateTime.Now;
+
+            JsonObject? sdk = null;
+            if (_ponte is { } p)
+            {
+                try
+                {
+                    sdk = await p.DiagSdk(Contadores.AlgunsCanais(5), _wsUserId)
+                        .WaitAsync(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
+                }
+                catch { sdk = null; }
+                if (sdk is not null && sdk.TryGetPropertyValue("uid", out var uid)
+                    && uid is JsonValue v && v.TryGetValue<string>(out var u) && !string.IsNullOrWhiteSpace(u))
+                    _sdkUserId = u.Trim();
+            }
+
+            int fila;
+            using (var cx = Banco.Abrir())
+            {
+                fila = ConversaRaspadinha.Pendentes(cx);
+                if (agora >= _proximaFaxina)
+                {
+                    _proximaFaxina = agora.AddHours(1);
+                    try { ConversaRaspadinha.Faxina(cx, agora); } catch { }
+                }
+            }
+            var ultimo = Contadores.UltimoQuadro;
+            var estado = ConversaRaspadinha.EstadoDoSinal(_ponte?.Gestor() ?? "ausente",
+                ultimo is { } uq && uq > agora - TimeSpan.FromMinutes(2), ultimo, fila,
+                Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant());
+            var corpo = ConversaRaspadinha.CorpoSinal(Terminal, Versao, estado);
+            var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
+                .ConfigureAwait(false);
+            if (st is >= 200 and < 300)
+            {
+                var s = ConversaRaspadinha.LerSinal(resp, DateTime.Now);
+                using (var cx = Banco.Abrir()) ConversaRaspadinha.GravarSinal(cx, resp, DateTime.Now);
+                var antes = _ultimo.Sinal.Modo;
+                _ultimo = new UltimoSinal(s, DateTime.Now);
+                proximo = TimeSpan.FromSeconds(s.IntervaloS);
+                if (antes != s.Modo) Diag($"modo {antes} -> {s.Modo} envio={s.Envio} comanda={s.ComandaOnde}");
+
+                foreach (var a in s.Avisos) Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero));
+                foreach (var sd in s.Saidas) TratarSaida(sd, DateTime.Now, null);
+                if (s.Comandas.Count > 0)
+                {
+                    using (var cx = Banco.Abrir())
+                        foreach (var c in s.Comandas) ConversaRaspadinha.GravarBonus(cx, c.Bonus, c.Cabecalho, DateTime.Now);
+                    _ = ServicoRaspadinhaChat.ImprimirPendentesAsync();
+                }
+            }
+            else Diag($"sinal http={st}");
+            await ServicoRaspadinhaChat.RepetirImpressosAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) { Diag("sinal: " + ex.GetType().Name); }
+        finally
+        {
+            UmSinalPorVez.Release();
+            try { _relogioSinal?.Change(proximo, Timeout.InfiniteTimeSpan); } catch { }
+        }
+    }
+
+    // ── 6. ABRIR E COLAR (Assistido) ─────────────────────────────────────────
+
+    /// <summary>
+    /// "Abrir e colar": a tela do chat abre a conversa do pedido pelo uuid, confere o número no
+    /// cabeçalho e só então cola. Se não bater, copia o texto e diz para abrir a conversa à mão.
+    /// </summary>
+    public static async Task<bool> AbrirEColarAsync(string? orderUuid, string? numero, string texto)
+    {
+        try
+        {
+            if (_ponte is not { } p || string.IsNullOrWhiteSpace(orderUuid)) return false;
+            return await p.AbrirEColar(orderUuid, numero, texto).ConfigureAwait(false);
+        }
+        catch (Exception ex) { Diag("abrir e colar: " + ex.GetType().Name); return false; }
+    }
+
+    // ── rastro ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// ProgramData\PdvNativo\chat-conversa.txt: uma linha por acontecimento. ⚠️ Nunca o texto da
+    /// pessoa, nunca a resposta inteira: tamanho, chave curta, ação, motivo.
+    /// </summary>
+    private static void Diag(string texto)
+    {
+        try { Telas.HospedeWebView2.Anotar("chat-conversa.txt", texto, Relogio.Elapsed); } catch { }
+    }
+
+    private static string Curta(string? s) => string.IsNullOrEmpty(s) ? "-" : s.Length <= 12 ? s : s[..12];
+
+    private static void Seguro(Action a) { try { a(); } catch { } }
+}

@@ -51,7 +51,7 @@ public sealed class Drenagem : IDisposable
     /// frente do dinheiro.
     /// </summary>
     internal static readonly (string Tipo, int Janela)[] JanelaPropria =
-        { (ChatRaspadinha.TipoNaFila, 5), (EntregadorGestor.TipoNaFila, 3) };
+        { (ChatRaspadinha.TipoNaFila, 5), (EntregadorGestor.TipoNaFila, 3), (ConversaRaspadinha.TipoNaFila, 5) };
 
     /// <summary>
     /// Quanto tempo um transitório espera antes de desistir, POR TIPO. Sete dias é o orçamento da
@@ -62,6 +62,7 @@ public sealed class Drenagem : IDisposable
     /// </summary>
     internal static TimeSpan PrazoDoTransitorio(string? tipo)
         => tipo == ChatRaspadinha.TipoNaFila || tipo == EntregadorGestor.TipoNaFila
+           || tipo == ConversaRaspadinha.TipoNaFila
             ? TimeSpan.FromHours(6)
             : TimeSpan.FromDays(DiasParaDesistir);
 
@@ -319,6 +320,12 @@ public sealed class Drenagem : IDisposable
             // seguro: nada é entregue e nada é criado no caixa, e aprender o mesmo nome duas vezes
             // é o mesmo nome. O que o servidor aceitou sai da lista local e não volta nunca mais.
             EntregadorGestor.TipoNaFila => await EntregadorGestor.ResolverNaFilaAsync((string)item.payload,
+                (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
+            // 07/10/2026: fala do chat do iFood (resgate pela conversa) que saiu do caixa sem
+            // resposta, ou foi capturada sem internet. Manda TODAS as falas pendentes do mesmo canal
+            // numa chamada só; o ERP deduplica pela chave da fala e devolve o mesmo resultado. Loja
+            // que desligou o chat novo: as falas saem sem chamada. Ver ConversaRaspadinha.ResolverNaFilaAsync.
+            ConversaRaspadinha.TipoNaFila => await ConversaRaspadinha.ResolverNaFilaAsync((string)item.client_key,
                 (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
@@ -1003,7 +1010,7 @@ public sealed class Drenagem : IDisposable
         { "venda", "venda_composta", "nfce_vinculo", "venda_cancelada", "fechamento",
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
           Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila,
-          EntregadorGestor.TipoNaFila };
+          EntregadorGestor.TipoNaFila, ConversaRaspadinha.TipoNaFila };
 
     /// <summary>
     /// HISTORICO (04/09/2026): sobe para pdv_estornos_sem_aprovacao as linhas de estorno

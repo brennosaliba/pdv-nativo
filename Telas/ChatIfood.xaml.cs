@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -55,6 +57,20 @@ public partial class ChatIfood : UserControl
     // guarda os receivers para não serem coletados
     private CoreWebView2DevToolsProtocolEventReceiver? _wsCreated, _wsRecv, _wsSent, _reqWill, _respRecv, _loadFin;
 
+    /// <summary>
+    /// O <c>user_id</c> da URL de cada WebSocket, pelo requestId do CDP (07/10/2026, resgate pelo
+    /// chat). É o id da LOJA naquela conexão, e é o que separa a fala da loja da do cliente. Só em
+    /// memória: nunca gravado, logado nem enviado.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string?> _wsUserPorConexao = new(StringComparer.Ordinal);
+
+    /// <summary>Os envios, diagnósticos e colagens esperando a resposta da página, por id.</summary>
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<ResultadoDoScript>> _envios = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject?>> _diagsSdk = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _colagens = new(StringComparer.Ordinal);
+    /// <summary>A última leitura da página: a tela de login do Gestor está aberta?</summary>
+    private bool _gestorPedeLogin;
+
     public ChatIfood()
     {
         InitializeComponent();
@@ -74,10 +90,28 @@ public partial class ChatIfood : UserControl
             // chega) não via nada. O evento existia e ninguém assinava.
             ServicoRaspadinhaChat.BonusNovo -= MostrarBonusNovo;
             ServicoRaspadinhaChat.BonusNovo += MostrarBonusNovo;
+            // e os avisos do chat novo (resgate feito, resposta para colar), na mesma barra
+            ServicoConversaChat.Avisou -= MostrarAvisoDaConversa;
+            ServicoConversaChat.Avisou += MostrarAvisoDaConversa;
             try { if (!_pronto) await IniciarAsync(); }
             catch (Exception ex) { Diag("loaded: " + ex.GetType().Name + " " + ex.Message); }
         };
-        Unloaded += (_, _) => ServicoRaspadinhaChat.BonusNovo -= MostrarBonusNovo;
+        Unloaded += (_, _) =>
+        {
+            ServicoRaspadinhaChat.BonusNovo -= MostrarBonusNovo;
+            ServicoConversaChat.Avisou -= MostrarAvisoDaConversa;
+        };
+    }
+
+    /// <summary>Um aviso do chat novo com o chat aberto: a mesma linha que a venda mostra.</summary>
+    private void MostrarAvisoDaConversa(AvisoDoChat a)
+    {
+        try
+        {
+            if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => MostrarAvisoDaConversa(a)); return; }
+            TxtEstado.Text = a.Texto;
+        }
+        catch (Exception ex) { DiagRaspadinha("aviso da conversa na tela: " + ex.GetType().Name); }
     }
 
     /// <summary>Um bônus novo chegou com o chat aberto: a mesma linha que a venda mostra.</summary>
@@ -159,6 +193,9 @@ public partial class ChatIfood : UserControl
 
             // injeta o script do painel ANTES de navegar (roda a cada carga)
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptPainel);
+            // e o do SDK do Sendbird (07/10/2026, resgate pelo chat): diag() e enviar(). O envio só
+            // roda com o token de uso único que o C# põe logo antes (EnviarPeloSdkAsync).
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptSendbird);
 
             // liga a captura de rede (groundwork do nativo) — best-effort
             await LigarCapturaAsync(core);
@@ -168,6 +205,17 @@ public partial class ChatIfood : UserControl
             Web.Visibility = Visibility.Visible;
             PainelErro.Visibility = Visibility.Collapsed;
             _pronto = true;
+
+            // RESGATE PELO CHAT (07/10/2026): o serviço novo lê os quadros e manda o sinal de 60 s
+            // desde já, com a loja desligada também (o sinal leva o diagnóstico que o dono confere
+            // no ERP antes de ligar a Sombra). Tudo que roda na página passa por esta ponte.
+            ServicoConversaChat.Ligar(new PonteDoChat
+            {
+                EnviarPeloSdk = EnviarPeloSdkAsync,
+                AbrirEColar = AbrirEColarAsync,
+                DiagSdk = DiagSdkAsync,
+                Gestor = () => !_pronto ? "ausente" : _gestorPedeLogin ? "login" : "logado",
+            });
 
             // rede de segurança: reconta a cada 7 s mesmo se o observador falhar
             _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(7) };
@@ -332,6 +380,32 @@ public partial class ChatIfood : UserControl
                 AprenderPedido(leitura);
                 foreach (var m in leitura.Mensagens)
                     OuvirMensagem(m, "dom", leitura.Pedido, leitura.Cliente);
+            }
+            else if (tipo == "pdvsb")
+            {
+                // o script do SDK contou como foi um envio (ver EnviarPeloSdkAsync)
+                var r = doc.RootElement;
+                var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
+                if (id is not null && _envios.TryRemove(id, out var tcs))
+                    tcs.TrySetResult(new ResultadoDoScript(
+                        r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True,
+                        r.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String ? er.GetString() : null,
+                        r.TryGetProperty("msgId", out var mi) && mi.ValueKind == JsonValueKind.String ? mi.GetString() : null));
+            }
+            else if (tipo == "pdvsbdiag")
+            {
+                var r = doc.RootElement;
+                _gestorPedeLogin = r.TryGetProperty("login", out var lg) && lg.ValueKind == JsonValueKind.True;
+                var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
+                if (id is not null && _diagsSdk.TryRemove(id, out var tcs))
+                    tcs.TrySetResult(JsonNode.Parse(txt) as JsonObject);
+            }
+            else if (tipo == "colar")
+            {
+                var r = doc.RootElement;
+                var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
+                if (id is not null && _colagens.TryRemove(id, out var tcs))
+                    tcs.TrySetResult(r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True);
             }
             else if (tipo == "ajuda")
             {
@@ -565,16 +639,27 @@ public partial class ChatIfood : UserControl
             {
                 using var d = JsonDocument.Parse(e.ParameterObjectAsJson);
                 if (d.RootElement.TryGetProperty("url", out var u))
+                {
                     _captura.RegistrarWebSocket(u.GetString());
+                    // o id da loja nesta conexão (user_id da URL do Sendbird), só em memória
+                    if (d.RootElement.TryGetProperty("requestId", out var rq) && rq.GetString() is { } req)
+                    {
+                        if (_wsUserPorConexao.Count > 200) _wsUserPorConexao.Clear();
+                        _wsUserPorConexao[req] = QuadroSendbird.UserIdDaUrl(u.GetString());
+                    }
+                }
                 AgendarDiagnostico();
             });
 
             _wsRecv = core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameReceived");
             _wsRecv.DevToolsProtocolEventReceived += (_, e) => Seguro(() =>
             {
-                var p = PayloadDoFrame(e.ParameterObjectAsJson);
+                var (p, conexao) = PayloadEConexao(e.ParameterObjectAsJson);
                 if (p is null) return;
-                _captura.RegistrarFrame(p, enviado: false);
+                _captura.RegistrarFrame(p, enviado: false, conexao);
+                // RESGATE PELO CHAT (07/10/2026): o quadro vai para o serviço novo, que só faz algo
+                // com a loja ligada no ERP. O id da loja é o user_id da URL DESTA conexão.
+                ServicoConversaChat.Quadro(p, enviado: false, conexao, WsUser(conexao));
                 AgendarDiagnostico();
                 // CÓDIGO DA RASPADINHA (22/09/2026): só os quadros RECEBIDOS entram aqui. O que
                 // a loja envia sai pelo webSocketFrameSent, que continua só alimentando o
@@ -585,8 +670,12 @@ public partial class ChatIfood : UserControl
             _wsSent = core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameSent");
             _wsSent.DevToolsProtocolEventReceived += (_, e) => Seguro(() =>
             {
-                var p = PayloadDoFrame(e.ParameterObjectAsJson);
-                if (p is not null) { _captura.RegistrarFrame(p, enviado: true); AgendarDiagnostico(); }
+                var (p, conexao) = PayloadEConexao(e.ParameterObjectAsJson);
+                if (p is null) return;
+                _captura.RegistrarFrame(p, enviado: true, conexao);
+                AgendarDiagnostico();
+                // o que SAI da página só confirma o envio de uma resposta; nunca vira fala
+                ServicoConversaChat.Quadro(p, enviado: true, conexao, WsUser(conexao));
             });
 
             _reqWill = core.GetDevToolsProtocolEventReceiver("Network.requestWillBeSent");
@@ -647,17 +736,131 @@ public partial class ChatIfood : UserControl
 
     private static void Seguro(Action a) { try { a(); } catch { } }
 
-    /// <summary>opcode 1 = texto; extrai response.payloadData do evento do CDP.</summary>
-    private static string? PayloadDoFrame(string parametroJson)
+    /// <summary>
+    /// opcode 1 = texto; extrai response.payloadData do evento do CDP, e o requestId da conexão (é
+    /// por ele que se sabe de que WebSocket veio o quadro, e portanto qual é o id da loja nele).
+    /// </summary>
+    private static (string? Payload, string? Conexao) PayloadEConexao(string parametroJson)
     {
         try
         {
             using var d = JsonDocument.Parse(parametroJson);
-            if (!d.RootElement.TryGetProperty("response", out var r)) return null;
-            if (r.TryGetProperty("opcode", out var op) && op.TryGetInt32(out var o) && o != 1) return null;
-            return r.TryGetProperty("payloadData", out var pd) ? pd.GetString() : null;
+            var conexao = d.RootElement.TryGetProperty("requestId", out var rq) ? rq.GetString() : null;
+            if (!d.RootElement.TryGetProperty("response", out var r)) return (null, conexao);
+            if (r.TryGetProperty("opcode", out var op) && op.TryGetInt32(out var o) && o != 1) return (null, conexao);
+            return (r.TryGetProperty("payloadData", out var pd) ? pd.GetString() : null, conexao);
+        }
+        catch { return (null, null); }
+    }
+
+    private string? WsUser(string? conexao)
+    {
+        var u = conexao is not null && _wsUserPorConexao.TryGetValue(conexao, out var x) ? x : null;
+        if (u is not null) _ultimoWsUser = u;
+        return u;
+    }
+
+    /// <summary>O id da loja da última conexão que trouxe quadro (só memória). Ordena as instâncias do SDK.</summary>
+    private string? _ultimoWsUser;
+
+    // ── RESGATE PELO CHAT: o que roda na página (07/10/2026) ─────────────────
+
+    /// <summary>
+    /// O ÚNICO lugar que manda texto ao cliente. Só aceita a <see cref="PermissaoDeEnvio"/> que o
+    /// <see cref="PortaoDeEnvio"/> cria, e o token de uso único sai dela uma vez só: o C# o põe em
+    /// <c>window.__pdvEnvioToken</c> na MESMA execução que chama o envio, e a página recusa sem ele.
+    /// O resultado volta por <c>chrome.webview.postMessage</c> (tipo "pdvsb"); sem resposta em 12 s,
+    /// "sem_resposta", que vira "incerta" e nunca é reenviada.
+    /// </summary>
+    private async Task<ResultadoDoScript> EnviarPeloSdkAsync(PermissaoDeEnvio permissao)
+    {
+        if (!Dispatcher.CheckAccess())
+            return await HospedeWebView2.NaTela(Dispatcher, () => EnviarPeloSdkAsync(permissao));
+        var token = permissao.ConsumirToken();
+        if (token is null) return new ResultadoDoScript(false, "erro_envio", null);
+        var core = _pronto ? Web.CoreWebView2 : null;
+        if (core is null) return new ResultadoDoScript(false, "sdk_ausente", null);
+        var id = Guid.NewGuid().ToString("N");
+        var tcs = new TaskCompletionSource<ResultadoDoScript>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _envios[id] = tcs;
+        try
+        {
+            var args = JsonSerializer.Serialize(new
+            {
+                id, token, canal = permissao.Canal, orderUuid = permissao.OrderUuid, texto = permissao.Texto,
+                ws = _ultimoWsUser,
+            });
+            var r = await core.ExecuteScriptAsync(
+                $"window.__pdvEnvioToken = {JsonSerializer.Serialize(token)}; window.pdvSb ? window.pdvSb.enviar({args}) : 'sem_script'");
+            if (r.Contains("sem_script", StringComparison.Ordinal)) return new ResultadoDoScript(false, "sdk_ausente", null);
+            var fim = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(12)));
+            return fim == tcs.Task ? tcs.Task.Result : new ResultadoDoScript(false, "sem_resposta", null);
+        }
+        catch (Exception ex)
+        {
+            DiagRaspadinha("envio pelo sdk: " + ex.GetType().Name);
+            return new ResultadoDoScript(false, "sem_resposta", null);
+        }
+        finally { _envios.TryRemove(id, out _); }
+    }
+
+    /// <summary>
+    /// O diagnóstico do SDK para o sinal: só contagens e verdadeiro/falso (o <c>uid</c> fica em
+    /// memória no serviço e sai do estado pela lista branca do núcleo).
+    /// </summary>
+    private async Task<JsonObject?> DiagSdkAsync(IReadOnlyList<string> canais, string? ws)
+    {
+        if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => DiagSdkAsync(canais, ws));
+        var core = _pronto ? Web.CoreWebView2 : null;
+        if (core is null) return null;
+        var id = Guid.NewGuid().ToString("N");
+        var tcs = new TaskCompletionSource<JsonObject?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _diagsSdk[id] = tcs;
+        try
+        {
+            var args = JsonSerializer.Serialize(new { id, canais = canais.Take(5).ToArray(), ws });
+            await core.ExecuteScriptAsync($"window.pdvSb ? window.pdvSb.diag({args}) : false");
+            var fim = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(6)));
+            return fim == tcs.Task ? tcs.Task.Result : null;
         }
         catch { return null; }
+        finally { _diagsSdk.TryRemove(id, out _); }
+    }
+
+    /// <summary>
+    /// "Abrir e colar" (Assistido): a página abre o pedido pelo uuid, toca no ícone do chat, confere
+    /// o número no cabeçalho da conversa e SÓ ENTÃO cola. Não bateu: o texto vai para a área de
+    /// transferência e a barra diz para abrir a conversa à mão. Nunca usa a busca por número.
+    /// </summary>
+    private async Task<bool> AbrirEColarAsync(string orderUuid, string? numero, string texto)
+    {
+        if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => AbrirEColarAsync(orderUuid, numero, texto));
+        var ok = false;
+        try
+        {
+            if (!_pronto) await PreAquecerAsync();
+            var core = _pronto ? Web.CoreWebView2 : null;
+            if (core is not null)
+            {
+                var id = Guid.NewGuid().ToString("N");
+                var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _colagens[id] = tcs;
+                try
+                {
+                    TxtEstado.Text = "Abrindo a conversa do pedido…";
+                    var arg = string.Join(", ", JsonSerializer.Serialize(orderUuid), JsonSerializer.Serialize(numero ?? ""),
+                        JsonSerializer.Serialize(texto), JsonSerializer.Serialize(id));
+                    await core.ExecuteScriptAsync($"window.pdvAbrirConversaDoPedido ? window.pdvAbrirConversaDoPedido({arg}) : false");
+                    var fim = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(20)));
+                    ok = fim == tcs.Task && tcs.Task.Result;
+                }
+                finally { _colagens.TryRemove(id, out _); }
+            }
+        }
+        catch (Exception ex) { DiagRaspadinha("abrir e colar: " + ex.GetType().Name); }
+        if (!ok) try { Clipboard.SetText(texto); } catch { /* a área de transferência pode estar presa */ }
+        TxtEstado.Text = ok ? "Resposta colada na conversa. Confira e aperte Enviar." : ConversaRaspadinha.TextoAbraECole(numero);
+        return ok;
     }
 
     private static string? TokenDeHeaders(JsonElement headers)
@@ -1604,6 +1807,65 @@ public partial class ChatIfood : UserControl
         } catch (e) { return false; }
       };
 
+      // (3.7) ABRIR E COLAR (07/10/2026, resgate pelo chat, modo Assistido). O ERP escreveu a
+      // resposta e uma pessoa aperta Enviar. A pagina abre o PEDIDO pelo uuid (nunca pela busca
+      // por numero: numero curto repete entre lojas e dias), toca no icone do chat do pedido,
+      // confere o #numero no cabecalho da conversa e SO ENTAO cola. Se nao bater em ~12 s, copia
+      // o texto e conta ao C#, que diz para abrir a conversa a mao.
+      window.pdvAbrirConversaDoPedido = function (uuid, numero, texto, id) {
+        var u = String(uuid || '').toLowerCase();
+        var n = String(numero || '').replace(/\D/g, '');
+        var t = String(texto || '');
+        // volta ao modo de antes: quem pediu o Gestor inteiro continua com ele; quem estava no
+        // modo normal volta a ter o holofote (mesmo que a gaveta estivesse fechada naquela hora,
+        // senao o __pdvSemHolofote ficava ligado para sempre e o chat nunca mais se isolava)
+        var semHolofoteAntes = !!window.__pdvSemHolofote;
+        function fim(ok){
+          try {
+            if (!ok) respCopiar(t);
+            window.__pdvSemHolofote = semHolofoteAntes;
+            if (!semHolofoteAntes) window.pdvIsolar();
+            cortina(false);
+          } catch (e) {}
+          envia({ tipo: 'colar', id: id || null, ok: !!ok, numero: n });
+        }
+        if (!/^[0-9a-f-]{36}$/.test(u) || !t) { fim(false); return false; }
+        try {
+          // o holofote esconde o detalhe do pedido (e o icone dele): sai por baixo da cortina
+          window.__pdvSemHolofote = true;
+          desisolar();
+          cortina(true);
+          var c = document.getElementById('pdv-cortina'); if (c) c.textContent = 'Abrindo a conversa do pedido' + (n ? ' #' + n : '') + '...';
+          location.hash = '#/home/order-display/expedition/' + u;
+          var tent = 0, clicou = false;
+          var relogio = setInterval(function () {
+            tent++;
+            try {
+              if (!clicou) {
+                // o icone do chat DO PEDIDO, nao o da barra de cima (que fica no topo da tela)
+                var ics = document.querySelectorAll('.ifdl-icon-chat,[class*="ifdl-icon-chat"]');
+                var alvo = null;
+                for (var i = ics.length - 1; i >= 0; i--) {
+                  var r = ics[i].getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0 && r.top > 70) { alvo = ics[i]; break; }
+                }
+                if (alvo) { (alvo.closest('a,button,[role="button"]') || alvo).click(); clicou = true; }
+              } else {
+                var p = convPainel();
+                var cab = p ? (p.textContent || '').slice(0, 600) : '';
+                if (n && new RegExp('#\\s*' + n + '(\\D|$)').test(cab)) {
+                  clearInterval(relogio);
+                  fim(respColar(t));
+                  return;
+                }
+              }
+            } catch (e) {}
+            if (tent >= 24) { clearInterval(relogio); fim(false); }
+          }, 500);
+          return true;
+        } catch (e) { fim(false); return false; }
+      };
+
       // observador: qualquer mexida no DOM reconta (com folga) e tenta abrir/isolar.
       var pend = null;
       var ajudaAntes = false;
@@ -1671,6 +1933,169 @@ public partial class ChatIfood : UserControl
         }, 1500);
       }
       if (document.body) liga(); else document.addEventListener('DOMContentLoaded', liga);
+    })();
+    """;
+
+
+    // ── o script do SDK do Sendbird (07/10/2026, resgate pelo chat) ──────────
+    // Roda a cada carga, separado do painel. Duas funcoes e nada mais:
+    //  · diag(): SO contagens (achou o SDK, quantas instancias, se o usuario bate com o do
+    //    WebSocket, se as conversas tem orderUuid, quantas congeladas). O uid fica em memoria no C#.
+    //  · enviar(): manda UMA resposta numa conversa, pelo mesmo metodo do botao Enviar. Recusa sem o
+    //    token de uso unico que o C# poe em window.__pdvEnvioToken imediatamente antes; confere o
+    //    canal (orderUuid igual, nao congelada, com cliente); 20 por minuto no maximo; sem focus()
+    //    e sem navegacao. O resultado vai por chrome.webview.postMessage (tipo 'pdvsb').
+    private const string ScriptSendbird = """
+    (function () {
+      if (window.pdvSb) return;
+      function envia(o){ try { window.chrome.webview.postMessage(JSON.stringify(o)); } catch (e) {} }
+      var enviados = [];
+      var cache = null, cacheEm = 0;
+
+      // instancia valida: tem groupChannel.getChannel e um usuario conectado
+      function valida(x){
+        try { return !!(x && x.groupChannel && typeof x.groupChannel.getChannel === 'function' && x.currentUser); }
+        catch (e) { return false; }
+      }
+      function junta(lista, x){ if (valida(x) && lista.indexOf(x) < 0) lista.push(x); }
+
+      // 1) o singleton do modulo (SendbirdChat.instance), varrendo os modulos do webpack
+      function doWebpack(lista){
+        try {
+          var nomes = Object.keys(self).filter(function (k) { return k.indexOf('webpackChunk') === 0; });
+          for (var i = 0; i < nomes.length; i++) {
+            var fila = self[nomes[i]];
+            if (!fila || typeof fila.push !== 'function') continue;
+            var req = null;
+            try { fila.push([['pdvsb' + Date.now() + '_' + i], {}, function (r) { req = r; }]); } catch (e) {}
+            if (!req || !req.c) continue;
+            var mods = req.c;
+            for (var k in mods) {
+              var ex = null;
+              try { ex = mods[k] && mods[k].exports; } catch (e) { ex = null; }
+              if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) continue;
+              var cands = [ex];
+              try { if (ex.default) cands.push(ex.default); } catch (e) {}
+              try { for (var p in ex) { var v = ex[p]; if (v && (typeof v === 'object' || typeof v === 'function')) cands.push(v); } } catch (e) {}
+              for (var j = 0; j < cands.length; j++) {
+                try { if (cands[j] && cands[j].instance) junta(lista, cands[j].instance); } catch (e) {}
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      // 2) a arvore do React a partir da caixa do chat (stores.sdkStore.sdk do UIKit)
+      function doReact(lista){
+        try {
+          var el = document.querySelector('[class*="sendbird-"]') || document.querySelector('textarea,[contenteditable="true"]');
+          if (!el) return;
+          var chave = Object.keys(el).filter(function (k) { return k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0; })[0];
+          var f = chave ? el[chave] : null, n = 0;
+          while (f && n < 500) {
+            var pr = f.memoizedProps;
+            if (pr) {
+              try { if (pr.value && pr.value.stores && pr.value.stores.sdkStore) junta(lista, pr.value.stores.sdkStore.sdk); } catch (e) {}
+              try { if (pr.stores && pr.stores.sdkStore) junta(lista, pr.stores.sdkStore.sdk); } catch (e) {}
+              try { if (pr.sdk) junta(lista, pr.sdk); } catch (e) {}
+            }
+            f = f.return; n++;
+          }
+        } catch (e) {}
+      }
+
+      function instancias(){
+        if (cache && cache.length && Date.now() - cacheEm < 60000) return cache.filter(valida);
+        var lista = [];
+        doWebpack(lista);
+        doReact(lista);
+        cache = lista; cacheEm = Date.now();
+        return lista;
+      }
+
+      // a que tem o usuario do WebSocket vem primeiro; as outras ficam de reserva
+      function ordenar(lista, ws){
+        if (!ws) return lista.slice();
+        var a = [], b = [];
+        lista.forEach(function (x) { try { if (x.currentUser && String(x.currentUser.userId) === String(ws)) a.push(x); else b.push(x); } catch (e) { b.push(x); } });
+        return a.concat(b);
+      }
+
+      async function acharCanal(lista, canal){
+        for (var i = 0; i < lista.length; i++) {
+          try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return ch; } catch (e) {}
+        }
+        return null;
+      }
+
+      function diag(a){
+        var id = a && a.id;
+        (async function () {
+          var r = { tipo: 'pdvsbdiag', id: id, login: !!document.querySelector('input[type="password"]') };
+          try {
+            var ws = a && a.ws;
+            var lista = ordenar(instancias(), ws);
+            r.achou = lista.length > 0;
+            r.instancias = lista.length;
+            r.user_id_igual_ws = !!(ws && lista.some(function (x) { try { return x.currentUser && String(x.currentUser.userId) === String(ws); } catch (e) { return false; } }));
+            if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
+            var canais = (a && a.canais) || [], conferidos = 0, comUuid = 0, congeladas = 0;
+            for (var i = 0; i < canais.length && i < 5; i++) {
+              var ch = await acharCanal(lista, canais[i]);
+              if (!ch) continue;
+              conferidos++;
+              if (ch.cachedMetaData && ch.cachedMetaData.orderUuid) comUuid++;
+              if (ch.isFrozen) congeladas++;
+            }
+            r.conferidos = conferidos;
+            r.tem_order_uuid = comUuid > 0;
+            r.congeladas = congeladas;
+          } catch (e) {}
+          envia(r);
+        })();
+        return true;
+      }
+
+      function enviar(a){
+        var id = a && a.id;
+        function fim(o){ o.tipo = 'pdvsb'; o.id = id; envia(o); }
+        try {
+          // o token de uso unico: sem ele igual ao que o C# acabou de por, nada sai
+          var esperado = window.__pdvEnvioToken;
+          window.__pdvEnvioToken = null;
+          if (!a || !a.token || !esperado || esperado !== a.token) { fim({ ok: false, erro: 'token' }); return 'token'; }
+          var agora = Date.now();
+          enviados = enviados.filter(function (t) { return agora - t < 60000; });
+          if (enviados.length >= 20) { fim({ ok: false, erro: 'limite' }); return 'limite'; }
+          var lista = ordenar(instancias(), a.ws);
+          if (!lista.length) { fim({ ok: false, erro: 'sdk_ausente' }); return 'sdk_ausente'; }
+          (async function () {
+            var ch = await acharCanal(lista, a.canal);
+            if (!ch) { fim({ ok: false, erro: 'canal_errado' }); return; }
+            var md = ch.cachedMetaData || {};
+            if (!a.orderUuid || md.orderUuid !== a.orderUuid) { fim({ ok: false, erro: 'canal_errado' }); return; }
+            if (ch.isFrozen) { fim({ ok: false, erro: 'congelada' }); return; }
+            var cliente = (ch.members || []).some(function (m) { return !!(m && m.metaData && m.metaData.userType === 'CUSTOMER'); });
+            if (!cliente) { fim({ ok: false, erro: 'sem_cliente' }); return; }
+            enviados.push(Date.now());
+            var feito = false;
+            function deu(msg){ if (feito) return; feito = true; fim({ ok: true, msgId: msg && msg.messageId ? String(msg.messageId) : null }); }
+            function naoDeu(){ if (feito) return; feito = true; fim({ ok: false, erro: 'erro_envio' }); }
+            try {
+              var params = { message: String(a.texto || '') };
+              var r = ch.sendUserMessage.length >= 2
+                ? ch.sendUserMessage(params, function (msg, err) { if (err) naoDeu(); else deu(msg); })
+                : ch.sendUserMessage(params);
+              if (r && typeof r.onSucceeded === 'function') { r.onSucceeded(deu); if (typeof r.onFailed === 'function') r.onFailed(naoDeu); }
+              else if (r && typeof r.then === 'function') r.then(deu, naoDeu);
+              else if (ch.sendUserMessage.length < 2) deu(r);
+            } catch (e) { naoDeu(); }
+          })().catch(function () { fim({ ok: false, erro: 'erro_envio' }); });
+          return 'iniciado';
+        } catch (e) { fim({ ok: false, erro: 'erro_envio' }); return 'erro'; }
+      }
+
+      window.pdvSb = { diag: diag, enviar: enviar };
     })();
     """;
 }

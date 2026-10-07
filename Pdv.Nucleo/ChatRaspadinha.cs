@@ -48,10 +48,20 @@ public enum MotivoChat
 /// <summary>
 /// O bônus que o SERVIDOR registrou (raspadinha_bonus_pedido). É isto, e só isto, que vira
 /// comanda: o caixa não inventa prêmio nem decide código.
+///
+/// Os quatro últimos campos são do chat novo (07/10/2026, seção 4.3): os itens já com o sabor
+/// ("Donut Homer"), a assinatura ("Automatizado"), quem imprime (<c>caixa</c> ou <c>kds</c>) e o
+/// cabeçalho da comanda quando o papel é DESTE terminal (<c>normal</c> ou <c>reserva_do_caixa</c>).
+/// Bônus do fluxo antigo chega sem eles e sai no papel como sempre saiu.
 /// </summary>
 public sealed record BonusRaspadinha(
     string Id, string? Codigo, string? Premio, string? PremioEmoji, string? Cliente,
-    string? Pedido, string? Loja, string? IfoodOrderId, string Origem, DateTime Quando);
+    string? Pedido, string? Loja, string? IfoodOrderId, string Origem, DateTime Quando,
+    IReadOnlyList<ItemBonus>? Itens = null, string? Assinatura = null, string? ComandaOnde = null,
+    string? Cabecalho = null);
+
+/// <summary>Um item do prêmio, uma linha da comanda: "1 Donut Homer".</summary>
+public sealed record ItemBonus(string Nome, int Qtd);
 
 /// <summary>A resposta da borda, já no vocabulário do caixa.</summary>
 public sealed record RespostaChat(DesfechoChat Desfecho, MotivoChat Motivo, string? MotivoCru,
@@ -105,6 +115,8 @@ public sealed class ChatRaspadinha
 
     public const string OrigemCaixa = "caixa";
     public const string OrigemExtensao = "extensao";
+    /// <summary>Origem do resgate feito pelo chat novo (ERP, assinatura "Automatizado").</summary>
+    public const string OrigemAutomatico = "automatico";
 
     /// <summary>Teto do texto que sai daqui. O servidor corta de novo; este é o do caixa.</summary>
     public const int TetoTexto = 400;
@@ -123,8 +135,16 @@ public sealed class ChatRaspadinha
 
     // ── A LOJA LIGOU? ────────────────────────────────────────────────────────
 
-    /// <summary>A loja ligou a captura do código no chat (pdv_loja_config, copiada no Atualizar)?</summary>
-    public static bool LigadoNaLoja(SqliteConnection cx) => Vendas.Config(cx, ChaveConfigLoja) == "1";
+    /// <summary>
+    /// A loja ligou a captura do código no chat (pdv_loja_config, copiada no Atualizar)?
+    ///
+    /// ⚠️ E O CHAT NOVO NÃO ESTÁ VALENDO (07/10/2026, tarefa P8). Com a loja em Sombra, Assistido ou
+    /// Automático quem lê o chat é o ServicoConversaChat; este fluxo antigo para inteiro, inclusive o
+    /// que já esperava na fila. O ERP tem a mesma guarda (<c>chat_automatico_ativo</c>), e as duas
+    /// juntas impedem que o mesmo código seja tratado por dois caminhos.
+    /// </summary>
+    public static bool LigadoNaLoja(SqliteConnection cx)
+        => Vendas.Config(cx, ChaveConfigLoja) == "1" && !ConversaRaspadinha.SinalAtivo(cx);
 
     // ── QUEM FALOU, E É NOVO? (puro) ─────────────────────────────────────────
 
@@ -245,7 +265,10 @@ public sealed class ChatRaspadinha
         "expired" or "vencido" or "venceu" => MotivoChat.Venceu,
         "already_redeemed" or "ja_resgatado" or "ja_usado" => MotivoChat.JaUsado,
         "outra_loja" or "loja_diferente" or "wrong_store" => MotivoChat.OutraLoja,
-        "loja_sem_raspadinha" or "loja_desligada" or "chat_desligado" => MotivoChat.LojaDesligada,
+        // chat_automatico_ativo (SQL 149): o chat novo está ligado nesta loja e a RPC antiga recusa
+        // o caixa e a extensão. É silêncio, como loja desligada: quem trata é o caminho novo.
+        "loja_sem_raspadinha" or "loja_desligada" or "chat_desligado" or "chat_automatico_ativo"
+            => MotivoChat.LojaDesligada,
         "sem_permissao" or "forbidden" or "unauthorized" => MotivoChat.SemPermissao,
         _ => MotivoChat.Desconhecido,
     };
@@ -338,55 +361,119 @@ public sealed class ChatRaspadinha
     /// Largura: passe <see cref="Kds.ColunasComanda"/> da bobina que vai imprimir, como a comanda
     /// de cozinha faz. Em 58 mm o texto encolhe junto, em vez de sair cortado.
     /// </summary>
+    /// <remarks>
+    /// LAYOUT DE 07/10/2026 (desenho "resgate-final", seção 9), igual no caixa e no KDS:
+    /// <code>
+    ///       RESGATE DA RASPADINHA          normal, centralizado
+    /// #5971                                3x (o número é o que acha a sacola)
+    /// ANA PAULA SOUZA                      1.5x, até 2 linhas
+    /// --------------------------------
+    /// 1 DONUT HOMER                        2x, uma linha por item
+    /// --------------------------------
+    /// Codigo AD-7KQ2MX  19:42              normal e sem acento
+    /// Resgate: Automatizado
+    /// Vai junto com o pedido.
+    /// Brinde sem valor fiscal.
+    /// </code>
+    /// Toda linha ampliada é montada na largura que CABE depois de ampliada (colunas / escala): em
+    /// 58 mm nada sai cortado nem empurrado para a linha de baixo pela própria impressora.
+    /// </remarks>
     public static IReadOnlyList<string> ComandaLinhas(BonusRaspadinha b, int colunas = Kds.ColunasPadrao,
         DateTime? hoje = null)
     {
         var L = Kds.ColunasComanda(colunas);
-        var agora = hoje ?? DateTime.Now;
-        var premio = string.IsNullOrWhiteSpace(b.Premio) ? "BRINDE" : b.Premio!.Trim().ToUpperInvariant();
+        var quando = hoje ?? DateTime.Now;
         var linhas = new List<string>
         {
-            new string('=', L),
-            LinhaEscala.Com(Centro("BRINDE DA RASPADINHA", L), 1.2),
-            Centro("iFOOD", L),
-            new string('=', L),
-            "",
+            Centro(b.Cabecalho == ConversaRaspadinha.CabecalhoReservaDoCaixa
+                ? "RESGATE (RESERVA DO CAIXA)" : "RESGATE DA RASPADINHA", L),
         };
-        // O PRÊMIO em 2x, como o número do pedido na comanda de cozinha: é o que a pessoa lê de
-        // longe, com a sacola na mão. Nome comprido quebra em vez de sumir cortado.
-        foreach (var parte in Quebra(premio, L))
-            linhas.Add(LinhaEscala.Com(Centro(parte, L), 2.0));
-        linhas.Add("");
-        linhas.Add(new string('-', L));
+
+        // O NÚMERO DO PEDIDO É O QUE FAZ O PAPEL SERVIR NO BALCÃO: com oito sacolas na bancada, é
+        // ele que diz em qual pôr o brinde. Sem número (bônus antigo), a linha DIZ que falta, em vez
+        // de sumir.
+        var numero = (b.Pedido ?? "").Trim().TrimStart('#').Trim();
+        if (numero.Length > 0)
+        {
+            var texto = "#" + numero;
+            var escala = Math.Min(3.0, Math.Floor(L / (double)texto.Length * 10) / 10);
+            linhas.AddRange(Ampliada(texto, Math.Max(1.0, escala), L, 1));
+        }
+        else
+            linhas.AddRange(Ampliada("PEDIDO: CONFIRA NO CHAT", 1.5, L, 2));
+
+        // O NOME INTEIRO, em até duas linhas: no balcão tem duas Anas.
         if (!string.IsNullOrWhiteSpace(b.Cliente))
-            linhas.Add(LinhaEscala.Com(Corta("Cliente: " + b.Cliente!.Trim(), L), 1.3));
-        // O NÚMERO DO PEDIDO É O QUE FAZ O PAPEL SERVIR NO BALCÃO. Com oito sacolas prontas na
-        // bancada, comanda sem número não diz em qual colocar o brinde. Quando ele não veio (o
-        // caminho do WebSocket não passa pelo cabeçalho da conversa), a linha DIZ isso, em vez de
-        // sumir e deixar quem pegou o papel sem saber que falta uma informação.
-        linhas.Add(string.IsNullOrWhiteSpace(b.Pedido)
-            ? LinhaEscala.Com(Corta("Pedido: confira no chat", L), 1.3)
-            : LinhaEscala.Com(Corta("Pedido: #" + b.Pedido!.Trim().TrimStart('#'), L), 1.5));
-        if (!string.IsNullOrWhiteSpace(b.Codigo))
-            linhas.Add(Corta("Codigo: " + b.Codigo!.Trim(), L));
-        linhas.Add(Corta("Hora: " + agora.ToString("HH:mm"), L));
+            linhas.AddRange(Ampliada(b.Cliente!.Trim().ToUpperInvariant(), 1.5, L, 2));
+
         linhas.Add(new string('-', L));
-        linhas.Add(Corta("Entregar junto com o pedido.", L));
+        var itens = b.Itens is { Count: > 0 }
+            ? b.Itens.Select(i => $"{Math.Max(1, i.Qtd)} {i.Nome.Trim()}")
+            : new[] { string.IsNullOrWhiteSpace(b.Premio) ? "BRINDE" : b.Premio!.Trim() };
+        foreach (var item in itens)
+            linhas.AddRange(Ampliada(item.ToUpperInvariant(), 2.0, L, 6));
+        linhas.Add(new string('-', L));
+
+        var codigo = string.IsNullOrWhiteSpace(b.Codigo) ? "" : "Codigo " + b.Codigo!.Trim() + "  ";
+        linhas.Add(Corta(SemAcento(codigo + quando.ToString("HH:mm")), L));
+        if (!string.IsNullOrWhiteSpace(b.Assinatura))
+            linhas.Add(Corta(SemAcento("Resgate: " + b.Assinatura!.Trim()), L));
+        linhas.Add(Corta("Vai junto com o pedido.", L));
+        linhas.Add(Corta("Brinde sem valor fiscal.", L));
         linhas.Add("");
         return linhas;
+    }
+
+    /// <summary>
+    /// Uma linha ampliada que cabe no papel: quebra por palavra na largura <c>colunas / escala</c>,
+    /// no máximo <paramref name="maxLinhas"/>, e a última leva "…" quando sobrou texto.
+    /// </summary>
+    private static IEnumerable<string> Ampliada(string texto, double escala, int colunas, int maxLinhas)
+    {
+        var largura = Math.Max(4, (int)Math.Floor(colunas / escala));
+        var partes = QuebraPorPalavra(texto, largura).ToList();
+        if (partes.Count > maxLinhas)
+        {
+            partes = partes.Take(maxLinhas).ToList();
+            var ultima = partes[^1];
+            partes[^1] = (ultima.Length >= largura ? ultima[..(largura - 1)] : ultima) + "…";
+        }
+        return partes.Select(p => LinhaEscala.Com(p, escala));
+    }
+
+    private static IEnumerable<string> QuebraPorPalavra(string s, int larg)
+    {
+        var atual = new StringBuilder();
+        foreach (var palavra in s.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var p = palavra;
+            while (p.Length > larg)
+            {
+                if (atual.Length > 0) { yield return atual.ToString(); atual.Clear(); }
+                yield return p[..larg];
+                p = p[larg..];
+            }
+            if (atual.Length > 0 && atual.Length + 1 + p.Length > larg) { yield return atual.ToString(); atual.Clear(); }
+            if (atual.Length > 0) atual.Append(' ');
+            atual.Append(p);
+        }
+        if (atual.Length > 0) yield return atual.ToString();
+    }
+
+    /// <summary>As linhas pequenas saem sem acento (a térmica não garante a página de código).</summary>
+    private static string SemAcento(string s)
+    {
+        var d = s.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(d.Length);
+        foreach (var c in d)
+            if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark) sb.Append(c);
+        return sb.ToString().Normalize(NormalizationForm.FormC);
     }
 
     private static string Centro(string s, int larg)
         => s.Length >= larg ? s[..larg] : s.PadLeft((larg + s.Length) / 2).PadRight(larg);
 
     private static string Corta(string s, int larg) => s.Length <= larg ? s : s[..(larg - 1)] + "…";
-
-    private static IEnumerable<string> Quebra(string s, int larg)
-    {
-        if (s.Length == 0) { yield return s; yield break; }
-        for (var i = 0; i < s.Length; i += larg)
-            yield return s.Substring(i, Math.Min(larg, s.Length - i));
-    }
 
     // ── TEXTOS DE TELA (uma linha cada) ──────────────────────────────────────
 
@@ -769,9 +856,11 @@ public sealed class ChatRaspadinha
         {
             using var cx = Banco.Abrir();
             return cx.Query("""
-                SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em
+                SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em,
+                       itens_json, assinatura, comanda_onde, cabecalho
                   FROM raspadinha_bonus
                  WHERE impresso_em IS NULL AND de_outro_terminal = 0 AND tentativas_impressao < @Teto
+                   AND (comanda_onde IS NULL OR cabecalho IS NOT NULL)
                  ORDER BY criado_em
                 """, new { Teto = TetoDeImpressao }).Select(Montar).ToList();
         }
@@ -782,6 +871,11 @@ public sealed class ChatRaspadinha
     /// Os bônus de HOJE que não estão no papel: os que a impressão falhou, os que são de outro
     /// terminal e os que ainda esperam. É o que o botão Reimprimir do chat oferece, porque o
     /// último bônus é UM só e numa noite sem bobina três brindes ficam sem comanda e sem botão.
+    ///
+    /// ⚠️ CHAT NOVO (07/10/2026): bônus com <c>comanda_onde</c> só entra quando o papel é DESTE
+    /// terminal (tem cabeçalho e não foi recusado pela reserva). O que é do KDS ou de outro caixa
+    /// nunca ganha <c>impresso_em</c> aqui (quem sabe do papel é o ERP), e sem este filtro o botão
+    /// tirava de novo TODAS as comandas de resgate do dia que a cozinha já tinha imprimido.
     /// </summary>
     public static IReadOnlyList<BonusRaspadinha> SemPapelHoje(DateTime? hoje = null)
     {
@@ -790,10 +884,12 @@ public sealed class ChatRaspadinha
             var dia = (hoje ?? DateTime.Now).Date.ToString("o");
             using var cx = Banco.Abrir();
             return cx.Query("""
-                SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em
+                SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em,
+                       itens_json, assinatura, comanda_onde, cabecalho
                   FROM raspadinha_bonus
                  WHERE criado_em >= @Dia
                    AND (impresso_em IS NULL OR erro_impressao IS NOT NULL)
+                   AND (comanda_onde IS NULL OR (cabecalho IS NOT NULL AND de_outro_terminal = 0))
                  ORDER BY criado_em
                 """, new { Dia = dia }).Select(Montar).ToList();
         }
@@ -810,7 +906,8 @@ public sealed class ChatRaspadinha
     private static BonusRaspadinha? Bonus(SqliteConnection cx, string id)
     {
         var linha = cx.QueryFirstOrDefault("""
-            SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em
+            SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em,
+                       itens_json, assinatura, comanda_onde, cabecalho
               FROM raspadinha_bonus WHERE id = @I
             """, new { I = id });
         return linha is null ? null : Montar(linha);
@@ -823,7 +920,8 @@ public sealed class ChatRaspadinha
         {
             using var cx = Banco.Abrir();
             var linha = cx.QueryFirstOrDefault("""
-                SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em
+                SELECT id, codigo, premio, premio_emoji, cliente, pedido, loja, ifood_order_id, origem, criado_em,
+                       itens_json, assinatura, comanda_onde, cabecalho
                   FROM raspadinha_bonus ORDER BY criado_em DESC LIMIT 1
                 """);
             return linha is null ? null : Montar(linha);
@@ -834,9 +932,59 @@ public sealed class ChatRaspadinha
     private static BonusRaspadinha Montar(dynamic l) => new(
         (string)l.id, l.codigo as string, l.premio as string, l.premio_emoji as string,
         l.cliente as string, l.pedido as string, l.loja as string, l.ifood_order_id as string,
-        (l.origem as string) == OrigemExtensao ? OrigemExtensao : OrigemCaixa,
+        (l.origem as string) is OrigemExtensao or OrigemAutomatico ? (string)l.origem : OrigemCaixa,
         DateTime.TryParse(l.criado_em as string, CultureInfo.InvariantCulture,
-            DateTimeStyles.RoundtripKind, out DateTime em) ? em : DateTime.Now);
+            DateTimeStyles.RoundtripKind, out DateTime em) ? em : DateTime.Now,
+        Itens(l.itens_json as string), l.assinatura as string, l.comanda_onde as string, l.cabecalho as string);
+
+    /// <summary>Os itens gravados em JSON (<c>[{"nome":"Donut Homer","qtd":1}]</c>). Estranho vira null.</summary>
+    private static IReadOnlyList<ItemBonus>? Itens(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            var lista = new List<ItemBonus>();
+            foreach (var x in doc.RootElement.EnumerateArray())
+                if (x.ValueKind == JsonValueKind.Object && Texto(x, "nome") is { } nome)
+                    lista.Add(new ItemBonus(nome, x.TryGetProperty("qtd", out var q) && q.TryGetInt32(out var n) ? n : 1));
+            return lista.Count > 0 ? lista : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Quantas vezes o papel deste bônus já falhou (a nova tentativa reserva de novo no ERP).</summary>
+    public static int TentativasDeImpressao(string id)
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            return cx.ExecuteScalar<int>("SELECT tentativas_impressao FROM raspadinha_bonus WHERE id = @I", new { I = id });
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// O ERP disse que o papel deste bônus não é daqui (já impresso, reservado por outro, desfeito):
+    /// o bônus sai da lista de pendentes sem tirar papel (de_outro_terminal).
+    ///
+    /// 07/10/2026 (revisão): o CLAIM VOLTA junto. Ele ficava, e quando o outro (KDS, outro caixa)
+    /// também falhava e o sinal entregava a comanda de novo a ESTE caixa, o GravarBonus não achava
+    /// a linha (só mexe com impresso_em nulo): o caixa ignorava calado a reserva que o ERP deu a
+    /// ele, a cada sinal, e o brinde ficava sem papel. A lista de pendentes e o Reimprimir
+    /// continuam de fora pelo de_outro_terminal, que só a nova entrega do sinal zera.
+    /// </summary>
+    public static void MarcarDeOutro(string id, string? motivo)
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            cx.Execute("UPDATE raspadinha_bonus SET de_outro_terminal = 1, erro_impressao = NULL, impresso_em = NULL WHERE id = @I", new { I = id });
+            Caixa.Auditar(cx, null, "raspadinha_chat_papel_de_outro", null, null, $"bonus={id} motivo={motivo}");
+        }
+        catch { /* conforto */ }
+    }
 
     /// <summary>
     /// Reivindica a impressão ANTES de mandar para o papel. Atômico: a puxada do delivery e a
@@ -853,6 +1001,22 @@ public sealed class ChatRaspadinha
                 new { I = id, Em = DateTime.Now.ToString("o") }) == 1;
         }
         catch { return false; }
+    }
+
+    /// <summary>
+    /// O papel saiu pelo botão Reimprimir (que não passa pelo claim): grava o claim e apaga a falha.
+    /// 07/10/2026 (revisão): sem isto a varredura automática tirava a MESMA comanda de novo no mesmo
+    /// caixa na puxada seguinte (impresso_em continuava nulo), e o brinde saía dobrado.
+    /// </summary>
+    public static void MarcarImpressoAqui(string id)
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            cx.Execute("UPDATE raspadinha_bonus SET impresso_em = COALESCE(impresso_em, @Em), erro_impressao = NULL WHERE id = @I",
+                new { I = id, Em = DateTime.Now.ToString("o") });
+        }
+        catch { /* conforto: o papel já saiu */ }
     }
 
     /// <summary>O papel saiu: apaga o rastro de falha, para o bônus sair da lista do Reimprimir.</summary>
