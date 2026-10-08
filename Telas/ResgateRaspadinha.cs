@@ -8,13 +8,31 @@ namespace Pdv.Telas;
 
 /// <summary>
 /// A TELA DE RESGATE MANUAL DA RASPADINHA (08/10/2026, SQL 154), montada em código como o
-/// SeletorComanda e o DetalhePedidoKds. Cinco passos numa janela só, com rolagem só no miolo:
+/// SeletorComanda e o DetalhePedidoKds. Cinco passos numa janela só:
 ///   [1] o código do cliente e o Conferir (com os códigos vivos da conversa, quando a tela abriu
 ///       por um pedido);  [2] a linha do prêmio ou a recusa;  [3] para onde vai (os pedidos
 ///   abertos da loja, o sugerido primeiro, e o balcão);  [4] o sabor, só se o prêmio pede;
 ///   [5] avisar o cliente no chat (só pedido do iFood com o chat da loja ligado).
 /// Depois do resgate a janela fica aberta com o resultado e o botão Desfazer (2 h, com o código
 /// do autenticador do dono).
+///
+/// O DESENHO É PARA 1024x768, a tela do caixa da Savassi (revisão pelas fotos de 08/10,
+/// docs/resgate-fotos, modo --foto-resgate da suíte):
+///  . três faixas: o CABEÇALHO FIXO (título, o código com o Conferir e os códigos da conversa, e a
+///    linha do prêmio ou do resultado), o MIOLO que rola só se precisar (destinos, sabores, avisar)
+///    e o RODAPÉ fixo. A linha do resultado nunca sai de vista: depois de Resgatar, ou de uma
+///    recusa, ela está no mesmo lugar, sem rolar. Na primeira versão ela ficava dentro da rolagem
+///    e, a 1024x768, "Resgatado. A comanda saiu." saía fora da tela.
+///  . a janela tem até 90% da largura da tela (920 px a 1024), para os 15 chips do donut super
+///    premium caberem em até três fileiras junto com os destinos e o avisar, sem rolagem.
+///  . o chip marcado muda só de cor (o rosa da marca): sem negrito e sem texto a mais, para nenhum
+///    chip mudar de largura nem pular de fileira debaixo do dedo. Nas caixas de 2 a quantidade vai
+///    num selo redondo de largura fixa dentro do chip, e a linha de apoio repete a escolha.
+///  . o rodapé é uma fileira só com o que está visível (Voltar/Fechar, Abrir e colar, Resgatar,
+///    Desfazer), repartida sem buraco.
+/// A régua dessas medidas mora em <see cref="ResgateManual.LarguraDaJanela"/> e
+/// <see cref="ResgateManual.AlturaMaximaDaJanela"/>; a suíte prova a conta sem janela e o encaixe
+/// com a janela de verdade a 1024x768 (TestesResgateManual, JN-6b, JN-18).
 ///
 /// A tela NÃO decide nada: o servidor confere, resgata e desfaz; esta janela só pergunta e
 /// mostra (Pdv.Nucleo/ResgateManual tem o que dá para provar sem WPF). A resposta do resgate é
@@ -31,6 +49,9 @@ public sealed class ResgateRaspadinha
 
     /// <summary>Resultado de uma chamada ao servidor: (status, corpo).</summary>
     public delegate Task<(int Status, string? Corpo)> Servidor(string nome, string corpo);
+
+    /// <summary>O campo do código não precisa da janela inteira: 440 px dão folga para 20 letras a 22 px.</summary>
+    private const double LarguraDoCodigo = 440;
 
     private readonly Window _janela;
     private readonly Servidor _servidor;
@@ -49,12 +70,14 @@ public sealed class ResgateRaspadinha
     private readonly Button _btnConferir;
     private readonly WrapPanel _chips;
     private readonly TextBlock _txtLinha;
+    private readonly ScrollViewer _rolagem;
     private readonly StackPanel _blocoDestino;
-    private readonly StackPanel _destinos;
+    private readonly WrapPanel _destinos;
     private readonly StackPanel _blocoSabor;
     private readonly WrapPanel _sabores;
     private readonly TextBlock _txtApoioSabor;
     private readonly CheckBox _chkAvisar;
+    private readonly Grid _rodape;
     private readonly Button _btnResgatar;
     private readonly Button _btnVoltar;
     private readonly Button _btnDesfazer;
@@ -90,30 +113,28 @@ public sealed class ResgateRaspadinha
         _confirmar = pergunta => Dialogo.Confirmar(_janela!, ResgateManual.Titulo, pergunta, "Resgatar", "Voltar");
         _pedirCodigo = aviso => PedirCodigo.Mostrar(_janela!, aviso ?? ResgateManual.TextoPedirCodigoDono);
 
-        _janela = Dialogo.Base(dono, 560);
-        _janela.MaxHeight = Math.Max(400, AlturaDaTela(dono) * 0.92);
+        _janela = Dialogo.Base(dono, ResgateManual.LarguraDaJanela(LarguraDaTela(dono)));
+        _janela.MaxHeight = ResgateManual.AlturaMaximaDaJanela(AlturaDaTela(dono));
 
-        // três faixas: cabeçalho fixo, o miolo que rola, os botões sempre à vista
+        // três faixas: o cabeçalho fixo, o miolo que rola se precisar, os botões sempre à vista
         var raiz = new Grid();
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         raiz.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         raiz.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        var cab = new StackPanel();
-        cab.Children.Add(PedirValor.Cabecalho(_janela, ResgateManual.Titulo));
+        // ── o cabeçalho fixo: o título, [1] o código e [2] a linha do prêmio ou do resultado ──
+        var fixo = new StackPanel();
+        fixo.Children.Add(PedirValor.Cabecalho(_janela, ResgateManual.Titulo));
         _txtOperador = Texto("Operador: " + _operador, 14, "TextoFraco");
         _txtOperador.Margin = new Thickness(0, -6, 0, 10);
-        cab.Children.Add(_txtOperador);
-        Grid.SetRow(cab, 0);
-        raiz.Children.Add(cab);
+        fixo.Children.Add(_txtOperador);
 
-        var miolo = new StackPanel();
-
-        // [1] o código
-        miolo.Children.Add(Rotulo("CÓDIGO DO CLIENTE"));
+        fixo.Children.Add(Rotulo("CÓDIGO DO CLIENTE"));
+        // [campo do código, até 440] [Conferir] [os códigos vivos da conversa, na mesma linha]
         var linhaCod = new Grid();
-        linhaCod.ColumnDefinitions.Add(new ColumnDefinition());
+        linhaCod.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MaxWidth = LarguraDoCodigo });
         linhaCod.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        linhaCod.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         _txtCodigo = new TextBox
         {
             Text = (codigoInicial ?? "").Trim().ToUpperInvariant(), FontSize = 22, MinHeight = 52, MaxLength = ResgateManual.MaxCodigo,
@@ -127,27 +148,27 @@ public sealed class ResgateRaspadinha
         _btnConferir.MinWidth = 140;
         _btnConferir.Margin = new Thickness(10, 0, 0, 0);
         _btnConferir.Click += (_, _) => _ = ConferirAsync();
-        Grid.SetColumn(_txtCodigo, 0); Grid.SetColumn(_btnConferir, 1);
-        linhaCod.Children.Add(_txtCodigo); linhaCod.Children.Add(_btnConferir);
-        miolo.Children.Add(linhaCod);
-        _chips = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
-        miolo.Children.Add(_chips);
+        _chips = new WrapPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        Grid.SetColumn(_txtCodigo, 0); Grid.SetColumn(_btnConferir, 1); Grid.SetColumn(_chips, 2);
+        linhaCod.Children.Add(_txtCodigo); linhaCod.Children.Add(_btnConferir); linhaCod.Children.Add(_chips);
+        fixo.Children.Add(linhaCod);
 
-        // [2] a linha do prêmio ou da recusa
         _txtLinha = Texto("", 16, "Texto");
         _txtLinha.FontWeight = FontWeights.SemiBold;
         _txtLinha.Margin = new Thickness(0, 12, 0, 0);
-        miolo.Children.Add(_txtLinha);
+        fixo.Children.Add(_txtLinha);
+        Grid.SetRow(fixo, 0);
+        raiz.Children.Add(fixo);
 
-        // [3] para onde vai
+        // ── o miolo (rola só se precisar): [3] para onde vai, [4] o sabor, [5] avisar ──
+        var miolo = new StackPanel();
         _blocoDestino = new StackPanel { Margin = new Thickness(0, 14, 0, 0), Visibility = Visibility.Collapsed };
         _blocoDestino.Children.Add(Rotulo("PARA ONDE VAI"));
-        _destinos = new StackPanel();
+        _destinos = new WrapPanel();
         _blocoDestino.Children.Add(_destinos);
         miolo.Children.Add(_blocoDestino);
 
-        // [4] o sabor
-        _blocoSabor = new StackPanel { Margin = new Thickness(0, 14, 0, 0), Visibility = Visibility.Collapsed };
+        _blocoSabor = new StackPanel { Margin = new Thickness(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         _blocoSabor.Children.Add(Rotulo("SABOR"));
         _sabores = new WrapPanel();
         _blocoSabor.Children.Add(_sabores);
@@ -155,53 +176,37 @@ public sealed class ResgateRaspadinha
         _blocoSabor.Children.Add(_txtApoioSabor);
         miolo.Children.Add(_blocoSabor);
 
-        // [5] avisar o cliente
         _chkAvisar = new CheckBox
         {
-            Content = "Avisar o cliente no chat", IsChecked = true, FontSize = 15, Margin = new Thickness(0, 14, 0, 0),
+            Content = "Avisar o cliente no chat", IsChecked = true, FontSize = 15, Margin = new Thickness(0, 12, 0, 0),
             Foreground = R("Texto"), Visibility = Visibility.Collapsed,
         };
         miolo.Children.Add(_chkAvisar);
 
-        var rolagem = new ScrollViewer
+        _rolagem = new ScrollViewer
         {
             Content = miolo, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0, 0, 4, 0),
         };
-        Grid.SetRow(rolagem, 1);
-        raiz.Children.Add(rolagem);
+        Grid.SetRow(_rolagem, 1);
+        raiz.Children.Add(_rolagem);
 
-        // o rodapé
-        var rodape = new StackPanel { Margin = new Thickness(0, 16, 0, 0) };
-        var linhaBotoes = new Grid();
-        linhaBotoes.ColumnDefinitions.Add(new ColumnDefinition());
-        linhaBotoes.ColumnDefinitions.Add(new ColumnDefinition());
+        // ── o rodapé: uma fileira só, com o que estiver visível ──
         _btnVoltar = Botao("Voltar", false);
-        _btnVoltar.Margin = new Thickness(0, 0, 6, 0);
         _btnVoltar.Click += (_, _) => _janela.Close();
         _btnResgatar = Botao("Resgatar", true);
-        _btnResgatar.Margin = new Thickness(6, 0, 0, 0);
         _btnResgatar.IsEnabled = false;
         _btnResgatar.Click += (_, _) => _ = ResgatarAsync();
-        Grid.SetColumn(_btnVoltar, 0); Grid.SetColumn(_btnResgatar, 1);
-        linhaBotoes.Children.Add(_btnVoltar); linhaBotoes.Children.Add(_btnResgatar);
-        rodape.Children.Add(linhaBotoes);
-        var linhaDepois = new Grid { Margin = new Thickness(0, 8, 0, 0) };
-        linhaDepois.ColumnDefinitions.Add(new ColumnDefinition());
-        linhaDepois.ColumnDefinitions.Add(new ColumnDefinition());
         _btnDesfazer = Botao("Desfazer", false);
-        _btnDesfazer.Margin = new Thickness(0, 0, 6, 0);
         _btnDesfazer.Visibility = Visibility.Collapsed;
         _btnDesfazer.Click += (_, _) => _ = DesfazerAsync();
         _btnColar = Botao("Abrir e colar", false);
-        _btnColar.Margin = new Thickness(6, 0, 0, 0);
         _btnColar.Visibility = Visibility.Collapsed;
         _btnColar.Click += (_, _) => _ = ColarAsync();
-        Grid.SetColumn(_btnDesfazer, 0); Grid.SetColumn(_btnColar, 1);
-        linhaDepois.Children.Add(_btnDesfazer); linhaDepois.Children.Add(_btnColar);
-        rodape.Children.Add(linhaDepois);
-        Grid.SetRow(rodape, 2);
-        raiz.Children.Add(rodape);
+        _rodape = new Grid { Margin = new Thickness(0, 16, 0, 0) };
+        PintarRodape();
+        Grid.SetRow(_rodape, 2);
+        raiz.Children.Add(_rodape);
 
         _janela.Content = Dialogo.Moldura(raiz);
         _janela.KeyDown += (_, e) => { if (e.Key == Key.Escape && !_ocupado) _janela.Close(); };
@@ -280,6 +285,8 @@ public sealed class ResgateRaspadinha
         Mostrar(ResgateManual.LinhaDoPremio(c.Codigo), "ok");
         PintarDestinos(c);
         PintarSabores(c.Codigo);
+        // um código novo começa do alto do miolo, nunca de onde a conferência anterior parou
+        _rolagem.ScrollToTop();
         Habilitar();
     }
 
@@ -291,7 +298,7 @@ public sealed class ResgateRaspadinha
             var b = new Button
             {
                 Content = cand, Style = (Style)Application.Current.Resources["BotaoBase"], MinHeight = 44, FontSize = 15,
-                Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(0, 0, 8, 6), Tag = cand,
+                Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(0, 3, 8, 3), Tag = cand,
             };
             b.Click += (_, _) => { _txtCodigo.Text = cand; _ = ConferirAsync(); };
             _chips.Children.Add(b);
@@ -327,7 +334,8 @@ public sealed class ResgateRaspadinha
         if (c.Pedidos.Count == 0)
         {
             var aviso = Texto(ResgateManual.TextoSemPedido, 13, "TextoFraco");
-            aviso.Margin = new Thickness(0, 2, 0, 0);
+            aviso.VerticalAlignment = VerticalAlignment.Center;
+            aviso.Margin = new Thickness(2, 0, 0, 8);
             _destinos.Children.Add(aviso);
         }
         _blocoDestino.Visibility = Visibility.Visible;
@@ -345,30 +353,65 @@ public sealed class ResgateRaspadinha
         }
         foreach (var o in cod.Opcoes)
         {
-            // um Button (o estilo BotaoBase e de Button): o "marcado" e pintado a mao em PintarChipsDeSabor
-            var chip = new Button
-            {
-                Content = o, Tag = o, MinHeight = 48, FontSize = 15, Padding = new Thickness(14, 6, 14, 6),
-                Margin = new Thickness(0, 0, 8, 8), Style = (Style)Application.Current.Resources["BotaoBase"],
-            };
-            chip.Click += (_, _) => { _escolhidos = ResgateManual.Tocar(cod, _escolhidos, o).ToList(); PintarChipsDeSabor(); Habilitar(); };
+            var chip = ChipDeSabor(o, comSelo: cod.Escolhas >= 2);
+            chip.Click += (_, _) => { _escolhidos = ResgateManual.Tocar(cod, _escolhidos, o).ToList(); PintarChipsDeSabor(cod); Habilitar(); };
             _sabores.Children.Add(chip);
         }
-        _txtApoioSabor.Text = ResgateManual.LinhaDeApoioDosSabores(cod);
         _blocoSabor.Visibility = Visibility.Visible;
-        PintarChipsDeSabor();
+        PintarChipsDeSabor(cod);
     }
 
-    private void PintarChipsDeSabor()
+    /// <summary>
+    /// Um chip de sabor: um Button (o estilo BotaoBase é de Button) com 40 px de alvo e a fonte dos
+    /// botões pequenos do caixa. O "marcado" é pintado em <see cref="PintarChipsDeSabor"/> SÓ POR
+    /// COR: nada aqui muda de tamanho ao tocar. Com duas escolhas o chip já nasce com o selo da
+    /// quantidade, escondido mas ocupando o lugar (Hidden, não Collapsed), para a largura ser a
+    /// mesma com 0, 1 ou 2.
+    /// </summary>
+    private Button ChipDeSabor(string sabor, bool comSelo)
+    {
+        var chip = new Button
+        {
+            Tag = sabor, MinHeight = 40, FontSize = 14, Padding = new Thickness(12, 4, 12, 4),
+            Margin = new Thickness(0, 0, 6, 6), Style = (Style)Application.Current.Resources["BotaoBase"],
+        };
+        if (!comSelo)
+        {
+            chip.Content = sabor;
+            return chip;
+        }
+        var linha = new StackPanel { Orientation = Orientation.Horizontal };
+        linha.Children.Add(new TextBlock { Text = sabor, VerticalAlignment = VerticalAlignment.Center });
+        linha.Children.Add(new Border
+        {
+            Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Margin = new Thickness(8, 0, 0, 0),
+            Background = R("Painel"), BorderBrush = R("Marca"), BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Hidden,
+            Child = new TextBlock
+            {
+                Text = "2", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = R("Marca"),
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            },
+        });
+        chip.Content = linha;
+        return chip;
+    }
+
+    private void PintarChipsDeSabor(CodigoConferido cod)
     {
         foreach (var chip in _sabores.Children.OfType<Button>())
         {
             var n = _escolhidos.Count(x => x == (string)chip.Tag);
-            chip.Content = n > 1 ? $"{chip.Tag} x{n}" : (string)chip.Tag;
             chip.Background = n > 0 ? R("RosaDegrade") : R("PainelAlto");
-            chip.FontWeight = n > 0 ? FontWeights.Bold : FontWeights.Normal;
+            chip.Foreground = n > 0 ? R("SobreMarca") : R("Texto");
             chip.BorderBrush = n > 0 ? R("Marca") : R("Borda");
+            if (chip.Content is StackPanel linha && linha.Children.Count == 2 && linha.Children[1] is Border selo)
+            {
+                selo.Visibility = n > 1 ? Visibility.Visible : Visibility.Hidden;
+                if (selo.Child is TextBlock t) t.Text = n.ToString();
+            }
         }
+        _txtApoioSabor.Text = ResgateManual.LinhaDeApoioDosSabores(cod, _escolhidos);
     }
 
     /// <summary>O pedido escolhido (nulo = balcão); nulo com <c>escolheu</c> falso quando nada está marcado.</summary>
@@ -401,6 +444,27 @@ public sealed class ResgateRaspadinha
         if (_conferencia is null || _conferencia.Pedidos.Count == 0) _blocoDestino.Visibility = Visibility.Collapsed;
         Mostrar("", "fraco");
         Habilitar();
+    }
+
+    /// <summary>
+    /// O rodapé é remontado com os botões VISÍVEIS, na ordem Voltar/Fechar, Abrir e colar, Resgatar,
+    /// Desfazer, cada um numa coluna igual: antes do resgate "Voltar | Resgatar", depois
+    /// "Fechar | Desfazer" (com "Abrir e colar" no meio quando há texto para colar), e desfeito só o
+    /// Fechar na largura toda. Na primeira versão os botões tinham lugar fixo numa grade de duas
+    /// colunas e, depois do resgate, sobravam duas metades vazias.
+    /// </summary>
+    private void PintarRodape()
+    {
+        _rodape.Children.Clear();
+        _rodape.ColumnDefinitions.Clear();
+        var visiveis = new[] { _btnVoltar, _btnColar, _btnResgatar, _btnDesfazer }.Where(b => b.Visibility == Visibility.Visible).ToList();
+        for (var i = 0; i < visiveis.Count; i++)
+        {
+            _rodape.ColumnDefinitions.Add(new ColumnDefinition());
+            visiveis[i].Margin = new Thickness(i == 0 ? 0 : 6, 0, i == visiveis.Count - 1 ? 0 : 6, 0);
+            Grid.SetColumn(visiveis[i], i);
+            _rodape.Children.Add(visiveis[i]);
+        }
     }
 
     // ── [RESGATAR] ───────────────────────────────────────────────────────────
@@ -452,6 +516,7 @@ public sealed class ResgateRaspadinha
         _btnVoltar.Content = "Fechar";
         _btnDesfazer.Visibility = Visibility.Visible;
         _btnColar.Visibility = temTexto && _orderIdResgatado is not null ? Visibility.Visible : Visibility.Collapsed;
+        PintarRodape();
         _txtCodigo.IsReadOnly = true;
         _btnConferir.IsEnabled = false;
         foreach (var rb in _destinos.Children.OfType<RadioButton>()) rb.IsEnabled = false;
@@ -485,6 +550,7 @@ public sealed class ResgateRaspadinha
         if (!d.Ok) return;
         _btnDesfazer.Visibility = Visibility.Collapsed;
         _btnColar.Visibility = Visibility.Collapsed;
+        PintarRodape();
         Desfeito?.Invoke(bonus);
     }
 
@@ -518,6 +584,9 @@ public sealed class ResgateRaspadinha
     {
         _txtLinha.Text = ResgateManual.Limpa(texto);
         _txtLinha.Foreground = tom switch { "ok" => R("Ok"), "erro" => R("Erro"), _ => R("TextoFraco") };
+        // a linha mora no cabeçalho fixo, fora da rolagem; isto é a garantia de que o resultado
+        // continua aparecendo na hora se um dia ela voltar para dentro de uma
+        _txtLinha.BringIntoView();
     }
 
     private static void Diag(string linha)
@@ -525,10 +594,17 @@ public sealed class ResgateRaspadinha
         try { HospedeWebView2.Anotar("chat-conversa.txt", linha, TimeSpan.Zero); } catch { }
     }
 
+    /// <summary>A tela onde a janela abre: a área de trabalho, ou a janela dona se ela for menor (o caixa é a janela cheia).</summary>
     private static double AlturaDaTela(Window dono)
     {
         var area = SystemParameters.WorkArea.Height;
         return dono.ActualHeight > 0 ? Math.Min(area, dono.ActualHeight) : area;
+    }
+
+    private static double LarguraDaTela(Window dono)
+    {
+        var area = SystemParameters.WorkArea.Width;
+        return dono.ActualWidth > 0 ? Math.Min(area, dono.ActualWidth) : area;
     }
 
     private static TextBlock Texto(string texto, double tamanho, string cor) => new()

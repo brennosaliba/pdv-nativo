@@ -69,6 +69,19 @@ public static class TestesResgateManual
          "pedidos":[],"pedido_informado":null,"candidatos":[]}
         """;
     private const string ConferirDesligado = """{"ok":true,"ligado":false,"modo":"automatico","chat_ativo":true,"codigo":null,"pedidos":[],"pedido_informado":null,"candidatos":[]}""";
+    /// <summary>O pior caso da janela a 1024x768: o donut super premium com as 15 opcoes do SQL 156, dois pedidos abertos e os candidatos.</summary>
+    private const string ConferirDonut15 = """
+        {"ok":true,"ligado":true,"modo":"automatico","chat_ativo":true,
+         "codigo":{"codigo":"AD-DN15XX","scratch_id":"s3","slug":"donut_super_premium","premio":"1 Donut Super Premium","nome_curto":"Donut Super Premium","emoji":"🍩",
+                   "vence_em":"2026-10-22T23:59:59-03:00","motivo":"ok","cliente_nome":"RENATA ALVES","escolhas":1,"repete":false,
+                   "opcoes":["Calabresa","4 Queijos","Bueno","Nutelludo","Morango com Ninho","Ninho com Nutella","Rocher","Morango com Nutella","Banoffee","Boston Cream","Churros","Homer","Ovomaltine","Red Velvet","Brigadeiro Gourmet"],
+                   "padrao":"","tem_catalogo":true,"itens_fixos":[]},
+         "frase":null,
+         "pedidos":[{"ifood_order_id":"3f2a0000-0000-4000-8000-000000000001","numero":"2607","cliente":"Renata Alves","entrega_status":"pronto","recebido_em":"2026-10-08T19:12:00-03:00","sugerido":true,"premio_codigo":null,"conversa_estado":"humano"},
+                    {"ifood_order_id":"3f2a0000-0000-4000-8000-000000000002","numero":"2611","cliente":"Paola Martins","entrega_status":null,"recebido_em":"2026-10-08T19:31:00-03:00","sugerido":false,"premio_codigo":null,"conversa_estado":null}],
+         "pedido_informado":{"ifood_order_id":"3f2a0000-0000-4000-8000-000000000001","numero":"2607","cliente":"Renata Alves","entrega_status":"pronto","saiu":false,"cancelado":false},
+         "candidatos":["AD-DN15XX","AD-7KQ2MX"]}
+        """;
     private static string ConferirRecusa(string motivo, string extra = "") =>
         "{\"ok\":true,\"ligado\":true,\"modo\":\"automatico\",\"chat_ativo\":true,\"codigo\":{\"codigo\":\"AD-RB684S\",\"motivo\":\"" + motivo + "\"," +
         "\"escolhas\":0,\"repete\":false,\"opcoes\":[],\"padrao\":\"\",\"tem_catalogo\":false,\"itens_fixos\":[]" + extra + "},\"frase\":null,\"pedidos\":[],\"pedido_informado\":null,\"candidatos\":[]}";
@@ -238,6 +251,18 @@ public static class TestesResgateManual
         checar(ResgateManual.LinhaDeApoioDosSabores(um) == "Escolha 1 sabor." && ResgateManual.LinhaDeApoioDosSabores(dois) == "Escolha 2 sabores. Pode repetir."
                && ResgateManual.LinhaDeApoioDosSabores(sem) == "",
             "SB-7 a linha de apoio dos sabores");
+        // revisao 08/10 (fotos): o chip nao pode mudar de largura ao tocar, entao o " x2" saiu do texto do
+        // chip; quem diz a escolha (e o repetido) e a linha de apoio
+        checar(ResgateManual.LinhaDeApoioDosSabores(um, new[] { "New York" }) == "Escolha 1 sabor: New York."
+               && ResgateManual.LinhaDeApoioDosSabores(dois, new[] { "Triplo" }) == "Escolha 2 sabores: Triplo e mais 1."
+               && ResgateManual.LinhaDeApoioDosSabores(dois, new[] { "Triplo", "Triplo" }) == "Escolha 2 sabores: Triplo e Triplo."
+               && ResgateManual.LinhaDeApoioDosSabores(dois, new[] { "New York", "Triplo" }) == "Escolha 2 sabores: New York e Triplo."
+               && ResgateManual.LinhaDeApoioDosSabores(sem, new[] { "x" }) == "",
+            "SB-8 a linha de apoio repete o que esta marcado e o que falta (e ela que mostra o sabor repetido, nao o chip)");
+        checar(ResgateManual.LarguraDaJanela(1024) == 920 && ResgateManual.LarguraDaJanela(1366) == 920 && ResgateManual.LarguraDaJanela(1920) == 920
+               && ResgateManual.LarguraDaJanela(1000) == 900 && ResgateManual.LarguraDaJanela(600) == 560 && ResgateManual.LarguraDaJanela(double.NaN) == 560
+               && ResgateManual.AlturaMaximaDaJanela(768) == 768 * 0.92 && ResgateManual.AlturaMaximaDaJanela(0) == 400 && ResgateManual.AlturaMaximaDaJanela(300) == 400,
+            "SB-9 a regua da janela: 90% da largura da tela entre 560 e 920 (920 a 1024) e 92% da altura, nunca menos que 400");
     }
 
     // ── OS TEXTOS ────────────────────────────────────────────────────────────
@@ -444,7 +469,7 @@ public static class TestesResgateManual
 
         var txt = Campo<TextBox>(tela, "_txtCodigo");
         var btnResgatar = Campo<Button>(tela, "_btnResgatar");
-        var destinos = Campo<StackPanel>(tela, "_destinos");
+        var destinos = Campo<WrapPanel>(tela, "_destinos");
         var sabores = Campo<WrapPanel>(tela, "_sabores");
         var chips = Campo<WrapPanel>(tela, "_chips");
         var chk = Campo<CheckBox>(tela, "_chkAvisar");
@@ -458,8 +483,9 @@ public static class TestesResgateManual
         checar(chips.Children.OfType<Button>().Select(b => (string)b.Content).SequenceEqual(new[] { "AD-RB684S", "AD-7KQ2MX" }) && !btnResgatar.IsEnabled
                && destinos.Children.OfType<RadioButton>().Count() == 2 && sabores.Children.Count == 0 && txt.Text == "",
             "JN-2 os codigos vivos da conversa aparecem como chips e os pedidos ja aparecem; sem codigo nao ha sabor e o Resgatar fica desabilitado");
-        checar(janela.ActualWidth <= 1024 && janela.ActualHeight <= 768 * 0.92 + 1,
-            $"JN-3 a janela cabe em 1024x768 ({janela.ActualWidth:0}x{janela.ActualHeight:0})");
+        checar(janela.ActualWidth <= ResgateManual.LarguraDaJanela(1024) + 1 && janela.ActualWidth >= ResgateManual.LarguraDaJanela(1024) - 1
+               && janela.ActualHeight <= 768 * 0.92 + 1,
+            $"JN-3 a janela cabe em 1024x768 e usa os 920 px da regua ({janela.ActualWidth:0}x{janela.ActualHeight:0})");
 
         // digita um codigo que nao existe: a linha diz e nada mais aparece
         txt.Text = "AD-ZZZZZZ";
@@ -478,10 +504,31 @@ public static class TestesResgateManual
             "JN-5 o premio na linha; o pedido sugerido ja marcado; o que ja tem premio cinza; o balcao por ultimo");
         checar(sabores.Children.Count == 3 && !btnResgatar.IsEnabled && chk.Visibility == Visibility.Visible && chk.IsChecked == true,
             "JN-6 os chips de sabor; sem sabor o Resgatar segue desabilitado; 'Avisar o cliente no chat' marcado");
+        // revisao 08/10 (fotos a 1024x768): o codigo e a linha do resultado moram no cabecalho FIXO e o rodape
+        // fora da rolagem; so destinos, sabores e avisar rolam, e com este premio nada precisa rolar
+        janela.UpdateLayout();
+        // o ScrollViewer do MIOLO pelo campo: o primeiro da arvore visual e o de dentro do TextBox do codigo
+        var rolagem = Campo<ScrollViewer>(tela, "_rolagem");
+        var rodape = Campo<Grid>(tela, "_rodape");
+        var txtLinha = Campo<TextBlock>(tela, "_txtLinha");
+        checar(!DentroDeRolagem(txt) && !DentroDeRolagem(txtLinha) && !DentroDeRolagem(chips) && !DentroDeRolagem(rodape)
+               && DentroDeRolagem(destinos) && DentroDeRolagem(sabores) && DentroDeRolagem(chk),
+            "JN-6b o codigo, os codigos da conversa, a linha do resultado e o rodape ficam FORA da rolagem; destinos, sabores e avisar dentro");
+        checar(rolagem.ScrollableHeight == 0 && rodape.Children.Count == 2 && rodape.ColumnDefinitions.Count == 2
+               && rodape.Children[0] == Campo<Button>(tela, "_btnVoltar") && rodape.Children[1] == btnResgatar,
+            $"JN-6c a 1024x768 nada precisa rolar (sobra {rolagem.ScrollableHeight:0} px) e o rodape e Voltar | Resgatar");
         var chipNy = sabores.Children.OfType<Button>().First(c => (string)c.Tag == "New York");
+        var posAntes = sabores.Children.OfType<Button>().Select(b => b.TranslatePoint(new Point(0, 0), sabores)).ToList();
+        var larguraAntes = chipNy.ActualWidth;
         chipNy.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-        checar(btnResgatar.IsEnabled && Campo<List<string>>(tela, "_escolhidos").SequenceEqual(new[] { "New York" }) && chipNy.FontWeight == FontWeights.Bold,
-            "JN-7 com o sabor escolhido o Resgatar habilita e o chip fica marcado");
+        janela.UpdateLayout();
+        var posDepois = sabores.Children.OfType<Button>().Select(b => b.TranslatePoint(new Point(0, 0), sabores)).ToList();
+        checar(btnResgatar.IsEnabled && Campo<List<string>>(tela, "_escolhidos").SequenceEqual(new[] { "New York" })
+               && chipNy.Background == (Brush)Application.Current.Resources["RosaDegrade"] && chipNy.FontWeight != FontWeights.Bold && chipNy.Content is string,
+            "JN-7 com o sabor escolhido o Resgatar habilita e o chip fica rosa (so cor: sem negrito, sem texto a mais)");
+        checar(Math.Abs(chipNy.ActualWidth - larguraAntes) < 0.5 && posAntes.Zip(posDepois).All(p => (p.First - p.Second).Length < 0.5)
+               && Campo<TextBlock>(tela, "_txtApoioSabor").Text == "Escolha 1 sabor: New York.",
+            $"JN-7b marcar nao muda a largura do chip ({larguraAntes:0} -> {chipNy.ActualWidth:0}) nem o lugar de nenhum; a linha de apoio repete a escolha");
         radios[2].IsChecked = true;
         checar(chk.Visibility == Visibility.Collapsed && btnResgatar.IsEnabled, "JN-8 no balcao nao se avisa o cliente");
         radios[0].IsChecked = true;
@@ -497,6 +544,10 @@ public static class TestesResgateManual
         checar(executadas == 1 && tela.BonusId == BONUS && tela.Linha == "Resgatado. A comanda saiu." && !btnResgatar.IsVisible
                && btnDesfazer.Visibility == Visibility.Visible && txt.IsReadOnly,
             $"JN-11 a resposta e executada pelo servico e a linha diz que a comanda saiu; sobra o Desfazer ({tela.Linha})");
+        janela.UpdateLayout();
+        checar(rodape.Children.Count == 2 && rodape.ColumnDefinitions.Count == 2 && (string)Campo<Button>(tela, "_btnVoltar").Content == "Fechar"
+               && rodape.Children[1] == btnDesfazer && !DentroDeRolagem(txtLinha) && rolagem.VerticalOffset == 0 && txtLinha.IsVisible,
+            "JN-11b depois do resgate o rodape e Fechar | Desfazer, sem buraco, e a linha do resultado esta a vista sem rolar");
 
         // desfaz: pede o codigo do dono e manda resgate_desfazer com ele
         await tela.DesfazerAsync();
@@ -505,6 +556,8 @@ public static class TestesResgateManual
                && (string)des["terminal_uuid"]! == "a0420449-0000-4000-8000-000000000001" && (string)des["operador"]! == "Ingrid"
                && tela.Linha == "Resgate desfeito. O código volta a valer." && btnDesfazer.Visibility == Visibility.Collapsed,
             "JN-12 o Desfazer pede o codigo do dono, manda resgate_desfazer e mostra a linha");
+        checar(rodape.Children.Count == 1 && rodape.ColumnDefinitions.Count == 1 && rodape.Children[0] == Campo<Button>(tela, "_btnVoltar"),
+            "JN-12b desfeito, sobra so o Fechar, na largura toda");
 
         // Esc fecha
         var fonte = PresentationSource.FromVisual(janela);
@@ -531,7 +584,7 @@ public static class TestesResgateManual
         await Task.Delay(50);
         await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
         var sab2 = Campo<WrapPanel>(tela2, "_sabores").Children.OfType<Button>().ToList();
-        var dest2 = Campo<StackPanel>(tela2, "_destinos").Children.OfType<RadioButton>().ToList();
+        var dest2 = Campo<WrapPanel>(tela2, "_destinos").Children.OfType<RadioButton>().ToList();
         var btn2 = Campo<Button>(tela2, "_btnResgatar");
         checar(sab2.Count == 3 && Campo<List<string>>(tela2, "_escolhidos").SequenceEqual(new[] { "Coca-Cola" }) && dest2.Count == 1 && dest2[0].IsChecked == true
                && btn2.IsEnabled && Campo<CheckBox>(tela2, "_chkAvisar").Visibility == Visibility.Collapsed,
@@ -576,6 +629,62 @@ public static class TestesResgateManual
                && Campo<Button>(tela3, "_btnDesfazer").Visibility == Visibility.Visible,
             $"JN-17 a segunda chamada e a MESMA (codigo, operador, destino) e a resposta repetida=true e executada como um resgate normal ({tela3.Linha})");
         j3.Close();
+
+        // revisao 08/10 (fotos): o PIOR CASO a 1024x768. O donut super premium com as 15 opcoes do SQL 156, dois
+        // pedidos abertos e o balcao: tudo a vista sem rolar, chips com 40 px de alvo, e marcar um nao mexe nos outros
+        var tela4 = new Pdv.Telas.ResgateRaspadinha(host, (_, _) => Task.FromResult<(int, string?)>((200, ConferirDonut15)), "Ingrid", null,
+            "AD-DN15XX", OID, "2607", chatAtivo: true, Executar);
+        var j4 = tela4.Janela;
+        j4.Left = -20000; j4.Top = -20000; j4.ShowActivated = false; j4.Opacity = 0;
+        j4.Show();
+        await Task.Delay(50);
+        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+        j4.UpdateLayout();
+        var sab4 = Campo<WrapPanel>(tela4, "_sabores");
+        var rol4 = Campo<ScrollViewer>(tela4, "_rolagem");
+        var chips4 = sab4.Children.OfType<Button>().ToList();
+        var chk4 = Campo<CheckBox>(tela4, "_chkAvisar");
+        double FundoEm(FrameworkElement e) => e.TranslatePoint(new Point(0, e.ActualHeight), rol4).Y;
+        checar(chips4.Count == 15 && Campo<WrapPanel>(tela4, "_destinos").Children.OfType<RadioButton>().Count() == 3
+               && j4.ActualWidth <= ResgateManual.LarguraDaJanela(1024) + 1 && j4.ActualHeight <= 768 * 0.92 + 1 && rol4.ScrollableHeight == 0
+               && chips4.All(c => FundoEm(c) <= rol4.ViewportHeight + 0.5) && chk4.Visibility == Visibility.Visible && FundoEm(chk4) <= rol4.ViewportHeight + 0.5,
+            $"JN-18 o pior caso a 1024x768: 15 chips do donut, 2 pedidos e o balcao e o avisar, tudo a vista sem rolar (janela {j4.ActualWidth:0}x{j4.ActualHeight:0}, sobra {rol4.ScrollableHeight:0} px)");
+        var linhas4 = chips4.Select(c => Math.Round(c.TranslatePoint(new Point(0, 0), sab4).Y)).Distinct().Count();
+        var pos4 = chips4.Select(b => b.TranslatePoint(new Point(0, 0), sab4)).ToList();
+        chips4.First(c => (string)c.Tag == "Brigadeiro Gourmet").RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        j4.UpdateLayout();
+        checar(linhas4 <= 3 && chips4.Select(b => b.TranslatePoint(new Point(0, 0), sab4)).Zip(pos4).All(p => (p.First - p.Second).Length < 0.5)
+               && chips4.All(c => c.ActualHeight >= 40) && Campo<Button>(tela4, "_btnResgatar").IsEnabled,
+            $"JN-19 os 15 chips em ate 3 fileiras ({linhas4}), com 40 px de alvo; marcar o mais largo nao move nenhum");
+        j4.Close();
+
+        // a caixa com 2: o mesmo sabor duas vezes aparece no selo do chip (largura fixa) e na linha de apoio, nunca no texto do chip
+        var tela5 = new Pdv.Telas.ResgateRaspadinha(host, (_, _) => Task.FromResult<(int, string?)>((200, ConferirCaixa2)), "Ingrid", null,
+            "AD-CX2001", null, null, chatAtivo: false, Executar);
+        var j5 = tela5.Janela;
+        j5.Left = -20000; j5.Top = -20000; j5.ShowActivated = false; j5.Opacity = 0;
+        j5.Show();
+        await Task.Delay(50);
+        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+        j5.UpdateLayout();
+        var triplo = Campo<WrapPanel>(tela5, "_sabores").Children.OfType<Button>().First(c => (string)c.Tag == "Triplo");
+        var larg5 = triplo.ActualWidth;
+        static string TextoDoChip(Button b) => b.Content is StackPanel sp && sp.Children[0] is TextBlock t ? t.Text : b.Content as string ?? "";
+        static Border? Selo(Button b) => b.Content is StackPanel sp && sp.Children.Count > 1 ? sp.Children[1] as Border : null;
+        triplo.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        triplo.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        j5.UpdateLayout();
+        var apoio5 = Campo<TextBlock>(tela5, "_txtApoioSabor").Text;
+        checar(Campo<List<string>>(tela5, "_escolhidos").SequenceEqual(new[] { "Triplo", "Triplo" }) && TextoDoChip(triplo) == "Triplo"
+               && Selo(triplo) is { Visibility: Visibility.Visible } s5 && (s5.Child as TextBlock)?.Text == "2"
+               && Math.Abs(triplo.ActualWidth - larg5) < 0.5 && apoio5 == "Escolha 2 sabores: Triplo e Triplo." && Campo<Button>(tela5, "_btnResgatar").IsEnabled,
+            $"JN-20 caixa de 2: Triplo duas vezes vira o selo '2' no chip sem mudar a largura, e a linha de apoio diz 'Triplo e Triplo' ({apoio5})");
+        triplo.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+        j5.UpdateLayout();
+        checar(Selo(triplo) is { Visibility: Visibility.Hidden } && Campo<TextBlock>(tela5, "_txtApoioSabor").Text == "Escolha 2 sabores: Triplo e mais 1."
+               && Math.Abs(triplo.ActualWidth - larg5) < 0.5 && !Campo<Button>(tela5, "_btnResgatar").IsEnabled,
+            "JN-21 o terceiro toque tira um: o selo some mas segura o lugar, e a linha de apoio pede mais 1");
+        j5.Close();
         host.Close();
     }
 
@@ -767,6 +876,14 @@ public static class TestesResgateManual
             yield return c;
             foreach (var n in Descendentes(c)) yield return n;
         }
+    }
+
+    /// <summary>O elemento esta dentro de um ScrollViewer (pode sair de vista ao rolar)?</summary>
+    private static bool DentroDeRolagem(DependencyObject o)
+    {
+        for (var p = VisualTreeHelper.GetParent(o); p is not null; p = VisualTreeHelper.GetParent(p))
+            if (p is ScrollViewer) return true;
+        return false;
     }
 
     private static string? Raiz()

@@ -316,12 +316,48 @@ public static class ResgateManual
         return lista;
     }
 
-    public static string LinhaDeApoioDosSabores(CodigoConferido c) => c.Escolhas switch
+    /// <summary>
+    /// A linha de apoio dos sabores. Sem nada marcado: "Escolha 1 sabor." / "Escolha 2 sabores. Pode
+    /// repetir.". Com escolha: "Escolha 1 sabor: New York." / "Escolha 2 sabores: Triplo e Triplo." /
+    /// "Escolha 2 sabores: Triplo e mais 1.". É ela, e não o texto do chip, que diz o sabor repetido:
+    /// o chip não pode mudar de largura ao tocar (revisão 08/10 pelas fotos).
+    /// </summary>
+    public static string LinhaDeApoioDosSabores(CodigoConferido c, IReadOnlyList<string>? escolhidos = null)
     {
-        <= 0 => "",
-        1 => "Escolha 1 sabor.",
-        _ => c.Repete ? $"Escolha {c.Escolhas} sabores. Pode repetir." : $"Escolha {c.Escolhas} sabores.",
-    };
+        if (c.Escolhas <= 0) return "";
+        var e = (escolhidos ?? Array.Empty<string>()).Where(s => !string.IsNullOrWhiteSpace(s)).Take(c.Escolhas).ToList();
+        var pede = c.Escolhas == 1 ? "Escolha 1 sabor" : $"Escolha {c.Escolhas} sabores";
+        if (e.Count == 0) return pede + (c.Escolhas > 1 && c.Repete ? ". Pode repetir." : ".");
+        var faltam = c.Escolhas - e.Count;
+        return Limpa($"{pede}: {string.Join(" e ", e)}" + (faltam > 0 ? $" e mais {faltam}." : "."));
+    }
+
+    // ── A JANELA: as medidas (puro) ──────────────────────────────────────────
+
+    /// <summary>A janela de resgate tem no maximo esta largura: 90% de 1024 da 920 (a tela do caixa da Savassi).</summary>
+    public const int LarguraMaximaJanela = 920;
+    /// <summary>Abaixo disto a janela nao encolhe (era a largura unica da primeira versao).</summary>
+    public const int LarguraMinimaJanela = 560;
+    /// <summary>Abaixo disto a janela nao encolhe em altura: o rodape tem de ficar a vista.</summary>
+    public const double AlturaMinimaJanela = 400;
+
+    /// <summary>
+    /// A largura da janela numa tela de <paramref name="larguraTela"/>: 90% da tela, entre 560 e 920.
+    /// Revisao 08/10 (fotos em docs/resgate-fotos): com 560 os 11 chips do cookie super premium nao
+    /// cabiam a 1024x768 sem rolar, e os 15 do donut menos ainda. Com 920 cabem em ate tres fileiras.
+    /// </summary>
+    public static int LarguraDaJanela(double larguraTela)
+    {
+        if (double.IsNaN(larguraTela) || larguraTela <= 0) return LarguraMinimaJanela;
+        return (int)Math.Max(LarguraMinimaJanela, Math.Min(LarguraMaximaJanela, Math.Floor(larguraTela * 0.9)));
+    }
+
+    /// <summary>O teto de altura da janela: 92% da tela, nunca menos que 400.</summary>
+    public static double AlturaMaximaDaJanela(double alturaTela)
+    {
+        if (double.IsNaN(alturaTela) || alturaTela <= 0) return AlturaMinimaJanela;
+        return Math.Max(AlturaMinimaJanela, alturaTela * 0.92);
+    }
 
     // ── OS TEXTOS DA TELA (puro, uma linha, sem travessao) ───────────────────
 

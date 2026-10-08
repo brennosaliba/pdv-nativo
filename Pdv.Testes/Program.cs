@@ -157,6 +157,13 @@ if (args.Length >= 2 && args[0] == "--foto-etiqueta")
 if (args.Length >= 4 && args[0] == "--foto-codigo")
     return FotoCodigo.Rodar(args);
 
+// Modo FOTO da janela de resgate manual da raspadinha (ver Pdv.Testes/FotoResgate.cs). Servidor
+// de mentira com dados de exemplo e banco temporario proprio: nao encosta no caixa. Grava
+// resgate-<momento>-<largura>.png nos tres tamanhos da rede (1024x768, 1366x768, 1920x1080).
+//   Pdv.Testes.exe --foto-resgate docs/resgate-fotos [claro|escuro]
+if (args.Length >= 2 && args[0] == "--foto-resgate")
+    return FotoResgate.Rodar(args);
+
 // Mostra na tela os papeis de abertura e de fechamento do caixa, do jeito que eles
 // saem na bobina, com a regua de colunas em cima. Serve para conferir o desenho sem
 // gastar papel e sem precisar de impressora.
