@@ -439,10 +439,16 @@ public static class ServicoConversaChat
         await RelatarAsync(s.Id, "falhou", erro ?? "erro_envio", null, s).ConfigureAwait(false);
     }
 
-    /// <summary>1.0.25: o SDK esta frio? Achou a instancia, tinha canais para conferir e nao achou nenhum.</summary>
-    public static bool SdkFrio(JsonObject? sdk, int canaisParaConferir)
+    /// <summary>
+    /// 1.0.25: o SDK esta frio? Achou a instancia e nao conferiu canal nenhum, tendo canais para
+    /// conferir, ou com o Gestor logado e nenhum canal de cliente visto ainda (17:51 de 08/10: a
+    /// Savassi com o Gestor logado ha 40 min, instancia achada, conferidos 0, canais_cm_por_merchant
+    /// vazio: a conexao do chat de clientes so nasce quando a gaveta de conversas abre).
+    /// </summary>
+    public static bool SdkFrio(JsonObject? sdk, int canaisParaConferir, bool gestorLogado)
     {
-        if (sdk is null || canaisParaConferir <= 0) return false;
+        if (sdk is null) return false;
+        if (canaisParaConferir <= 0 && !gestorLogado) return false;
         var achou = sdk.TryGetPropertyValue("achou", out var a) && a is JsonValue av && av.TryGetValue<bool>(out var ab) && ab;
         var conferidos = sdk.TryGetPropertyValue("conferidos", out var c) && c is JsonValue cv && cv.TryGetValue<int>(out var ci) ? ci : -1;
         return achou && conferidos == 0;
@@ -528,7 +534,7 @@ public static class ServicoConversaChat
                     _sdkUserId = u.Trim();
                 // 1.0.25: SDK frio (achou a instancia, havia canais para conferir e nenhum foi achado):
                 // abre a lista de conversas no Gestor escondido, no maximo a cada 2 min
-                if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count) && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)
+                if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count, p.Gestor() == "logado") && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)
                 {
                     _ultimoAquecimento = DateTime.Now;
                     var aqueceu = await AquecerAsync(p, null, null).ConfigureAwait(false);

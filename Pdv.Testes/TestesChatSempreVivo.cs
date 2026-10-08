@@ -73,15 +73,18 @@ public static class TestesChatSempreVivo
             var frio = System.Text.Json.Nodes.JsonNode.Parse("{\"achou\":true,\"conferidos\":0,\"canais_cm_por_merchant\":{}}")!.AsObject();
             var quente = System.Text.Json.Nodes.JsonNode.Parse("{\"achou\":true,\"conferidos\":4}")!.AsObject();
             var semSdk = System.Text.Json.Nodes.JsonNode.Parse("{\"achou\":false,\"conferidos\":0}")!.AsObject();
-            checar(ServicoConversaChat.SdkFrio(frio, 3) && !ServicoConversaChat.SdkFrio(quente, 3) && !ServicoConversaChat.SdkFrio(frio, 0)
-                   && !ServicoConversaChat.SdkFrio(semSdk, 3) && !ServicoConversaChat.SdkFrio(null, 3),
-                "CV-11b SdkFrio: achou e conferidos=0 com canais para conferir; quente, sem canais, sem instancia ou sem diagnostico nao e frio");
+            checar(ServicoConversaChat.SdkFrio(frio, 3, false) && ServicoConversaChat.SdkFrio(frio, 0, true) && !ServicoConversaChat.SdkFrio(frio, 0, false)
+                   && !ServicoConversaChat.SdkFrio(quente, 3, true) && !ServicoConversaChat.SdkFrio(semSdk, 3, true) && !ServicoConversaChat.SdkFrio(null, 3, true),
+                "CV-11b SdkFrio: achou e conferidos=0 com canais para conferir, ou com o Gestor logado e nenhum canal visto; quente, sem instancia ou sem diagnostico nao e frio");
             checar(ServicoConversaChat.IntervaloDoAquecimento == TimeSpan.FromMinutes(2)
-                   && servico.Contains("if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count) && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)"),
+                   && servico.Contains("if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count, p.Gestor() == \"logado\") && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)"),
                 "CV-11c o sinal aquece pela lista de conversas no maximo a cada 2 min");
             checar(chat.Contains("public async Task<bool> AquecerConversaAsync(string? numero, string? orderUuid)") && chat.Contains("AquecerConversa = AquecerConversaAsync,")
-                   && chat.Contains("window.pdvAbrirConversas ? window.pdvAbrirConversas() : false") && chat.Contains("window.pdvBuscarConversa ? window.pdvBuscarConversa("),
+                   && chat.Contains("window.pdvAquecerLista ? window.pdvAquecerLista() : 'sem_funcao'") && chat.Contains("window.pdvBuscarConversa ? window.pdvBuscarConversa("),
                 "CV-11d a tela aquece pela lista e pela conversa do pedido, com as funcoes que o Fale com o iFood ja usa");
+            checar(chat.Contains("if (candidato()) return 'aberta';") && chat.Contains("return window.pdvAbrirConversas() ? 'abriu' : 'nao_achou';")
+                   && chat.Contains("if (!comPedido && IsHitTestVisible) {"),
+                "CV-11g a pagina so clica no icone quando a gaveta NAO esta aberta (o clique fecha a gaveta aberta), e o aquecimento automatico nao mexe na pagina com o operador na tela do chat");
             checar(chat.Contains("_ = AquecerDepoisDoInicioAsync(minha);") && chat.Contains("if (minha != _tentativa || !_pronto) return;"),
                 "CV-11e logo depois de o Gestor carregar o caixa aquece uma vez sozinho, e desiste se o controle foi recriado");
             checar(typeof(PonteDoChat).GetProperty("AquecerConversa") is { } pa

@@ -958,23 +958,28 @@ public partial class ChatIfood : UserControl
     {
         if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => AquecerConversaAsync(numero, orderUuid));
         if (!_pronto) return false;
+        var n = AjudaIfood.SoDigitos(numero ?? "");
+        var comPedido = n.Length >= 3 && ChatContagem.NumeroPedidoValido(n);
+        // o aquecimento automatico (sem pedido) nao mexe na pagina enquanto o operador esta na tela do chat
+        if (!comPedido && IsHitTestVisible) { DiagRaspadinha("aquecer: operador na tela do chat, nao mexo"); return false; }
         try
         {
             var core = Web.CoreWebView2;
             if (core is null) return false;
-            var abriu = await core.ExecuteScriptAsync("window.pdvAbrirConversas ? window.pdvAbrirConversas() : false");
-            var n = AjudaIfood.SoDigitos(numero ?? "");
-            if (abriu == "true" && n.Length >= 3 && ChatContagem.NumeroPedidoValido(n))
+            // 'aberta' (a gaveta ja estava aberta: nao clica), 'abriu', 'nao_achou', 'erro' ou 'sem_funcao'
+            var lista = (await core.ExecuteScriptAsync("window.pdvAquecerLista ? window.pdvAquecerLista() : 'sem_funcao'")).Trim('"');
+            var ok = lista is "aberta" or "abriu";
+            if (ok && comPedido)
             {
-                await Task.Delay(1500);   // a lista leva um instante para aparecer
+                if (lista == "abriu") await Task.Delay(1500);   // a lista leva um instante para aparecer
                 if (Web.CoreWebView2 is not { } core2) return false;
                 var arg = JsonSerializer.Serialize(n);
                 var achou = await core2.ExecuteScriptAsync($"window.pdvBuscarConversa ? window.pdvBuscarConversa({arg}) : false");
-                DiagRaspadinha($"aquecer: lista={abriu} conversa #{n}={achou}");
+                DiagRaspadinha($"aquecer: lista={lista} conversa #{n}={achou}");
                 return true;
             }
-            DiagRaspadinha($"aquecer: lista={abriu}");
-            return abriu == "true";
+            DiagRaspadinha($"aquecer: lista={lista}");
+            return ok;
         }
         catch (Exception ex) { DiagRaspadinha("aquecer: " + ex.GetType().Name); return false; }
     }
@@ -1507,6 +1512,16 @@ public partial class ChatIfood : UserControl
           var b = botaoAtendimento(); if (!b) return false;
           b.click(); return true;
         } catch (e) { return false; }
+      };
+
+      // 1.0.25: o AQUECIMENTO do SDK (o caixa abre a lista de conversas sozinho). So clica no
+      // icone quando a gaveta de conversas NAO esta aberta: o mesmo clique FECHA a gaveta
+      // aberta, e isso esfriaria o SDK de novo na tentativa seguinte.
+      window.pdvAquecerLista = function () {
+        try {
+          if (candidato()) return 'aberta';
+          return window.pdvAbrirConversas() ? 'abriu' : 'nao_achou';
+        } catch (e) { return 'erro'; }
       };
 
       // O X DA GAVETA (04/09, pedido do dono). O holofote esconde os IRMÃOS da
