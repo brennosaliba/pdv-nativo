@@ -42,7 +42,9 @@ public static class ConfigLojaPainel
         string? PlaylistUri, string? PlaylistNome, string? DeviceId, string? DeviceNome, int? Volume,
         bool? RaspadinhaNoCaixa = null,
         /// <summary>22/09/2026: capturar o código da raspadinha no chat do iFood.</summary>
-        bool? RaspadinhaNoChat = null);
+        bool? RaspadinhaNoChat = null,
+        /// <summary>08/10/2026 (SQL 154): a tela de resgate manual da raspadinha dentro do PDV.</summary>
+        bool? RaspadinhaResgatePdv = null);
 
     /// <summary>O JSON da RPC (array) em linhas; JSON estranho = lista vazia, nunca exceção.</summary>
     public static IReadOnlyList<Linha> Ler(string? json)
@@ -70,7 +72,7 @@ public static class ConfigLojaPainel
                     DateTimeStyles.RoundtripKind, out var d) ? d.ToLocalTime() : null;
                 saida.Add(new Linha(store, S("chat_respostas"), S("admin_pin_hash"), S("admin_pin_salt"), em,
                     S("playlist_uri"), S("playlist_nome"), S("device_id"), S("device_nome"), I("volume"),
-                    B("raspadinha_no_caixa"), B("raspadinha_no_chat")));
+                    B("raspadinha_no_caixa"), B("raspadinha_no_chat"), B("raspadinha_resgate_pdv")));
             }
         }
         catch { /* JSON ilegível: nada a aplicar */ }
@@ -148,6 +150,12 @@ public static class ConfigLojaPainel
         var chatAntes = Vendas.Config(cx, ChatRaspadinha.ChaveConfigLoja);
         Gravar(cx, ChatRaspadinha.ChaveConfigLoja, l.RaspadinhaNoChat == true ? "1" : null);
         if (chatAntes != Vendas.Config(cx, ChatRaspadinha.ChaveConfigLoja)) mudou.Add("código da raspadinha no chat");
+
+        // RESGATE MANUAL NO PDV (08/10/2026, SQL 154): mesma regra. Campo ausente (servidor sem o
+        // 154) ou falso = desligado: sem a chave nem o cartão, nem o botão do aviso, nem o do KDS.
+        var resgateAntes = Vendas.Config(cx, ResgateManual.ChaveConfigLoja);
+        Gravar(cx, ResgateManual.ChaveConfigLoja, l.RaspadinhaResgatePdv == true ? "1" : null);
+        if (resgateAntes != Vendas.Config(cx, ResgateManual.ChaveConfigLoja)) mudou.Add("resgate da raspadinha no caixa");
 
         return string.Join(", ", mudou);
     }

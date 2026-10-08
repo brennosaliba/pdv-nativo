@@ -542,6 +542,35 @@ public static class Banco
         CREATE INDEX IF NOT EXISTS ix_raspadinha_conversa_pendente
           ON raspadinha_conversa_fala(canal) WHERE estado = 'pendente';
 
+        -- ── BANCO DE CONVERSAS DO CHAT DO iFOOD: O ARQUIVO (08/10/2026, SQL 155) ───
+        -- Uma linha por QUADRO que e mensagem (MESG, BRDM, ADMM, AEDI, FILE), de qualquer lado
+        -- (cliente, loja, ifood, desconhecido). A chave e a MESMA do resgate (sb:<msg_id> ou
+        -- h:<sha256>): o ERP liga a mensagem arquivada ao evento do resgate por (loja, chave).
+        -- Nasce JUNTO com a linha da fila (tipo ifood_chat_lote), na mesma transacao. O texto ja
+        -- entra MASCARADO (ChatArquivo.Mascarar) e SAI quando a linha tem desfecho; a linha inteira
+        -- some em 2 dias (ChatArquivo.Faxina). estado: pendente, enviada, descartada.
+        CREATE TABLE IF NOT EXISTS ifood_chat_arquivo (
+          chave          TEXT PRIMARY KEY,
+          canal          TEXT NOT NULL,
+          ifood_order_id TEXT NOT NULL,
+          merchant_id    TEXT NOT NULL,
+          lado           TEXT NOT NULL,
+          autor_tipo     TEXT,
+          autor_id       TEXT,
+          tipo_quadro    TEXT NOT NULL,
+          custom_type    TEXT,
+          msg_id         TEXT,
+          texto          TEXT,
+          sussurro       INTEGER NOT NULL DEFAULT 0,
+          tem_midia      INTEGER NOT NULL DEFAULT 0,
+          quando         TEXT NOT NULL,
+          estado         TEXT NOT NULL DEFAULT 'pendente',
+          tentativas     INTEGER NOT NULL DEFAULT 0,
+          criado_em      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_ifood_chat_arquivo_pend
+          ON ifood_chat_arquivo(estado, criado_em);
+
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────
         -- Chave/valor em vez de coluna nova em `terminal`: Migrar() só faz CREATE TABLE
         -- IF NOT EXISTS, não tem ALTER nem versionamento. Coluna nova só chegaria em

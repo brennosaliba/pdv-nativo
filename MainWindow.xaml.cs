@@ -389,6 +389,8 @@ public partial class MainWindow : Window
         k.Voltou += () => Conteudo.Content = _telaVenda;
         // "Fale com o iFood" do detalhe: abre a aba do chat já procurando o pedido
         k.PediuAjudaIfood += numero => { MostrarChat(); _ = CamadaChat.FaleComIfoodAsync(numero); };
+        // 154 (08/10): "Raspadinha" do detalhe: a tela de resgate manual abre por cima do quadro, já no pedido
+        k.PediuResgate += (orderId, numero) => _telaVenda?.AbrirResgate(null, orderId, numero);
         Conteudo.Content = k;
     }
 

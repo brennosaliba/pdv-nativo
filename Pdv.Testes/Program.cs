@@ -1980,5 +1980,17 @@ Console.WriteLine();
 Console.WriteLine("--- Aprovacao do dono: o script do SDK no node, contra um runtime falso do webpack 5 ---");
 TestesScriptSendbird.Rodar((cond, nome) => Check("script-sb: " + nome, cond));
 
+// -- 08/10/2026: O BANCO DE CONVERSAS DO CHAT DO iFOOD (caixa 1.0.22, SQL 155) ----------
+// O segundo ouvinte dos quadros do Sendbird arquiva TUDO que e mensagem (cliente, loja, iFood,
+// foto), mascara no balcao, guarda com a fila e manda em lote. Mao unica: o caixa nao le classe.
+Console.WriteLine();
+Console.WriteLine("--- Banco de conversas: o leitor largo, a mascara, o lote, a fila e o tempo ---");
+await TestesChatArquivo.RodarAsync((cond, nome) => Check("chat-arquivo: " + nome, cond));
+
+// -- 08/10/2026: RESGATE MANUAL DA RASPADINHA DENTRO DO PDV (caixa 1.0.22, SQL 154) ------
+Console.WriteLine();
+Console.WriteLine("--- Resgate manual da raspadinha: a chave da loja, a tela, o servico e os textos ---");
+await TestesResgateManual.RodarAsync((cond, nome) => Check("resgate-manual: " + nome, cond));
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

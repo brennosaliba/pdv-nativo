@@ -51,7 +51,9 @@ public sealed class Drenagem : IDisposable
     /// frente do dinheiro.
     /// </summary>
     internal static readonly (string Tipo, int Janela)[] JanelaPropria =
-        { (ChatRaspadinha.TipoNaFila, 5), (EntregadorGestor.TipoNaFila, 3), (ConversaRaspadinha.TipoNaFila, 5) };
+        { (ChatRaspadinha.TipoNaFila, 5), (EntregadorGestor.TipoNaFila, 3), (ConversaRaspadinha.TipoNaFila, 5),
+          // 08/10/2026: o arquivo do chat (banco de conversas) sobe devagar, atras de tudo, 3 por vez
+          (ChatArquivo.TipoNaFila, 3) };
 
     /// <summary>
     /// Quanto tempo um transitório espera antes de desistir, POR TIPO. Sete dias é o orçamento da
@@ -64,6 +66,8 @@ public sealed class Drenagem : IDisposable
         => tipo == ChatRaspadinha.TipoNaFila || tipo == EntregadorGestor.TipoNaFila
            || tipo == ConversaRaspadinha.TipoNaFila
             ? TimeSpan.FromHours(6)
+            // 08/10/2026: o arquivo do chat espera a rede ate 2 dias (depois disso a linha local some)
+            : tipo == ChatArquivo.TipoNaFila ? ChatArquivo.GuardaLocal
             : TimeSpan.FromDays(DiasParaDesistir);
 
     /// <summary>Tamanho da janela principal, a do dinheiro.</summary>
@@ -326,6 +330,11 @@ public sealed class Drenagem : IDisposable
             // numa chamada só; o ERP deduplica pela chave da fala e devolve o mesmo resultado. Loja
             // que desligou o chat novo: as falas saem sem chamada. Ver ConversaRaspadinha.ResolverNaFilaAsync.
             ConversaRaspadinha.TipoNaFila => await ConversaRaspadinha.ResolverNaFilaAsync((string)item.client_key,
+                (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
+            // 08/10/2026: o arquivo do chat (banco de conversas, SQL 155) que ficou sem rede. Manda TODAS
+            // as mensagens pendentes num lote so; o ERP deduplica pela chave. Nada e entregue a ninguem:
+            // e so o que apareceu no chat, ja mascarado. Loja com a captura desligada no ERP: descarta.
+            ChatArquivo.TipoNaFila => await ChatArquivo.ResolverNaFilaAsync((string)item.client_key,
                 (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
@@ -1010,7 +1019,7 @@ public sealed class Drenagem : IDisposable
         { "venda", "venda_composta", "nfce_vinculo", "venda_cancelada", "fechamento",
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
           Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila,
-          EntregadorGestor.TipoNaFila, ConversaRaspadinha.TipoNaFila };
+          EntregadorGestor.TipoNaFila, ConversaRaspadinha.TipoNaFila, ChatArquivo.TipoNaFila };
 
     /// <summary>
     /// HISTORICO (04/09/2026): sobe para pdv_estornos_sem_aprovacao as linhas de estorno

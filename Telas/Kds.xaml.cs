@@ -26,6 +26,8 @@ public partial class Kds : UserControl
     public event Action? Voltou;
     /// <summary>"Fale com o iFood" do detalhe de um pedido do iFood: o número vai para o chat.</summary>
     public event Action<string>? PediuAjudaIfood;
+    /// <summary>154 (08/10): "Raspadinha" do detalhe de um pedido do iFood: o uuid e o número vão para a tela de resgate.</summary>
+    public event Action<string, string>? PediuResgate;
 
     private readonly string _loja;
     private DispatcherTimer? _timer;
@@ -144,12 +146,22 @@ public partial class Kds : UserControl
         Action? ajuda = AjudaIfood.PodePedirAjuda(t.Origem, t.Numero)
             ? () => { FecharDetalhe(); PediuAjudaIfood?.Invoke(t.Numero); }
             : null;
-        var painel = new DetalhePedidoKds(DetalhePedido.De(t, DateTime.Now, complemento), FecharDetalhe, ajuda);
+        // 154: só em pedido do iFood, só com a tela ligada na loja e só com alguém ouvindo (o modo foto não tem)
+        Action? resgatar = t.Origem == "ifood" && PediuResgate is not null && ResgateLigadoNaLoja()
+            ? () => { FecharDetalhe(); PediuResgate?.Invoke(t.RefId, t.Numero); }
+            : null;
+        var painel = new DetalhePedidoKds(DetalhePedido.De(t, DateTime.Now, complemento), FecharDetalhe, ajuda, resgatar);
         PainelDetalhe.Content = painel;
         Veu.Visibility = Visibility.Visible;
         _detalheDe = t.Id;
         painel.FocarFechar();
         if (complemento is null && t.Origem == "ifood") _ = CompletarDetalheAsync(t, painel);
+    }
+
+    private static bool ResgateLigadoNaLoja()
+    {
+        try { using var cx = Banco.Abrir(); return Nucleo.ResgateManual.LigadoNaLoja(cx); }
+        catch { return false; }
     }
 
     /// <summary>Pelo número visível do pedido (é como o modo --foto-kds pede). Falso se não está no quadro.</summary>

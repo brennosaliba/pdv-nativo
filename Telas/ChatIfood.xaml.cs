@@ -660,6 +660,8 @@ public partial class ChatIfood : UserControl
                 // RESGATE PELO CHAT (07/10/2026): o quadro vai para o serviço novo, que só faz algo
                 // com a loja ligada no ERP. O id da loja é o user_id da URL DESTA conexão.
                 ServicoConversaChat.Quadro(p, enviado: false, conexao, WsUser(conexao));
+                // BANCO DE CONVERSAS (08/10/2026, SQL 155): o segundo ouvinte arquiva tudo que e mensagem
+                ServicoArquivoChat.Quadro(p, enviado: false, conexao, WsUser(conexao));
                 AgendarDiagnostico();
                 // CÓDIGO DA RASPADINHA (22/09/2026): só os quadros RECEBIDOS entram aqui. O que
                 // a loja envia sai pelo webSocketFrameSent, que continua só alimentando o
@@ -676,6 +678,7 @@ public partial class ChatIfood : UserControl
                 AgendarDiagnostico();
                 // o que SAI da página só confirma o envio de uma resposta; nunca vira fala
                 ServicoConversaChat.Quadro(p, enviado: true, conexao, WsUser(conexao));
+                ServicoArquivoChat.Quadro(p, enviado: true, conexao, WsUser(conexao));
             });
 
             _reqWill = core.GetDevToolsProtocolEventReceiver("Network.requestWillBeSent");

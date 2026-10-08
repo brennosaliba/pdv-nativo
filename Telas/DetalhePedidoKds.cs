@@ -35,7 +35,8 @@ public sealed class DetalhePedidoKds : Border
     private readonly Button _fechar;
 
     /// <param name="faleComIfood">Só em pedido do iFood: abre o atendimento do iFood para este pedido (null = sem botão).</param>
-    public DetalhePedidoKds(DetalhePedido d, Action fechar, Action? faleComIfood = null)
+    /// <param name="resgatar">154 (08/10): só em pedido do iFood com a tela de resgate ligada na loja: abre o resgate da raspadinha já neste pedido (null = sem botão).</param>
+    public DetalhePedidoKds(DetalhePedido d, Action fechar, Action? faleComIfood = null, Action? resgatar = null)
     {
         Detalhe = d;
 
@@ -145,7 +146,7 @@ public sealed class DetalhePedidoKds : Border
             MinHeight = 60, FontSize = 20, Margin = new Thickness(26, 12, 26, 20),
         };
         _fechar.Click += (_, _) => fechar();
-        if (faleComIfood is null)
+        if (faleComIfood is null && resgatar is null)
         {
             Grid.SetRow(_fechar, 2);
             raiz.Children.Add(_fechar);
@@ -154,22 +155,43 @@ public sealed class DetalhePedidoKds : Border
         {
             // FALE COM O iFOOD (12/09/2026, pedido do dono): "motoqueiro não chegou, no
             // Gestor tem a opção Fale com o iFood". Ao lado do Fechar, só em pedido do iFood.
+            // RASPADINHA (08/10/2026, SQL 154): o resgate manual já neste pedido, só com a
+            // tela ligada na loja. Os botões dividem a linha por igual; o Fechar fica por último.
             var rodape = new Grid { Margin = new Thickness(26, 12, 26, 20) };
-            rodape.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            rodape.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var ajuda = new Button
+            var botoes = new List<Button>();
+            if (resgatar is not null)
             {
-                Content = "🛟 " + AjudaIfood.TextoBotao,
-                Style = (Style)Application.Current.Resources["BotaoBase"],
-                MinHeight = 60, FontSize = 18, Margin = new Thickness(0, 0, 8, 0),
-                ToolTip = "Abre o atendimento do iFood para este pedido, na aba Chat",
-            };
-            ajuda.Click += (_, _) => faleComIfood();
-            Grid.SetColumn(ajuda, 0);
-            rodape.Children.Add(ajuda);
-            _fechar.Margin = new Thickness(8, 0, 0, 0);
-            Grid.SetColumn(_fechar, 1);
-            rodape.Children.Add(_fechar);
+                var r = new Button
+                {
+                    Content = Nucleo.ResgateManual.RotuloKds,
+                    Style = (Style)Application.Current.Resources["BotaoBase"],
+                    MinHeight = 60, FontSize = 18,
+                    ToolTip = "Resgata a raspadinha do cliente neste pedido",
+                };
+                r.Click += (_, _) => resgatar();
+                botoes.Add(r);
+            }
+            if (faleComIfood is not null)
+            {
+                var ajuda = new Button
+                {
+                    Content = "🛟 " + AjudaIfood.TextoBotao,
+                    Style = (Style)Application.Current.Resources["BotaoBase"],
+                    MinHeight = 60, FontSize = 18,
+                    ToolTip = "Abre o atendimento do iFood para este pedido, na aba Chat",
+                };
+                ajuda.Click += (_, _) => faleComIfood();
+                botoes.Add(ajuda);
+            }
+            botoes.Add(_fechar);
+            // 16 px entre vizinhos (8 de cada lado), como era entre o "Fale com o iFood" e o Fechar no 1.0.21
+            for (var i = 0; i < botoes.Count; i++)
+            {
+                rodape.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                botoes[i].Margin = new Thickness(i == 0 ? 0 : 8, 0, i == botoes.Count - 1 ? 0 : 8, 0);
+                Grid.SetColumn(botoes[i], i);
+                rodape.Children.Add(botoes[i]);
+            }
             Grid.SetRow(rodape, 2);
             raiz.Children.Add(rodape);
         }

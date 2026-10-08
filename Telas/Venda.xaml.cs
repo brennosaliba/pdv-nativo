@@ -418,11 +418,14 @@ public partial class Venda : UserControl
         BtnConversaColar.Visibility = colar && temPedido ? Visibility.Visible : Visibility.Collapsed;
         // falha_envio leva só o Abrir e colar (seção 2.2); sem o pedido, o Copiar é a saída
         BtnConversaCopiar.Visibility = colar && (a.Tipo != "falha_envio" || !temPedido) ? Visibility.Visible : Visibility.Collapsed;
-        BotoesToastConversa.Visibility = colar ? Visibility.Visible : Visibility.Collapsed;
+        // 154 (08/10): o chat não resolveu e a loja ligou a tela: "Resgatar aqui" abre já no pedido do aviso
+        var resgatar = _resgatePdv && temPedido && Nucleo.ResgateManual.TiposDeAvisoComResgate.Contains(a.Tipo);
+        BtnConversaResgatar.Visibility = resgatar ? Visibility.Visible : Visibility.Collapsed;
+        BotoesToastConversa.Visibility = colar || resgatar ? Visibility.Visible : Visibility.Collapsed;
         ToastConversa.Visibility = Visibility.Visible;
 
         _toastConversaSome?.Stop();
-        _toastConversaSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(colar ? 120 : 30) };
+        _toastConversaSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(colar || resgatar ? 120 : 30) };
         _toastConversaSome.Tick += (_, _) => { ToastConversa.Visibility = Visibility.Collapsed; _toastConversaSome?.Stop(); };
         _toastConversaSome.Start();
     });
@@ -1311,7 +1314,9 @@ public partial class Venda : UserControl
         _combos = Nucleo.Combos.Carregar(cx);
         // 21/09/2026: a loja ligou a raspadinha no painel? Aí a aba Promoções existe mesmo sem
         // promoção vigente, com o cartão do brinde no topo.
-        _raspadinhaNoCaixa = Nucleo.Brindes.LigadoNaLoja(cx);
+        // 08/10/2026 (SQL 154): a tela de resgate manual também traz o cartão; com as duas chaves, vale a nova
+        _resgatePdv = Nucleo.ResgateManual.LigadoNaLoja(cx);
+        _raspadinhaNoCaixa = Nucleo.Brindes.LigadoNaLoja(cx) || _resgatePdv;
         // Sem ORDER BY: quem ordena é o Núcleo, em pt-BR. O SQLite compara texto por BYTE,
         // e com isso ÁGUA MINERAL COM GÁS aparecia no FIM de Bebidas, depois de SUCO UVA
         // (defeito que o dono viu no balcão) — ver Pdv.Nucleo/Categorias.cs.
@@ -2896,6 +2901,8 @@ public partial class Venda : UserControl
     private async Task ConferirRaspadinhaAsync()
     {
         if (_brindeOcupado) return;
+        // 154 (08/10): com a tela de resgate ligada, o Conferir abre a janela com o código digitado
+        if (_resgatePdv) { AbrirResgate(TxtCodigoRaspadinha.Text, null, null); return; }
         if (_homologacao) { MostrarLinhaBrinde(Nucleo.Brindes.TextoHomologacao, "erro", AcaoBrinde.Nenhuma); return; }
         if (string.IsNullOrWhiteSpace(TxtCodigoRaspadinha.Text))
         {
@@ -3066,6 +3073,55 @@ public partial class Venda : UserControl
         AutomationProperties.SetName(BtnBrinde, BtnBrinde.Content as string ?? "");
     }
     // ── fim do BRINDE DA RASPADINHA ─────────────────────────────────────────
+
+    // ── RESGATE MANUAL DA RASPADINHA (08/10/2026, SQL 154) ──────────────────
+    // O dono: "add dentro do PDV tb a pagina de resgate da raspadinha caso falhe pra resgatar e
+    // fazer tudo dentro do pdv". Três entradas, uma janela (Telas/ResgateRaspadinha.cs): o cartão
+    // da aba Promoções (Conferir), o "Resgatar aqui" do aviso do chat e o "Raspadinha" do detalhe
+    // do pedido no KDS. Tudo nasce desligado: a chave pdv_loja_config.raspadinha_resgate_pdv desce
+    // pelo Atualizar (ConfigLojaPainel). A janela usa a sessão do terminal (Servicos.Nuvem()) e a
+    // resposta entra pelo mesmo caminho do chat (ServicoConversaChat.ExecutarRespostaManualAsync).
+    // NADA AQUI TOCA A VENDA: o resgate é bônus no servidor, não item da comanda.
+
+    /// <summary>A loja ligou a tela de resgate manual (pdv_loja_config.raspadinha_resgate_pdv).</summary>
+    private bool _resgatePdv;
+
+    private void AbrirResgateDoToast(object sender, RoutedEventArgs e)
+    {
+        var a = _avisoConversa;
+        FecharToastConversa(sender, e);
+        AbrirResgate(null, a?.OrderUuid, a?.Numero);
+    }
+
+    /// <summary>
+    /// Abre a tela de resgate: com o código já digitado (cartão), com o pedido (aviso do chat, KDS) ou
+    /// vazia. Pública porque o KDS chama por aqui (MainWindow liga o evento do quadro à tela de venda).
+    /// </summary>
+    public void AbrirResgate(string? codigo, string? orderId, string? numero)
+    {
+        if (!_resgatePdv) { AvisoLeve(Nucleo.ResgateManual.TextoDesligado); return; }
+        if (_homologacao) { AvisoLeve(Nucleo.Brindes.TextoHomologacao); return; }
+        var dono = Window.GetWindow(this) ?? Application.Current?.MainWindow;
+        if (dono is null) return;
+        string? terminalUuid = null;
+        try
+        {
+            using var cx = Banco.Abrir();
+            terminalUuid = cx.ExecuteScalar<string?>("SELECT terminal_uuid FROM terminal LIMIT 1");
+        }
+        catch { /* sem o uuid o balde do rate limit do TOTP é o do usuário */ }
+        var nuvem = Servicos.Nuvem();
+        Telas.ResgateRaspadinha.Servidor servidor = async (nome, corpo) =>
+        {
+            var (st, resp) = await nuvem.FuncaoAsync(nome, corpo, Nucleo.ResgateManual.Prazo).ConfigureAwait(false);
+            return (st, resp);
+        };
+        var tela = new Telas.ResgateRaspadinha(dono, servidor, _operador.Nome, terminalUuid, codigo, orderId, numero,
+            ServicoConversaChat.Sinal.Ativo);
+        tela.PediuChat += () => PediuChat?.Invoke();
+        tela.Mostrar();
+        if (_categoriaAtual == CategoriaPromo) TxtCodigoRaspadinha.Text = "";
+    }
 
     // ── CICLO DO DINHEIRO ───────────────────────────────────────────────────
     private void Sangria(object sender, RoutedEventArgs e) => Movimento("sangria");

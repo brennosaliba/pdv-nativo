@@ -734,6 +734,10 @@
                             Click="AbrirEColarDoToast" Padding="10,4"/>
                     <Button x:Name="BtnConversaCopiar" Content="Copiar" Style="{StaticResource BotaoTexto}"
                             Click="CopiarDoToast" Margin="10,0,0,0" Padding="10,4"/>
+                    <!-- 154 (08/10/2026): o chat nao resolveu (precisa de ajuda, nao raspou, ja usado no
+                         validador...): a pessoa resgata na tela do caixa, ja no pedido do aviso -->
+                    <Button x:Name="BtnConversaResgatar" Content="Resgatar aqui" Style="{StaticResource BotaoTexto}"
+                            Click="AbrirResgateDoToast" Margin="10,0,0,0" Padding="10,4" Visibility="Collapsed"/>
                 </StackPanel>
             </StackPanel>
         </Border>

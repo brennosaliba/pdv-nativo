@@ -513,6 +513,46 @@ public static class ServicoConversaChat
         catch (Exception ex) { Diag("abrir e colar: " + ex.GetType().Name); return false; }
     }
 
+    // ── 7. O RESGATE MANUAL PELA TELA DO PDV (08/10/2026, SQL 154) ──────────
+
+    /// <summary>
+    /// A resposta de <c>resgate_manual</c> entra pelo MESMO caminho da resposta do chat: o bônus
+    /// vira papel deste terminal (quando <c>comanda.imprimir_aqui</c>), a saída "sdk" reservada vai
+    /// para a fila de envio pelo portão, a "operador" vira aviso com o texto para a pessoa colar, e
+    /// o aviso de uma linha sai como sempre. Devolve a resposta lida, se a comanda saiu daqui e se
+    /// sobrou texto para colar. Nunca lança.
+    /// </summary>
+    public static async Task<(RespostaConversa Resposta, bool ComandaSaiu, bool TemTextoParaColar)> ExecutarRespostaManualAsync(int st, string? corpo)
+    {
+        var agora = DateTime.Now;
+        var r = ConversaRaspadinha.LerResposta(st, corpo, agora);
+        if (r.Status != StatusConversa.Ok || r.Bonus is null) return (r, false, false);
+        var comandaSaiu = false;
+        try
+        {
+            using (var cx = Banco.Abrir())
+                ConversaRaspadinha.GravarBonus(cx, r.Bonus, ConversaRaspadinha.CabecalhoDaResposta(r), agora);
+            if (r.ImprimirAqui)
+            {
+                // o papel ANTES de avisar: se a bobina acabou, a linha da tela e a unica coisa que sobra
+                await ServicoRaspadinhaChat.ImprimirPendentesAsync().ConfigureAwait(false);
+                using var cx = Banco.Abrir();
+                comandaSaiu = Dapper.SqlMapper.ExecuteScalar<long>(cx,
+                    "SELECT COUNT(*) FROM raspadinha_bonus WHERE id = @I AND impresso_em IS NOT NULL AND erro_impressao IS NULL",
+                    new { I = r.Bonus.Id }) == 1;
+            }
+            var temTexto = r.Saidas.Any(s => ConversaRaspadinha.Destino(s, _ultimo.Sinal) == DestinoDaSaida.Colar);
+            Diag($"resgate manual bonus={Curta(r.Bonus.Id)} acao={r.Acao} comanda_aqui={r.ImprimirAqui} saiu={comandaSaiu} saidas={r.Saidas.Count} colar={temTexto}");
+            Seguro(() => Processar(r, null));
+            return (r, comandaSaiu, temTexto);
+        }
+        catch (Exception ex)
+        {
+            Diag("resgate manual: " + ex.GetType().Name);
+            return (r, comandaSaiu, false);
+        }
+    }
+
     // ── rastro ───────────────────────────────────────────────────────────────
 
     /// <summary>

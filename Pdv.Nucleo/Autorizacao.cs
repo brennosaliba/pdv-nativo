@@ -240,6 +240,16 @@ public static class Autorizacao
         return $"promocao:{Limpo(comandaId, 48)}:{Limpo(promoId, 48)}";
     }
 
+    /// <summary>154 (08/10): o tipo do log do TOTP quando o caixa desfaz um resgate da raspadinha.</summary>
+    public const string TipoResgateDesfazer = "resgate_desfazer";
+
+    /// <summary>
+    /// AMARRA O REGISTRO ÀQUELE RESGATE (154): "resgate:&lt;bonus_id&gt;", a mesma referência que o
+    /// servidor grava ao conferir o código dentro da transação do desfazer.
+    /// </summary>
+    public static string ReferenciaResgate(string bonusId)
+        => "resgate:" + new string((bonusId ?? "").Where(c => char.IsLetterOrDigit(c) || c == '-').Take(48).ToArray());
+
     /// <summary>Nome com que este caixa se apresenta à nuvem (cadastro `pdv_terminais.nome`).</summary>
     public static string NomeDoTerminal(SqliteConnection cx)
     {
