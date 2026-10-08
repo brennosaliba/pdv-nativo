@@ -431,6 +431,22 @@ public static class TestesConversaChat
             "PT-20 o resto vira 'falhou' e o ERP passa a resposta para a pessoa");
         checar(typeof(PermissaoDeEnvio).GetConstructors().Length == 0,
             "PT-21 ninguém fora do núcleo cria uma permissão de envio (o construtor é interno)");
+
+        // 1.0.25 (08/10/2026): a NOVA TENTATIVA da mesma saida. Pelo Decidir ela cai no eco que ela
+        // mesma registrou (foi isso que matou toda mensagem do pedido das 17:15 as 17:30); pelo Repetir
+        // sai com token novo, e so o prazo da reserva manda.
+        var pr = Novo();
+        var (perm1, mo1) = pr.Decidir(Saida(id: 5208), sinal, Agora.AddSeconds(-5), Agora.AddSeconds(-1), Agora);
+        checar(perm1 is not null && mo1 == MotivoPortao.Liberado
+               && pr.Decidir(Saida(id: 5208), sinal, Agora.AddSeconds(-5), Agora.AddSeconds(-1), Agora.AddSeconds(10)) is (null, MotivoPortao.Eco),
+            "PT-22 a segunda decisão da MESMA saída cai em Eco (era isso que barrava a nova tentativa da 1.0.24)");
+        var rep = pr.Repetir(perm1!, Agora.AddSeconds(-1), Agora.AddSeconds(10));
+        checar(rep is not null && ReferenceEquals(rep.Saida, perm1!.Saida) && rep.Canal == perm1.Canal && rep.OrderUuid == perm1.OrderUuid
+               && rep.ConsumirToken() is { Length: 32 } tk2 && tk2 != tk && rep.ConsumirToken() is null,
+            "PT-23 o Repetir dá a mesma saída de novo, com token novo de uso único, sem passar pelo eco");
+        checar(pr.Repetir(perm1, Agora.AddSeconds(-1), Agora.AddSeconds(50)) is null
+               && pr.Repetir(perm1, Agora.AddSeconds(-1), Agora.AddSeconds(49)) is not null,
+            "PT-24 o Repetir respeita o prazo da reserva (50 s): depois dele, nada (vira incerta/reserva_vencida)");
     }
 
     // ── CONFIRMAÇÃO ──────────────────────────────────────────────────────────
@@ -840,7 +856,7 @@ public static class TestesConversaChat
         // git não separa as duas, então a prova é pelo conteúdo)
         checar(impressao.Length > 0 && !Regex.IsMatch(impressao, @"ConversaRaspadinha|ServicoConversaChat|comanda_onde|RESGATE|ItemBonus"),
             "FN-17 Impressao.cs não tem nada desta entrega");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.24</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.24 (chat vivo desde o inicio, envio com nova tentativa, aviso de solicitacao)");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.25</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.25 (nova tentativa sem o eco e aquecimento do SDK)");
     }
 
     private static string? Raiz()

@@ -26,6 +26,13 @@ public sealed class PonteDoChat
     public required Func<IReadOnlyList<string>, string?, Task<JsonObject?>> DiagSdk { get; init; }
     /// <summary>"logado", "login" ou "ausente".</summary>
     public required Func<string> Gestor { get; init; }
+    /// <summary>
+    /// 1.0.25: (numero do pedido, uuid) → abre a lista de conversas do Gestor escondido e, com o
+    /// numero, a conversa do pedido. E o que AQUECE o SDK do Sendbird: com o Gestor recem-carregado
+    /// e nenhuma conversa aberta, getChannel nao acha nada e todo envio cai em canal_errado ate
+    /// alguem tocar numa conversa (12:27 e 17:15 de 08/10). Opcional: a bateria nao precisa dela.
+    /// </summary>
+    public Func<string?, string?, Task<bool>>? AquecerConversa { get; init; }
 }
 
 /// <summary>
@@ -353,9 +360,14 @@ public static class ServicoConversaChat
         }
     }
 
-    /// <summary>Quantas vezes o envio frio tenta antes de dizer "falhou" (1.0.24), e o respiro entre elas.</summary>
+    /// <summary>Quantas vezes o envio frio tenta antes de dizer "falhou" (1.0.24), e o respiro entre elas.
+    /// 1.0.25: o respiro caiu para 6 s porque antes dele o caixa aquece o SDK abrindo a conversa; com 15 s
+    /// as tres tentativas estouravam o prazo da reserva (50 s) e a terceira nem acontecia.</summary>
     public const int TentativasDeEnvio = 3;
-    public static readonly TimeSpan RespiroEntreTentativas = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan RespiroEntreTentativas = TimeSpan.FromSeconds(6);
+    /// <summary>1.0.25: o aquecimento do SDK pelo sinal, no maximo a cada 2 min.</summary>
+    public static readonly TimeSpan IntervaloDoAquecimento = TimeSpan.FromMinutes(2);
+    private static DateTime _ultimoAquecimento = DateTime.MinValue;
 
     private static async Task EnviarUmaAsync(SaidaConversa s, DateTime recebida)
     {
@@ -364,11 +376,28 @@ public static class ServicoConversaChat
         // "falhou": 5 seguidas as 12:27 pausaram as mensagens do pedido e a resposta de um
         // resgate foi para o "Abrir e colar" que ninguem tocou. Agora o envio tenta de novo, com
         // o portao decidido de novo (token novo) e 15 s de respiro, ate 3 vezes; so entao falha.
+        // 1.0.25 (08/10/2026, 17:15): a nova tentativa passava de novo pelo portao, e o eco que a
+        // PRIMEIRA decisao registrou barrava a segunda como repetida: toda mensagem do pedido virou
+        // "incerta/eco" sem sair. Agora so a primeira tentativa decide; as seguintes repetem a mesma
+        // permissao com token novo (Portao.Repetir), e antes de cada uma o caixa aquece o SDK
+        // abrindo a conversa do pedido no Gestor escondido.
         string? erro = null;
+        PermissaoDeEnvio? primeira = null;
         for (var tentativa = 1; tentativa <= TentativasDeEnvio; tentativa++)
         {
             var ultimo = _ultimo;
-            var (permissao, motivo) = Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now);
+            PermissaoDeEnvio? permissao;
+            MotivoPortao motivo;
+            if (tentativa == 1)
+            {
+                (permissao, motivo) = Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now);
+                primeira = permissao;
+            }
+            else
+            {
+                permissao = primeira is null ? null : Portao.Repetir(primeira, recebida, DateTime.Now);
+                motivo = permissao is null ? MotivoPortao.ReservaVencida : MotivoPortao.Liberado;
+            }
             Diag($"saida={s.Id} etapa={s.Etapa} portao={motivo}{(tentativa > 1 ? " tentativa=" + tentativa : "")}");
             if (permissao is null)
             {
@@ -401,12 +430,35 @@ public static class ServicoConversaChat
             if (visto == true) { await RelatarAsync(s.Id, "incerta", "erro_envio", null, s).ConfigureAwait(false); return; }
             erro = res.Erro is "sdk_ausente" or "canal_errado" or "congelada" or "sem_cliente" or "erro_envio"
                 ? res.Erro : "erro_envio";
-            // congelada e sem_cliente nao mudam com o tempo; o resto e o SDK frio: respira e tenta de novo
+            // congelada e sem_cliente nao mudam com o tempo; o resto e o SDK frio: aquece, respira e tenta de novo
             if (erro is "congelada" or "sem_cliente" || tentativa == TentativasDeEnvio) break;
-            Diag($"saida={s.Id} erro={erro}: tenta de novo em {RespiroEntreTentativas.TotalSeconds:0} s");
+            var aqueceu = await AquecerAsync(ponte, s.PedidoNumero, s.IfoodOrderId).ConfigureAwait(false);
+            Diag($"saida={s.Id} erro={erro}: aqueceu={aqueceu}, tenta de novo em {RespiroEntreTentativas.TotalSeconds:0} s");
             await Task.Delay(RespiroEntreTentativas).ConfigureAwait(false);
         }
         await RelatarAsync(s.Id, "falhou", erro ?? "erro_envio", null, s).ConfigureAwait(false);
+    }
+
+    /// <summary>1.0.25: o SDK esta frio? Achou a instancia, tinha canais para conferir e nao achou nenhum.</summary>
+    public static bool SdkFrio(JsonObject? sdk, int canaisParaConferir)
+    {
+        if (sdk is null || canaisParaConferir <= 0) return false;
+        var achou = sdk.TryGetPropertyValue("achou", out var a) && a is JsonValue av && av.TryGetValue<bool>(out var ab) && ab;
+        var conferidos = sdk.TryGetPropertyValue("conferidos", out var c) && c is JsonValue cv && cv.TryGetValue<int>(out var ci) ? ci : -1;
+        return achou && conferidos == 0;
+    }
+
+    /// <summary>1.0.25: abre a conversa do pedido (ou a lista) no Gestor escondido, para o SDK carregar o canal. Nunca lanca.</summary>
+    private static async Task<bool> AquecerAsync(PonteDoChat ponte, string? numero, string? orderUuid)
+    {
+        try
+        {
+            if (ponte.AquecerConversa is null) return false;
+            var ok = await ponte.AquecerConversa(numero, orderUuid).WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            if (ok) _ultimoAquecimento = DateTime.Now;
+            return ok;
+        }
+        catch (Exception ex) { Diag("aquecer: " + ex.GetType().Name); return false; }
     }
 
     /// <summary>
@@ -474,6 +526,14 @@ public static class ServicoConversaChat
                 if (sdk is not null && sdk.TryGetPropertyValue("uid", out var uid)
                     && uid is JsonValue v && v.TryGetValue<string>(out var u) && !string.IsNullOrWhiteSpace(u))
                     _sdkUserId = u.Trim();
+                // 1.0.25: SDK frio (achou a instancia, havia canais para conferir e nenhum foi achado):
+                // abre a lista de conversas no Gestor escondido, no maximo a cada 2 min
+                if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count) && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)
+                {
+                    _ultimoAquecimento = DateTime.Now;
+                    var aqueceu = await AquecerAsync(p, null, null).ConfigureAwait(false);
+                    Diag($"sinal: sdk frio, aquecimento pela lista de conversas={aqueceu}");
+                }
             }
 
             int fila;

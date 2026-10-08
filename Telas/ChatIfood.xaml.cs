@@ -251,7 +251,12 @@ public partial class ChatIfood : UserControl
                 AbrirEColar = AbrirEColarAsync,
                 DiagSdk = DiagSdkAsync,
                 Gestor = () => !_pronto ? "ausente" : _gestorPedeLogin ? "login" : "logado",
+                // 1.0.25: aquece o SDK abrindo a conversa do pedido (com o numero) ou so a lista
+                AquecerConversa = AquecerConversaAsync,
             });
+            // 1.0.25: e aquece uma vez sozinho, logo depois de o Gestor carregar, para o primeiro
+            // pedido do dia nao cair em canal_errado
+            _ = AquecerDepoisDoInicioAsync(minha);
 
             // rede de segurança: reconta a cada 7 s mesmo se o observador falhar
             _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(7) };
@@ -939,6 +944,57 @@ public partial class ChatIfood : UserControl
             }
             catch { /* diagnóstico é conveniência, nunca derruba o caixa */ }
         });
+    }
+
+    /// <summary>
+    /// 1.0.25: o AQUECIMENTO do SDK. Com o Gestor recem-carregado e nenhuma conversa aberta, o SDK do
+    /// Sendbird nao acha canal nenhum (getChannel falha) e todo envio automatico cai em canal_errado
+    /// ate alguem tocar numa conversa (12:27 e 17:15 de 08/10/2026 na Savassi). Aqui o caixa faz isso
+    /// sozinho no Gestor escondido: abre a lista de conversas e, com o numero, a conversa do pedido
+    /// (pdvAbrirConversas + pdvBuscarConversa, as mesmas funcoes do botao Fale com o iFood). Devolve
+    /// true se a pagina abriu a lista. Chamado de qualquer thread.
+    /// </summary>
+    public async Task<bool> AquecerConversaAsync(string? numero, string? orderUuid)
+    {
+        if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => AquecerConversaAsync(numero, orderUuid));
+        if (!_pronto) return false;
+        try
+        {
+            var core = Web.CoreWebView2;
+            if (core is null) return false;
+            var abriu = await core.ExecuteScriptAsync("window.pdvAbrirConversas ? window.pdvAbrirConversas() : false");
+            var n = AjudaIfood.SoDigitos(numero ?? "");
+            if (abriu == "true" && n.Length >= 3 && ChatContagem.NumeroPedidoValido(n))
+            {
+                await Task.Delay(1500);   // a lista leva um instante para aparecer
+                if (Web.CoreWebView2 is not { } core2) return false;
+                var arg = JsonSerializer.Serialize(n);
+                var achou = await core2.ExecuteScriptAsync($"window.pdvBuscarConversa ? window.pdvBuscarConversa({arg}) : false");
+                DiagRaspadinha($"aquecer: lista={abriu} conversa #{n}={achou}");
+                return true;
+            }
+            DiagRaspadinha($"aquecer: lista={abriu}");
+            return abriu == "true";
+        }
+        catch (Exception ex) { DiagRaspadinha("aquecer: " + ex.GetType().Name); return false; }
+    }
+
+    /// <summary>1.0.25: 25 s depois de o Gestor carregar, abre a lista de conversas uma vez (e mais uma, se a primeira nao deu).</summary>
+    private async Task AquecerDepoisDoInicioAsync(int minha)
+    {
+        try
+        {
+            for (var vez = 1; vez <= 2; vez++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(vez == 1 ? 25 : 40));
+                if (minha != _tentativa || !_pronto) return;
+                if (_gestorPedeLogin) { DiagRaspadinha("aquecer no inicio: o Gestor pede login"); continue; }
+                var ok = await AquecerConversaAsync(null, null);
+                DiagRaspadinha($"aquecer no inicio ({vez}): {ok}");
+                if (ok) return;
+            }
+        }
+        catch (Exception ex) { DiagRaspadinha("aquecer no inicio: " + ex.GetType().Name); }
     }
 
     // ── pulo do pedido para a conversa (exposto para venda/KDS no futuro) ─────

@@ -57,15 +57,37 @@ public static class TestesChatSempreVivo
         checar(pedido.Contains("for (var t = 0; t < 3; t++)") && pedido.Contains("await espera(1200)"), "CV-9 o metadata do canal e pedido ate 3 vezes");
 
         // ── 4. o envio tenta de novo antes de dizer falhou ──
-        checar(ServicoConversaChat.TentativasDeEnvio == 3 && ServicoConversaChat.RespiroEntreTentativas == TimeSpan.FromSeconds(15),
-            "CV-10 3 tentativas com 15 s entre elas");
+        checar(ServicoConversaChat.TentativasDeEnvio == 3 && ServicoConversaChat.RespiroEntreTentativas == TimeSpan.FromSeconds(6),
+            "CV-10 3 tentativas com 6 s entre elas (1.0.25: o aquecimento vem antes do respiro; com 15 s a terceira estourava a reserva)");
         var iEnviar = servico.IndexOf("private static async Task EnviarUmaAsync(", StringComparison.Ordinal);
-        var enviar = iEnviar < 0 ? "" : servico.Substring(iEnviar, Math.Min(4500, servico.Length - iEnviar));
+        var enviar = iEnviar < 0 ? "" : servico.Substring(iEnviar, Math.Min(7000, servico.Length - iEnviar));
         checar(enviar.Contains("for (var tentativa = 1; tentativa <= TentativasDeEnvio; tentativa++)")
                && enviar.Contains("Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now)")
+               && enviar.Contains("Portao.Repetir(primeira, recebida, DateTime.Now)")
                && enviar.Contains("if (erro is \"congelada\" or \"sem_cliente\" || tentativa == TentativasDeEnvio) break;")
+               && enviar.Contains("await AquecerAsync(ponte, s.PedidoNumero, s.IfoodOrderId)")
                && enviar.Contains("await RelatarAsync(s.Id, \"falhou\", erro ?? \"erro_envio\", null, s)"),
-            "CV-11 cada tentativa passa pelo portao de novo (token novo); congelada e sem_cliente nao tentam de novo; so no fim relata falhou");
+            "CV-11 a 1a tentativa passa pelo portao; as seguintes pelo Repetir (token novo, sem o eco) depois de aquecer; congelada e sem_cliente nao tentam de novo; so no fim relata falhou");
+        // 1.0.25: o SDK frio e reconhecido pelo diagnostico, e o caixa aquece sozinho
+        {
+            var frio = System.Text.Json.Nodes.JsonNode.Parse("{\"achou\":true,\"conferidos\":0,\"canais_cm_por_merchant\":{}}")!.AsObject();
+            var quente = System.Text.Json.Nodes.JsonNode.Parse("{\"achou\":true,\"conferidos\":4}")!.AsObject();
+            var semSdk = System.Text.Json.Nodes.JsonNode.Parse("{\"achou\":false,\"conferidos\":0}")!.AsObject();
+            checar(ServicoConversaChat.SdkFrio(frio, 3) && !ServicoConversaChat.SdkFrio(quente, 3) && !ServicoConversaChat.SdkFrio(frio, 0)
+                   && !ServicoConversaChat.SdkFrio(semSdk, 3) && !ServicoConversaChat.SdkFrio(null, 3),
+                "CV-11b SdkFrio: achou e conferidos=0 com canais para conferir; quente, sem canais, sem instancia ou sem diagnostico nao e frio");
+            checar(ServicoConversaChat.IntervaloDoAquecimento == TimeSpan.FromMinutes(2)
+                   && servico.Contains("if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count) && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)"),
+                "CV-11c o sinal aquece pela lista de conversas no maximo a cada 2 min");
+            checar(chat.Contains("public async Task<bool> AquecerConversaAsync(string? numero, string? orderUuid)") && chat.Contains("AquecerConversa = AquecerConversaAsync,")
+                   && chat.Contains("window.pdvAbrirConversas ? window.pdvAbrirConversas() : false") && chat.Contains("window.pdvBuscarConversa ? window.pdvBuscarConversa("),
+                "CV-11d a tela aquece pela lista e pela conversa do pedido, com as funcoes que o Fale com o iFood ja usa");
+            checar(chat.Contains("_ = AquecerDepoisDoInicioAsync(minha);") && chat.Contains("if (minha != _tentativa || !_pronto) return;"),
+                "CV-11e logo depois de o Gestor carregar o caixa aquece uma vez sozinho, e desiste se o controle foi recriado");
+            checar(typeof(PonteDoChat).GetProperty("AquecerConversa") is { } pa
+                   && !pa.GetCustomAttributes(typeof(System.Runtime.CompilerServices.RequiredMemberAttribute), false).Any(),
+                "CV-11f a porta do aquecimento e opcional na ponte (a bateria e o teste nao precisam dela)");
+        }
         checar(enviar.Contains("if (res.Ok || res.Erro is \"sem_resposta\") return;") && enviar.Contains("if (visto == true) { await RelatarAsync(s.Id, \"incerta\""),
             "CV-12 a confirmacao pelo quadro e o 'incerta' continuam como antes dentro do laco");
 

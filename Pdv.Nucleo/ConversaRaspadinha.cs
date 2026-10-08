@@ -1329,6 +1329,20 @@ public sealed class PortaoDeEnvio
     public static string NovoToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     /// <summary>
+    /// 1.0.25 (08/10/2026): a segunda ou terceira tentativa da MESMA saida, depois de o script dizer
+    /// que nao mandou (canal_errado/erro_envio com o SDK frio). Na 1.0.24 a tentativa passava de
+    /// novo por <see cref="Decidir"/>, e o eco registrado pela primeira decisao a barrava como
+    /// repetida: toda mensagem do pedido virou "incerta/eco" sem sair (17:15 as 17:30 na Savassi).
+    /// Aqui: token novo para a mesma saida, sem a trava do eco (o eco e desta propria saida) e sem
+    /// contar de novo no limite; o prazo da reserva continua valendo (null = reserva vencida).
+    /// </summary>
+    public PermissaoDeEnvio? Repetir(PermissaoDeEnvio anterior, DateTime recebidaEm, DateTime agora)
+    {
+        if (agora - recebidaEm > PrazoDaReserva) return null;
+        return new PermissaoDeEnvio(anterior.Saida, anterior.Canal, anterior.OrderUuid, NovoToken());
+    }
+
+    /// <summary>
     /// O que dizer ao ERP sobre uma saída "sdk" reservada que o portão segurou. Eco e reserva vencida
     /// viram "incerta" (não manda de novo); o resto vira "falhou", e o ERP passa a saída para a pessoa.
     /// Sombra e operador não têm o que dizer.
