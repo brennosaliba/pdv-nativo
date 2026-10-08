@@ -779,7 +779,7 @@ public static class TestesConversaChat
             "FN-6 a página recusa sem o token e o apaga (uso único)");
         checar(!js.Contains(".focus(", StringComparison.Ordinal) && !js.Contains("location.", StringComparison.Ordinal),
             "FN-7 o envio não mexe no foco nem navega");
-        checar(js.Contains("orderUuid !== a.orderUuid", StringComparison.Ordinal) && js.Contains("isFrozen", StringComparison.Ordinal)
+        checar(js.Contains("pedido.toLowerCase() !== String(a.orderUuid).toLowerCase()", StringComparison.Ordinal) && js.Contains("isFrozen", StringComparison.Ordinal)
                && js.Contains("'CUSTOMER'", StringComparison.Ordinal) && js.Contains("enviados.length >= 20", StringComparison.Ordinal),
             "FN-8 a página confere o pedido do canal, se não está congelado, se tem cliente, e o limite de 20 por minuto");
         foreach (var erro in new[] { "sdk_ausente", "canal_errado", "congelada", "sem_cliente", "erro_envio" })
@@ -840,7 +840,7 @@ public static class TestesConversaChat
         // git não separa as duas, então a prova é pelo conteúdo)
         checar(impressao.Length > 0 && !Regex.IsMatch(impressao, @"ConversaRaspadinha|ServicoConversaChat|comanda_onde|RESGATE|ItemBonus"),
             "FN-17 Impressao.cs não tem nada desta entrega");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.20</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.20");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.21</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.21");
     }
 
     private static string? Raiz()

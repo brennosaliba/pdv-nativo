@@ -2111,6 +2111,29 @@ public partial class ChatIfood : UserControl
         return a.concat(b);
       }
 
+      // 1.0.21 (07/10): o canal do getChannel pode vir sem o metadata no cache (o sinal da loja
+      // mostrou tem_order_uuid=false), e a primeira resposta automatica cairia em canal_errado,
+      // que pausa a loja. Sem o orderUuid no cache, pergunta ao proprio canal; e o endereco do
+      // canal do iFood ja traz o pedido (sendbird_gc_cm_<pedido>_<loja>).
+      var URL_DO_PEDIDO = /^sendbird_gc_cm_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_/i;
+      function pedidoSemRede(ch){
+        var md = (ch && ch.cachedMetaData) || {};
+        if (md.orderUuid) return String(md.orderUuid);
+        var m = URL_DO_PEDIDO.exec(String((ch && ch.url) || ''));
+        return m ? m[1].toLowerCase() : '';
+      }
+      async function pedidoDoCanal(ch){
+        var p = pedidoSemRede(ch);
+        if (p) return p;
+        try {
+          if (ch && typeof ch.getMetaData === 'function') {
+            var r = await ch.getMetaData(['orderUuid']);
+            if (r && r.orderUuid) return String(r.orderUuid);
+          }
+        } catch (e) {}
+        return '';
+      }
+
       async function acharCanal(lista, canal){
         for (var i = 0; i < lista.length; i++) {
           try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return ch; } catch (e) {}
@@ -2139,7 +2162,7 @@ public partial class ChatIfood : UserControl
               var ch = await acharCanal(lista, canais[i]);
               if (!ch) continue;
               conferidos++;
-              if (ch.cachedMetaData && ch.cachedMetaData.orderUuid) comUuid++;
+              if (pedidoSemRede(ch)) comUuid++;
               if (ch.isFrozen) congeladas++;
             }
             r.conferidos = conferidos;
@@ -2167,8 +2190,8 @@ public partial class ChatIfood : UserControl
           (async function () {
             var ch = await acharCanal(lista, a.canal);
             if (!ch) { fim({ ok: false, erro: 'canal_errado' }); return; }
-            var md = ch.cachedMetaData || {};
-            if (!a.orderUuid || md.orderUuid !== a.orderUuid) { fim({ ok: false, erro: 'canal_errado' }); return; }
+            var pedido = await pedidoDoCanal(ch);
+            if (!a.orderUuid || pedido.toLowerCase() !== String(a.orderUuid).toLowerCase()) { fim({ ok: false, erro: 'canal_errado' }); return; }
             if (ch.isFrozen) { fim({ ok: false, erro: 'congelada' }); return; }
             var cliente = (ch.members || []).some(function (m) { return !!(m && m.metaData && m.metaData.userType === 'CUSTOMER'); });
             if (!cliente) { fim({ ok: false, erro: 'sem_cliente' }); return; }

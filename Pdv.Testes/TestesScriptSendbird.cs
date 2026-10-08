@@ -189,7 +189,8 @@ function montarRuntime(nome, modulos) {
 function canais(lista, quem) {
   var o = {};
   lista.forEach(function (c) {
-    o[c.url] = { url: c.url, cachedMetaData: { orderUuid: c.uuid }, isFrozen: !!c.congelada,
+    o[c.url] = { url: c.url, cachedMetaData: c.semMeta ? {} : { orderUuid: c.uuid }, isFrozen: !!c.congelada,
+      getMetaData: c.metaRede ? function (k) { return Promise.resolve({ orderUuid: c.uuid }); } : undefined,
       members: [{ metaData: { userType: 'CUSTOMER' } }, { metaData: { userType: 'MERCHANT' } }],
       sendUserMessage: function (params) {
         __enviadas.push({ por: quem, canal: c.url, texto: params.message });
@@ -412,6 +413,28 @@ function exec(sb) { return Array.from(sb.__exec).join(','); }
     const d1 = await diag(sb, 'r1', 'loja-1');
     checar(d1 && d1.achou === true && d1.instancias === 1 && d1.via_react === true && d1.via_webpack === false && d1.user_id_igual_ws === true,
       '50 sem o modulo, a arvore do React dentro do shadowRoot aberto acha o SDK (segunda via)');
+  }
+
+  // ── MUNDO M (1.0.21): o canal vem sem o metadata no cache, como o sinal da loja mostrou ──
+  {
+    const U = '3fa0c6c2-1b2e-4c8a-9d10-aa22bb33cc44', OUTRO = '9b8e7d6c-5a4b-4c3d-8e2f-001122334455';
+    const URL_PEDIDO = 'sendbird_gc_cm_' + U + '_ff493e25-f413-42e5-a46a-96c0b788813f';
+    const sb = mundo();
+    rodar(sb, "var G = bootGestor('webpackChunkgestor_pedidos', 'loja-1', ["
+      + "{ url: '" + URL_PEDIDO + "', uuid: '" + U + "', semMeta: true },"
+      + "{ url: 'canal-rede', uuid: 'uuid-rede', semMeta: true, metaRede: true },"
+      + "{ url: 'canal-mudo', uuid: 'uuid-mudo', semMeta: true }], 'gestor');");
+    carregar(sb);
+    const d = await diag(sb, 'm0', 'loja-1', [URL_PEDIDO]);
+    checar(d && d.conferidos === 1 && d.tem_order_uuid === true, '70 o diagnostico le o pedido pelo endereco do canal quando o metadata nao veio');
+    const e1 = await enviar(sb, 'm1', 'tk-m1', URL_PEDIDO, U, 'Oi, Ana!', 'loja-1');
+    checar(e1 && e1.ok === true, '71 sem metadata no cache, o endereco do canal do iFood prova o pedido e a resposta sai');
+    const e2 = await enviar(sb, 'm2', 'tk-m2', URL_PEDIDO, OUTRO, 'texto', 'loja-1');
+    checar(e2 && e2.ok === false && e2.erro === 'canal_errado', '72 o endereco de OUTRO pedido continua recusado (canal_errado)');
+    const e3 = await enviar(sb, 'm3', 'tk-m3', 'canal-rede', 'uuid-rede', 'texto', 'loja-1');
+    checar(e3 && e3.ok === true, '73 sem cache e sem o pedido no endereco, pergunta o metadata ao canal e manda');
+    const e4 = await enviar(sb, 'm4', 'tk-m4', 'canal-mudo', 'uuid-mudo', 'texto', 'loja-1');
+    checar(e4 && e4.ok === false && e4.erro === 'canal_errado', '74 sem cache, sem endereco e sem metadata, nao manda (canal_errado)');
   }
 
   // ── MUNDO E: o script carregado duas vezes na mesma pagina nao duplica ──
