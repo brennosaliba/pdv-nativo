@@ -168,6 +168,30 @@ public static class ChatArquivo
             => !string.IsNullOrWhiteSpace(b) && string.Equals(a, b.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// 1.0.24: o cartao do iFood que abre uma SOLICITACAO do cliente (custom_type "summary",
+    /// texto "Quero cancelar o pedido" / "Quero adicionar observacao ao pedido" / "Quero trocar
+    /// um item"). So o cartao de abertura, nunca a resposta ("A loja aceitou", "recusou").
+    /// </summary>
+    public static bool EhSolicitacaoDoCliente(MensagemArquivo m)
+    {
+        if (m.Comando != "BRDM" || !string.Equals(m.CustomType, "summary", StringComparison.OrdinalIgnoreCase)) return false;
+        var t = (m.Texto ?? "").Trim();
+        return t.StartsWith("Quero ", StringComparison.OrdinalIgnoreCase) && t.Length <= 120;
+    }
+
+    /// <summary>"#1234: o cliente quer cancelar o pedido. Responda no Gestor em ate 5 min." (sem travessao, ate 160).</summary>
+    public static string TextoDaSolicitacao(string? numero, string? pedido)
+    {
+        var p = (pedido ?? "").Trim();
+        if (p.StartsWith("Quero ", StringComparison.OrdinalIgnoreCase)) p = p[6..].Trim();
+        if (p.Length == 0) p = "fazer uma alteração";
+        if (p.Length > 60) p = p[..57] + "...";
+        p = p.Replace((char)0x2013, ',').Replace((char)0x2014, ',');
+        var quem = string.IsNullOrWhiteSpace(numero) ? "Pedido do iFood" : "#" + numero.Trim();
+        return $"{quem}: o cliente quer {char.ToLowerInvariant(p[0])}{p[1..]}. Responda no Gestor em até 5 min.";
+    }
+
     public static string LadoTexto(LadoArquivo l) => l switch
     {
         LadoArquivo.Cliente => "cliente",

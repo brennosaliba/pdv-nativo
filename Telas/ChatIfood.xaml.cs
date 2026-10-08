@@ -132,6 +132,36 @@ public partial class ChatIfood : UserControl
     /// </summary>
     internal static void Diag(string texto) => HospedeWebView2.Anotar("chat-webview-diagnostico.txt", texto, _relogio.Elapsed);
 
+    // ── O VIGIA DA INICIALIZAÇÃO (08/10/2026, 1.0.24) ─────────────────────────
+    // Na Savassi o caixa abriu as 11:00:51 com "ambiente ok" e o servico do chat so ligou as
+    // 12:21:36, quando alguem abriu a aba: a inicializacao ficou parada 80 minutos num passo
+    // intermediario (a camada recolhida nao dava janela ao WebView2) e ninguem soube. Agora cada
+    // passo deixa rastro, e se a tela nao fica pronta em 90 s o vigia anota em que passo parou;
+    // em 3 min, recria o controle (pelo teto de sempre). O conserto de verdade e a camada nao
+    // ser mais Collapsed (MainWindow); o vigia e a rede de seguranca e o diagnostico.
+    private string _passo = "";
+    private void Passo(string nome)
+    {
+        _passo = nome;
+        Diag("passo: " + nome);
+    }
+
+    private async Task VigiarInicioAsync(int minha)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(90));
+            if (_pronto || minha != _tentativa) return;
+            Diag($"inicializacao parada em '{_passo}' depois de 90 s (visivel={IsVisible} largura={ActualWidth:0} toque={IsHitTestVisible})");
+            await Task.Delay(TimeSpan.FromSeconds(90));
+            if (_pronto || minha != _tentativa) return;
+            Diag($"inicializacao parada em '{_passo}' depois de 180 s: recriando o controle");
+            _iniciando = false;
+            await RecriarAsync("inicializacao parada em " + _passo);
+        }
+        catch (Exception ex) { Diag("vigia: " + ex.GetType().Name); }
+    }
+
     /// <summary>
     /// Pré-aquece o WebView2 para o observador já rodar em segundo plano (o selo
     /// na venda acende antes de alguém abrir o chat). Se a plataforma não
@@ -146,6 +176,8 @@ public partial class ChatIfood : UserControl
         if (_iniciando || _pronto) return;   // pré-aquecer + 1ª abertura não podem inicializar duas vezes
         _iniciando = true;
         var minha = ++_tentativa;
+        _passo = "controle";
+        _ = VigiarInicioAsync(minha);
         try
         {
             TxtEstado.Text = "carregando…";
@@ -154,6 +186,7 @@ public partial class ChatIfood : UserControl
 
             var core = await Hospede.IniciarControleAsync();
             if (minha != _tentativa) return;
+            Passo("scripts");
 
             // quiosque: sem DevTools nem menu de contexto pro operador se perder.
             // (A captura de rede NÃO depende desta flag — ela é o F12 visual.)
@@ -196,15 +229,18 @@ public partial class ChatIfood : UserControl
             // e o do SDK do Sendbird (07/10/2026, resgate pelo chat): diag() e enviar(). O envio só
             // roda com o token de uso único que o C# põe logo antes (EnviarPeloSdkAsync).
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptSendbird);
+            Passo("captura");
 
             // liga a captura de rede (groundwork do nativo) — best-effort
             await LigarCapturaAsync(core);
             if (minha != _tentativa) return;
+            Passo("navegar");
 
             Web.Source = new Uri(UrlGestor);
             Web.Visibility = Visibility.Visible;
             PainelErro.Visibility = Visibility.Collapsed;
             _pronto = true;
+            Passo("pronto");
 
             // RESGATE PELO CHAT (07/10/2026): o serviço novo lê os quadros e manda o sinal de 60 s
             // desde já, com a loja desligada também (o sinal leva o diagnóstico que o dono confere
@@ -2125,21 +2161,38 @@ public partial class ChatIfood : UserControl
         var m = URL_DO_PEDIDO.exec(String((ch && ch.url) || ''));
         return m ? m[1].toLowerCase() : '';
       }
+      // o respiro das tentativas; a bateria (node) encurta por window.__pdvRespiroMs
+      function espera(ms){
+        var r = (typeof window.__pdvRespiroMs === 'number') ? window.__pdvRespiroMs : ms;
+        if (typeof setTimeout !== 'function') return Promise.resolve();   // sem relogio (harness), segue na hora
+        return new Promise(function (ok) { setTimeout(ok, r); });
+      }
+
+      // 1.0.24 (08/10): logo depois de o Gestor carregar, sem nenhuma conversa aberta, o SDK
+      // ainda esta frio: o metadata nao vem e o canal nao e achado de primeira (5 envios
+      // seguidos cairam em canal_errado as 12:27 e pausaram as mensagens do pedido). Uma
+      // segunda e terceira tentativa com um respiro resolvem sem ninguem abrir conversa.
       async function pedidoDoCanal(ch){
         var p = pedidoSemRede(ch);
         if (p) return p;
-        try {
-          if (ch && typeof ch.getMetaData === 'function') {
-            var r = await ch.getMetaData(['orderUuid']);
-            if (r && r.orderUuid) return String(r.orderUuid);
-          }
-        } catch (e) {}
+        for (var t = 0; t < 3; t++) {
+          try {
+            if (ch && typeof ch.getMetaData === 'function') {
+              var r = await ch.getMetaData(['orderUuid']);
+              if (r && r.orderUuid) return String(r.orderUuid);
+            }
+          } catch (e) {}
+          await espera(1200);
+        }
         return '';
       }
 
       async function acharCanal(lista, canal){
-        for (var i = 0; i < lista.length; i++) {
-          try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return ch; } catch (e) {}
+        for (var t = 0; t < 3; t++) {
+          for (var i = 0; i < lista.length; i++) {
+            try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return ch; } catch (e) {}
+          }
+          await espera(1500);
         }
         return null;
       }

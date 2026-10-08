@@ -34,9 +34,19 @@
 
         <!-- Chat do iFood como CAMADA viva: nasce uma vez e NUNCA é destacada da
              árvore, para o WebView2 seguir vivo (observando não lidas) mesmo com o
-             operador na venda. Some por Visibility (Collapsed), porque o WebView2
-             é HWND e pintaria por cima de tudo se ficasse só atrás. -->
-        <telas:ChatIfood Grid.Row="1" x:Name="CamadaChat" Visibility="Collapsed"/>
+             operador na venda.
+             08/10/2026 (1.0.24): ela NAO e mais Collapsed. Recolhida, o WPF nao cria a
+             janela do WebView2 e o EnsureCoreWebView2Async fica esperando; o chat so
+             nascia quando alguem abria a aba. Na Savassi o caixa ficou das 07:21 as
+             10:34 e das 11:00 as 12:21 sem ler o chat por isso. Agora e EMPURRADA para
+             fora da janela (TranslateTransform), como o WhatsApp: o HWND existe desde o
+             inicio, nao pinta nada fora da janela e IsHitTestVisible tira o toque. -->
+        <telas:ChatIfood Grid.Row="1" x:Name="CamadaChat" IsHitTestVisible="False"
+                         KeyboardNavigation.TabNavigation="None" Focusable="False">
+            <telas:ChatIfood.RenderTransform>
+                <TranslateTransform X="30000"/>
+            </telas:ChatIfood.RenderTransform>
+        </telas:ChatIfood>
         <!-- WhatsApp da loja: outra camada viva, pelo mesmo motivo. Mas ela NAO se
              recolhe (Collapsed): e EMPURRADA para fora da janela (TranslateTransform).
              Para o Chromium a pagina continua VISIVEL, e e so assim que o WhatsApp Web

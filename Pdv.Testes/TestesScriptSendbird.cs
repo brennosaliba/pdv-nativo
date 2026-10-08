@@ -189,8 +189,10 @@ function montarRuntime(nome, modulos) {
 function canais(lista, quem) {
   var o = {};
   lista.forEach(function (c) {
+    // 1.0.24: metaDepois = N: o metadata falha N vezes e responde na seguinte (o SDK frio logo depois de carregar)
+    var faltam = c.metaDepois || 0;
     o[c.url] = { url: c.url, cachedMetaData: c.semMeta ? {} : { orderUuid: c.uuid }, isFrozen: !!c.congelada,
-      getMetaData: c.metaRede ? function (k) { return Promise.resolve({ orderUuid: c.uuid }); } : undefined,
+      getMetaData: c.metaRede ? function (k) { if (faltam > 0) { faltam--; return Promise.reject(new Error('frio')); } return Promise.resolve({ orderUuid: c.uuid }); } : undefined,
       members: [{ metaData: { userType: 'CUSTOMER' } }, { metaData: { userType: 'MERCHANT' } }],
       sendUserMessage: function (params) {
         __enviadas.push({ por: quem, canal: c.url, texto: params.message });
@@ -263,6 +265,8 @@ function mundo(documento) {
   const sb = { console: console };
   sb.self = sb;
   sb.window = sb;
+  sb.__pdvRespiroMs = 1;   // 1.0.24: as tentativas do SDK frio respiram 1 ms aqui (1,2 s e 1,5 s na loja)
+  sb.setTimeout = setTimeout;   // o contexto do vm nasce sem relogio; o do node serve
   sb.document = documento || {
     querySelector: function () { return null; },
     querySelectorAll: function () { return []; }
@@ -435,6 +439,21 @@ function exec(sb) { return Array.from(sb.__exec).join(','); }
     checar(e3 && e3.ok === true, '73 sem cache e sem o pedido no endereco, pergunta o metadata ao canal e manda');
     const e4 = await enviar(sb, 'm4', 'tk-m4', 'canal-mudo', 'uuid-mudo', 'texto', 'loja-1');
     checar(e4 && e4.ok === false && e4.erro === 'canal_errado', '74 sem cache, sem endereco e sem metadata, nao manda (canal_errado)');
+  }
+
+  // ── MUNDO F (1.0.24): o SDK frio logo depois de o Gestor carregar ──
+  {
+    const sb = mundo();
+    rodar(sb, "var G = bootGestor('webpackChunkgestor_pedidos', 'loja-1', ["
+      + "{ url: 'canal-frio', uuid: 'uuid-frio', semMeta: true, metaRede: true, metaDepois: 2 },"
+      + "{ url: 'canal-gelado', uuid: 'uuid-gelado', semMeta: true, metaRede: true, metaDepois: 3 }], 'gestor');");
+    carregar(sb);
+    const e1 = await enviar(sb, 'f1', 'tk-f1', 'canal-frio', 'uuid-frio', 'Oi, Rodrigo!', 'loja-1');
+    checar(e1 && e1.ok === true, '75 o metadata falha duas vezes e responde na terceira: a resposta sai (antes caia em canal_errado)');
+    const e2 = await enviar(sb, 'f2', 'tk-f2', 'canal-gelado', 'uuid-gelado', 'texto', 'loja-1');
+    checar(e2 && e2.ok === false && e2.erro === 'canal_errado', '76 tres falhas seguidas do metadata: canal_errado, sem insistir para sempre');
+    const e3 = await enviar(sb, 'f3', 'tk-f3', 'canal-que-nao-existe', 'uuid-x', 'texto', 'loja-1');
+    checar(e3 && e3.ok === false && e3.erro === 'canal_errado', '77 canal que nao existe: canal_errado depois das tentativas');
   }
 
   // ── MUNDO E: o script carregado duas vezes na mesma pagina nao duplica ──

@@ -111,7 +111,7 @@ public partial class MainWindow : Window
     /// <summary>Só com o operador numa tela de trabalho (quadro ou venda) e sem chat por cima.</summary>
     private bool LeitorAtivo()
         => Conteudo.Content is Telas.Kds or Venda
-           && CamadaChat.Visibility != Visibility.Visible
+           && !CamadaChat.IsHitTestVisible
            && !CamadaWhatsApp.IsHitTestVisible;
 
     private static bool EmCampoDeTexto()
@@ -332,10 +332,12 @@ public partial class MainWindow : Window
         if (!_chatLigado)
         {
             _chatLigado = true;
-            CamadaChat.Voltou += () => CamadaChat.Visibility = Visibility.Collapsed;
+            CamadaChat.Voltou += () => EsconderChat(devolverTeclado: true);
         }
         EsconderWhatsApp();                                 // uma camada de cada vez
-        CamadaChat.Visibility = Visibility.Visible;
+        // 1.0.24: a camada vive fora da janela; mostrar e trazer para o lugar (como o WhatsApp)
+        CamadaChat.RenderTransform = new System.Windows.Media.TranslateTransform(0, 0);
+        CamadaChat.IsHitTestVisible = true;
         _ = CamadaChat.PreAquecerAsync();
     }
 
@@ -349,7 +351,7 @@ public partial class MainWindow : Window
             _whatsAppLigado = true;
             CamadaWhatsApp.Voltou += EsconderWhatsApp;
         }
-        CamadaChat.Visibility = Visibility.Collapsed;       // uma camada de cada vez
+        EsconderChat(devolverTeclado: false);               // uma camada de cada vez
         CamadaWhatsApp.RenderTransform = System.Windows.Media.Transform.Identity;
         CamadaWhatsApp.IsHitTestVisible = true;
         _ = CamadaWhatsApp.PreAquecerAsync();
@@ -361,6 +363,17 @@ public partial class MainWindow : Window
     /// dele quando chega mensagem). E devolve o teclado ao caixa: o HWND do WebView2 fora
     /// da tela seguraria as teclas do leitor de código de barras e do PIN.
     /// </summary>
+    /// <summary>
+    /// 1.0.24: o chat sai da frente do mesmo jeito que o WhatsApp: empurrado para fora da janela,
+    /// sem toque. O WebView2 continua vivo (lendo o chat e mandando o sinal), que e o ponto.
+    /// </summary>
+    private void EsconderChat(bool devolverTeclado)
+    {
+        CamadaChat.RenderTransform = new System.Windows.Media.TranslateTransform(30000, 0);
+        CamadaChat.IsHitTestVisible = false;
+        if (devolverTeclado) DevolverTecladoAoCaixa();
+    }
+
     private void EsconderWhatsApp()
     {
         CamadaWhatsApp.RenderTransform = new System.Windows.Media.TranslateTransform(30000, 0);

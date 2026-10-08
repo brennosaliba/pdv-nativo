@@ -326,10 +326,20 @@ public static class ServicoConversaChat
         if (!ConversaRaspadinha.TextoLimpo(a.Texto, 160)) { Diag($"aviso {a.Tipo} recusado (texto fora da regra)"); return; }
         if (a.TextoParaColar is not null && !ConversaRaspadinha.TextoLimpo(a.TextoParaColar, ConversaRaspadinha.TetoTexto))
             a = a with { TextoParaColar = null };
-        if (a.Tipo is "mandar" or "falha_envio" or "humano") Alerta.MensagemChat();
+        if (a.Tipo is "mandar" or "falha_envio" or "humano" or "solicitacao") Alerta.MensagemChat();
         Diag($"aviso {a.Tipo} pedido={a.Numero ?? "-"}");
         try { Avisou?.Invoke(a); } catch { }
     }
+
+    /// <summary>
+    /// 1.0.24 (08/10/2026): um aviso que nasce NESTE caixa, sem passar pelo ERP. Hoje: a
+    /// "solicitação de alteração" do iFood (cancelar, trocar item, observação), que chega como
+    /// cartão do sistema, não como texto, e tem 5 minutos para a loja responder no Gestor. O
+    /// leitor da raspadinha não a enxergava e o dono achou que o bot "não respondeu". Passa
+    /// pelo mesmo filtro dos outros avisos (texto limpo, caixa mudo).
+    /// </summary>
+    public static void AvisoLocal(string tipo, string texto, string? orderUuid, string? numero)
+        => Seguro(() => Emitir(new AvisoDoChat(tipo, texto, null, orderUuid, numero)));
 
     // ── 4. O ENVIO (um por vez, 3 s entre mensagens) ─────────────────────────
 
@@ -343,43 +353,60 @@ public static class ServicoConversaChat
         }
     }
 
+    /// <summary>Quantas vezes o envio frio tenta antes de dizer "falhou" (1.0.24), e o respiro entre elas.</summary>
+    public const int TentativasDeEnvio = 3;
+    public static readonly TimeSpan RespiroEntreTentativas = TimeSpan.FromSeconds(15);
+
     private static async Task EnviarUmaAsync(SaidaConversa s, DateTime recebida)
     {
-        var ultimo = _ultimo;
-        var (permissao, motivo) = Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now);
-        Diag($"saida={s.Id} etapa={s.Etapa} portao={motivo}");
-        if (permissao is null)
+        // 1.0.24 (08/10/2026): com o Gestor recem-carregado e nenhuma conversa aberta, o script
+        // devolve canal_errado ou erro_envio de primeira (SDK frio). Antes, uma falha ja virava
+        // "falhou": 5 seguidas as 12:27 pausaram as mensagens do pedido e a resposta de um
+        // resgate foi para o "Abrir e colar" que ninguem tocou. Agora o envio tenta de novo, com
+        // o portao decidido de novo (token novo) e 15 s de respiro, ate 3 vezes; so entao falha.
+        string? erro = null;
+        for (var tentativa = 1; tentativa <= TentativasDeEnvio; tentativa++)
         {
-            if (PortaoDeEnvio.Relato(motivo) is { } rel)
-                await RelatarAsync(s.Id, rel.Resultado, rel.Erro, null, s).ConfigureAwait(false);
-            return;
+            var ultimo = _ultimo;
+            var (permissao, motivo) = Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now);
+            Diag($"saida={s.Id} etapa={s.Etapa} portao={motivo}{(tentativa > 1 ? " tentativa=" + tentativa : "")}");
+            if (permissao is null)
+            {
+                if (PortaoDeEnvio.Relato(motivo) is { } rel)
+                    await RelatarAsync(s.Id, rel.Resultado, rel.Erro, null, s).ConfigureAwait(false);
+                return;
+            }
+            var ponte = _ponte;
+            if (ponte is null)
+            {
+                await RelatarAsync(s.Id, "falhou", "sdk_ausente", null, s).ConfigureAwait(false);
+                return;
+            }
+            // A confirmação é PELO QUADRO (seção 0, decisão 9), e a espera nasce ANTES do script: o SDK
+            // só responde depois que o servidor devolve a mensagem, e a essa altura o quadro que saiu e
+            // a volta com o msg_id já passaram pelo CDP. Esperando só depois, nada nunca casava e toda
+            // resposta mandada virava "incerta".
+            Confirmacoes.Aguardar(s.Id, permissao.Canal, permissao.Texto, DateTime.Now);
+            ResultadoDoScript res;
+            try { res = await ponte.EnviarPeloSdk(permissao).ConfigureAwait(false); }
+            catch { res = new ResultadoDoScript(false, "sem_resposta", null); }
+            Diag($"saida={s.Id} script ok={res.Ok} erro={res.Erro ?? "-"}");
+            // Mandou, ou não respondeu (pode ter saído): quem decide é o quadro, em até 15 s. Sem ele,
+            // "incerta" (ConfirmacaoDeEnvio.Vencidas), e nunca de novo.
+            if (res.Ok || res.Erro is "sem_resposta") return;
+            // O script disse que não mandou. Se o quadro já confirmou, vale o quadro; se o quadro foi
+            // visto saindo, é dúvida e vira incerta. Só sem quadro nenhum é "falhou" (vai para a pessoa).
+            var visto = Confirmacoes.Cancelar(s.Id);
+            if (visto is null) return;
+            if (visto == true) { await RelatarAsync(s.Id, "incerta", "erro_envio", null, s).ConfigureAwait(false); return; }
+            erro = res.Erro is "sdk_ausente" or "canal_errado" or "congelada" or "sem_cliente" or "erro_envio"
+                ? res.Erro : "erro_envio";
+            // congelada e sem_cliente nao mudam com o tempo; o resto e o SDK frio: respira e tenta de novo
+            if (erro is "congelada" or "sem_cliente" || tentativa == TentativasDeEnvio) break;
+            Diag($"saida={s.Id} erro={erro}: tenta de novo em {RespiroEntreTentativas.TotalSeconds:0} s");
+            await Task.Delay(RespiroEntreTentativas).ConfigureAwait(false);
         }
-        var ponte = _ponte;
-        if (ponte is null)
-        {
-            await RelatarAsync(s.Id, "falhou", "sdk_ausente", null, s).ConfigureAwait(false);
-            return;
-        }
-        // A confirmação é PELO QUADRO (seção 0, decisão 9), e a espera nasce ANTES do script: o SDK
-        // só responde depois que o servidor devolve a mensagem, e a essa altura o quadro que saiu e
-        // a volta com o msg_id já passaram pelo CDP. Esperando só depois, nada nunca casava e toda
-        // resposta mandada virava "incerta".
-        Confirmacoes.Aguardar(s.Id, permissao.Canal, permissao.Texto, DateTime.Now);
-        ResultadoDoScript res;
-        try { res = await ponte.EnviarPeloSdk(permissao).ConfigureAwait(false); }
-        catch { res = new ResultadoDoScript(false, "sem_resposta", null); }
-        Diag($"saida={s.Id} script ok={res.Ok} erro={res.Erro ?? "-"}");
-        // Mandou, ou não respondeu (pode ter saído): quem decide é o quadro, em até 15 s. Sem ele,
-        // "incerta" (ConfirmacaoDeEnvio.Vencidas), e nunca de novo.
-        if (res.Ok || res.Erro is "sem_resposta") return;
-        // O script disse que não mandou. Se o quadro já confirmou, vale o quadro; se o quadro foi
-        // visto saindo, é dúvida e vira incerta. Só sem quadro nenhum é "falhou" (vai para a pessoa).
-        var visto = Confirmacoes.Cancelar(s.Id);
-        if (visto is null) return;
-        if (visto == true) { await RelatarAsync(s.Id, "incerta", "erro_envio", null, s).ConfigureAwait(false); return; }
-        var erro = res.Erro is "sdk_ausente" or "canal_errado" or "congelada" or "sem_cliente" or "erro_envio"
-            ? res.Erro : "erro_envio";
-        await RelatarAsync(s.Id, "falhou", erro, null, s).ConfigureAwait(false);
+        await RelatarAsync(s.Id, "falhou", erro ?? "erro_envio", null, s).ConfigureAwait(false);
     }
 
     /// <summary>

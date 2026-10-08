@@ -1437,6 +1437,7 @@ TestesFechamentoVoltar.Rodar((cond, nome) => Check("fechamento-voltar: " + nome,
 TestesBuscaKds.Rodar((cond, nome) => Check("busca-kds: " + nome, cond));
 TestesRetomada.Rodar((cond, nome) => Check("retomada: " + nome, cond));
 TestesAjudaIfood.Rodar((cond, nome) => Check("ajuda-ifood: " + nome, cond));
+TestesChatSempreVivo.Rodar((cond, nome) => Check("chat-vivo: " + nome, cond));
 TestesLinhaPromocao.Rodar((cond, nome) => Check("promo-linha: " + nome, cond));
 TestesPapelDeCaixa.Rodar((cond, nome) => Check("papel-caixa: " + nome, cond));
 TestesRetiradaCofre.Rodar((cond, nome) => Check("retirada-cofre: " + nome, cond));

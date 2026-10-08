@@ -410,7 +410,7 @@ public partial class Venda : UserControl
         TxtToastConversaIcone.Text = a.Tipo switch
         {
             "resgatou" => "🎁",
-            "mandar" or "falha_envio" or "humano" => "💬",
+            "mandar" or "falha_envio" or "humano" or "solicitacao" => "💬",
             _ => "🔔",
         };
         var colar = !string.IsNullOrWhiteSpace(a.TextoParaColar);
@@ -421,11 +421,14 @@ public partial class Venda : UserControl
         // 154 (08/10): o chat não resolveu e a loja ligou a tela: "Resgatar aqui" abre já no pedido do aviso
         var resgatar = _resgatePdv && temPedido && Nucleo.ResgateManual.TiposDeAvisoComResgate.Contains(a.Tipo);
         BtnConversaResgatar.Visibility = resgatar ? Visibility.Visible : Visibility.Collapsed;
-        BotoesToastConversa.Visibility = colar || resgatar ? Visibility.Visible : Visibility.Collapsed;
+        // 1.0.24: a solicitacao de alteracao do iFood e a conversa que pede gente levam ao chat num toque
+        var abrirChat = a.Tipo is "solicitacao" or "humano";
+        BtnConversaAbrirChat.Visibility = abrirChat ? Visibility.Visible : Visibility.Collapsed;
+        BotoesToastConversa.Visibility = colar || resgatar || abrirChat ? Visibility.Visible : Visibility.Collapsed;
         ToastConversa.Visibility = Visibility.Visible;
 
         _toastConversaSome?.Stop();
-        _toastConversaSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(colar || resgatar ? 120 : 30) };
+        _toastConversaSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(colar || resgatar || abrirChat ? 120 : 30) };
         _toastConversaSome.Tick += (_, _) => { ToastConversa.Visibility = Visibility.Collapsed; _toastConversaSome?.Stop(); };
         _toastConversaSome.Start();
     });
@@ -434,6 +437,13 @@ public partial class Venda : UserControl
     {
         _toastConversaSome?.Stop();
         ToastConversa.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>"Abrir o chat" (1.0.24): a camada do chat vem para a frente, a pessoa responde no Gestor.</summary>
+    private void AbrirChatDoToast(object sender, RoutedEventArgs e)
+    {
+        FecharToastConversa(sender, e);
+        PediuChat?.Invoke();
     }
 
     /// <summary>"Abrir e colar": a camada do chat vem para a frente e a página faz o resto.</summary>

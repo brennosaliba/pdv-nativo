@@ -840,7 +840,7 @@ public static class TestesConversaChat
         // git não separa as duas, então a prova é pelo conteúdo)
         checar(impressao.Length > 0 && !Regex.IsMatch(impressao, @"ConversaRaspadinha|ServicoConversaChat|comanda_onde|RESGATE|ItemBonus"),
             "FN-17 Impressao.cs não tem nada desta entrega");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.22</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.22 (1.0.21 mais o resgate manual e o arquivo do chat)");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.24</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.24 (chat vivo desde o inicio, envio com nova tentativa, aviso de solicitacao)");
     }
 
     private static string? Raiz()

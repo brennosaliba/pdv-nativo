@@ -76,11 +76,40 @@ public static class ServicoArquivoChat
             var m = ChatArquivo.LerQuadro(payload, wsUserId, null);
             var t = ChatArquivo.Triagem(m, enviado, Merchants(), agora);
             if (!t.Entra) return;
+            // 1.0.24 (08/10/2026): a solicitacao de alteracao do iFood (cartao do sistema com
+            // custom_type "summary": "Quero cancelar o pedido", "Quero adicionar observacao ao
+            // pedido") tem 5 min para a loja responder no Gestor; o leitor da raspadinha nao a
+            // enxerga. Aqui ela vira aviso com som na tela de venda, com o botao Abrir o chat.
+            if (ChatArquivo.EhSolicitacaoDoCliente(t.Mensagem!))
+                AvisarSolicitacao(t.Canal!, t.Mensagem!);
             Interlocked.Increment(ref _lidas);
             Interlocked.Increment(ref _naFila);
             if (!Gravacoes.Writer.TryWrite((t.Canal!, t.Mensagem!, agora))) Interlocked.Decrement(ref _naFila);
         }
         catch (Exception ex) { Diag("quadro: " + ex.GetType().Name); }
+    }
+
+    /// <summary>O aviso da solicitacao: uma vez por canal a cada 10 min, com o numero do pedido quando o KDS local o tem.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> SolicitacoesAvisadas = new(StringComparer.Ordinal);
+
+    private static void AvisarSolicitacao(CanalDaFala canal, MensagemArquivo m)
+    {
+        var agora = DateTime.Now;
+        if (SolicitacoesAvisadas.TryGetValue(canal.Canal, out var antes) && antes > agora.AddMinutes(-10)) return;
+        SolicitacoesAvisadas[canal.Canal] = agora;
+        if (SolicitacoesAvisadas.Count > 500)
+            foreach (var k in SolicitacoesAvisadas.Where(x => x.Value < agora.AddHours(-2)).Select(x => x.Key).ToList())
+                SolicitacoesAvisadas.TryRemove(k, out _);
+        string? numero = null;
+        try
+        {
+            using var cx = Banco.Abrir();
+            numero = Dapper.SqlMapper.ExecuteScalar<string?>(cx,
+                "SELECT numero FROM kds_ticket WHERE origem = 'ifood' AND ref_id = @r LIMIT 1", new { r = canal.OrderId });
+        }
+        catch { /* sem o numero o aviso sai mesmo assim */ }
+        ServicoConversaChat.AvisoLocal("solicitacao", ChatArquivo.TextoDaSolicitacao(numero, m.Texto), canal.OrderId, numero);
+        Diag($"solicitacao do cliente pedido={numero ?? "?"} len={m.Texto.Length}");
     }
 
     /// <summary>Os relogios nascem no primeiro quadro, uma vez so.</summary>

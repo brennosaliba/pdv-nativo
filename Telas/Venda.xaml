@@ -738,6 +738,10 @@
                          validador...): a pessoa resgata na tela do caixa, ja no pedido do aviso -->
                     <Button x:Name="BtnConversaResgatar" Content="Resgatar aqui" Style="{StaticResource BotaoTexto}"
                             Click="AbrirResgateDoToast" Margin="10,0,0,0" Padding="10,4" Visibility="Collapsed"/>
+                    <!-- 1.0.24 (08/10/2026): solicitacao de alteracao do iFood (5 min para responder no
+                         Gestor) e conversa que precisa de gente: um toque leva ao chat -->
+                    <Button x:Name="BtnConversaAbrirChat" Content="Abrir o chat" Style="{StaticResource BotaoTexto}"
+                            Click="AbrirChatDoToast" Margin="10,0,0,0" Padding="10,4" Visibility="Collapsed"/>
                 </StackPanel>
             </StackPanel>
         </Border>
