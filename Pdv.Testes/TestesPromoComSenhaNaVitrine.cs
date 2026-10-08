@@ -320,15 +320,17 @@ public static class TestesPromoComSenhaNaVitrine
 
         var catPromo = (string)typeof(Pdv.Telas.Venda).GetField("CategoriaPromo", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
         var contagem = Campo<Dictionary<string, int>>(venda, "_quantosPorCategoria");
-        checar(contagem.GetValueOrDefault(catPromo) == 3,
-            $"TL-1 a categoria PROMOÇÃO existe e conta o card junto dos produtos (2 produtos + 1 card, viu {contagem.GetValueOrDefault(catPromo)})");
+        // 08/10/2026 (dono): o card da promoção com código saiu da aba; ela mora no botão fixo
+        // acima do cupom de cortesia (BtnPromoComSenha). Card() agora devolve esse botão.
+        checar(contagem.GetValueOrDefault(catPromo) == 2,
+            $"TL-1 a categoria PROMOÇÃO conta só os produtos (2, sem o card da promoção com código, viu {contagem.GetValueOrDefault(catPromo)})");
 
         Button? Card()
         {
             typeof(Pdv.Telas.Venda).GetField("_categoriaAtual", P)!.SetValue(venda, catPromo);
             Invocar(venda, "PintarProdutos");
             host.UpdateLayout();
-            return BlocosDaPromo(Campo<ItemsControl>(venda, "ListaProdutos")).OfType<Button>().FirstOrDefault(b => b.Tag as string == IdFunc);
+            return Campo<Button>(venda, "BtnPromoComSenha");
         }
         void Tocar(Button b) => b.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
         bool Perguntando() => Campo<bool>(venda, "_perguntandoPromo");
@@ -348,17 +350,20 @@ public static class TestesPromoComSenhaNaVitrine
         Console.WriteLine($"      [medido] categoria PROMOCAO: {string.Join(" / ", textos)}");
         // 21/09/2026: a aba vai em colunas independentes (Venda.ColunasDaPromocao); "antes das seções"
         // passa a ser "o primeiro bloco da primeira coluna".
-        checar(card is not null && BlocosDaPromo(lista).FirstOrDefault() == card,
-            "TL-2 a categoria PROMOÇÃO mostra o card da Desconto Funcionario, antes das seções de produto");
+        checar(card is not null && card.Visibility == Visibility.Visible
+               && !BlocosDaPromo(lista).OfType<Button>().Any(b => b.Tag as string == IdFunc),
+            "TL-2 a aba PROMOÇÃO não tem mais o card; o botão fixo aparece mesmo com a comanda vazia");
         if (card is null) { Fechar(host, fecha, venda); return; }
-        var textosCard = Textos(card).ToList();
-        checar(textosCard.Contains("Desconto Funcionario") && textosCard.Contains("30% de desconto · código do gerente"),
-            $"TL-3 o card diz o nome e '30% de desconto · código do gerente' ({string.Join(" | ", textosCard)})");
+        checar(Campo<TextBlock>(venda, "TxtPromoComSenha").Text == "Desconto Funcionario",
+            $"TL-3 o botão fixo diz 'Desconto Funcionario' ({Campo<TextBlock>(venda, "TxtPromoComSenha").Text})");
+        var cortesia = Campo<Button>(venda, "BtnCortesia");
+        checar(card.TranslatePoint(new Point(0, 0), host).Y < cortesia.TranslatePoint(new Point(0, 0), host).Y,
+            "TL-3b o botão fica em cima do cupom de cortesia");
         var pos = card.TranslatePoint(new Point(0, 0), host);
         checar(card.ActualHeight > 0 && pos.X >= 0 && pos.Y >= 0 && pos.X + card.ActualWidth <= 1024 && pos.Y + card.ActualHeight <= 768,
             $"TL-4 o card cabe na tela de 1024x768 (x={pos.X:0} y={pos.Y:0} {card.ActualWidth:0}x{card.ActualHeight:0})");
         checar(textos.Any(t => t.EndsWith("Donuts do Dia", StringComparison.Ordinal)) && textos.Contains(Promocoes.SemProdutoHoje)
-               && textos.Any(t => t.EndsWith("Promocao Duo Gourmet", StringComparison.Ordinal)) &&Campo<TextBlock>(venda, "TxtContagem").Text == "2 itens",
+               && textos.Any(t => t.EndsWith("Promocao Duo Gourmet", StringComparison.Ordinal)) &&Campo<TextBlock>(venda, "TxtContagem").Text == "1 item",
             $"TL-5 promoção sem código continua como antes: seção do donut com a linha curta e a duo com o produto ({Campo<TextBlock>(venda, "TxtContagem").Text})");
 
         // ── toque com a comanda vazia ──────────────────────────────────────
@@ -408,8 +413,8 @@ public static class TestesPromoComSenhaNaVitrine
             $"TL-12 código errado 3 vezes: recusada, sem desconto ({Total()}), 3 falhas no log da nuvem");
         checar(Toast() == "Promoção Desconto Funcionario não aplicada" && Auditoria("promo_nao_autorizada") == 2,
             $"TL-13 …avisa numa linha e audita como o botão ('{Toast()}', {Auditoria("promo_nao_autorizada")} registros)");
-        checar(Campo<Button>(venda, "BtnPromoComSenha").Visibility != Visibility.Visible,
-            "TL-14 recusada, o botão ao lado do total some (como antes)");
+        checar(Campo<Button>(venda, "BtnPromoComSenha").Visibility == Visibility.Visible,
+            "TL-14 recusada, o botão fixo continua (o toque pergunta de novo, como o antigo card)");
 
         // ── tocou de novo, código certo: aplica ────────────────────────────
         tela.AoPedirCodigo = _ => fake.CodigoAgoraGerente();
@@ -460,7 +465,7 @@ public static class TestesPromoComSenhaNaVitrine
         var rotulo = Campo<TextBlock>(venda, "TxtPromoComSenha");
         var fimTexto = rotulo.TranslatePoint(new Point(rotulo.ActualWidth, 0), botao);
         Console.WriteLine($"      [medido] botao {botao.ActualWidth:0}px, texto termina em {fimTexto.X:0.0}px");
-        checar(botao.Visibility == Visibility.Visible && rotulo.Text == "Aplicar Desconto Funcionario"
+        checar(botao.Visibility == Visibility.Visible && rotulo.Text == "Desconto Funcionario"
                && fimTexto.X <= botao.ActualWidth - botao.BorderThickness.Right,
             $"TL-21 o nome no botão ao lado do total termina dentro do botão (reticências, não corte seco): {fimTexto.X:0.0} de {botao.ActualWidth:0}");
         relogio = relogio.AddSeconds(30);

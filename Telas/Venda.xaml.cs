@@ -1178,6 +1178,8 @@ public partial class Venda : UserControl
         // rodapé da comanda mais magro
         TxtTotal.FontSize = estreita ? 32 : 42;
         TxtCupomRotulo.Text = estreita ? "Cupom de cortesia" : "Aplicar cupom de cortesia";
+        // 08/10: o botão fixo da promoção com código mostra o nome inteiro a 1024 ("Desconto Funcionario")
+        TxtPromoComSenha.FontSize = estreita ? 13 : 14;
         TxtLimparRotulo.Visibility = estreita ? Visibility.Collapsed : Visibility.Visible;
         BtnLimpar.Padding = estreita ? new Thickness(14, 0, 14, 0) : new Thickness(18, 0, 18, 0);
         TxtFinalizarRotulo.FontSize = estreita ? 17 : 19;
@@ -1338,9 +1340,10 @@ public partial class Venda : UserControl
         // vitrine de PROMOÇÃO no topo: só existe quando alguma promoção vigente
         // menciona produto do catálogo — categoria vazia é pior que nenhuma
         var emPromo = _catalogo.Count(pp => _promoVitrine.ContainsKey(pp.Id));
-        // 13/09/2026 (Savassi): promoção com código (desconto funcionário) também tem card
-        // aqui. Loja só com ela precisa da categoria: foi onde o dono procurou.
-        var naPromo = emPromo + Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now).Count;
+        // 08/10/2026: a promoção com código (desconto funcionário) saiu desta aba. O dono: "pode
+        // remover em promoção, ao add o produto aparece a função a direita; ela pode ser fixa em
+        // cima de cupom de cortesia". Ela mora só no botão fixo (PintarBotaoPromoComSenha).
+        var naPromo = emPromo;
         var nomesCat = _catalogo.Select(p => p.Categoria).ToList();
         var temAbaPromo = naPromo > 0 || _raspadinhaNoCaixa;
         if (temAbaPromo) nomesCat.Add(CategoriaPromo);
@@ -1575,19 +1578,16 @@ public partial class Venda : UserControl
             // dia" (brigadeiro na quarta, ovomaltine na quinta) aparecia, na
             // quinta, toda cinza com "só vale qua", ovomaltine incluso. Agora
             // só entra na vitrine o que vale AGORA; o resto nem aparece.
-            // 13/09/2026: primeiro os cards das promoções com código (desconto
-            // funcionário). O toque pede o código do gerente/dono pelo mesmo portão do
-            // botão ao lado do total; nada é aplicado sem ele.
-            var comSenha = Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now);
-            // 21/09/2026: os blocos (cards com código e seções) vão para COLUNAS INDEPENDENTES,
-            // não mais um por célula do UniformGrid. Ver ColunasDaPromocao.
+            // 08/10/2026: os cards das promoções com código saíram daqui; ficam no botão fixo
+            // acima do cupom de cortesia (PintarBotaoPromoComSenha).
+            // 21/09/2026: as seções vão para COLUNAS INDEPENDENTES, não mais uma por célula do
+            // UniformGrid. Ver ColunasDaPromocao.
             var blocos = new List<FrameworkElement>();
-            foreach (var c in comSenha) blocos.Add(CardPromoComSenha(c));
             var grupos = lista
                 .GroupBy(p => _promoVitrine[p.Id].Nome)
                 .OrderByDescending(g => g.Any(p => _promoVitrine[p.Id].AtivaAgora))
                 .ThenBy(g => g.Key);
-            var visiveis = comSenha.Count;
+            var visiveis = 0;
             foreach (var g in grupos)
             {
                 var ativos = g.Where(p => _promoVitrine[p.Id].AtivaAgora).ToList();
@@ -1638,52 +1638,6 @@ public partial class Venda : UserControl
         var destino = Nucleo.ColunasPorAltura.Distribuir(alturas, colunas);
         for (var i = 0; i < blocos.Count; i++) pilhas[destino[i]].Children.Add(blocos[i]);
         return grade;
-    }
-
-    /// <summary>
-    /// Card de promoção com código na categoria PROMOÇÃO: chave, nome e uma linha com a
-    /// regra e de quem é o código ("30% de desconto · código do gerente"). É um botão:
-    /// o toque vai para <see cref="TocarPromoComSenha"/>.
-    /// </summary>
-    private Button CardPromoComSenha(Nucleo.Promocoes.PromoComSenha promo)
-    {
-        var b = new Button
-        {
-            Style = (Style)Application.Current.Resources["BotaoBase"],
-            Margin = new Thickness(4, 6, 4, 10), Padding = new Thickness(14, 10, 14, 11),
-            MinHeight = 64, VerticalAlignment = VerticalAlignment.Top,
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            BorderThickness = new Thickness(2), Tag = promo.PromoId,
-        };
-        b.SetResourceReference(Control.BackgroundProperty, "VeuElevado");
-        b.SetResourceReference(Control.BorderBrushProperty, "Rosa");
-        var linha = new DockPanel { LastChildFill = true };
-        var chave = new TextBlock
-        {
-            Text = "🔑", FontSize = 22, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0),
-        };
-        DockPanel.SetDock(chave, Dock.Left);
-        linha.Children.Add(chave);
-        var coluna = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        var titulo = new TextBlock
-        {
-            Text = Capitalizar(promo.Nome), FontSize = 17, FontWeight = FontWeights.Bold,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        };
-        titulo.SetResourceReference(TextBlock.ForegroundProperty, "Texto");
-        coluna.Children.Add(titulo);
-        var regra = new TextBlock
-        {
-            Text = PortaoPromocao.LinhaDoCard(promo.Regra, promo.Nivel), FontSize = 13,
-            Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis,
-        };
-        regra.SetResourceReference(TextBlock.ForegroundProperty, "TextoFraco");
-        coluna.Children.Add(regra);
-        linha.Children.Add(coluna);
-        b.Content = linha;
-        AutomationProperties.SetName(b, Capitalizar(promo.Nome));
-        b.Click += (_, _) => TocarPromoComSenha(promo.PromoId);
-        return b;
     }
 
     /// <summary>
@@ -2155,20 +2109,38 @@ public partial class Venda : UserControl
     /// comanda, e some assim que for respondida (aplicada ou recusada) ou quando a
     /// comanda deixa de alcançá-la. Quem decide o texto é <see cref="PortaoPromocao"/>.
     /// </summary>
+    // 08/10/2026 (dono): o botão é FIXO acima do cupom de cortesia enquanto existir promoção com
+    // código vigente agora (o card da aba Promoção saiu). Com a promoção oferecida para a comanda,
+    // o toque pede o código como sempre; sem ela (comanda vazia, já aplicada, outra vale mais), o
+    // toque passa pelo mesmo portão do antigo card (TocarPromoComSenha) e só avisa numa linha.
     private void PintarBotaoPromoComSenha()
     {
         var pendentes = _avaliacao?.Pendentes ?? Array.Empty<Nucleo.Promocoes.PromoPendente>();
-        BtnPromoComSenha.Visibility = pendentes.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        if (pendentes.Count == 0) return;
-        TxtPromoComSenha.Text = PortaoPromocao.RotuloDoBotao(pendentes.Select(p => Capitalizar(p.Nome)).ToList());
+        var vigentes = Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now);
+        if (pendentes.Count == 0 && vigentes.Count == 0)
+        {
+            BtnPromoComSenha.Visibility = Visibility.Collapsed;
+            return;
+        }
+        BtnPromoComSenha.Visibility = Visibility.Visible;
+        TxtPromoComSenha.Text = PortaoPromocao.RotuloDoBotao(pendentes.Count > 0
+            ? pendentes.Select(p => Capitalizar(p.Nome)).ToList()
+            : vigentes.Select(p => Capitalizar(p.Nome)).ToList());
         AutomationProperties.SetName(BtnPromoComSenha, TxtPromoComSenha.Text);
     }
 
     private void AplicarPromoComSenha(object sender, RoutedEventArgs e)
     {
         if (_perguntandoPromo) return;
+        var pendentes = _avaliacao?.Pendentes ?? Array.Empty<Nucleo.Promocoes.PromoPendente>();
+        if (pendentes.Count == 0)
+        {
+            var vigentes = Nucleo.Promocoes.PromocoesComSenhaNaVitrine(_promos, DateTime.Now);
+            if (vigentes.Count > 0) TocarPromoComSenha(vigentes[0].PromoId);
+            return;
+        }
         _perguntandoPromo = true;
-        _ = PerguntarPromocoesAsync(_avaliacao?.Pendentes ?? Array.Empty<Nucleo.Promocoes.PromoPendente>());
+        _ = PerguntarPromocoesAsync(pendentes);
     }
 
     /// <summary>

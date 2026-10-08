@@ -798,9 +798,10 @@ public static class TestesBrindes
 
         var catPromo = (string)typeof(Pdv.Telas.Venda).GetField("CategoriaPromo", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
         var contagem = Campo<Dictionary<string, int>>(venda, "_quantosPorCategoria");
-        var totalPromo = ProdutosPorPromo.Sum() + 1 + 1;   // produtos + card com código + cartão da raspadinha
+        // 08/10/2026: o card com código saiu da aba (botão fixo acima do cupom de cortesia)
+        var totalPromo = ProdutosPorPromo.Sum() + 1;   // produtos + cartão da raspadinha
         checar(contagem.GetValueOrDefault(catPromo) == totalPromo,
-            $"TL-1 a aba Promoções conta os produtos, o card com código e o cartão da raspadinha ({contagem.GetValueOrDefault(catPromo)} de {totalPromo})");
+            $"TL-1 a aba Promoções conta os produtos e o cartão da raspadinha, sem o card com código ({contagem.GetValueOrDefault(catPromo)} de {totalPromo})");
 
         var cartao = Campo<Border>(venda, "CartaoRaspadinha");
         var lista = Campo<ItemsControl>(venda, "ListaProdutos");
@@ -828,8 +829,8 @@ public static class TestesBrindes
         var pilhas = colunasGrid.Children.OfType<StackPanel>().ToList();
         var blocos = pilhas.SelectMany(p => p.Children.OfType<FrameworkElement>()).ToList();
         var card = blocos.OfType<Button>().FirstOrDefault(b => b.Tag as string == IdFunc);
-        checar(blocos.Count == ProdutosPorPromo.Length + 1 && card is not null && pilhas[0].Children.IndexOf(card) == 0,
-            $"TL-6 os 14 blocos (13 seções e o card do funcionário) estão nas colunas, com o card abrindo a primeira ({blocos.Count})");
+        checar(blocos.Count == ProdutosPorPromo.Length && card is null,
+            $"TL-6 os 13 blocos (as seções) estão nas colunas, sem o card do funcionário ({blocos.Count})");
         var depois = lista.ActualHeight;
         // o ESPAÇO que o card ocupa na aba (com a margem): na coluna, o dele; na grade velha, a célula
         var cardDepois = card?.DesiredSize.Height ?? 0;
@@ -848,8 +849,8 @@ public static class TestesBrindes
         velha.Children.Clear();
         Console.WriteLine($"      [medido] aba Promoções 1024x768, {colunasDaAba} coluna(s), 14 blocos: altura {antes:0} px antes (UniformGrid) e {depois:0} px depois (colunas); card do funcionário {cardAntes:0} px antes e {cardDepois:0} px depois; maior seção {maiorDepois:0} px");
         checar(depois < antes * 0.75, $"TL-7 a aba fica mais curta: {depois:0} px contra {antes:0} px no UniformGrid");
-        checar(cardDepois > 0 && cardDepois < 130 && cardAntes >= maiorDepois - 1 && cardAntes > cardDepois * 2,
-            $"TL-8 o card do desconto de funcionário ocupa a altura dele ({cardDepois:0} px), não a da maior seção ({cardAntes:0} px antes)");
+        checar(cardDepois == 0 && Campo<Button>(venda, "BtnPromoComSenha").Visibility == Visibility.Visible,
+            $"TL-8 o desconto de funcionário não ocupa a aba ({cardDepois:0} px): fica no botão fixo da comanda");
         AbrirPromo();   // repinta as colunas de verdade
         Foto(host, "promocoes-1024.png");
 
@@ -864,7 +865,7 @@ public static class TestesBrindes
         var uniforme1920 = ColunasPorAltura.AlturaEmGradeUniforme(alturas1920, pilhas1920.Count);
         Console.WriteLine($"      [medido] aba Promoções 1920x1080, {pilhas1920.Count} colunas: {lista.ActualHeight:0} px (colunas) contra {uniforme1920:0} px (UniformGrid); colunas com {string.Join(" / ", pilhas1920.Select(p => p.ActualHeight.ToString("0")))} px");
         Foto(host, "promocoes-1920.png");
-        checar(pilhas1920.Count >= 2 && alturas1920.Count == 14 && lista.ActualHeight < uniforme1920 * 0.75,
+        checar(pilhas1920.Count >= 2 && alturas1920.Count == 13 && lista.ActualHeight < uniforme1920 * 0.75,
             $"TL-8b em 1920 a aba usa {pilhas1920.Count} colunas e fica mais curta que a grade uniforme ({lista.ActualHeight:0} contra {uniforme1920:0} px)");
         host.Width = 1024; host.Height = 768;
         host.UpdateLayout();

@@ -37,7 +37,7 @@ public static class TestesPromoOferecida
     public static void Rodar(Action<bool, string> checar)
     {
         // ── o rótulo do botão (puro) ────────────────────────────────────────
-        checar(PortaoPromocao.RotuloDoBotao(new[] { "Desconto funcionário" }) == "Aplicar Desconto funcionário",
+        checar(PortaoPromocao.RotuloDoBotao(new[] { "Desconto funcionário" }) == "Desconto funcionário",
             "uma promoção: o botão diz o nome dela, que é o que o operador confere com o cliente");
         checar(PortaoPromocao.RotuloDoBotao(new[] { "Desconto funcionário", "Desconto do dono" }) == "Aplicar promoção (2)",
             "duas ou mais: só o número, senão a linha vira parede");
@@ -86,8 +86,9 @@ public static class TestesPromoOferecida
 
         var botao = Campo<Button>(venda, "BtnPromoComSenha");
         var rotulo = Campo<TextBlock>(venda, "TxtPromoComSenha");
-        checar(botao.Visibility != Visibility.Visible,
-            "comanda vazia: nenhum botão de promoção com senha");
+        // 08/10/2026 (dono): o botão é fixo acima do cupom de cortesia enquanto a promoção vale hoje
+        checar(botao.Visibility == Visibility.Visible,
+            "comanda vazia: o botão fixo da promoção com senha aparece");
 
         // ── BIPA UM PRODUTO ────────────────────────────────────────────────
         // É AQUI que a janela do código abria sozinha. Depois disto não pode haver
@@ -108,15 +109,15 @@ public static class TestesPromoOferecida
         // ── O CONVITE ──────────────────────────────────────────────────────
         checar(botao.Visibility == Visibility.Visible,
             "o botão aparece, porque a promoção valeria para esta comanda");
-        checar(rotulo.Text == "Aplicar Desconto Funcionario",
+        checar(rotulo.Text == "Desconto Funcionario",
             $"…e diz o nome dela (viu: {rotulo.Text})");
 
         // ── ESVAZIOU, SUMIU ────────────────────────────────────────────────
         Invocar(venda, "EsvaziarComanda");
         Invocar(venda, "PintarComanda");
         host.UpdateLayout();
-        checar(botao.Visibility != Visibility.Visible,
-            "comanda limpa: o botão some junto (a promoção não alcança nada)");
+        checar(botao.Visibility == Visibility.Visible,
+            "comanda limpa: o botão fixo continua (o toque só avisa, a promoção não alcança nada)");
 
         fecha.Stop();
         host.Content = null;

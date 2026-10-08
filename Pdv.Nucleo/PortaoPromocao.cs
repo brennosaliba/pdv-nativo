@@ -125,7 +125,7 @@ public static class PortaoPromocao
     public static string RotuloDoBotao(IReadOnlyList<string> nomes) => nomes.Count switch
     {
         0 => "",
-        1 => $"Aplicar {nomes[0]}",
+        1 => nomes[0],   // 08/10: sem "Aplicar"; a chave do botão já diz, e o nome cabe a 1024
         _ => $"Aplicar promoção ({nomes.Count})",
     };
 

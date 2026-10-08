@@ -118,13 +118,14 @@ public static class TestesPromoFuncionarioSavassi
         var lista = Campo<ItemsControl>(venda, "ListaProdutos");
         var textos = lista.Items.OfType<DependencyObject>().SelectMany(Textos).ToList();
         Console.WriteLine($"      [medido] categoria PROMOCAO mostra {lista.Items.Count} secao(oes): {string.Join(" / ", textos)}");
-        // 13/09/2026: era o defeito medido ("nao lista"). Com a correcao, o card aparece.
-        checar(textos.Any(t => t.Contains("Funcionario", StringComparison.OrdinalIgnoreCase)),
-            "categoria PROMOCAO lista a Desconto Funcionario (card com chave)");
+        // 08/10/2026 (dono): o card saiu da categoria PROMOCAO; a promocao mora no botao fixo
+        checar(!textos.Any(t => t.Contains("Funcionario", StringComparison.OrdinalIgnoreCase)),
+            "categoria PROMOCAO nao tem mais o card da Desconto Funcionario");
 
         var botao = Campo<Button>(venda, "BtnPromoComSenha");
         var rotulo = Campo<TextBlock>(venda, "TxtPromoComSenha");
-        checar(botao.Visibility != Visibility.Visible, "comanda vazia: botao escondido");
+        checar(botao.Visibility == Visibility.Visible && rotulo.Text == "Desconto Funcionario",
+            "comanda vazia: o botao fixo aparece com o nome da promocao");
 
         Invocar(venda, "Adicionar", Produto());
         host.UpdateLayout();
@@ -138,8 +139,8 @@ public static class TestesPromoFuncionarioSavassi
             FlowDirection.LeftToRight, new System.Windows.Media.Typeface(rotulo.FontFamily, rotulo.FontStyle, rotulo.FontWeight, rotulo.FontStretch),
             rotulo.FontSize, System.Windows.Media.Brushes.Black, 1.0);
         Console.WriteLine($"      [medido] texto do botao: precisa {ft.WidthIncludingTrailingWhitespace:0.0}px, ganhou {rotulo.ActualWidth:0.0}px => {(ft.WidthIncludingTrailingWhitespace > rotulo.ActualWidth + 0.5 ? "CORTADO com reticencias" : "inteiro")}");
-        checar(botao.Visibility == Visibility.Visible && rotulo.Text == "Aplicar Desconto Funcionario",
-            "com 1 item: botao 'Aplicar Desconto Funcionario' aparece");
+        checar(botao.Visibility == Visibility.Visible && rotulo.Text == "Desconto Funcionario",
+            "com 1 item: botao 'Desconto Funcionario' aparece");
         checar(pos.X >= 0 && pos.Y >= 0 && pos.X + botao.ActualWidth <= 1024 && pos.Y + botao.ActualHeight <= 768 && botao.ActualHeight > 0,
             "o botao cabe dentro de 1024x768");
 

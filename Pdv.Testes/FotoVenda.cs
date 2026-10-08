@@ -67,6 +67,10 @@ public static class FotoVenda
         // mostrar o cartao do validador no topo da aba Promocoes.
         var raspadinha = args.Any(a => a.Equals("raspadinha", StringComparison.OrdinalIgnoreCase));
         args = args.Where(a => !a.Equals("raspadinha", StringComparison.OrdinalIgnoreCase)).ToArray();
+        // 08/10/2026: "promo-senha" = semeia na CÓPIA a DESCONTO FUNCIONARIO de produção (30%, código
+        // do gerente), para a foto mostrar o botão fixo acima do cupom de cortesia.
+        var promoSenha = args.Any(a => a.Equals("promo-senha", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("promo-senha", StringComparison.OrdinalIgnoreCase)).ToArray();
         var modo = args.FirstOrDefault(a => a.Equals("tef", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("tef+pos", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("semtef", StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant();
@@ -128,6 +132,13 @@ public static class FotoVenda
             if (semTef) Vendas.GravarConfig(cx, "tef_habilitado", "0");
             if (loja) Vendas.GravarConfig(cx, "homologacao", "0");
             if (raspadinha) Vendas.GravarConfig(cx, Brindes.ChaveConfigLoja, "1");
+            if (promoSenha)
+                cx.Execute("INSERT OR REPLACE INTO promo (id, payload, atualizado_em) VALUES ('foto-func', @P, @a)", new
+                {
+                    P = "{\"id\":\"foto-func\",\"nome\":\"DESCONTO FUNCIONARIO\",\"tipo\":\"percentual\",\"alvo\":\"todos\",\"ativa\":true,"
+                        + "\"percentual\":30,\"inicio\":\"2026-09-08\",\"config\":{\"autorizacao\":\"gerente\"}}",
+                    a = DateTime.UtcNow.ToString("O"),
+                });
         }
         var operador = new Operador(opId, opNome, "operador");
         var sessao = new Sessao("sessao-foto", Caixa.DiaOperacional(), opId, opNome,
