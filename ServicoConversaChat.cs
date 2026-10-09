@@ -151,7 +151,9 @@ public static class ServicoConversaChat
             if (QuadroSendbird.Comando(payload) != QuadroSendbird.ComandoMensagem) return;
             var m = QuadroSendbird.Ler(payload);
             if (m is null) return;
-            if (!string.IsNullOrWhiteSpace(wsUserId)) _wsUserId = wsUserId;
+            // 1.0.26: o id da loja so vem da conexao do chat de CLIENTES (canal de pedido
+            // sendbird_gc_cm_); a do entregador tem outro usuario e trocava o _wsUserId
+            if (!string.IsNullOrWhiteSpace(wsUserId) && CanalIfood.Ler(m.Canal) is not null) _wsUserId = wsUserId;
 
             if (Confirmacoes.Ver(m, enviado) is { } conf)
                 _ = RelatarAsync(conf.SaidaId, "enviada", null, conf.MsgId, null);

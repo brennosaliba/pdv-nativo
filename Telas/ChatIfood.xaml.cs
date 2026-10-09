@@ -2180,21 +2180,34 @@ public partial class ChatIfood : UserControl
         }
         return null;
       }
+      // 1.0.26 (09/10): o Gestor tem DUAS conexoes do Sendbird (o chat de clientes e o do
+      // entregador), e SendbirdChat.instance e um singleton: aponta para a ULTIMA que subiu. Com
+      // a do entregador por cima, o webpack so achava ela e todo envio caia em canal_errado
+      // (Savassi 09/10 12:37, user_id_igual_ws=false). Aqui a procura sobe a arvore do React a
+      // partir de VARIOS elementos do Sendbird (ate 40) e junta todos os provedores achados.
       function doReact(lista){
         try {
-          var el = acharNo(document, '[class*="sendbird-"]', 0, { n: 0 })
+          var els = [];
+          try { els = Array.prototype.slice.call(document.querySelectorAll('[class*="sendbird-"]'), 0, 40); } catch (e) {}
+          var um = acharNo(document, '[class*="sendbird-"]', 0, { n: 0 })
                 || acharNo(document, 'textarea,[contenteditable="true"]', 0, { n: 0 });
-          if (!el) return;
-          var chave = Object.keys(el).filter(function (k) { return k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0; })[0];
-          var f = chave ? el[chave] : null, n = 0;
-          while (f && n < 500) {
-            var pr = f.memoizedProps;
-            if (pr) {
-              try { if (pr.value && pr.value.stores && pr.value.stores.sdkStore) junta(lista, pr.value.stores.sdkStore.sdk); } catch (e) {}
-              try { if (pr.stores && pr.stores.sdkStore) junta(lista, pr.stores.sdkStore.sdk); } catch (e) {}
-              try { if (pr.sdk) junta(lista, pr.sdk); } catch (e) {}
+          if (um && els.indexOf(um) < 0) els.push(um);
+          var vistos = [];
+          for (var e1 = 0; e1 < els.length; e1++) {
+            var el = els[e1];
+            var chave = Object.keys(el).filter(function (k) { return k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0; })[0];
+            var f = chave ? el[chave] : null, n = 0;
+            while (f && n < 500) {
+              if (vistos.indexOf(f) >= 0) break;
+              vistos.push(f);
+              var pr = f.memoizedProps;
+              if (pr) {
+                try { if (pr.value && pr.value.stores && pr.value.stores.sdkStore) junta(lista, pr.value.stores.sdkStore.sdk); } catch (e) {}
+                try { if (pr.stores && pr.stores.sdkStore) junta(lista, pr.stores.sdkStore.sdk); } catch (e) {}
+                try { if (pr.sdk) junta(lista, pr.sdk); } catch (e) {}
+              }
+              f = f.return; n++;
             }
-            f = f.return; n++;
           }
         } catch (e) {}
       }
@@ -2206,9 +2219,11 @@ public partial class ChatIfood : UserControl
         }
         var lista = [];
         doWebpack(lista);
-        via.webpack = lista.length > 0;
-        if (!lista.length) doReact(lista);
-        via.react = !via.webpack && lista.length > 0;
+        var doPacote = lista.length;
+        via.webpack = doPacote > 0;
+        // 1.0.26: o React SEMPRE, somando ao webpack (o singleton so mostra uma das conexoes)
+        doReact(lista);
+        via.react = lista.length > doPacote;
         cache = lista; cacheEm = Date.now();
         return lista;
       }

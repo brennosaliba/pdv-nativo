@@ -91,6 +91,14 @@ public static class TestesChatSempreVivo
                    && !pa.GetCustomAttributes(typeof(System.Runtime.CompilerServices.RequiredMemberAttribute), false).Any(),
                 "CV-11f a porta do aquecimento e opcional na ponte (a bateria e o teste nao precisam dela)");
         }
+        // 1.0.26: as duas conexoes do Sendbird (clientes e entregador)
+        checar(chat.Contains("var doPacote = lista.length;") && chat.Contains("via.react = lista.length > doPacote;")
+               && !chat.Contains("if (!lista.length) doReact(lista);"),
+            "CV-27 o React e procurado SEMPRE, somando ao webpack (o singleton so mostra a ultima conexao)");
+        checar(chat.Contains("document.querySelectorAll('[class*=\"sendbird-\"]'), 0, 40)") && chat.Contains("if (vistos.indexOf(f) >= 0) break;"),
+            "CV-28 a procura do React parte de ate 40 elementos do Sendbird, sem repetir no da arvore");
+        checar(servico.Contains("if (!string.IsNullOrWhiteSpace(wsUserId) && CanalIfood.Ler(m.Canal) is not null) _wsUserId = wsUserId;"),
+            "CV-29 o id da loja no WebSocket so vem de canal de pedido (a conexao do entregador nao troca)");
         checar(enviar.Contains("if (res.Ok || res.Erro is \"sem_resposta\") return;") && enviar.Contains("if (visto == true) { await RelatarAsync(s.Id, \"incerta\""),
             "CV-12 a confirmacao pelo quadro e o 'incerta' continuam como antes dentro do laco");
 
