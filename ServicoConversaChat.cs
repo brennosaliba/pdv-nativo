@@ -456,6 +456,42 @@ public static class ServicoConversaChat
         return achou && conferidos == 0;
     }
 
+    /// <summary>
+    /// 1.0.27 (09/10): os canais que o diagnostico do SDK confere. Antes eram so os vistos em quadros
+    /// de conversa; depois de reiniciar, sem nenhum cliente escrever, nao havia canal nenhum, o SDK
+    /// nao era provado e o servidor nao gerava as mensagens do pedido (13:27 a 13:35 da Savassi). O
+    /// endereco do canal do iFood e sendbird_gc_cm_(pedido)_(loja): os pedidos do iFood do KDS das
+    /// ultimas 3 h com os merchants do sinal completam a lista.
+    /// </summary>
+    public static IReadOnlyList<string> CanaisParaConferir()
+    {
+        var lista = Contadores.AlgunsCanais(5).ToList();
+        if (lista.Count >= 3) return lista;
+        try
+        {
+            var merchants = _ultimo.Sinal.MerchantIds;
+            if (merchants.Count == 0) return lista;
+            using var cx = Banco.Abrir();
+            using var cmd = cx.CreateCommand();
+            cmd.CommandText = "SELECT ref_id FROM kds_ticket WHERE origem = 'ifood' AND criado_em >= $desde ORDER BY criado_em DESC LIMIT 3";
+            cmd.Parameters.AddWithValue("$desde", DateTime.Now.AddHours(-3).ToString("yyyy-MM-dd'T'HH:mm:ss"));
+            using var r = cmd.ExecuteReader();
+            while (r.Read() && lista.Count < 5)
+            {
+                var pedido = r.IsDBNull(0) ? "" : r.GetString(0).Trim().ToLowerInvariant();
+                if (pedido.Length != 36) continue;
+                foreach (var m in merchants)
+                {
+                    var canal = $"sendbird_gc_cm_{pedido}_{m.Trim().ToLowerInvariant()}";
+                    if (CanalIfood.Ler(canal) is not null && !lista.Contains(canal)) lista.Add(canal);
+                    if (lista.Count >= 5) break;
+                }
+            }
+        }
+        catch (Exception ex) { Diag("canais para conferir: " + ex.GetType().Name); }
+        return lista;
+    }
+
     /// <summary>1.0.25: abre a conversa do pedido (ou a lista) no Gestor escondido, para o SDK carregar o canal. Nunca lanca.</summary>
     private static async Task<bool> AquecerAsync(PonteDoChat ponte, string? numero, string? orderUuid)
     {
@@ -527,7 +563,7 @@ public static class ServicoConversaChat
             {
                 try
                 {
-                    sdk = await p.DiagSdk(Contadores.AlgunsCanais(5), _wsUserId)
+                    sdk = await p.DiagSdk(CanaisParaConferir(), _wsUserId)
                         .WaitAsync(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
                 }
                 catch { sdk = null; }
@@ -536,7 +572,7 @@ public static class ServicoConversaChat
                     _sdkUserId = u.Trim();
                 // 1.0.25: SDK frio (achou a instancia, havia canais para conferir e nenhum foi achado):
                 // abre a lista de conversas no Gestor escondido, no maximo a cada 2 min
-                if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count, p.Gestor() == "logado") && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)
+                if (SdkFrio(sdk, CanaisParaConferir().Count, p.Gestor() == "logado") && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)
                 {
                     _ultimoAquecimento = DateTime.Now;
                     var aqueceu = await AquecerAsync(p, null, null).ConfigureAwait(false);

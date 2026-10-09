@@ -2299,15 +2299,25 @@ public partial class ChatIfood : UserControl
             r.modulos = achados.length;
             r.runtimes = Object.keys(reqs).length;
             if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
-            var canais = (a && a.canais) || [], conferidos = 0, comUuid = 0, congeladas = 0;
+            var canais = (a && a.canais) || [], conferidos = 0, comUuid = 0, congeladas = 0, uidQueAchou = '';
             for (var i = 0; i < canais.length && i < 5; i++) {
-              var ch = await acharCanal(lista, canais[i]);
+              var ch = null;
+              // 1.0.27: guarda QUAL conexao achou o canal de pedido: essa e a do chat de clientes
+              for (var t2 = 0; t2 < 2 && !ch; t2++) {
+                for (var k = 0; k < lista.length && !ch; k++) {
+                  try { ch = await lista[k].groupChannel.getChannel(canais[i]); if (ch && !uidQueAchou && lista[k].currentUser) uidQueAchou = String(lista[k].currentUser.userId); } catch (e) {}
+                }
+                if (!ch) await espera(1500);
+              }
               if (!ch) continue;
               conferidos++;
               if (pedidoSemRede(ch)) comUuid++;
               if (ch.isFrozen) congeladas++;
             }
             r.conferidos = conferidos;
+            // 1.0.27: sem fala de cliente ainda, o id da loja no WebSocket nao existe; a conexao que
+            // achou o canal de pedido prova que a instancia e a do chat de clientes
+            if (uidQueAchou) { r.uid_canal = true; if (!ws) { r.user_id_igual_ws = true; r.uid = uidQueAchou; } }
             r.tem_order_uuid = comUuid > 0;
             r.congeladas = congeladas;
           } catch (e) {}

@@ -77,7 +77,7 @@ public static class TestesChatSempreVivo
                    && !ServicoConversaChat.SdkFrio(quente, 3, true) && !ServicoConversaChat.SdkFrio(semSdk, 3, true) && !ServicoConversaChat.SdkFrio(null, 3, true),
                 "CV-11b SdkFrio: achou e conferidos=0 com canais para conferir, ou com o Gestor logado e nenhum canal visto; quente, sem instancia ou sem diagnostico nao e frio");
             checar(ServicoConversaChat.IntervaloDoAquecimento == TimeSpan.FromMinutes(2)
-                   && servico.Contains("if (SdkFrio(sdk, Contadores.AlgunsCanais(5).Count, p.Gestor() == \"logado\") && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)"),
+                   && servico.Contains("if (SdkFrio(sdk, CanaisParaConferir().Count, p.Gestor() == \"logado\") && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)"),
                 "CV-11c o sinal aquece pela lista de conversas no maximo a cada 2 min");
             checar(chat.Contains("public async Task<bool> AquecerConversaAsync(string? numero, string? orderUuid)") && chat.Contains("AquecerConversa = AquecerConversaAsync,")
                    && chat.Contains("window.pdvAquecerLista ? window.pdvAquecerLista() : 'sem_funcao'") && chat.Contains("window.pdvBuscarConversa ? window.pdvBuscarConversa("),
@@ -99,6 +99,11 @@ public static class TestesChatSempreVivo
             "CV-28 a procura do React parte de ate 40 elementos do Sendbird, sem repetir no da arvore");
         checar(servico.Contains("if (!string.IsNullOrWhiteSpace(wsUserId) && CanalIfood.Ler(m.Canal) is not null) _wsUserId = wsUserId;"),
             "CV-29 o id da loja no WebSocket so vem de canal de pedido (a conexao do entregador nao troca)");
+        checar(servico.Contains("sdk = await p.DiagSdk(CanaisParaConferir(), _wsUserId)") && servico.Contains("SELECT ref_id FROM kds_ticket WHERE origem = 'ifood'")
+               && servico.Contains("var canal = $\"sendbird_gc_cm_{pedido}_{m.Trim().ToLowerInvariant()}\";"),
+            "CV-30 o diagnostico confere tambem os canais dos pedidos do iFood do KDS (sem esperar fala de cliente)");
+        checar(chat.Contains("if (uidQueAchou) { r.uid_canal = true; if (!ws) { r.user_id_igual_ws = true; r.uid = uidQueAchou; } }"),
+            "CV-31 sem id do WebSocket, a conexao que achou o canal de pedido prova o chat de clientes");
         checar(enviar.Contains("if (res.Ok || res.Erro is \"sem_resposta\") return;") && enviar.Contains("if (visto == true) { await RelatarAsync(s.Id, \"incerta\""),
             "CV-12 a confirmacao pelo quadro e o 'incerta' continuam como antes dentro do laco");
 
