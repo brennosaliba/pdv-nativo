@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
+using Dapper;
 using Pdv.Nucleo;
 
 namespace Pdv.Telas;
@@ -1098,6 +1099,9 @@ public partial class ChatIfood : UserControl
         try
         {
             if (!_pronto || Web.CoreWebView2 is null) return;
+            // 1.0.29 (09/10, pedido do dono): abrir o Gestor inteiro pede o autenticador do gerente
+            // geral ou do dono (nivel gerente = manager ou owner). Voltar para "So o chat" e livre.
+            if (!_gestorInteiro && !await AutorizarGestorInteiroAsync()) return;
             _gestorInteiro = !_gestorInteiro;
             TxtGestorInteiro.Text = _gestorInteiro ? "Só o chat" : "Gestor inteiro";
             await Web.CoreWebView2.ExecuteScriptAsync(_gestorInteiro
@@ -1106,6 +1110,32 @@ public partial class ChatIfood : UserControl
             TxtEstado.Text = _gestorInteiro ? "Gestor inteiro (toque em Só o chat para voltar)" : "painel do chat";
         }
         catch (Exception ex) { Diag("gestor inteiro: " + ex.GetType().Name); }
+    }
+
+    /// <summary>1.0.29: o codigo do autenticador do gerente geral ou do dono, conferido na nuvem. false = nao abre.</summary>
+    private async Task<bool> AutorizarGestorInteiroAsync()
+    {
+        try
+        {
+            var dono = Window.GetWindow(this) ?? Application.Current.MainWindow;
+            if (dono is null) return false;
+            PedidoAutorizacao pedido;
+            using (var cx = Banco.Abrir())
+            {
+                var terminal = Autorizacao.NomeDoTerminal(cx);
+                pedido = new PedidoAutorizacao(terminal, Autorizacao.ReferenciaGestorInteiro(terminal, DateTime.Now), 0,
+                    Loja: cx.ExecuteScalar<string?>("SELECT loja_nome FROM terminal LIMIT 1"))
+                {
+                    Tipo = Autorizacao.TipoGestorInteiro,
+                    Nivel = Autorizacao.NivelGerente,
+                };
+            }
+            var aut = await Autorizacao.ResolverAsync(Servicos.Autorizador(), pedido, new TelaAutorizacao(dono));
+            Diag($"gestor inteiro: {(aut.Autorizado ? "liberado por " + (aut.AprovadoPor ?? "-") : "recusado")}");
+            if (!aut.Autorizado && !aut.Avisado) TxtEstado.Text = aut.Motivo;
+            return aut.Autorizado;
+        }
+        catch (Exception ex) { Diag("gestor inteiro (2FA): " + ex.GetType().Name); TxtEstado.Text = "Não deu para conferir o código agora."; return false; }
     }
 
     /// <summary>

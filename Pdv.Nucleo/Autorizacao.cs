@@ -240,6 +240,13 @@ public static class Autorizacao
         return $"promocao:{Limpo(comandaId, 48)}:{Limpo(promoId, 48)}";
     }
 
+    /// <summary>1.0.29 (09/10, pedido do dono): abrir o Gestor inteiro no caixa pede o autenticador do gerente geral ou do dono.</summary>
+    public const string TipoGestorInteiro = "gestor_inteiro";
+
+    /// <summary>A referencia do log: "gestor:(terminal):(aaaammddhhmmss)".</summary>
+    public static string ReferenciaGestorInteiro(string terminal, DateTime agora)
+        => "gestor:" + new string((terminal ?? "").Where(char.IsLetterOrDigit).Take(40).ToArray()) + ":" + agora.ToString("yyyyMMddHHmmss");
+
     /// <summary>154 (08/10): o tipo do log do TOTP quando o caixa desfaz um resgate da raspadinha.</summary>
     public const string TipoResgateDesfazer = "resgate_desfazer";
 
@@ -313,6 +320,7 @@ public static class Autorizacao
         {
             "cancelamento" => ("Cancelamento", "não autorizado."),
             "promocao" => ("Promoção", "não autorizada."),
+            TipoGestorInteiro => ("Acesso ao Gestor", "não autorizado."),
             _ => ("Estorno", "não autorizado."),
         };
         var papel = Papel(pedido.Nivel);

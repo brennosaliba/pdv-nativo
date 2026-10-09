@@ -127,6 +127,12 @@ public static class TestesChatSempreVivo
                    && servicoRasp.Contains(": ChatRaspadinha.ComandaLinhas(b,"),
                 "CV-34 com o pedido no KDS sai a comanda original com a cortesia; sem ele, o papel avulso");
         }
+        // 1.0.29: Gestor inteiro so com o autenticador do gerente geral ou do dono
+        checar(chat.Contains("if (!_gestorInteiro && !await AutorizarGestorInteiroAsync()) return;")
+               && chat.Contains("Tipo = Autorizacao.TipoGestorInteiro,") && chat.Contains("Nivel = Autorizacao.NivelGerente,")
+               && Autorizacao.TipoGestorInteiro == "gestor_inteiro"
+               && Autorizacao.ReferenciaGestorInteiro("CAIXA 1", new DateTime(2026, 10, 9, 14, 30, 0)) == "gestor:CAIXA1:20261009143000",
+            "CV-35 abrir o Gestor inteiro pede o 2FA (nivel gerente: gerente geral ou dono); voltar para So o chat e livre");
         checar(enviar.Contains("if (res.Ok || res.Erro is \"sem_resposta\") return;") && enviar.Contains("if (visto == true) { await RelatarAsync(s.Id, \"incerta\""),
             "CV-12 a confirmacao pelo quadro e o 'incerta' continuam como antes dentro do laco");
 
