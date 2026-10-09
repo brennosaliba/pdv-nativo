@@ -425,6 +425,44 @@ public sealed class ChatRaspadinha
     }
 
     /// <summary>
+    /// 1.0.28 (09/10/2026, pedido do dono): o resgate sai JUNTO da comanda do pedido original. A
+    /// comanda de cozinha do pedido e reimpressa inteira, com o premio no fim como CORTESIA e com
+    /// quadradinho, para a cozinha nao mandar so o brinde. Sem o pedido no KDS, quem chama usa o
+    /// papel avulso de sempre (<see cref="ComandaLinhas(BonusRaspadinha, int, DateTime?)"/>).
+    /// </summary>
+    public static IReadOnlyList<string> ComandaDoPedidoComCortesia(Ticket pedido, BonusRaspadinha b,
+        int colunas = Kds.ColunasPadrao, DateTime? hoje = null)
+    {
+        var L = Kds.ColunasComanda(colunas);
+        var quando = hoje ?? DateTime.Now;
+        var linhas = Kds.ComandaLinhas(pedido, colunas, hoje).ToList();
+        // tira o fecho (tracejado + linha vazia) para a cortesia entrar dentro da comanda
+        while (linhas.Count > 0 && (linhas[^1].Length == 0 || linhas[^1] == new string('-', L))) linhas.RemoveAt(linhas.Count - 1);
+        linhas.Insert(0, LinhaEscala.Com(Centro("REIMPRESSA: RESGATE DA RASPADINHA", L), 1.0));
+        linhas.Add(new string('=', L));
+        linhas.Add(LinhaEscala.Com(Centro("+ CORTESIA RASPADINHA", L), 1.5));
+        var itens = b.Itens is { Count: > 0 }
+            ? b.Itens.Select(i => $"{Math.Max(1, i.Qtd)}x {i.Nome.Trim()}")
+            : new[] { "1x " + (string.IsNullOrWhiteSpace(b.Premio) ? "BRINDE" : b.Premio!.Trim()) };
+        foreach (var item in itens)
+        {
+            var primeira = true;
+            foreach (var parte in QuebraPorPalavra(item.ToUpperInvariant(), Math.Max(4, (int)Math.Floor((L - 4) / 1.5))))
+            {
+                linhas.Add(LinhaEscala.Com((primeira ? "[ ] " : "    ") + parte, 1.5));
+                primeira = false;
+            }
+        }
+        linhas.Add(new string('=', L));
+        var codigo = string.IsNullOrWhiteSpace(b.Codigo) ? "" : "Codigo " + b.Codigo!.Trim() + "  ";
+        linhas.Add(Corta(SemAcento(codigo + quando.ToString("HH:mm")), L));
+        linhas.Add(Corta("Monte o pedido inteiro com a cortesia.", L));
+        linhas.Add(Corta("Brinde sem valor fiscal.", L));
+        linhas.Add("");
+        return linhas;
+    }
+
+    /// <summary>
     /// Uma linha ampliada que cabe no papel: quebra por palavra na largura <c>colunas / escala</c>,
     /// no máximo <paramref name="maxLinhas"/>, e a última leva "…" quando sobrou texto.
     /// </summary>

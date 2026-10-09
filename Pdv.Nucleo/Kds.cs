@@ -238,6 +238,19 @@ public static class Kds
 
     private static string SoDigitos(string? s) => new string((s ?? "").Where(char.IsDigit).ToArray());
 
+    /// <summary>1.0.28: o ticket do iFood de um pedido (o mais recente), em qualquer estado menos cancelado.</summary>
+    public static Ticket? DoPedidoIfood(string? orderId)
+    {
+        var id = (orderId ?? "").Trim();
+        if (id.Length == 0) return null;
+        using var cx = Banco.Abrir();
+        return cx.Query(
+            @"SELECT * FROM kds_ticket
+               WHERE origem = 'ifood' AND lower(ref_id) = lower(@r) AND status <> 'cancelado'
+               ORDER BY criado_em DESC LIMIT 1", new { r = id })
+            .Select(Ler).FirstOrDefault();
+    }
+
     public static List<Ticket> Abertos()
     {
         using var cx = Banco.Abrir();

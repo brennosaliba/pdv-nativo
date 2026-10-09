@@ -344,9 +344,16 @@ public static class ServicoRaspadinhaChat
     }
 
     /// <summary>O papel em si: mesma largura e mesmo caminho da comanda de cozinha.</summary>
+    /// 1.0.28 (09/10, pedido do dono): com o pedido no KDS, sai a comanda ORIGINAL reimpressa com o
+    /// premio como cortesia no fim (a cozinha monta o pedido inteiro, e nao so o brinde); sem ele,
+    /// o papel avulso de sempre.
     private static Task<string?> ImprimirAsync(BonusRaspadinha b, Impressao.Destino destino)
-        => Impressao.ImprimirTextoAsync(
-            $"Brinde da raspadinha {b.Codigo ?? b.Id}",
-            new[] { ChatRaspadinha.ComandaLinhas(b, Nucleo.Kds.ColunasComanda(destino.Papel.Colunas)) },
-            destino);
+    {
+        Nucleo.Ticket? pedido = null;
+        try { pedido = Nucleo.Kds.DoPedidoIfood(b.IfoodOrderId); } catch { pedido = null; }
+        var linhas = pedido is not null
+            ? ChatRaspadinha.ComandaDoPedidoComCortesia(pedido, b, destino.Papel.Colunas)
+            : ChatRaspadinha.ComandaLinhas(b, Nucleo.Kds.ColunasComanda(destino.Papel.Colunas));
+        return Impressao.ImprimirTextoAsync($"Brinde da raspadinha {b.Codigo ?? b.Id}", new[] { linhas }, destino);
+    }
 }

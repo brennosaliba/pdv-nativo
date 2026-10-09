@@ -104,6 +104,29 @@ public static class TestesChatSempreVivo
             "CV-30 o diagnostico confere tambem os canais dos pedidos do iFood do KDS (sem esperar fala de cliente)");
         checar(chat.Contains("if (uidQueAchou) { r.uid_canal = true; if (!ws) { r.user_id_igual_ws = true; r.uid = uidQueAchou; } }"),
             "CV-31 sem id do WebSocket, a conexao que achou o canal de pedido prova o chat de clientes");
+
+        // 1.0.28: o resgate reimprime a comanda ORIGINAL do pedido com o premio como cortesia (#1424 de 09/10)
+        {
+            var t = new Ticket("t1", "ifood", "a323de4a-734d-48c6-af68-a18e1763f5c6", "1424", "Brenno Saliba",
+                "[{\"Descricao\":\"Donut Homer\",\"Qtd\":2000,\"Observacao\":null},{\"Descricao\":\"Cookie Ninho\",\"Qtd\":1000,\"Observacao\":null}]", "pronto",
+                new DateTime(2026, 10, 9, 13, 50, 0), null, null);
+            var b = new BonusRaspadinha("b1", "AD-EW3W2P", "Cookie New York", null, "Brenno Saliba", "1424", "American Day Savassi",
+                t.RefId, "chat", new DateTime(2026, 10, 9, 13, 57, 0), new[] { new ItemBonus("Cookie New York", 1) }, "Automatizado");
+            var l = ChatRaspadinha.ComandaDoPedidoComCortesia(t, b, 48, new DateTime(2026, 10, 9, 13, 57, 0));
+            var txt = string.Join("|", l);
+            var iPed32 = txt.IndexOf("DONUT HOMER", StringComparison.OrdinalIgnoreCase);
+            var iCort32 = txt.IndexOf("CORTESIA RASPADINHA", StringComparison.Ordinal);
+            var iPrem32 = txt.IndexOf("1X COOKIE NEW YORK", StringComparison.Ordinal);
+            checar(txt.Contains("COMANDA DE COZINHA") && txt.Contains("#1424") && iPed32 >= 0 && iCort32 > iPed32 && iPrem32 > iCort32
+                   && txt.Contains("REIMPRESSA: RESGATE DA RASPADINHA") && txt.Contains("Codigo AD-EW3W2P")
+                   && l.Any(x => x.Contains("[ ] 1X COOKIE NEW YORK")),
+                $"CV-32 a comanda do resgate e a do pedido inteiro, com o premio no fim como cortesia e quadradinho ({txt})");
+            checar(!txt.Contains('—') && !txt.Contains('–'), "CV-33 sem travessao na comanda da cortesia");
+            var servicoRasp = Fonte("ServicoRaspadinhaChat.cs") ?? "";
+            checar(servicoRasp.Contains("Nucleo.Kds.DoPedidoIfood(b.IfoodOrderId)") && servicoRasp.Contains("ChatRaspadinha.ComandaDoPedidoComCortesia(pedido, b, destino.Papel.Colunas)")
+                   && servicoRasp.Contains(": ChatRaspadinha.ComandaLinhas(b,"),
+                "CV-34 com o pedido no KDS sai a comanda original com a cortesia; sem ele, o papel avulso");
+        }
         checar(enviar.Contains("if (res.Ok || res.Erro is \"sem_resposta\") return;") && enviar.Contains("if (visto == true) { await RelatarAsync(s.Id, \"incerta\""),
             "CV-12 a confirmacao pelo quadro e o 'incerta' continuam como antes dentro do laco");
 
