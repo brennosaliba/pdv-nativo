@@ -56,7 +56,18 @@ public sealed class Drenagem : IDisposable
           (ChatArquivo.TipoNaFila, 3),
           // 13/10/2026: pedido para a TV da cozinha. Janela propria: com a rota do KDS ainda nao
           // publicada cada envio volta 404 (espera) e nao pode empurrar a venda para fora da janela.
-          (PedidoCozinha.TipoNaFila, 10) };
+          (PedidoCozinha.TipoNaFila, 10),
+          // 13/10/2026: o rastro da comanda aberta (ContasAbertas). Ate o dono rodar o SQL da RPC
+          // cada envio volta 404 PGRST202 (espera), e o registro nunca passa na frente do dinheiro.
+          (ContasAbertas.TipoEvento, 5) };
+
+    /// <summary>
+    /// Tipos que NAO dependem da nuvem e por isso drenam MESMO SEM sessao de nuvem (13/10/2026): o
+    /// pedido para a TV da cozinha vai para o servidor do KDS com a chave da loja, nao para o
+    /// Supabase. Com o login da nuvem caido o cliente continua sentado esperando o donut; a fila
+    /// da cozinha nao pode esperar o login voltar. O mesmo handler, a mesma regra pura.
+    /// </summary>
+    internal static readonly string[] TiposSemNuvem = { PedidoCozinha.TipoNaFila };
 
     /// <summary>
     /// Quanto tempo um transitório espera antes de desistir, POR TIPO. Sete dias é o orçamento da
@@ -73,6 +84,8 @@ public sealed class Drenagem : IDisposable
             : tipo == ChatArquivo.TipoNaFila ? ChatArquivo.GuardaLocal
             // 13/10/2026: pedido da cozinha com horas de atraso nao serve mais a ninguem
             : tipo == PedidoCozinha.TipoNaFila ? PedidoCozinha.Validade
+            // 13/10/2026: o rastro da comanda e REGISTRO, nao transitorio: nunca sai da fila por idade
+            : tipo == ContasAbertas.TipoEvento ? ContasAbertas.SemPrazo
             : TimeSpan.FromDays(DiasParaDesistir);
 
     /// <summary>Tamanho da janela principal, a do dinheiro.</summary>
@@ -86,10 +99,14 @@ public sealed class Drenagem : IDisposable
     /// JanelaPropria: com a borda do chat ainda não publicada, uma conversa aberta vira dezenas
     /// de linhas transitórias de id baixo e a venda gravada depois nunca entrava no LIMIT 50.
     /// </summary>
-    internal static List<dynamic> JanelaDaFila(SqliteConnection cx)
+    /// <param name="soSemNuvem">
+    /// SEM SESSAO DE NUVEM (13/10/2026): so as janelinhas de <see cref="TiposSemNuvem"/>; a janela
+    /// principal (o dinheiro) e os outros tipos esperam o login voltar, como sempre esperaram.
+    /// </param>
+    internal static List<dynamic> JanelaDaFila(SqliteConnection cx, bool soSemNuvem = false)
     {
         var principais = TiposComHandler.Except(JanelaPropria.Select(j => j.Tipo)).ToArray();
-        var fila = cx.Query($"""
+        var fila = soSemNuvem ? new List<dynamic>() : cx.Query($"""
             SELECT id, tipo, ref_id, client_key, payload, tentativas, primeiro_erro_em
               FROM outbox
              WHERE enviado_em IS NULL
@@ -100,6 +117,8 @@ public sealed class Drenagem : IDisposable
              LIMIT {JanelaPrincipal}
             """).ToList();
         foreach (var (tipo, janela) in JanelaPropria)
+        {
+            if (soSemNuvem && !TiposSemNuvem.Contains(tipo)) continue;
             fila.AddRange(cx.Query("""
                 SELECT id, tipo, ref_id, client_key, payload, tentativas, primeiro_erro_em
                   FROM outbox
@@ -110,6 +129,7 @@ public sealed class Drenagem : IDisposable
                  ORDER BY id
                  LIMIT @N
                 """, new { T = tipo, N = janela }));
+        }
         return fila;
     }
 
@@ -210,13 +230,19 @@ public sealed class Drenagem : IDisposable
         if (!await _porta.WaitAsync(0, ct).ConfigureAwait(false)) return 0;
         try
         {
-            if (!await _nuvem.SessaoOkAsync(ct).ConfigureAwait(false)) return 0;
-            var token = await _nuvem.TokenAsync(ct).ConfigureAwait(false);
-            if (token is null) return 0;
+            // SEM SESSAO DE NUVEM a varredura NAO devolve mais 0 em silencio (13/10/2026): ela
+            // drena so os tipos que nao dependem da nuvem (TiposSemNuvem: o pedido para a TV da
+            // cozinha) e deixa o resto esperando o login, como sempre. O token vazio nunca chega
+            // a um handler da nuvem: a janela sem nuvem so traz esses tipos, e ProcessarAsync
+            // ainda confere.
+            var token = await _nuvem.SessaoOkAsync(ct).ConfigureAwait(false)
+                ? await _nuvem.TokenAsync(ct).ConfigureAwait(false) : null;
+            var semNuvem = token is null;
 
             var enviados = 0;
             List<dynamic> fila;
-            using (var cx = Banco.Abrir()) fila = JanelaDaFila(cx);
+            using (var cx = Banco.Abrir()) fila = JanelaDaFila(cx, soSemNuvem: semNuvem);
+            if (fila.Count == 0) return 0;
 
             // as vendas vão primeiro: o vínculo da nota precisa do id que a venda ganha
             // no servidor, então a ordem por id da fila já resolve (a venda entra antes)
@@ -241,7 +267,7 @@ public sealed class Drenagem : IDisposable
 
                 try
                 {
-                    if (await ProcessarAsync(linha, id, vendaNaNuvem, token, ct).ConfigureAwait(false))
+                    if (await ProcessarAsync(linha, id, vendaNaNuvem, token ?? "", ct).ConfigureAwait(false))
                         enviados++;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -272,6 +298,9 @@ public sealed class Drenagem : IDisposable
         dynamic item = linha;
         var tipo = (string)item.tipo;
         var refId = (string)item.ref_id;
+        // sem sessao de nuvem (token vazio) so os tipos de TiposSemNuvem passam daqui; o resto
+        // nem e tentado e nada e escrito na linha (a janela ja filtrou; isto e o cinto)
+        if (token.Length == 0 && !TiposSemNuvem.Contains(tipo)) return false;
         var (ok, erro) = tipo switch
         {
             "venda" => await EnviarVendaAsync((string)item.payload, refId, vendaNaNuvem, token, ct).ConfigureAwait(false),
@@ -345,6 +374,11 @@ public sealed class Drenagem : IDisposable
             // nao para a nuvem: chave e endereco lidos AGORA da config do caixa. O servidor
             // deduplica pelo id da venda, entao o reenvio nunca vira card dobrado.
             PedidoCozinha.TipoNaFila => await EnviarPedidoCozinhaAsync((string)item.payload, ct).ConfigureAwait(false),
+            // 13/10/2026: o rastro da COMANDA ABERTA (cancelada com item, item tirado depois da cozinha,
+            // atravessou o fechamento, lote mandado de novo). A RPC pdv_conta_evento so registra, idempotente
+            // pela client_key; 404 PGRST202 espera o dono rodar o SQL. Ver ContasAbertas.ResolverEventoNaFilaAsync.
+            ContasAbertas.TipoEvento => await ContasAbertas.ResolverEventoNaFilaAsync((string)item.client_key, (string)item.payload,
+                (nome, corpo) => RpcAsync(nome, corpo, token, ct)).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
             // para o dead-letter abaixo depois de poucas tentativas.
@@ -1029,7 +1063,7 @@ public sealed class Drenagem : IDisposable
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
           Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila,
           EntregadorGestor.TipoNaFila, ConversaRaspadinha.TipoNaFila, ChatArquivo.TipoNaFila,
-          PedidoCozinha.TipoNaFila };
+          PedidoCozinha.TipoNaFila, ContasAbertas.TipoEvento };
 
     /// <summary>
     /// 13/10/2026: manda um pedido da fila para a TV da cozinha (POST /api/pdv/pedidos no servidor
@@ -1043,6 +1077,13 @@ public sealed class Drenagem : IDisposable
         {
             url = PedidoCozinha.Url(cx);
             token = PedidoCozinha.Token(cx);
+            // 13/10/2026: LOTE DE COMANDA ABERTA consulta a conta antes do POST (uma leitura, nada
+            // escrito aqui: so o loop escreve na outbox). Comanda cancelada ou lote substituido = sai
+            // da fila como "descartado: ..." sem chamada; item tirado com PIN com o lote ainda na fila
+            // = o corpo vai refeito sem ele. Pedido de venda de balcao passa intacto.
+            var (descartar, motivo, corpoRefeito) = ContasAbertas.PrepararEnvio(cx, payload);
+            if (descartar) return (true, motivo);
+            if (corpoRefeito is not null) payload = corpoRefeito;
         }
         return await PedidoCozinha.ResolverNaFilaAsync(payload, url, token, async (endereco, chave, corpo) =>
         {

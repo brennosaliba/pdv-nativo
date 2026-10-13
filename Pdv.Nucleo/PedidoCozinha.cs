@@ -22,12 +22,20 @@ public enum DestinoCozinha
 /// O caixa marca "Para a cozinha" no pagamento e escolhe "Consumo na loja" ou "Para viagem". A
 /// VENDA segue o caminho de sempre (gravada, fila "venda", nota ou recibo, baixa de estoque e
 /// receita na nuvem pelo pdv_registrar_venda): o pedido da cozinha e SO producao. Ele nasce NA
-/// MESMA TRANSACAO da venda (Vendas.Finalizar), depois do pagamento, e por isso:
-///  · nao existe pedido sem venda paga (cliente que desiste antes de pagar nao manda produzir);
-///  · nao existe segundo lancamento: o servidor do KDS grava o pedido e nao chama o ERP.
+/// MESMA TRANSACAO da venda (Vendas.Finalizar), depois do pagamento. Nao existe segundo
+/// lancamento: o servidor do KDS grava o pedido e nao chama o ERP.
+///
+/// DOIS CAMINHOS PARA A MESMA TV (13/10/2026, comanda aberta):
+///  · VENDA DE BALCAO: um pedido por venda paga (<see cref="Corpo"/>), como acima. Cliente que
+///    desiste antes de pagar nao manda produzir.
+///  · COMANDA ABERTA (ContasAbertas.cs): a cozinha produz ANTES do dinheiro, de proposito. Cada
+///    "Pedir a cozinha" e um LOTE imutavel (<see cref="CorpoDoLote"/>), com id "<contaId>-<n>",
+///    so com o que ainda nao foi pedido. O que compensa a producao sem venda e o rastro
+///    (conta_evento), o PIN de outro gerente para tirar item ja pedido e os avisos do fechamento.
+///    Fechar a conta e UMA venda, e ela NUNCA manda de novo o que os lotes ja levaram.
 ///
 /// Sem internet a venda NAO trava: o pedido fica na fila (outbox, tipo <see cref="TipoNaFila"/>)
-/// e a Drenagem manda quando a rede volta. O servidor deduplica pelo id da venda, entao o
+/// e a Drenagem manda quando a rede volta. O servidor deduplica pelo id (venda ou lote), entao o
 /// reenvio nao vira card dobrado. Passadas <see cref="Validade"/> sem conseguir, desiste: o
 /// cliente ja foi embora e um donut atrasado de horas na TV so atrapalha.
 ///
@@ -179,6 +187,54 @@ public static class PedidoCozinha
     /// </summary>
     public static Dictionary<string, object?> Corpo(string vendaId, long numero, IEnumerable<LinhaVenda> itens,
         DestinoCozinha destino, string? operador, string? cliente, DateTime criadoEm)
+        => Corpo(vendaId, numero.ToString(CultureInfo.InvariantCulture), itens, destino, operador, cliente, criadoEm);
+
+    /// <summary>Marca do corpo de um LOTE de comanda aberta (campo opcional "origem"; a TV antiga ignora).</summary>
+    public const string OrigemComanda = "comanda";
+
+    /// <summary>O numero que a TV mostra para o lote: "C12-2" (cabe em ^[0-9A-Za-z-]{1,12}$ e nao se confunde com a venda 12 do dia).</summary>
+    public static string NumeroDoLote(long numeroConta, int n) => $"C{numeroConta}-{n}";
+
+    /// <summary>
+    /// O corpo do POST de um LOTE da comanda aberta (13/10/2026). O mesmo formato de <see cref="Corpo"/>
+    /// (vendaId = loteId, numero "C12-2", cliente = nome da conta, consumo da conta, criadoEm do lote,
+    /// itens como sempre) mais dois campos NOVOS e opcionais que o servidor antigo descarta sem erro:
+    /// origem = "comanda" e comanda = {id, numero, nome, lote}. O Corpo da venda fica byte a byte igual.
+    /// </summary>
+    public static Dictionary<string, object?> CorpoDoLote(string loteId, string contaId, long numeroConta, string? nome, int n,
+        IEnumerable<ItemDoLote> itens, DestinoCozinha destino, string? operador, DateTime criadoEm)
+    {
+        var linhas = itens.Select(i => new LinhaVenda(null, null, i.Nome, new Quantidade(i.QtdMilesimos), Dinheiro.Zero, Dinheiro.Zero,
+            i.Unidade, null, null, null, null, 0, GratisMilesimos: i.Brinde ? i.QtdMilesimos : 0, Escolhas: Combos.DeJson(i.EscolhasJson)));
+        var corpo = Corpo(loteId, NumeroDoLote(numeroConta, n), linhas, destino, operador, nome, criadoEm);
+        corpo["origem"] = OrigemComanda;
+        corpo["comanda"] = new Dictionary<string, object?>
+        {
+            ["id"] = contaId,
+            ["numero"] = numeroConta.ToString(CultureInfo.InvariantCulture),
+            ["nome"] = string.IsNullOrWhiteSpace(nome) ? null : nome.Trim(),
+            ["lote"] = n,
+        };
+        return corpo;
+    }
+
+    /// <summary>O id do lote quando o payload da fila e de uma comanda aberta (origem "comanda"); null na venda de balcao ou em JSON estranho.</summary>
+    public static string? LoteDeComanda(string payload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object) return null;
+            if (!r.TryGetProperty("origem", out var o) || o.ValueKind != JsonValueKind.String || o.GetString() != OrigemComanda) return null;
+            return r.TryGetProperty("vendaId", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>O mesmo corpo, com o numero em texto (a venda manda o numero_local; o lote manda "C12-2").</summary>
+    public static Dictionary<string, object?> Corpo(string vendaId, string numero, IEnumerable<LinhaVenda> itens,
+        DestinoCozinha destino, string? operador, string? cliente, DateTime criadoEm)
     {
         var lista = new List<Dictionary<string, object?>>();
         foreach (var i in itens)
@@ -204,7 +260,7 @@ public static class PedidoCozinha
         return new Dictionary<string, object?>
         {
             ["vendaId"] = vendaId,
-            ["numero"] = numero.ToString(CultureInfo.InvariantCulture),
+            ["numero"] = numero,
             ["cliente"] = string.IsNullOrWhiteSpace(cliente) ? null : cliente.Trim(),
             ["consumo"] = destino == DestinoCozinha.Loja ? "loja" : "viagem",
             ["operador"] = string.IsNullOrWhiteSpace(operador) ? null : operador.Trim(),

@@ -83,11 +83,18 @@ public static class Vendas
     /// transação só. Ou entra tudo, ou não entra nada: venda sem pagamento faria o
     /// caixa acusar falta, e pagamento sem venda faria acusar sobra.
     /// </summary>
+    /// <param name="conta">
+    /// COMANDA ABERTA (13/10/2026, ContasAbertas.cs): a conta que esta virando esta venda. Com ela,
+    /// <paramref name="cozinha"/> e forcado a null (os lotes ja levaram o que foi pedido; os PENDENTES vao
+    /// como lote n+1 nesta transacao se <see cref="ContaParaFechar.DestinoDosPendentes"/> disser), a conta
+    /// e fechada PRIMEIRO (idempotente: ja fechada com venda finalizada devolve a venda existente) e
+    /// Kds.DoBalcao nao roda (producao dobrada). Conta de teste so fecha em turno de teste, e vice-versa.
+    /// </param>
     public static VendaGravada Finalizar(
         SqliteConnection cx, Sessao sessao, Operador operador,
         IReadOnlyList<LinhaVenda> itens, IReadOnlyList<PagamentoVenda> pagamentos,
         string? documento, string loja, string? lojaId,
-        DestinoCozinha? cozinha = null, string? cliente = null)
+        DestinoCozinha? cozinha = null, string? cliente = null, ContaParaFechar? conta = null)
     {
         if (itens.Count == 0) throw new InvalidOperationException("Não dá para finalizar uma comanda vazia.");
         if (pagamentos.Count == 0) throw new InvalidOperationException("Informe a forma de pagamento.");
@@ -147,7 +154,31 @@ public static class Vendas
         // conhece e voltar 409. Lido ANTES da transação, pelo mesmo motivo do `homologacao`.
         var idAssina = Operadores.IdCanonico(cx, operador.Id);
 
+        // A CONTA QUE ESTA VIRANDO VENDA, lida ANTES da transacao. A segunda trava do turno
+        // cruzado (a tela ja barrou sem dinheiro): conta real nunca vira venda de teste
+        // (dinheiro que sumiria do apurado) e conta de teste nunca vira venda real (produto
+        // que a nuvem nao conhece, dead-letter). E com conta a cozinha e forcada a null: o
+        // corpo da venda NUNCA vai para a TV, senao os itens ja pedidos iriam de novo.
+        ContaAberta? contaLida = null;
+        if (conta is not null)
+        {
+            contaLida = ContasAbertas.Ler(cx, conta.Id) ?? throw new InvalidOperationException(ContasAbertas.Textos.NaoEncontrada);
+            if (contaLida.Teste != homologacao)
+                throw new InvalidOperationException(homologacao ? ContasAbertas.Textos.RealEmTurnoDeTeste : ContasAbertas.Textos.TesteEmTurnoReal);
+            cozinha = null;
+        }
+
         using var tx = cx.BeginTransaction();
+
+        // A CONTA FECHA PRIMEIRO, e e idempotente. Se ela ja esta fechada com uma venda
+        // finalizada (o "Tentar de novo" depois de uma excecao pos-commit na tela), a venda
+        // existente volta e nada mais e gravado: nem V2, nem segunda baixa, nem segunda nota.
+        // Cancelada ou inexistente lanca aqui, antes de qualquer INSERT.
+        if (conta is not null)
+        {
+            var fechamento = ContasAbertas.FecharNaVenda(cx, tx, conta.Id, vendaId);
+            if (!fechamento.Fechou) { tx.Rollback(); return fechamento.VendaExistente!; }
+        }
 
         // Numeração dentro da transação, senão duas vendas quase simultâneas pegam o
         // mesmo número e a segunda estoura no índice único.
@@ -264,6 +295,21 @@ public static class Vendas
             PedidoCozinha.Enfileirar(cx, tx, vendaId,
                 PedidoCozinha.Corpo(vendaId, numero, itens, destino, operador.Nome, cliente, DateTime.Now));
 
+        // A CONTA VIROU VENDA (13/10/2026). Os itens ja pedidos nunca vao de novo; os que
+        // AINDA NAO foram pedidos vao como lote n+1, aqui dentro, so se o operador escolheu
+        // um destino no bloco "Para a cozinha" (que a tela so mostra com pendentes). Os
+        // pendentes sao lidos da PROPRIA conta (itens_json, com LinhaId), nunca das LinhaVenda.
+        if (conta is not null && contaLida is not null)
+        {
+            ContaLote? loteFinal = null;
+            if (conta.DestinoDosPendentes is { } dp)
+                loteFinal = ContasAbertas.CriarLoteNoTx(cx, tx, contaLida, dp, operador with { Id = idAssina }, homologacao);
+            var lotes = ContasAbertas.Lotes(cx, conta.Id, tx);
+            Caixa.Auditar(cx, tx, "conta_fechada", idAssina, null,
+                $"comanda={contaLida.Numero} venda={numero} total={total.Formatado()} itens={itens.Count} lotes={lotes.Count}"
+                + (loteFinal is null ? "" : $" (pendentes no lote {loteFinal.N})"));
+        }
+
         // A COMANDA VIROU VENDA: o rascunho morre AQUI, na mesma transação. Fora dela
         // (na tela, depois do commit) uma queda entre gravar e limpar deixaria um
         // rascunho órfão de uma venda já paga — e o operador restauraria os mesmos
@@ -277,7 +323,8 @@ public static class Vendas
         // vitrine que so entrega da estufa deixa desligado - senao cada venda de
         // balcao vira card e a fila real do delivery some no meio. NUNCA pode
         // derrubar a venda: o dinheiro ja esta gravado quando isto roda.
-        try { if (Config(cx, "kds_balcao") == "1") Kds.DoBalcao(vendaId); }
+        // Venda de CONTA pula: os lotes ja mandaram produzir (producao dobrada).
+        try { if (conta is null && Config(cx, "kds_balcao") == "1") Kds.DoBalcao(vendaId); }
         catch { /* fila de preparo nunca e motivo para perder venda */ }
 
         return new VendaGravada(vendaId, clientKey, numero, total, sessao.BusinessDate);

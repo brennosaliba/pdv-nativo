@@ -767,6 +767,18 @@ if (args.Length >= 1 && args[0] == "--so-aprovacao")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (13/10/2026): so a suite da comanda aberta (conta_aberta/conta_lote), mais a do
+// pedido para a cozinha, que ela nao pode quebrar. NAO e o gate.
+//   Pdv.Testes.exe --so-conta
+if (args.Length >= 1 && args[0] == "--so-conta")
+{
+    await TestesContaAberta.RodarAsync((cond, nome) => Check("conta: " + nome, cond));
+    await TestesPedidoCozinha.RodarAsync((cond, nome) => Check("cozinha: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so conta) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 var arquivo = Path.Combine(Path.GetTempPath(), $"pdv-teste-{Guid.NewGuid():N}.db");
 Banco.Migrar(arquivo);
 
@@ -1579,6 +1591,13 @@ await TestesFila.RodarIsolamentoAsync((cond, nome) => Check("fila: " + nome, con
 Console.WriteLine();
 Console.WriteLine("--- Pedido para a cozinha (TV do KDS) ---");
 await TestesPedidoCozinha.RodarAsync((cond, nome) => Check("cozinha: " + nome, cond));
+
+// -- COMANDA ABERTA (13/10/2026) -------------------------------------------------
+// "abre a comanda e fecha pra pagamento.. e a comanda tambem permite solicitar itens da cozinha".
+// Conta por mesa ou cliente, guardada no SQLite; pede a cozinha por lote; fechar e UMA venda, uma vez.
+Console.WriteLine();
+Console.WriteLine("--- Comanda aberta (conta por mesa ou cliente): nucleo, lotes e fechamento ---");
+await TestesContaAberta.RodarAsync((cond, nome) => Check("conta: " + nome, cond));
 
 // -- PENDENCIA: o aviso que nao se apaga -------------------------------------
 // 16 vendas / R$ 102.626,50 em dead-letter sem NENHUMA saida: o dono arrumava o

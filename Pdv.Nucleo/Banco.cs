@@ -426,6 +426,69 @@ public static class Banco
           dono             TEXT
         );
 
+        -- ── COMANDA ABERTA: conta por mesa ou cliente (13/10/2026, ContasAbertas.cs) ──
+        -- Pedido do dono: "abre a comanda e fecha pra pagamento, e a comanda tambem permite
+        -- solicitar itens da cozinha". No codigo e no banco ela se chama CONTA ABERTA,
+        -- porque "comanda" ja e o carrinho da tela (comanda_rascunho).
+        --
+        -- NAO e dinheiro e NAO e do turno: a conta sobrevive ao reinicio do caixa e a troca
+        -- de turno (a venda cai no turno de quem receber). itens_json e a MESMA lista do
+        -- rascunho (List<ItemRascunho>), com LinhaId e CozinhaMilesimos por linha.
+        -- venda_id NAO tem REFERENCES de proposito: o fechamento marca a conta ANTES do
+        -- INSERT da venda, na mesma transacao, e o FK do SQLite e imediato.
+        -- `dono` e a mesma regra do rascunho (processo, nao turno): conta carregada noutro
+        -- Pdv.exe vivo nao se carrega; processo morto libera.
+        CREATE TABLE IF NOT EXISTS conta_aberta (
+          id                 TEXT PRIMARY KEY,                 -- Guid N: prefixo do id do lote
+          numero             INTEGER NOT NULL,                 -- curto, do dia: 1, 2, ... 12
+          nome               TEXT,                             -- "Mesa 5", "Joana", "Balcão" (ate 60)
+          consumo            TEXT NOT NULL DEFAULT 'loja' CHECK (consumo IN ('loja','viagem')),
+          status             TEXT NOT NULL CHECK (status IN ('aberta','fechada','cancelada')),
+          itens_json         TEXT NOT NULL,
+          cortesia_codigo    TEXT,
+          cortesia_json      TEXT,
+          operador_id        TEXT NOT NULL,
+          sessao_abertura    TEXT NOT NULL,                    -- so auditoria: a conta nao morre com o turno
+          business_date      TEXT NOT NULL,                    -- idem, e a numeracao do dia
+          teste              INTEGER NOT NULL DEFAULT 0,       -- aberta no modo de homologacao ou turno de teste
+          aberta_em          TEXT NOT NULL,
+          atualizado_em      TEXT NOT NULL,
+          ultimo_toque_em    TEXT NOT NULL,
+          fechando_em        TEXT,                             -- o Pagamento abriu (cobranca pode ter saido)
+          fechada_em         TEXT,
+          venda_id           TEXT,
+          cancelada_em       TEXT,
+          cancel_motivo      TEXT,
+          cancel_operador    TEXT,
+          cancel_autorizador TEXT,
+          cancel_automatico  INTEGER NOT NULL DEFAULT 0,
+          dono               TEXT
+        );
+        -- O numero nao se repete entre as ABERTAS (inclusive a mesa que atravessou a noite).
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_conta_aberta_numero
+          ON conta_aberta(numero) WHERE status = 'aberta';
+        CREATE INDEX IF NOT EXISTS ix_conta_aberta_status ON conta_aberta(status, business_date);
+
+        -- Um registro por "Pedir a cozinha": o LOTE. Imutavel; item novo e lote novo. O id e
+        -- "<contaId>-<n>" e e o vendaId do POST: a TV grava o pedido "pdv-<contaId>-<n>" e
+        -- deduplica por ele. O ESTADO do lote nao e coluna: sai da linha da outbox
+        -- (ContasAbertas.EstadoDoLote). itens_retirados_json: o que foi tirado com PIN enquanto
+        -- o lote ainda estava na fila (o envio refaz o corpo). substituido_por: o lote n+1 do
+        -- "Mandar de novo" (o velho deixa de contar). homologacao=1: existe so no banco.
+        CREATE TABLE IF NOT EXISTS conta_lote (
+          id                   TEXT PRIMARY KEY,
+          conta_id             TEXT NOT NULL,
+          n                    INTEGER NOT NULL,
+          consumo              TEXT NOT NULL,
+          itens_json           TEXT NOT NULL,
+          itens_retirados_json TEXT,
+          substituido_por      TEXT,
+          homologacao          INTEGER NOT NULL DEFAULT 0,
+          operador_id          TEXT NOT NULL,
+          criado_em            TEXT NOT NULL,
+          UNIQUE(conta_id, n)
+        );
+
         -- ── PROMOÇÕES (espelho de pdv_promocoes, payload jsonb cru) ───────────
         -- O motor (Promocoes.cs) parseia na carga; JSON estranho é ignorado.
         CREATE TABLE IF NOT EXISTS promo (

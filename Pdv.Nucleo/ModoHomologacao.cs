@@ -222,6 +222,10 @@ public static class ModoHomologacao
         if (n > 0)
             Auditar(cx, tx, "caixa_teste_encerrado", sessao.BusinessDate,
                 $"{porque}: turno de teste encerrado sem contagem (só teve venda de teste)");
+        // 13/10/2026: as COMANDAS ABERTAS de teste morrem com o turno de teste. Elas nunca
+        // podem virar venda de verdade (produto que a nuvem nao conhece, dead-letter), e
+        // uma conta de teste parada na lista confundiria o operador do turno real.
+        ContasAbertas.CancelarDeTeste(cx, tx, IdOperador, porque);
         tx.Commit();
     }
 

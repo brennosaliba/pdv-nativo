@@ -17,11 +17,22 @@ namespace Pdv.Nucleo;
 /// Nulo em item simples. O default e OBRIGATORIO: o rascunho gravado por um exe anterior
 /// nao tem o campo, e ele precisa continuar desserializando na queda de energia.
 /// </param>
+/// <param name="LinhaId">
+/// COMANDA ABERTA (13/10/2026, ContasAbertas.cs): a identidade da LINHA, nascida quando ela entra
+/// na comanda. E por ela que o lote da cozinha e a retirada com PIN acham a linha de novo depois
+/// de o preco ser recalculado ou a lista reordenada. Nulo no rascunho do balcao e em JSON antigo.
+/// </param>
+/// <param name="CozinhaMilesimos">
+/// Quanto DESTA linha ja foi para a cozinha (em milesimos), somando os lotes. Tirar abaixo disto
+/// e tirar producao: so com PIN de outro gerente (ContasAbertas.RetirarProduzido). Zero no balcao.
+/// Os dois campos ficam NO FIM e com default pelo mesmo motivo do EscolhasJson.
+/// </param>
 public sealed record ItemRascunho(
     string ProdutoId, string? Plu, string Nome, string Categoria,
     long PrecoCent, long QtdMilesimos, string Unidade,
     string? Ncm, string? Cest, string? Csosn, int Origem, string? Foto,
-    string? EscolhasJson = null);
+    string? EscolhasJson = null,
+    string? LinhaId = null, long CozinhaMilesimos = 0);
 
 /// <summary>
 /// A comanda em andamento, do jeito que ela volta depois do religamento.
@@ -66,7 +77,12 @@ public static class Rascunho
     /// o número antigo pode estar de pé em qualquer outro programa — o que faria a
     /// comanda da queda de energia parecer "de um PDV vivo" e nunca mais voltar.
     /// </summary>
-    private static readonly string Eu = QuemSouEu();
+    /// <summary>
+    /// Interno porque a COMANDA ABERTA (ContasAbertas.cs) usa a MESMA marca de dono: a conta
+    /// carregada noutro Pdv.exe vivo nao se carrega, e o processo morto (reinicio) a libera.
+    /// Uma regra so, num lugar so.
+    /// </summary>
+    internal static readonly string Eu = QuemSouEu();
 
     private static string QuemSouEu()
     {
@@ -87,7 +103,7 @@ public static class Rascunho
     /// rascunho sobreviver à venda paga, e aí o operador cobra os mesmos itens duas
     /// vezes; recusar gravar por engano custa, no máximo, rebipar a comanda.
     /// </summary>
-    private static bool DeOutroPdvVivo(string? dono)
+    internal static bool DeOutroPdvVivo(string? dono)
     {
         if (string.IsNullOrEmpty(dono) || dono == Eu) return false;
         var corte = dono.IndexOf(':');

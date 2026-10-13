@@ -75,6 +75,12 @@ public sealed class FakePostgrest : IDisposable
     /// </summary>
     public volatile string? MasterDoPainel;
 
+    // ── COMANDA ABERTA: o rastro conta_evento (13/10/2026) ───────────────────
+    /// <summary>Encena o servidor SEM o SQL aplicar-hoje/pdv_conta_evento.sql: 404 PGRST202.</summary>
+    public volatile bool ContaEventoAusente;
+    /// <summary>p_client_key → corpo recebido por pdv_conta_evento (deduplicado como a RPC real faz).</summary>
+    public ConcurrentDictionary<string, string> ContaEventos { get; } = new();
+
     // ── BRINDE DA RASPADINHA (21/09/2026) ───────────────────────────────────
     /// <summary>O corpo que brinde_raspadinha_conferir devolve para um código que vale (com as regras).</summary>
     public ConcurrentDictionary<string, string> ConferirPorCodigo { get; } = new();
@@ -257,6 +263,28 @@ public sealed class FakePostgrest : IDisposable
                     if (!Resgatadas.TryAdd(code!, 1))
                     { Responder(ctx, 200, """{"ok":false,"error":"ja_resgatado"}"""); return; }
                     Responder(ctx, 200, """{"ok":true}""");
+                    return;
+                }
+                case "/rest/v1/rpc/pdv_conta_evento":
+                {
+                    // 13/10/2026: o rastro da comanda aberta (cancelada com item, item tirado depois da
+                    // cozinha, atravessou o fechamento). A RPC real so registra, idempotente por p_client_key.
+                    ChamadasPorRpc.AddOrUpdate("pdv_conta_evento", 1, (_, n) => n + 1);
+                    if (ContaEventoAusente)
+                    {
+                        Responder(ctx, 404, """{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.pdv_conta_evento(p_client_key, p_evento, p_payload, p_store) in the schema cache"}""");
+                        return;
+                    }
+                    string? ck = null;
+                    try
+                    {
+                        using var d = JsonDocument.Parse(corpo);
+                        if (d.RootElement.TryGetProperty("p_client_key", out var kv) && kv.ValueKind == JsonValueKind.String) ck = kv.GetString();
+                    }
+                    catch { }
+                    if (string.IsNullOrWhiteSpace(ck)) { Responder(ctx, 400, """{"message":"p_client_key obrigatorio"}"""); return; }
+                    var novo = ContaEventos.TryAdd(ck!, corpo);
+                    Responder(ctx, 200, novo ? """{"ok":true,"novo":true}""" : """{"ok":true,"novo":false}""");
                     return;
                 }
                 case "/rest/v1/rpc/pdv_kds_pronto":
