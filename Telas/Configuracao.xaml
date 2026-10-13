@@ -324,14 +324,18 @@
                                Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
 
-                    <!-- 13/10/2026: PEDIDO PARA A TV DA COZINHA (PedidoCozinha.cs). A chave da loja que o
-                         servidor do KDS confere (PDV_KDS_TOKENS de lá). Em branco, o botão "Para a
-                         cozinha" some do pagamento. Grava no Salvar. -->
+                    <!-- 13/10/2026: PEDIDO PARA A TV DA COZINHA (PedidoCozinha.cs). 1.0.31: a chave da
+                         loja vem da nuvem no Atualizar (painel > Configurações > TV da cozinha) e o
+                         servidor do KDS confere no banco. O campo é só sobrescrita deste caixa,
+                         opcional; em branco vale a da nuvem. Grava no Salvar. -->
                     <TextBlock Text="PEDIDO PARA A TV DA COZINHA" Foreground="{DynamicResource Marca}"
                                FontSize="13" FontWeight="Bold" Margin="0,4,0,6"/>
-                    <TextBlock Text="Chave da TV da cozinha" Style="{StaticResource Rotulo}"/>
-                    <TextBox x:Name="TxtChaveCozinha" Margin="0,4,0,4" Tag="em branco: sem pedido para a cozinha"/>
+                    <TextBlock x:Name="TxtOrigemChaveCozinha" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,4"/>
                     <TextBlock Text="Com a chave, o pagamento mostra Para a cozinha: Consumo na loja ou Para viagem."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <TextBlock Text="Outra chave só neste caixa (opcional)" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtChaveCozinha" Margin="0,4,0,4" Tag="em branco: vale a da nuvem"/>
+                    <TextBlock Text="Deixe em branco. Só preencha se o suporte pedir."
                                Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                     <!-- Tema mora aqui porque é a outra coisa desta MÁQUINA (a luz do

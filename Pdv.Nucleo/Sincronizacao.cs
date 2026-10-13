@@ -300,6 +300,11 @@ public static class Sincronizacao
             try { await nuvem.BaixarMasterAsync(cx).ConfigureAwait(false); }
             catch { /* fica o master que já está guardado */ }
 
+            // a chave da TV da cozinha da loja (1.0.31): ninguém digita, vem do painel
+            andamento?.Report("Conferindo a chave da TV da cozinha…");
+            try { await nuvem.BaixarChaveCozinhaAsync(cx).ConfigureAwait(false); }
+            catch { /* fica a chave que já está guardada */ }
+
             mudou = ImpressaoDigital(cx) != antes;
 
             // Fotos por último e sem prazo curto: é o que mais demora e é o que menos

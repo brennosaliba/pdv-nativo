@@ -31,13 +31,23 @@ public enum DestinoCozinha
 /// reenvio nao vira card dobrado. Passadas <see cref="Validade"/> sem conseguir, desiste: o
 /// cliente ja foi embora e um donut atrasado de horas na TV so atrapalha.
 ///
-/// Configuracao (tela Configuracao, bloco "PEDIDO PARA A TV DA COZINHA"): a chave da loja, que o
-/// servidor do KDS confere (PDV_KDS_TOKENS no .env de la). Sem chave o botao nao aparece.
+/// A CHAVE DA LOJA VEM DA NUVEM (1.0.31, SQL 168 do ERP; pedido do dono: "coloca sincronizado na
+/// nuvem com o KDS da propria loja"). O painel guarda uma chave por loja; o caixa baixa a da loja
+/// dele no Atualizar (RPC <see cref="Rpc"/>) e guarda em <see cref="ChaveTokenNuvem"/>; o servidor
+/// do KDS confere a mesma chave no banco. Ninguem digita nada. O campo da Configuracao continua
+/// como sobrescrita opcional deste caixa (<see cref="ChaveToken"/>); se ele for igual a chave da
+/// nuvem, sai sozinho (assim trocar a chave no painel chega a todos os caixas). Sem chave o
+/// botao nao aparece.
 /// </summary>
 public static class PedidoCozinha
 {
     public const string TipoNaFila = "kds_cozinha";
+    /// <summary>Sobrescrita digitada neste caixa (opcional). Vale antes da chave da nuvem.</summary>
     public const string ChaveToken = "kds_cozinha_token";
+    /// <summary>A chave da loja que desceu da nuvem no Atualizar.</summary>
+    public const string ChaveTokenNuvem = "kds_cozinha_token_nuvem";
+    /// <summary>A RPC que devolve a chave da loja do terminal (SQL 168 do ERP).</summary>
+    public const string Rpc = "pdv_kds_cozinha_chave_caixa";
     public const string ChaveUrl = "kds_cozinha_url";
     /// <summary>O servidor do KDS da TV (o mesmo do link do pronto da etiqueta).</summary>
     public const string UrlPadrao = "https://kds.americandaybrasil.com.br/homolog";
@@ -59,8 +69,102 @@ public static class PedidoCozinha
         _ => TextoNao,
     };
 
-    public static string? Token(SqliteConnection cx)
-        => Vendas.Config(cx, ChaveToken) is { } t && t.Trim().Length > 0 ? t.Trim() : null;
+    /// <summary>A chave que vale: a digitada neste caixa, senao a da nuvem.</summary>
+    public static string? Token(SqliteConnection cx) => TokenManual(cx) ?? TokenNuvem(cx);
+
+    public static string? TokenManual(SqliteConnection cx) => Limpo(Vendas.Config(cx, ChaveToken));
+
+    public static string? TokenNuvem(SqliteConnection cx) => Limpo(Vendas.Config(cx, ChaveTokenNuvem));
+
+    private static string? Limpo(string? t) => t is not null && t.Trim().Length > 0 ? t.Trim() : null;
+
+    /// <summary>As 4 ultimas letras (o que a tela mostra; a chave inteira nunca aparece).</summary>
+    public static string? TerminaEm(string? chave)
+        => Limpo(chave) is { } c ? (c.Length <= 4 ? c : c[^4..]) : null;
+
+    /// <summary>A linha "Chave da TV da cozinha: ..." da Configuracao.</summary>
+    public static string DescricaoOrigem(SqliteConnection cx)
+    {
+        var manual = TokenManual(cx);
+        var nuvem = TokenNuvem(cx);
+        if (manual is not null)
+            return $"Chave da TV da cozinha: digitada neste caixa (termina em {TerminaEm(manual)})."
+                   + (nuvem is not null ? $" A da nuvem termina em {TerminaEm(nuvem)}." : "");
+        if (nuvem is not null) return $"Chave da TV da cozinha: vem da nuvem (termina em {TerminaEm(nuvem)}).";
+        return "Chave da TV da cozinha: a nuvem ainda não mandou. Toque em Atualizar.";
+    }
+
+    /// <summary>Uma linha da RPC <see cref="Rpc"/>.</summary>
+    public sealed record ChaveDaNuvem(string Store, string Chave);
+
+    /// <summary>O JSON da RPC (array) em linhas; JSON estranho = lista vazia, nunca excecao.</summary>
+    public static IReadOnlyList<ChaveDaNuvem> LerDaNuvem(string? json)
+    {
+        var saida = new List<ChaveDaNuvem>();
+        if (string.IsNullOrWhiteSpace(json)) return saida;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return saida;
+            foreach (var o in doc.RootElement.EnumerateArray())
+            {
+                if (o.ValueKind != JsonValueKind.Object) continue;
+                string? S(string n) => o.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+                var store = S("store");
+                var chave = Limpo(S("chave"));
+                if (string.IsNullOrWhiteSpace(store) || chave is null || chave.Length < 24) continue;
+                saida.Add(new ChaveDaNuvem(store.Trim(), chave));
+            }
+        }
+        catch { /* JSON ilegivel: nada a aplicar */ }
+        return saida;
+    }
+
+    /// <summary>A linha desta loja: pelo nome do terminal; se so ha uma ao alcance, e ela.</summary>
+    public static ChaveDaNuvem? EscolherDaLoja(IReadOnlyList<ChaveDaNuvem> linhas, string? lojaNome)
+    {
+        var alvo = ConfigLojaPainel.Normalizar(lojaNome);
+        if (alvo.Length > 0)
+        {
+            var exata = linhas.FirstOrDefault(l => ConfigLojaPainel.Normalizar(l.Store) == alvo);
+            if (exata is not null) return exata;
+            var contem = linhas.Where(l => ConfigLojaPainel.Normalizar(l.Store).Contains(alvo)
+                                           || alvo.Contains(ConfigLojaPainel.Normalizar(l.Store))).ToList();
+            if (contem.Count == 1) return contem[0];
+        }
+        return linhas.Count == 1 ? linhas[0] : null;
+    }
+
+    /// <summary>
+    /// Guarda o que a nuvem respondeu (a nuvem e a verdade: sem linha da loja, a chave da nuvem
+    /// sai). A sobrescrita igual a chave da nuvem sai junto (era a copia da 1.0.30). Audita so o
+    /// final. Devolve o que mudou ("" = nada).
+    /// </summary>
+    public static string AplicarDaNuvem(SqliteConnection cx, ChaveDaNuvem? linha)
+    {
+        var antes = TokenNuvem(cx);
+        var nova = linha?.Chave;
+        if (nova is null) cx.Execute("DELETE FROM config WHERE chave=@C", new { C = ChaveTokenNuvem });
+        else if (nova != antes) Vendas.GravarConfig(cx, ChaveTokenNuvem, nova);
+        if (nova is not null && TokenManual(cx) == nova)
+            cx.Execute("DELETE FROM config WHERE chave=@C", new { C = ChaveToken });
+        if (nova == antes) return "";
+        Caixa.Auditar(cx, null, "chave_cozinha_da_nuvem", null, null,
+            nova is null ? "a nuvem nao tem chave da TV da cozinha para esta loja"
+                         : $"chave da TV da cozinha da nuvem, termina em {TerminaEm(nova)}");
+        return "chave da TV da cozinha";
+    }
+
+    /// <summary>
+    /// O que a Configuracao grava do campo de sobrescrita: vazio ou igual a chave da nuvem =
+    /// sem sobrescrita (vale a da nuvem).
+    /// </summary>
+    public static void GravarManual(SqliteConnection cx, string? digitada)
+    {
+        var d = Limpo(digitada);
+        if (d is null || d == TokenNuvem(cx)) cx.Execute("DELETE FROM config WHERE chave=@C", new { C = ChaveToken });
+        else Vendas.GravarConfig(cx, ChaveToken, d);
+    }
 
     public static string Url(SqliteConnection cx)
         => (Vendas.Config(cx, ChaveUrl) is { } u && u.Trim().Length > 0 ? u.Trim() : UrlPadrao).TrimEnd('/');

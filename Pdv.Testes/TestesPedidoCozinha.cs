@@ -203,6 +203,9 @@ public static class TestesPedidoCozinha
             var itPeso = ((List<Dictionary<string, object?>>)peso["itens"]!)[0];
             checar((int)itPeso["qtd"]! == 1 && ((string)itPeso["nome"]!).Contains("0,375 KG", StringComparison.Ordinal),
                 "item pesavel vai como 1 com a quantidade no nome: " + itPeso["nome"]);
+
+            // 8) A CHAVE VEM DA NUVEM (1.0.31, SQL 168 do ERP)
+            ChaveDaNuvem(cx, checar);
         }
         finally
         {
@@ -210,5 +213,105 @@ public static class TestesPedidoCozinha
             SqliteConnection.ClearAllPools();
             try { File.Delete(arquivo); } catch { }
         }
+
+        // a Nuvem chama a RPC, escolhe a linha pelo nome do terminal, e o Atualizar puxa
+        var nuvem = Fonte(Path.Combine("Pdv.Nucleo", "Nuvem.cs")) ?? "";
+        var sinc = Fonte(Path.Combine("Pdv.Nucleo", "Sincronizacao.cs")) ?? "";
+        var tela = Fonte(Path.Combine("Telas", "Configuracao.xaml.cs")) ?? "";
+        var xaml = Fonte(Path.Combine("Telas", "Configuracao.xaml")) ?? "";
+        checar(PedidoCozinha.Rpc == "pdv_kds_cozinha_chave_caixa"
+               && nuvem.Contains("\"/rest/v1/rpc/\" + PedidoCozinha.Rpc", StringComparison.Ordinal)
+               && nuvem.Contains("PedidoCozinha.EscolherDaLoja(linhas, loja)", StringComparison.Ordinal),
+            "nuvem: a Nuvem chama pdv_kds_cozinha_chave_caixa e escolhe a linha pelo nome do terminal");
+        checar(sinc.Contains("await nuvem.BaixarChaveCozinhaAsync(cx)", StringComparison.Ordinal),
+            "nuvem: o Atualizar (Sincronizacao) puxa a chave da TV da cozinha");
+        checar(tela.Contains("PedidoCozinha.DescricaoOrigem(cx)", StringComparison.Ordinal)
+               && tela.Contains("PedidoCozinha.GravarManual(cx, TxtChaveCozinha.Text)", StringComparison.Ordinal)
+               && tela.Contains("TxtChaveCozinha.Text = PedidoCozinha.TokenManual(cx)", StringComparison.Ordinal),
+            "nuvem: a Configuracao mostra de onde vem a chave e o campo e so a sobrescrita");
+        var ini = xaml.IndexOf("PEDIDO PARA A TV DA COZINHA (PedidoCozinha.cs)", StringComparison.Ordinal);
+        var fim = ini < 0 ? -1 : xaml.IndexOf("TEMA DA TELA", ini, StringComparison.Ordinal);
+        var bloco = ini >= 0 && fim > ini ? xaml[ini..fim] : "";
+        checar(bloco.Contains("TxtOrigemChaveCozinha", StringComparison.Ordinal) && !bloco.Contains('—') && !bloco.Contains('–'),
+            "nuvem: o bloco da TV da cozinha na Configuracao tem a linha da origem da chave e nenhum travessao");
+    }
+
+    private static void ChaveDaNuvem(SqliteConnection cx, Action<bool, string> checar)
+    {
+        const string sav = "a0a1a2a3a4a5a6a7a8a9b0b1b2b3b4b5b6b7b8b9c0c1235e";
+        const string sav2 = "f0f1f2f3f4f5f6f7f8f9e0e1e2e3e4e5e6e7e8e9d0d1b7c9";
+        const string cas = "c0c1c2c3c4c5c6c7c8c9c0c1c2c3c4c5c6c7c8c9c0c1ca51";
+        cx.Execute("DELETE FROM config WHERE chave IN (@A, @B)", new { A = PedidoCozinha.ChaveToken, B = PedidoCozinha.ChaveTokenNuvem });
+
+        // leitura da RPC
+        var json = "[{\"store\":\"American Day Savassi\",\"chave\":\"" + sav + "\",\"termina_em\":\"235e\"},"
+                   + "{\"store\":\"American Day Castelo\",\"chave\":\"" + cas + "\"},"
+                   + "{\"store\":\"Loja Curta\",\"chave\":\"curta\"},{\"chave\":\"" + sav + "\"},7]";
+        var linhas = PedidoCozinha.LerDaNuvem(json);
+        checar(linhas.Count == 2, $"nuvem: le as linhas boas e ignora chave curta, sem loja e lixo ({linhas.Count})");
+        checar(PedidoCozinha.LerDaNuvem("nao e json").Count == 0 && PedidoCozinha.LerDaNuvem(null).Count == 0
+               && PedidoCozinha.LerDaNuvem("{}").Count == 0, "nuvem: JSON estranho vira lista vazia, sem excecao");
+        checar(PedidoCozinha.EscolherDaLoja(linhas, "American Day Savassi")?.Chave == sav
+               && PedidoCozinha.EscolherDaLoja(linhas, "american day CASTELO")?.Chave == cas,
+            "nuvem: escolhe a linha pelo nome do terminal (sem caixa)");
+        checar(PedidoCozinha.EscolherDaLoja(linhas, "Loja Nova") is null,
+            "nuvem: dono com varias lojas e terminal de outra loja: nenhuma (nunca chuta)");
+        checar(PedidoCozinha.EscolherDaLoja(linhas.Take(1).ToList(), null)?.Chave == sav,
+            "nuvem: conta de terminal recebe uma linha so: e ela");
+
+        // sem chave nenhuma
+        checar(!PedidoCozinha.Ligado(cx) && PedidoCozinha.DescricaoOrigem(cx).Contains("a nuvem ainda não mandou", StringComparison.Ordinal),
+            "nuvem: sem chave o botao nao aparece e a Configuracao diz para tocar em Atualizar");
+
+        // a nuvem manda a chave: liga sozinho, sem digitar
+        var mudou = PedidoCozinha.AplicarDaNuvem(cx, PedidoCozinha.EscolherDaLoja(linhas, "American Day Savassi"));
+        checar(mudou != "" && PedidoCozinha.Ligado(cx) && PedidoCozinha.Token(cx) == sav,
+            "nuvem: a chave da nuvem liga o Para a cozinha sem digitar nada");
+        checar(PedidoCozinha.DescricaoOrigem(cx) == "Chave da TV da cozinha: vem da nuvem (termina em 235e).",
+            "nuvem: a Configuracao diz 'vem da nuvem (termina em 235e)': " + PedidoCozinha.DescricaoOrigem(cx));
+        var aud = cx.ExecuteScalar<string>("SELECT detalhe FROM auditoria WHERE evento = 'chave_cozinha_da_nuvem' ORDER BY rowid DESC LIMIT 1") ?? "";
+        checar(aud.Contains("235e", StringComparison.Ordinal) && !aud.Contains(sav, StringComparison.Ordinal),
+            "nuvem: a auditoria guarda so o final, nunca a chave inteira");
+        checar(PedidoCozinha.AplicarDaNuvem(cx, new PedidoCozinha.ChaveDaNuvem("American Day Savassi", sav)) == "",
+            "nuvem: a mesma chave de novo nao muda nada (idempotente)");
+
+        // a 1.0.30 tinha a chave digitada igual: ela sai sozinha, e a troca no painel chega
+        Vendas.GravarConfig(cx, PedidoCozinha.ChaveToken, sav);
+        PedidoCozinha.AplicarDaNuvem(cx, new PedidoCozinha.ChaveDaNuvem("American Day Savassi", sav));
+        checar(PedidoCozinha.TokenManual(cx) is null, "nuvem: a chave digitada igual a da nuvem (1.0.30) sai sozinha");
+        PedidoCozinha.AplicarDaNuvem(cx, new PedidoCozinha.ChaveDaNuvem("American Day Savassi", sav2));
+        checar(PedidoCozinha.Token(cx) == sav2, "nuvem: chave trocada no painel chega ao caixa no Atualizar");
+
+        // sobrescrita: digitada vale antes da nuvem; em branco ou igual a da nuvem, sai
+        PedidoCozinha.GravarManual(cx, "  outra-chave-so-deste-caixa-0123456789  ");
+        checar(PedidoCozinha.Token(cx) == "outra-chave-so-deste-caixa-0123456789"
+               && PedidoCozinha.DescricaoOrigem(cx).StartsWith("Chave da TV da cozinha: digitada neste caixa (termina em 6789).", StringComparison.Ordinal),
+            "nuvem: a sobrescrita digitada vale antes da nuvem e a tela diz isso");
+        PedidoCozinha.GravarManual(cx, "   ");
+        checar(PedidoCozinha.TokenManual(cx) is null && PedidoCozinha.Token(cx) == sav2, "nuvem: campo em branco volta a valer a da nuvem");
+        PedidoCozinha.GravarManual(cx, sav2);
+        checar(PedidoCozinha.TokenManual(cx) is null, "nuvem: digitar a mesma da nuvem nao vira sobrescrita");
+
+        // a nuvem tirou a chave da loja: o botao some (a nuvem e a verdade)
+        PedidoCozinha.AplicarDaNuvem(cx, null);
+        checar(!PedidoCozinha.Ligado(cx) && PedidoCozinha.TokenNuvem(cx) is null,
+            "nuvem: sem chave da loja na nuvem, o Para a cozinha some");
+
+        checar(PedidoCozinha.TerminaEm("abc") == "abc" && PedidoCozinha.TerminaEm(null) is null && PedidoCozinha.TerminaEm("123456") == "3456",
+            "nuvem: TerminaEm mostra no maximo 4 letras");
+        foreach (var t in new[] { PedidoCozinha.DescricaoOrigem(cx), "Chave da TV da cozinha: vem da nuvem (termina em 235e)." })
+            checar(!t.Contains('—') && !t.Contains('–') && !t.Contains('\n'), "nuvem: texto da origem sem travessao e em uma linha");
+    }
+
+    private static string? Fonte(string relativo)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "Pdv.csproj")))
+            {
+                var c = Path.Combine(dir.FullName, relativo);
+                return File.Exists(c) ? File.ReadAllText(c) : null;
+            }
+        return null;
     }
 }

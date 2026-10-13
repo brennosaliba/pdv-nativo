@@ -376,6 +376,29 @@ public sealed class Nuvem
         catch { return null; }
     }
 
+    // ── CHAVE DA TV DA COZINHA (13/10/2026, 1.0.31) ────────────────────────────────────
+    /// <summary>
+    /// A chave da TV da cozinha da loja deste terminal (RPC <see cref="PedidoCozinha.Rpc"/>, SQL
+    /// 168 do ERP). A nuvem e a verdade quando responde; sem resposta (404 antes do SQL, sem
+    /// rede) fica a que esta guardada. As regras moram em PedidoCozinha.
+    /// Devolve o que mudou ("" = nada; null = nao deu para consultar).
+    /// </summary>
+    public async Task<string?> BaixarChaveCozinhaAsync(SqliteConnection cx)
+    {
+        if (!await SessaoOkAsync().ConfigureAwait(false)) return null;
+        try
+        {
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/" + PedidoCozinha.Rpc);
+            req.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return null;
+            var linhas = PedidoCozinha.LerDaNuvem(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+            var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1");
+            return PedidoCozinha.AplicarDaNuvem(cx, PedidoCozinha.EscolherDaLoja(linhas, loja));
+        }
+        catch { return null; }
+    }
+
     // ── USUÁRIO MASTER DA REDE (15/09/2026) ────────────────────────────────────────────
     /// <summary>
     /// O master da empresa deste terminal (RPC <see cref="UsuarioMaster.Rpc"/>): nome, hash e sal.

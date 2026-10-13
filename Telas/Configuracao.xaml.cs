@@ -146,8 +146,10 @@ public partial class Configuracao : UserControl
         ChkComandaSeparada.IsChecked =
             Impressao.ComandaSeparada(Vendas.Config(cx, "kds_comanda_separada"), impComandaGravada);
         CarregarEtiqueta(cx);
-        // 13/10/2026: chave da TV da cozinha (pedido para a cozinha no pagamento)
-        TxtChaveCozinha.Text = PedidoCozinha.Token(cx) ?? "";
+        // 13/10/2026: chave da TV da cozinha (pedido para a cozinha no pagamento). 1.0.31: vem da
+        // nuvem; o campo mostra so a sobrescrita deste caixa (em branco = vale a da nuvem).
+        TxtChaveCozinha.Text = PedidoCozinha.TokenManual(cx) ?? "";
+        TxtOrigemChaveCozinha.Text = PedidoCozinha.DescricaoOrigem(cx);
 
         // Largura da bobina: as opções saem da MESMA tabela que a impressão usa para
         // montar o cupom, então o combo nunca oferece papel que o desenho não sabe fazer.
@@ -1600,10 +1602,9 @@ public partial class Configuracao : UserControl
             // devolve a bobina que o dono já tinha escolhido.
             Vendas.GravarConfig(cx, "kds_comanda_separada", ChkComandaSeparada.IsChecked == true ? "1" : "0");
             Vendas.GravarConfig(cx, "kds_comanda_papel_mm", AssistenteConfig.TextoPapel(PapelComandaEscolhido()));
-            // 13/10/2026: chave da TV da cozinha. Em branco = sem pedido para a cozinha (a chave sai).
-            var chaveCozinha = TxtChaveCozinha.Text.Trim();
-            if (chaveCozinha.Length == 0) cx.Execute("DELETE FROM config WHERE chave=@C", new { C = PedidoCozinha.ChaveToken });
-            else Vendas.GravarConfig(cx, PedidoCozinha.ChaveToken, chaveCozinha);
+            // 13/10/2026: chave da TV da cozinha. 1.0.31: o campo e so a sobrescrita deste caixa;
+            // em branco (ou igual a da nuvem) vale a chave que veio da nuvem.
+            PedidoCozinha.GravarManual(cx, TxtChaveCozinha.Text);
             // Respostas prontas do chat do iFood: gravadas já normalizadas (o que a tela do
             // chat vai ler); tudo apagado volta às de fábrica (a chave sai).
             var respostas = TxtRespostasChat.Text.Trim();
