@@ -12,6 +12,14 @@ namespace Pdv.Telas;
 public enum DesfechoVenda { Concluida, Desistiu }
 
 /// <summary>
+/// COMANDA ABERTA (13/10/2026): a conta que esta virando esta venda, como o Pagamento precisa dela.
+/// <paramref name="PendentesMilesimos"/> e o que AINDA NAO foi para a cozinha: o bloco "Para a cozinha"
+/// so aparece com pendentes, pre-marcado com o consumo da conta, e manda so eles (lote n+1 na
+/// transacao do Finalizar). Os itens ja pedidos nunca vao de novo.
+/// </summary>
+public sealed record ContaNoPagamento(string Id, long Numero, string? Nome, DestinoCozinha Consumo, long PendentesMilesimos);
+
+/// <summary>
 /// Tela de pagamento.
 ///
 /// A ordem do fluxo é inegociável e vem do que dói no balcão:
@@ -87,7 +95,10 @@ public partial class Pagamento : UserControl
 
     private string? _documento;
     // 13/10/2026: "Para a cozinha" (PedidoCozinha). null = não manda nada para a TV da cozinha.
+    // Com comanda (_conta) e o destino SO dos pendentes (ContaParaFechar.DestinoDosPendentes).
     private DestinoCozinha? _cozinha;
+    /// <summary>A comanda que esta sendo fechada (null = venda de balcao).</summary>
+    private readonly ContaNoPagamento? _conta;
     private string _digitado = "";
     private Fase _fase = Fase.Forma;
     private CancellationTokenSource? _cobranca;
@@ -118,7 +129,7 @@ public partial class Pagamento : UserControl
     public event Action<DesfechoVenda>? Encerrou;
 
     public Pagamento(Operador operador, Sessao sessao, IReadOnlyList<LinhaVenda> itens,
-        IEmissorFiscal emissor, IProvedorTef? tef, string loja, string? lojaId)
+        IEmissorFiscal emissor, IProvedorTef? tef, string loja, string? lojaId, ContaNoPagamento? conta = null)
     {
         InitializeComponent();
         _operador = operador;
@@ -129,10 +140,10 @@ public partial class Pagamento : UserControl
         _tef = tef;
         _loja = loja;
         _lojaId = lojaId;
+        _conta = conta;
 
         TxtTotal.Text = _total.Formatado();
-        var qtd = itens.Sum(i => i.Qtd.Milesimos) / 1000m;
-        TxtResumo.Text = $"{itens.Count} {(itens.Count == 1 ? "produto" : "produtos")} · {qtd:0.###} {(qtd == 1 ? "item" : "itens")}";
+        TxtResumo.Text = ResumoDosItens();
 
         MontarFormas();
         MontarAtalhos();
@@ -284,12 +295,19 @@ public partial class Pagamento : UserControl
     /// que FALTA — deixar o total gigante com parte já paga faz o operador cobrar o
     /// valor errado; a conta completa (total − pago = falta) fica logo abaixo.
     /// </summary>
+    /// <summary>"3 produtos · 5 itens"; com comanda, "Comanda 12 · Mesa 5 · 3 produtos · 5 itens".</summary>
+    private string ResumoDosItens()
+    {
+        var qtd = _itens.Sum(i => i.Qtd.Milesimos) / 1000m;
+        if (_conta is { } c) return ContasAbertas.Textos.ResumoDoPagamento(c.Numero, c.Nome, _itens.Count, qtd);
+        return $"{_itens.Count} {(_itens.Count == 1 ? "produto" : "produtos")} · {qtd:0.###} {(qtd == 1 ? "item" : "itens")}";
+    }
+
     private void PintarPartes()
     {
         if (_partes.Count == 0)
         {
-            var qtd = _itens.Sum(i => i.Qtd.Milesimos) / 1000m;
-            TxtResumo.Text = $"{_itens.Count} {(_itens.Count == 1 ? "produto" : "produtos")} · {qtd:0.###} {(qtd == 1 ? "item" : "itens")}";
+            TxtResumo.Text = ResumoDosItens();
             TxtRotuloTotal.Text = "TOTAL";
             TxtTotal.Text = _total.Formatado();
             TxtTotal.Foreground = (Brush)Application.Current.Resources["Texto"];
@@ -435,11 +453,18 @@ public partial class Pagamento : UserControl
 
     // ── PEDIDO PARA A COZINHA (13/10/2026) ──────────────────────────────────
     // Só com a chave da TV da cozinha gravada. Escolha padrão: Não (venda de balcão comum).
+    // COMANDA ABERTA (13/10/2026): com comanda o bloco so aparece quando ha itens que AINDA NAO foram
+    // pedidos, e vem pre-marcado com o consumo da conta; com tudo ja pedido, some (nada vai de novo).
     private void MontarCozinha()
     {
         bool ligado;
         try { using var cx = Banco.Abrir(); ligado = PedidoCozinha.Ligado(cx); }
         catch { ligado = false; }
+        if (_conta is { } conta)
+        {
+            ligado = ligado && conta.PendentesMilesimos > 0;
+            if (ligado) _cozinha = conta.Consumo;
+        }
         BlocoCozinha.Visibility = ligado ? Visibility.Visible : Visibility.Collapsed;
         TxtRotuloCozinha.Text = PedidoCozinha.Rotulo;
         BtnCozinhaNao.Content = PedidoCozinha.TextoNao;
@@ -984,8 +1009,11 @@ public partial class Pagamento : UserControl
         try
         {
             using var cx = Banco.Abrir();
+            // COMANDA ABERTA: a conta inteira vira UMA venda; o nome da conta vai em `cliente` e os
+            // pendentes vao como lote n+1 so se o operador escolheu um destino (ContaParaFechar).
             _venda = Vendas.Finalizar(cx, _sessao, _operador, _itens, _partes,
-                _documento, _loja, _lojaId, _cozinha);
+                _documento, _loja, _lojaId, _conta is null ? _cozinha : null, _conta?.Nome,
+                _conta is null ? null : new ContaParaFechar(_conta.Id, _cozinha));
             // Quem decide se sai nota é Pdv.Nucleo/Vendas.SemNota: loja em modo recibo OU
             // caixa em modo de homologação (venda de teste). A regra mora lá, e não aqui,
             // para não existirem duas cópias dela.

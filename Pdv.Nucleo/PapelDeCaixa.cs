@@ -81,11 +81,17 @@ public static class PapelDeCaixa
     /// autorizou, porque um fechamento sem contagem assinado como se fosse normal é pior
     /// que nenhum papel.
     /// </summary>
+    /// <param name="comandas">
+    /// COMANDA ABERTA (13/10/2026): as duas linhas de <c>ContasAbertas.LinhasDoFechamento</c>
+    /// ("Comandas canceladas no turno: N (R$ X)" e "Comandas abertas: N (R$ X)"). O gerente ve no
+    /// papel que vai ao cofre o que a cozinha produziu sem venda e o que ficou para o proximo turno.
+    /// Nulo ou vazio (caixa esquecido, loja sem comanda) nao imprime o bloco.
+    /// </param>
     public static IReadOnlyList<string> Fechamento(
         string loja, DateTime quando, Sessao sessao, string quemFechou,
         IReadOnlyList<LinhaDoResumo> resumo, Dinheiro desvio, IReadOnlyList<string> semConferencia,
         Dinheiro? fica, Dinheiro? retirada, string? justificativa,
-        bool semContagem, string? autorizador, int colunas)
+        bool semContagem, string? autorizador, int colunas, IReadOnlyList<string>? comandas = null)
     {
         var c = PapelTexto.Largura(colunas);
         var l = new List<string>
@@ -127,6 +133,12 @@ public static class PapelDeCaixa
             l.Add(PapelTexto.Traco(c));
             l.AddRange(PapelTexto.Campo("Fica na gaveta", ficou.Formatado(), c));
             if (retirada is { } r) l.AddRange(PapelTexto.Campo("Retirado para o cofre", r.Formatado(), c));
+        }
+
+        if (comandas is { Count: > 0 })
+        {
+            l.Add(PapelTexto.Traco(c));
+            foreach (var linha in comandas) l.AddRange(PapelTexto.Quebrar(linha, c));
         }
 
         if (semContagem)

@@ -68,6 +68,15 @@ public sealed record FechamentoDaConta(bool Fechou, VendaGravada? VendaExistente
 public sealed record ResumoContas(int CanceladasN, Dinheiro Canceladas, int AbertasN, Dinheiro Abertas);
 
 /// <summary>
+/// Uma linha do dialogo Comandas, ja com os textos que a tela mostra: "12 · Mesa 5" | "3 itens · R$ 45,00" |
+/// "cozinha 2 de 3" | selo. O selo e UM so, nesta ordem: na tela, em uso no outro caixa, confira a maquininha,
+/// o estado do ultimo lote (na TV, fila, nao foi). <see cref="LoteParaMandarDeNovo"/> e o lote que o botao
+/// [Mandar de novo] reenvia (so com "nao foi" e sem substituto).
+/// </summary>
+public sealed record LinhaDaLista(ContaAberta Conta, string Titulo, string Itens, string Cozinha, string Selo,
+    bool NaTela, bool EmUso, bool ConferirMaquininha, string? LoteParaMandarDeNovo);
+
+/// <summary>
 /// COMANDA ABERTA (13/10/2026). Pedido do dono: "agora vamos adicionar a funcao comanda no PDV, abre a
 /// comanda e fecha pra pagamento.. e a comanda tambem permite solicitar itens da cozinha!"
 ///
@@ -168,6 +177,15 @@ public static class ContasAbertas
         public const string ConfiraMaquininha = "⚠ confira a maquininha";
         public const string EmUsoNoOutroCaixa = "em uso no outro caixa";
         public const string ZeroItens = "0 itens";
+        /// <summary>O Limpar em modo comanda tira so o que ainda nao foi pedido.</summary>
+        public const string JaPedidosFicam = "O que já foi pedido fica. Tire um a um com PIN.";
+        public const string SemComandaNaTela = "Nenhuma comanda na tela.";
+        public const string TituloNaLoja = "Na loja";
+        public const string ConsumoDaComanda = "Consumo";
+        public const string DicaBotaoComandas = "Comandas abertas: mesas e clientes";
+        public const string DicaGuardar = "Guardar a comanda e voltar ao balcão";
+        public const string DicaCozinha = "Mandar para a cozinha o que ainda não foi pedido";
+        public const string AvisoAutorizador = "PIN de outro gerente";
 
         public static string ComandaAberta(long n) => $"Comanda {n} aberta.";
         public static string CozinhaN(long pendentes) => $"Cozinha {pendentes}";
@@ -186,6 +204,15 @@ public static class ContasAbertas
         public static string CriarOutra(string nome) => $"Criar outra {nome}";
         public static string Mesa(int i) => $"Mesa {i}";
         public static string CozinhaDeN(long pedidos, long total) => $"cozinha {pedidos} de {total}";
+        public static string ContaGuardada(long n) => $"Comanda {n} guardada.";
+        public static string ContaCancelada(long n) => $"Comanda {n} cancelada.";
+        public static string CancelarPergunta(long n) => $"Cancelar a comanda {n}?";
+        public static string NaCozinha(long unidades) => unidades == 1 ? "1 na cozinha" : $"{unidades} na cozinha";
+        public static string ItensEValor(decimal unidades, Dinheiro valor) => $"{Rascunho.TextoItens(unidades)} · {valor.Formatado()}";
+        /// <summary>O TxtResumo do Pagamento: "Comanda 12 · Mesa 5 · 3 produtos · 5 itens".</summary>
+        public static string ResumoDoPagamento(long n, string? nome, int produtos, decimal itens)
+            => $"Comanda {n}" + (string.IsNullOrWhiteSpace(nome) ? "" : $" · {nome}")
+               + $" · {produtos} {(produtos == 1 ? "produto" : "produtos")} · {itens:0.###} {(itens == 1 ? "item" : "itens")}";
 
         /// <summary>O selo da linha da lista pelo estado do ultimo lote. Lote de teste nao tem selo.</summary>
         public static string Selo(EstadoLote e) => e switch
@@ -204,11 +231,14 @@ public static class ContasAbertas
             Balcao, PedidoNaFila, CozinhaRecebeu, NadaNovo, PedidoJaNaTv, PedidoAindaNaFila, NadaParaMandarDeNovo,
             ContinuamProximoTurno, FecharMesmoAssim, SaiuDoCardapio, CupomNaoValeMais, TesteEmTurnoReal,
             RealEmTurnoDeTeste, NaoEncontrada, ItemNaoEncontrado, NaTela, NaTv, SeloFila, SeloNaoFoi, ConfiraMaquininha,
-            EmUsoNoOutroCaixa, ZeroItens,
+            EmUsoNoOutroCaixa, ZeroItens, JaPedidosFicam, SemComandaNaTela, TituloNaLoja, ConsumoDaComanda,
+            DicaBotaoComandas, DicaGuardar, DicaCozinha, AvisoAutorizador,
             ComandaAberta(12), CozinhaN(2), CancelarComanda(12), PedidoNaCozinhaGuardada(12), JaFoiFechada(12),
             JaFoiCancelada(12), ComandasAbertas(2, Dinheiro.DeReais(85)), ComandasCanceladasNoTurno(1, Dinheiro.DeReais(24)),
             CupomJaNaComanda(13), CarrinhoTem(3), CarrinhoTem(1), AbrirComItens(3), GuardarEAbrir(12), LevarPara(12),
-            JaEstaAberta("Mesa 5"), CriarOutra("Mesa 5"), Mesa(8), CozinhaDeN(2, 3),
+            JaEstaAberta("Mesa 5"), CriarOutra("Mesa 5"), Mesa(8), CozinhaDeN(2, 3), ContaGuardada(12), ContaCancelada(12),
+            CancelarPergunta(12), NaCozinha(2), NaCozinha(1), ItensEValor(3, Dinheiro.DeReais(45)),
+            ResumoDoPagamento(12, "Mesa 5", 3, 5), ResumoDoPagamento(12, null, 1, 1),
         };
     }
 
@@ -309,6 +339,39 @@ public static class ContasAbertas
 
     /// <summary>A conta esta carregada noutro Pdv.exe que continua vivo? (processo morto = livre)</summary>
     public static bool EmUsoPorOutroPdv(ContaAberta conta) => Rascunho.DeOutroPdvVivo(conta.Dono);
+
+    /// <summary>
+    /// As linhas do dialogo Comandas do modo atual, por numero, com os textos prontos. A conferencia da
+    /// maquininha (Caixa.CobrancaSemVenda) roda UMA vez por lista: positiva, so marca a conta que nao esta
+    /// na tela e cujo dono nao esta vivo (o caixa caiu com ela carregada); fechando_em de pe sem venda
+    /// marca sempre. Nunca lanca: a lista aparece mesmo com a conferencia falhando.
+    /// </summary>
+    public static IReadOnlyList<LinhaDaLista> LinhasDaLista(SqliteConnection cx, Sessao sessao, string? carregadaId, bool teste)
+    {
+        var cobrado = Cobrado(cx, sessao);
+        var r = new List<LinhaDaLista>();
+        foreach (var c in Listar(cx, teste))
+        {
+            var naTela = carregadaId is not null && c.Id == carregadaId;
+            var emUso = !naTela && EmUsoPorOutroPdv(c);
+            var donoMorto = !naTela && !emUso;
+            var conferir = (c.FechandoEm is not null && c.VendaId is null) || (donoMorto && cobrado is { Positivo: true });
+            var unidades = c.Itens.Sum(i => i.QtdMilesimos) / 1000m;
+            var pedidas = c.Itens.Sum(i => i.CozinhaMilesimos) / 1000m;
+            var lotes = Lotes(cx, c.Id).Where(l => !l.Homologacao).ToList();
+            var ultimo = lotes.OrderByDescending(l => l.N).FirstOrDefault();
+            var estado = ultimo is null ? EstadoLote.Teste : EstadoDoLote(cx, ultimo.Id);
+            var itens = c.Itens.Count == 0 ? Textos.ZeroItens : Textos.ItensEValor(unidades, c.ValorTabela);
+            var cozinha = lotes.Count == 0 && pedidas == 0 ? "" : Textos.CozinhaDeN((long)pedidas, (long)unidades);
+            var selo = naTela ? Textos.NaTela
+                : emUso ? Textos.EmUsoNoOutroCaixa
+                : conferir ? Textos.ConfiraMaquininha
+                : Textos.Selo(estado);
+            var reenviar = estado == EstadoLote.NaoFoi && ultimo is { SubstituidoPor: null } ? ultimo.Id : null;
+            r.Add(new LinhaDaLista(c, c.Titulo, itens, cozinha, selo, naTela, emUso, conferir, reenviar));
+        }
+        return r;
+    }
 
     /// <summary>
     /// Assume a conta para esta tela (dono = este processo). Null quando ela nao esta mais aberta ou esta

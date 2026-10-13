@@ -33,6 +33,19 @@ public sealed class ItemComanda
     public bool EhCombo => Escolhas is not null;
     public Dinheiro Bruto => Produto.Preco.VezesQtd(Qtd.Milesimos);
     public Dinheiro Total => new(Bruto.Centavos - DescontoCent);
+
+    // ── COMANDA ABERTA (13/10/2026, Venda.Comanda.cs) ───────────────────────
+    /// <summary>A identidade da linha (Guid N), nascida quando ela entra. E por ela que o lote da
+    /// cozinha e a retirada com PIN acham a linha de novo; ReprecificarComanda copia.</summary>
+    public string LinhaId { get; init; } = Guid.NewGuid().ToString("N");
+    /// <summary>Quanto desta linha ja foi para a cozinha (milesimos). Tirar abaixo disto e tirar
+    /// producao: so com o PIN de OUTRO gerente. Zero no balcao.</summary>
+    public long CozinhaMilesimos { get; set; }
+    /// <summary>O produto saiu do catalogo entre abrir e carregar a comanda: a linha so mostra o
+    /// nome e barra Pedir a cozinha e Fechar conta ate ser tirada.</summary>
+    public bool ForaDoCardapio { get; init; }
+    /// <summary>Qtd - CozinhaMilesimos: o que o botao "Cozinha N" leva desta linha.</summary>
+    public long PendenteMilesimos => Math.Max(0, Qtd.Milesimos - CozinhaMilesimos);
 }
 
 /// <summary>
@@ -561,6 +574,8 @@ public partial class Venda : UserControl
     private void AvisoLeve(string texto)
     {
         TxtToastAviso.Text = texto;
+        // o tom de sempre e o de aviso (vermelho); AvisoLeve(texto, tom) troca depois
+        ToastAviso.SetResourceReference(Border.BorderBrushProperty, "Erro");
         ToastAviso.Visibility = Visibility.Visible;
         _toastAvisoSome?.Stop();
         _toastAvisoSome = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
@@ -829,6 +844,9 @@ public partial class Venda : UserControl
             {
                 // Tem versão nova: o relatório do painel não aparece (o que importa dele
                 // já está nos selos) e a caixa que abre é a da troca do programa.
+                // COMANDA ABERTA (13/10/2026): a comanda carregada ja esta no banco e sobrevive
+                // a troca do exe; guardar e so soltar o dono, e o portao ve o carrinho vazio.
+                if (_contaAberta is not null) GuardarConta();
                 try
                 {
                     estaFechando = await AtualizarCaixa.ExecutarAsync(dono, _comanda.Count, _tefOcupado);
@@ -1001,11 +1019,16 @@ public partial class Venda : UserControl
             // a linha já foi pedida pelo cliente e não pode mudar sozinha.
             if (novo is null || novo.Preco.Centavos == item.Produto.Preco.Centavos) continue;
             // Desconto, brinde e nome da promoção são reescritos por PintarComanda.
+            // A identidade da linha e a marca da cozinha (comanda aberta) vao junto: sem isso
+            // a cozinha receberia tudo de novo depois de uma troca de preco.
             _comanda[k] = new ItemComanda
             {
                 Produto = novo,
                 Qtd = item.Qtd,
                 Escolhas = item.Escolhas,
+                LinhaId = item.LinhaId,
+                CozinhaMilesimos = item.CozinhaMilesimos,
+                ForaDoCardapio = item.ForaDoCardapio,
             };
         }
 
@@ -1193,6 +1216,9 @@ public partial class Venda : UserControl
         TxtLimparRotulo.Visibility = estreita ? Visibility.Collapsed : Visibility.Visible;
         BtnLimpar.Padding = estreita ? new Thickness(14, 0, 14, 0) : new Thickness(18, 0, 18, 0);
         TxtFinalizarRotulo.FontSize = estreita ? 17 : 19;
+        // COMANDA ABERTA (13/10/2026): as medidas da coluna a 1024 estao escritas em
+        // AplicarModoComanda (Venda.Comanda.cs); aqui so se avisa que a largura mudou.
+        AplicarModoComanda(estreita);
 
         // cabeçalho compacto: só quem está no caixa (avatar + nome), sem a linha
         // da sessão e sem repetir a loja (ela está na barra de baixo); botões menores
@@ -2097,6 +2123,10 @@ public partial class Venda : UserControl
         BtnCortesia.IsEnabled = _comanda.Count > 0 && _cortesiaCodigo is null;
         BtnCortesia.Visibility = _cortesiaCodigo is null ? Visibility.Visible : Visibility.Collapsed;
         SalvarRascunho();
+        // COMANDA ABERTA (13/10/2026): o cabecalho, o chip, a faixa e os botoes Guardar e
+        // Cozinha N seguem o modo (Venda.Comanda.cs). Depois do SalvarRascunho: o numero do
+        // botao Cozinha e lido do disco, que e quem sabe o que ja foi pedido.
+        PintarModoComanda();
     }
 
     /// <summary>
@@ -2270,19 +2300,26 @@ public partial class Venda : UserControl
     {
         if (!_rascunhoOferecido) return;
         if (PainelPagamento.Visibility == Visibility.Visible) return;
+        // COMANDA ABERTA (13/10/2026): com uma comanda carregada o carrinho E a conta. Ela grava
+        // em conta_aberta e APAGA comanda_rascunho, senao a queda de energia devolveria os
+        // mesmos itens duas vezes (rascunho solto E conta) e o operador cobraria duas vezes.
+        if (_contaAberta is not null) { GravarNaConta(); return; }
         try
         {
             using var cx = Banco.Abrir();
-            Rascunho.Gravar(cx, _sessao, _operador,
-                _comanda.Select(i => new ItemRascunho(
-                    i.Produto.Id, i.Produto.Plu, i.Produto.Nome, i.Produto.Categoria,
-                    i.Produto.Preco.Centavos, i.Qtd.Milesimos, i.Produto.Unidade,
-                    i.Produto.Ncm, i.Produto.Cest, i.Produto.Csosn, i.Produto.Origem,
-                    i.Produto.Foto, Nucleo.Combos.ParaJson(i.Escolhas))).ToList(),
-                Dinheiro.Zero, _cortesiaCodigo, _cortesiaCobertura);
+            Rascunho.Gravar(cx, _sessao, _operador, ItensDoDisco(), Dinheiro.Zero, _cortesiaCodigo, _cortesiaCobertura);
         }
         catch { /* rascunho é conforto, não dinheiro: nunca atrapalha a venda */ }
     }
+
+    /// <summary>O carrinho no formato do disco (rascunho e conta): snapshot do produto, escolhas, a identidade da linha e a marca da cozinha.</summary>
+    private List<ItemRascunho> ItensDoDisco()
+        => _comanda.Select(i => new ItemRascunho(
+                i.Produto.Id, i.Produto.Plu, i.Produto.Nome, i.Produto.Categoria,
+                i.Produto.Preco.Centavos, i.Qtd.Milesimos, i.Produto.Unidade,
+                i.Produto.Ncm, i.Produto.Cest, i.Produto.Csosn, i.Produto.Origem,
+                i.Produto.Foto, Nucleo.Combos.ParaJson(i.Escolhas),
+                LinhaId: i.LinhaId, CozinhaMilesimos: i.CozinhaMilesimos)).ToList();
 
     /// <summary>
     /// O caixa desligou com comanda em andamento: devolve os ITENS, com o operador
@@ -2321,13 +2358,15 @@ public partial class Venda : UserControl
         // rascunho. O que se pode afirmar sobre o dinheiro sai de Rascunho.AvisoDeCobranca,
         // que é testado; a tela só mostra.
         var aviso = Rascunho.AvisoDeCobranca(cobrado);
+        // COMANDA ABERTA (13/10/2026): o rascunho solto e sempre a venda de BALCAO (com uma
+        // comanda carregada ele e apagado). Com mesa guardada no banco, o corpo diz isso,
+        // para o operador nao procurar a mesa aqui. O texto mora em Rascunho.CorpoDoAviso.
+        var temContaAberta = false;
+        try { using var cxc = Banco.Abrir(); temContaAberta = ContasAbertas.ContarAbertas(cxc, _homologacao || _sessao.Teste) > 0; }
+        catch { }
 
         var recuperar = Dialogo.Confirmar(Window.GetWindow(this)!, "Comanda aberta",
-            $"O caixa parou às {quando} e esta comanda ficou aberta:\n\n" +
-            $"{Rascunho.TextoItens(unidades)} · {total.Formatado()}\n\n" +
-            aviso + "\n\n" +
-            (unidades == 1m ? "Ao continuar, o item volta" : "Ao continuar, os itens voltam") +
-            " para a tela. Confira o pedido com o cliente antes de finalizar.",
+            Rascunho.CorpoDoAviso(quando, unidades, total, aviso, temContaAberta),
             "Continuar comanda", "Descartar comanda");
 
         if (!recuperar)
@@ -2356,6 +2395,10 @@ public partial class Venda : UserControl
                 // rascunho de exe antigo nao tem o campo: combo volta sem escolhas e a
                 // linha pede os sabores ao toque (o Finalizar nao deixa passar sem eles)
                 Escolhas = Nucleo.Combos.DeJson(i.EscolhasJson),
+                // a identidade da linha e a marca da cozinha voltam do disco (comanda aberta);
+                // o rascunho do balcao nao tem nenhuma das duas e nasce com as de sempre
+                LinhaId = i.LinhaId ?? Guid.NewGuid().ToString("N"),
+                CozinhaMilesimos = i.CozinhaMilesimos,
             });
 
         // A cortesia volta junto: sem ela o operador cobraria o que já tinha sido
@@ -2414,7 +2457,8 @@ public partial class Venda : UserControl
         {
             Text = item.Produto.Nome.ToUpperInvariant(), FontSize = 13, FontWeight = FontWeights.SemiBold,
             TextWrapping = TextWrapping.Wrap, LineHeight = 16,
-            Foreground = (Brush)Application.Current.Resources["Texto"],
+            // fora do cardapio (comanda aberta): o nome em cinza, so para mostrar e barrar
+            Foreground = (Brush)Application.Current.Resources[item.ForaDoCardapio ? "TextoFraco" : "Texto"],
             Margin = new Thickness(0, 0, 10, 0),
         };
         Grid.SetRow(nome, 0); Grid.SetColumn(nome, 0);
@@ -2435,11 +2479,16 @@ public partial class Venda : UserControl
             Text = $"{item.Qtd.Formatada()} × {item.Produto.Preco.Formatado()}"
                  + (item.UnidadesGratis > 0 ? $" · {item.UnidadesGratis} grátis"
                     : item.DescontoCent > 0 ? $" · -{new Dinheiro(item.DescontoCent).Formatado()}" : "")
-                 + (item.PromoNome is { Length: > 0 } ? $" ({Capitalizar(item.PromoNome)})" : ""),
+                 + (item.PromoNome is { Length: > 0 } ? $" ({Capitalizar(item.PromoNome)})" : "")
+                 // COMANDA ABERTA (13/10/2026): "· 2 na cozinha" mostra a regra do PIN antes do toque;
+                 // "saiu do cardápio" e a linha que barra Pedir a cozinha e Fechar conta
+                 + (item.ForaDoCardapio ? $" · {ContasAbertas.Textos.SaiuDoCardapio}"
+                    : item.CozinhaMilesimos > 0 ? $" · {ContasAbertas.Textos.NaCozinha(item.CozinhaMilesimos / 1000)}" : ""),
             FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
-            Foreground = (Brush)Application.Current.Resources["TextoFraco"],
+            Foreground = (Brush)Application.Current.Resources[item.ForaDoCardapio ? "Erro" : "TextoFraco"],
             Margin = new Thickness(0, 10, 0, 0),
         };
+        AutomationProperties.SetName(unitario, $"Unitario {item.Produto.Nome}");
         Grid.SetRow(unitario, 1); Grid.SetColumn(unitario, 0);
         g.Children.Add(unitario);
 
@@ -2492,6 +2541,8 @@ public partial class Venda : UserControl
             b.Click += (_, _) =>
             {
                 var novo = item.Qtd.Milesimos + delta * 1000;
+                // COMANDA ABERTA: cruzar para baixo do que ja foi pedido e tirar producao (PIN)
+                if (novo < item.CozinhaMilesimos) { TirarProduzido(item, Math.Max(0, novo)); return; }
                 if (novo <= 0) _comanda.Remove(item);       // chegou a zero: sai da comanda
                 else item.Qtd = new Quantidade(novo);
                 PintarComanda();
@@ -2519,13 +2570,20 @@ public partial class Venda : UserControl
         var mais = Passo("+", 1);
         AutomationProperties.SetName(mais, $"Aumentar {item.Produto.Nome}");
         controles.Children.Add(mais);
+        // linha fora do cardapio: nao se aumenta nem se diminui, so se tira
+        if (item.ForaDoCardapio) { menos.Visibility = Visibility.Collapsed; mais.Visibility = Visibility.Collapsed; }
 
         // Lixeira: tirar 3 unidades tocando "−" três vezes é lento e dá erro. Um toque resolve.
         var lixeira = Redondo("🗑", 16, (Brush)Application.Current.Resources["Erro"]);
         lixeira.Margin = new Thickness(10, 0, 0, 0);
         lixeira.ToolTip = "Remover item";
         AutomationProperties.SetName(lixeira, $"Remover {item.Produto.Nome}");
-        lixeira.Click += (_, _) => { _comanda.Remove(item); PintarComanda(); };
+        lixeira.Click += (_, _) =>
+        {
+            // COMANDA ABERTA: linha ja pedida so sai com o PIN de outro gerente
+            if (item.CozinhaMilesimos > 0) { TirarProduzido(item, 0); return; }
+            _comanda.Remove(item); PintarComanda();
+        };
         controles.Children.Add(lixeira);
 
         controles.HorizontalAlignment = HorizontalAlignment.Right;
@@ -2542,6 +2600,10 @@ public partial class Venda : UserControl
         if (!Dialogo.Confirmar(Window.GetWindow(this)!, "Limpar comanda",
                 _comanda.Count == 1 ? "Tirar o item da comanda?" : $"Tirar os {_comanda.Count} itens da comanda?",
                 "Limpar comanda", "Voltar", perigo: true)) return;
+        // COMANDA ABERTA (13/10/2026): o Limpar continua Limpar, nunca "cancelar comanda" (isso
+        // mora no dialogo Comandas). Tira so o que ainda nao foi pedido; o que ja foi para a
+        // cozinha fica, e sai um a um com o PIN de outro gerente (a lixeira da linha).
+        if (_contaAberta is not null) { LimparSoOPendente(); return; }
         EsvaziarComanda();
         PintarComanda();
     }
@@ -2588,6 +2650,13 @@ public partial class Venda : UserControl
         {
             Dialogo.Avisar(dono, "Cupom de outra loja",
                 $"Este cupom é da loja {c.Loja}. Só pode ser usado lá.", "erro");
+            return;
+        }
+        // COMANDA ABERTA (13/10/2026): reserva do cupom por conta. O mesmo codigo nao vale em
+        // duas comandas guardadas ao mesmo tempo (seria o mesmo brinde dado duas vezes).
+        if (CupomPresoEmOutraConta(c.Codigo ?? codigo) is { } outra)
+        {
+            Dialogo.Avisar(dono, "Cupom em outra comanda", ContasAbertas.Textos.CupomJaNaComanda(outra), "erro");
             return;
         }
 
@@ -2640,6 +2709,10 @@ public partial class Venda : UserControl
         if (_comanda.Count == 0) return;
         var dono = Window.GetWindow(this)!;
         if (TefEmAndamento(dono)) return;
+        // COMANDA ABERTA (13/10/2026): "Fechar conta" passa primeiro pelas conferencias da conta
+        // (ainda aberta, turno de teste, cardapio, cupom revalidado, maquininha), que sao
+        // assincronas; so depois volta para ca com _contaConferida de pe. Venda.Comanda.cs.
+        if (_contaAberta is not null && !_contaConferida) { _ = ConferirContaEFinalizarAsync(); return; }
 
         // Monta os itens COBRADOS: a quantidade coberta pela cortesia sai (brinde,
         // não venda — não vai pra NFC-e). Item totalmente coberto some da nota.
@@ -2730,8 +2803,11 @@ public partial class Venda : UserControl
         }
 
         var cortesiaAplicada = _cortesiaCodigo;
+        // COMANDA ABERTA: o Pagamento recebe a conta (numero, nome, consumo e o que ainda nao foi
+        // pedido) e fechando_em e marcado ANTES de qualquer dinheiro (ver ContaParaOPagamento).
+        var contaNoPagamento = ContaParaOPagamento();
         var tela = new Pagamento(_operador, _sessao, itens,
-            Servicos.Emissor(), Servicos.Tef(), _loja, _lojaId);
+            Servicos.Emissor(), Servicos.Tef(), _loja, _lojaId, contaNoPagamento);
         // Leva o passo do roteiro junto: e ele que liga o REQNUM da transacao a linha
         // da planilha de homologacao. Venda normal de loja vai com null e nao anota nada.
         tela.PassoDoRoteiro = _passoEmExecucao;
@@ -2752,6 +2828,9 @@ public partial class Venda : UserControl
                 // Cupom só morre com a venda concluída (dinheiro entrou). Falha no
                 // resgate não desfaz a venda — a cortesia já foi dada; loga e segue.
                 if (cortesiaAplicada is not null) _ = ResgatarSilenciosoAsync(cortesiaAplicada);
+                // COMANDA ABERTA: a conta ja fechou dentro da transacao da venda. Solta ANTES
+                // de esvaziar, senao a repintura gravaria o carrinho vazio numa conta fechada.
+                ContaVirouVenda();
                 // Esvazia ANTES de tirar a cortesia: RemoverCortesia repinta, e repintar
                 // grava o rascunho. Na ordem inversa a comanda já vendida era regravada
                 // por um instante — e uma queda ali deixaria um rascunho órfão de venda
@@ -2759,6 +2838,8 @@ public partial class Venda : UserControl
                 EsvaziarComanda();
                 RemoverCortesia(this, new RoutedEventArgs());
             }
+            // "Voltar para a comanda": a conta continua carregada e fechando_em sai
+            else ContaDesistiuDoPagamento();
         };
         PainelPagamento.Content = tela;
         PainelPagamento.Visibility = Visibility.Visible;
@@ -3243,6 +3324,9 @@ public partial class Venda : UserControl
         // não pede comanda vazia nem maquininha livre, então sai antes das travas.
         if (acao == MenuBarra.Impressora) { await TrocarImpressoraAsync(); return; }
 
+        // COMANDA ABERTA (13/10/2026): a comanda carregada e GUARDADA (ela ja esta no banco);
+        // a trava de baixo fica so para o carrinho solto do balcao.
+        if (_contaAberta is not null) GuardarConta();
         if (_comanda.Count > 0)
         {
             Dialogo.Avisar(dono, "Comanda aberta",
@@ -4139,12 +4223,18 @@ public partial class Venda : UserControl
         if (_semFechamento) return;
         if (_fechandoCaixa) return;   // segundo toque enquanto o primeiro fechamento corre
         if (TefEmAndamento(dono)) return;
+        // COMANDA ABERTA (13/10/2026): a comanda carregada e guardada antes das travas (ela nao e
+        // dinheiro e sobrevive ao turno); a trava de baixo e so do carrinho solto do balcao.
+        if (_contaAberta is not null) GuardarConta();
         if (_comanda.Count > 0)
         {
             Dialogo.Avisar(dono, "Comanda aberta",
                 "Termine ou limpe a comanda antes de fechar o caixa.", "erro");
             return;
         }
+        // As comandas guardadas: cancela sozinho as vazias sem lote e, se restarem abertas, avisa
+        // e deixa passar (nao bloqueia: a mesa pode estar comendo na troca de turno).
+        if (!ComandasDeixamFechar(dono)) return;
         _fechandoCaixa = true;
         try
         {
@@ -4219,9 +4309,10 @@ public partial class Venda : UserControl
                 var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                 var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
                 var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, null, tefDisponivel, fica);
-                var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, null);
+                var comandas = ComandasAtravessaram(cx);
+                var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, null, comandas);
                 var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
-                MostrarResultado(dono, linhasFech, null, divergencias, resumoTeste, folha, papel, tefDisponivel);
+                MostrarResultado(dono, linhasFech, null, divergencias, comandas, resumoTeste, folha, papel, tefDisponivel);
                 FechouCaixa?.Invoke();
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
@@ -4236,9 +4327,10 @@ public partial class Venda : UserControl
                     var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                     var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
                     var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just, tefDisponivel, fica);
-                    var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, just);
+                    var comandas = ComandasAtravessaram(cx);
+                    var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, just, comandas);
                     var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
-                    MostrarResultado(dono, linhasFech, just, divergencias, resumoTeste, folha, papel, tefDisponivel);
+                    MostrarResultado(dono, linhasFech, just, divergencias, comandas, resumoTeste, folha, papel, tefDisponivel);
                     FechouCaixa?.Invoke();
                 }
                 catch (Exception e2)
@@ -4323,8 +4415,8 @@ public partial class Venda : UserControl
     }
 
     private static void MostrarResultado(Window dono, List<LinhaFechamento> linhas, string? justificativa,
-        List<DivergenciaTef> divergencias, string? resumoTeste = null, string? folha = null, string? retirada = null,
-        bool tefDisponivel = true)
+        List<DivergenciaTef> divergencias, IReadOnlyList<string>? comandas = null, string? resumoTeste = null,
+        string? folha = null, string? retirada = null, bool tefDisponivel = true)
     {
         // As linhas saem do Núcleo (ResumoFechamento), a MESMA montagem do caixa esquecido.
         // 13/09/2026, pedido do dono: crédito, débito e PIX sempre partidos em TEF e POS
@@ -4353,6 +4445,10 @@ public partial class Venda : UserControl
         // precisa ler isso aqui. Número que some sem explicação é número que vira
         // desconfiança do fechamento inteiro.
         if (resumoTeste is not null) corpo += "\n\n" + resumoTeste;
+
+        // COMANDA ABERTA (13/10/2026): o que a cozinha produziu sem venda (canceladas) e o que
+        // ficou para o proximo turno (abertas). As mesmas duas linhas do papel.
+        if (comandas is { Count: > 0 }) corpo += "\n\n" + string.Join("\n", comandas);
 
         // O papel do fechamento (18/09/2026): o comprovante que o operador assina e
         // entrega ao gerente. Se ele não saiu, o resumo diz o que anotar à mão.
@@ -4389,7 +4485,7 @@ public partial class Venda : UserControl
     /// </summary>
     private async Task<string?> ImprimirFechamentoAsync(Window dono, Microsoft.Data.Sqlite.SqliteConnection cx,
         List<LinhaFechamento> linhasFech, Dictionary<string, Dinheiro> contagem, Dinheiro? fica,
-        bool tef, string? justificativa)
+        bool tef, string? justificativa, IReadOnlyList<string>? comandas = null)
     {
         var politica = Impressoes.Politica(cx, Impressoes.Fechamento);
         if (!PapelDeCaixa.SaiSozinho(politica, _sessao.Teste))
@@ -4412,7 +4508,7 @@ public partial class Venda : UserControl
                 ResumoFechamento.Linhas(linhasFech, tef),
                 new Dinheiro(linhasFech.Sum(l => l.DiferencaConferida.Abs.Centavos)),
                 ResumoFechamento.SemConferencia(linhasFech, tef),
-                fica, retirada, justificativa, semContagem: false, autorizador: null, destino.Papel.Colunas);
+                fica, retirada, justificativa, semContagem: false, autorizador: null, destino.Papel.Colunas, comandas);
             var erro = await Impressao.ImprimirTextoAsync("Fechamento de caixa", new[] { linhas }, destino);
             return erro is null
                 ? "O papel do fechamento saiu na impressora: assine e entregue ao gerente."
@@ -4510,6 +4606,8 @@ public partial class Venda : UserControl
     private void AbrirConfiguracao(object sender, RoutedEventArgs e)
     {
         if (TefEmAndamento(Window.GetWindow(this)!)) return;
+        // COMANDA ABERTA (13/10/2026): a comanda carregada e guardada (ja esta no banco) antes da trava
+        if (_contaAberta is not null) GuardarConta();
         if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Configuração",
                 "A comanda fica guardada. Quando você voltar, o caixa pergunta se quer continuar com ela.",
                 "Abrir configuração", "Voltar"))
@@ -4523,6 +4621,9 @@ public partial class Venda : UserControl
         // sair jogaria fora a comanda do roteiro em silêncio.
         if (_semFechamento) return;
         if (TefEmAndamento(Window.GetWindow(this)!)) return;
+        // COMANDA ABERTA (13/10/2026): a comanda carregada NAO e jogada fora: e guardada (solta
+        // o dono) e volta pelo botao Comandas no proximo login. O descarte e so do carrinho solto.
+        if (_contaAberta is not null) GuardarConta();
         if (_comanda.Count > 0 && !Dialogo.Confirmar(Window.GetWindow(this)!, "Sair do caixa",
                 "A comanda aberta vai ser jogada fora. Ela não volta depois.",
                 "Descartar e sair", "Voltar", perigo: true))

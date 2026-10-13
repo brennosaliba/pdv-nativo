@@ -164,6 +164,14 @@ if (args.Length >= 4 && args[0] == "--foto-codigo")
 if (args.Length >= 2 && args[0] == "--foto-resgate")
     return FotoResgate.Rodar(args);
 
+// Modo FOTO da COMANDA ABERTA (ver Pdv.Testes/FotoComanda.cs): a tela de venda com a comanda "12 · Mesa 5",
+// o dialogo Comandas (lista e Nova comanda), o Pagamento da comanda e a janela do PIN, nos tres tamanhos
+// da rede (1024x768, 1366x768, 1920x1080; "escuro" so 1024). Copia do banco do caixa, nuvem morta. Mede
+// os cinco criterios do desenho e sai 1 quando algum falha.
+//   Pdv.Testes.exe --foto-comanda docs/comanda-fotos [claro|escuro]
+if (args.Length >= 2 && args[0] == "--foto-comanda")
+    return FotoComanda.Rodar(args);
+
 // Mostra na tela os papeis de abertura e de fechamento do caixa, do jeito que eles
 // saem na bobina, com a regua de colunas em cima. Serve para conferir o desenho sem
 // gastar papel e sem precisar de impressora.
@@ -774,6 +782,7 @@ if (args.Length >= 1 && args[0] == "--so-conta")
 {
     await TestesContaAberta.RodarAsync((cond, nome) => Check("conta: " + nome, cond));
     await TestesPedidoCozinha.RodarAsync((cond, nome) => Check("cozinha: " + nome, cond));
+    TestesComandaTela.Rodar((cond, nome) => Check("comanda-tela: " + nome, cond));
     Console.WriteLine();
     Console.WriteLine($"=== (so conta) {ok} OK, {falhas} falhas ===");
     return falhas == 0 ? 0 : 1;
@@ -1598,6 +1607,11 @@ await TestesPedidoCozinha.RodarAsync((cond, nome) => Check("cozinha: " + nome, c
 Console.WriteLine();
 Console.WriteLine("--- Comanda aberta (conta por mesa ou cliente): nucleo, lotes e fechamento ---");
 await TestesContaAberta.RodarAsync((cond, nome) => Check("conta: " + nome, cond));
+// A TELA da comanda (etapa Telas, 13/10/2026): o botao Comandas, a coluna em modo comanda, o dialogo,
+// o Pagamento com a conta, o PIN de outro gerente e os vigias de fonte.
+Console.WriteLine();
+Console.WriteLine("--- Comanda aberta: a tela de venda, o dialogo Comandas e o Pagamento ---");
+TestesComandaTela.Rodar((cond, nome) => Check("comanda-tela: " + nome, cond));
 
 // -- PENDENCIA: o aviso que nao se apaga -------------------------------------
 // 16 vendas / R$ 102.626,50 em dead-letter sem NENHUMA saida: o dono arrumava o

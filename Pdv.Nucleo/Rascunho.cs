@@ -224,6 +224,20 @@ public static class Rascunho
                 : "Fique tranquilo: nenhum valor foi cobrado e a venda não foi finalizada.";
 
     /// <summary>
+    /// O CORPO DO DIALOGO DO RASCUNHO (13/10/2026, comanda aberta). O rascunho solto e sempre a venda
+    /// de BALCAO: com uma comanda carregada a tela grava nela e apaga o rascunho (ContasAbertas), entao
+    /// o que volta aqui nunca e uma mesa. Com comanda aberta no banco a frase diz que as mesas estao
+    /// guardadas, para o operador nao procurar a mesa neste dialogo. Mora aqui, e nao na tela, porque
+    /// e texto que o operador le no meio do atendimento e a suite confere o valor.
+    /// </summary>
+    public static string CorpoDoAviso(string quando, decimal unidades, Dinheiro total, string avisoCobranca, bool comandasGuardadas)
+        => $"O caixa parou às {quando} com uma venda de balcão na tela: {TextoItens(unidades)} · {total.Formatado()}."
+           + (comandasGuardadas ? " As comandas das mesas estão guardadas." : "")
+           + "\n\n" + avisoCobranca + "\n\n"
+           + (unidades == 1m ? "Ao continuar, o item volta" : "Ao continuar, os itens voltam")
+           + " para a tela. Confira o pedido com o cliente antes de finalizar.";
+
+    /// <summary>
     /// "1 item" / "2 itens" — a tela nunca mostra "item(ns)". Aceita fração porque
     /// item pesado entra em quilos (1,5 já é plural).
     /// </summary>

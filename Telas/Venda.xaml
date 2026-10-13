@@ -414,7 +414,11 @@
             </Grid>
 
             <!-- ══ DIREITA: a conta ══ -->
-            <Border Grid.Column="2" Background="{DynamicResource FundoAfundado}" BorderBrush="{DynamicResource Borda}" BorderThickness="1,0,0,0">
+            <!-- COMANDA ABERTA (13/10/2026): com uma comanda carregada (Venda.Comanda.cs, _contaAberta) a
+                 borda esquerda desta coluna sobe para 4 px em ciano e o cabecalho vira uma FAIXA pintada:
+                 o olho ve de longe que a coluna e uma mesa, nao o balcao. Tudo em AplicarModoComanda. -->
+            <Border Grid.Column="2" x:Name="ColunaComanda" SizeChanged="ColunaComandaRedimensionou"
+                    Background="{DynamicResource FundoAfundado}" BorderBrush="{DynamicResource Borda}" BorderThickness="1,0,0,0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -422,17 +426,39 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Margin="18,16,18,10">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Comanda" Foreground="{DynamicResource Texto}" FontSize="20" FontWeight="Bold"/>
-                            <Border x:Name="ChipItens" CornerRadius="9" Padding="9,2,9,3" Margin="10,2,0,0"
+                    <!-- Cabecalho da coluna: titulo (balcao: "Comanda" + chip "2 itens"; comanda carregada:
+                         "12 · Mesa 5", numero e separador num Run proprio, so o NOME corta) e o botao
+                         Comandas, docado a direita, que abre o dialogo das comandas abertas. A 1024 o botao
+                         fica so com o glifo e o numero de abertas (AplicarLargura). -->
+                    <Border Grid.Row="0" x:Name="FaixaComanda" Margin="18,16,18,10" CornerRadius="10"
+                            BorderThickness="0" Padding="0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" x:Name="TxtTituloComanda" Foreground="{DynamicResource Texto}"
+                                       FontSize="20" FontWeight="Bold" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"><Run x:Name="RunNumeroComanda" Text="Comanda"/><Run x:Name="RunNomeComanda" Text=""/></TextBlock>
+                            <Border Grid.Column="1" x:Name="ChipItens" CornerRadius="9" Padding="9,2,9,3" Margin="10,0,0,0"
                                     VerticalAlignment="Center" Visibility="Collapsed"
                                     Background="{DynamicResource ChipInfoFundo}" BorderBrush="{DynamicResource ChipInfoBorda}" BorderThickness="1">
                                 <TextBlock x:Name="TxtQtdItens" FontSize="11.5" FontWeight="Bold"
                                            Foreground="{DynamicResource Ciano}"/>
                             </Border>
-                        </StackPanel>
-                    </Grid>
+                            <Button Grid.Column="2" x:Name="BtnComandas" Click="AbrirComandas" Style="{StaticResource BotaoBase}"
+                                    MinHeight="40" Padding="10,0" Margin="8,0,0,0" VerticalAlignment="Center"
+                                    AutomationProperties.Name="Comandas" ToolTip="Comandas abertas: mesas e clientes">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="≡" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="TxtRotuloComandas" Text="Comandas" FontSize="13" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="TxtNumComandas" Text="" FontSize="13" FontWeight="Bold" Margin="6,0,0,0"
+                                               VerticalAlignment="Center" Foreground="{DynamicResource Ciano}"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                    </Border>
 
                     <ScrollViewer Grid.Row="1" x:Name="ScrollComanda" VerticalScrollBarVisibility="Auto" Padding="12,0,12,0">
                         <ItemsControl x:Name="ListaComanda"/>
@@ -451,7 +477,9 @@
                                    HorizontalAlignment="Center" Margin="0,4,0,0"/>
                     </StackPanel>
 
-                    <Border Grid.Row="2" Background="{DynamicResource BarraDegrade}" BorderBrush="{DynamicResource Borda}"
+                    <!-- 13/10/2026: a 1024 o padding lateral cai para 12 (AplicarModoComanda): e o que faz a
+                         linha do cupom caber com Guardar e "Cozinha N" em modo comanda. -->
+                    <Border Grid.Row="2" x:Name="RodapeComanda" Background="{DynamicResource BarraDegrade}" BorderBrush="{DynamicResource Borda}"
                             BorderThickness="0,1,0,0" Padding="18,16,18,18">
                         <StackPanel>
                             <!-- Cortesia aplicada: cupom de erro de pedido resgatado no caixa.
@@ -522,13 +550,35 @@
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="BtnCortesia" Click="AplicarCortesia" Style="{StaticResource BotaoBase}"
-                                    MinHeight="46" Margin="0,0,0,10" IsEnabled="False" HorizontalContentAlignment="Center">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🎁" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="TxtCupomRotulo" Text="Aplicar cupom de cortesia" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                </StackPanel>
-                            </Button>
+                            <!-- A LINHA DO CUPOM (13/10/2026, comanda aberta): no balcao e so o cupom de cortesia,
+                                 como sempre. Com uma comanda carregada ela vira TRES colunas, sem linha nova no
+                                 rodape (a lista nao perde altura): o cupom so com o icone a 1024, Guardar e
+                                 "Cozinha N" (N = o que ainda nao foi pedido). Ver AplicarModoComanda. -->
+                            <Grid x:Name="LinhaCupom" Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="LarguraCupom" Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition x:Name="LarguraCozinha" Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" x:Name="BtnCortesia" Click="AplicarCortesia" Style="{StaticResource BotaoBase}"
+                                        MinHeight="46" IsEnabled="False" HorizontalContentAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="TxtIconeCupom" Text="🎁" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="TxtCupomRotulo" Text="Aplicar cupom de cortesia" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Grid.Column="1" x:Name="BtnGuardar" Click="GuardarComanda" Style="{StaticResource BotaoBase}"
+                                        MinHeight="46" Margin="8,0,0,0" Padding="10,0" Visibility="Collapsed"
+                                        AutomationProperties.Name="Guardar" ToolTip="Guardar a comanda e voltar ao balcão">
+                                    <TextBlock x:Name="TxtGuardarRotulo" Text="Guardar" FontSize="14" VerticalAlignment="Center"/>
+                                </Button>
+                                <Button Grid.Column="2" x:Name="BtnCozinha" Click="PedirCozinhaDaComanda" Style="{StaticResource BotaoBase}"
+                                        MinHeight="46" Margin="8,0,0,0" Padding="10,0" Visibility="Collapsed"
+                                        AutomationProperties.Name="Cozinha" ToolTip="Mandar para a cozinha o que ainda não foi pedido">
+                                    <TextBlock x:Name="TxtCozinhaRotulo" Text="Cozinha" FontSize="14" FontWeight="Bold" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Ciano}" TextTrimming="CharacterEllipsis"/>
+                                </Button>
+                            </Grid>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -542,11 +592,13 @@
                                         <TextBlock x:Name="TxtLimparRotulo" Text="Limpar" FontSize="16" Margin="9,0,0,0" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Button>
+                                <!-- Em modo comanda o botao diz "Fechar conta" (a 1024: 15 px e sem a seta, senao
+                                     "Fechar conta →" media 166 px num botao de 136). -->
                                 <Button Grid.Column="1" x:Name="BtnFinalizar" Click="Finalizar"
                                         Style="{StaticResource BotaoPrincipal}" MinHeight="62" IsEnabled="False">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock x:Name="TxtFinalizarRotulo" Text="Finalizar" FontSize="19" FontWeight="Bold" VerticalAlignment="Center"/>
-                                        <TextBlock Text="→" FontSize="21" FontWeight="Bold" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="TxtSetaFinalizar" Text="→" FontSize="21" FontWeight="Bold" Margin="12,0,0,0" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Button>
                             </Grid>

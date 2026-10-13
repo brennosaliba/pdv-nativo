@@ -22,6 +22,9 @@ public static class PedirSenha
         {
             Text = rotulo,
             Style = (Style)Application.Current.Resources["Rotulo"],
+            // 13/10/2026: o rotulo da comanda ("Esse item já foi para a cozinha. PIN de outro gerente
+            // para tirar.") nao cabe numa linha de 440 px: quebra em vez de cortar
+            TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8),
         });
 
