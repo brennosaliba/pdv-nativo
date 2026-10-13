@@ -324,6 +324,16 @@
                                Foreground="{DynamicResource TextoFraco}" FontSize="12.5"
                                TextWrapping="Wrap" Margin="0,0,0,14"/>
 
+                    <!-- 13/10/2026: PEDIDO PARA A TV DA COZINHA (PedidoCozinha.cs). A chave da loja que o
+                         servidor do KDS confere (PDV_KDS_TOKENS de lá). Em branco, o botão "Para a
+                         cozinha" some do pagamento. Grava no Salvar. -->
+                    <TextBlock Text="PEDIDO PARA A TV DA COZINHA" Foreground="{DynamicResource Marca}"
+                               FontSize="13" FontWeight="Bold" Margin="0,4,0,6"/>
+                    <TextBlock Text="Chave da TV da cozinha" Style="{StaticResource Rotulo}"/>
+                    <TextBox x:Name="TxtChaveCozinha" Margin="0,4,0,4" Tag="em branco: sem pedido para a cozinha"/>
+                    <TextBlock Text="Com a chave, o pagamento mostra Para a cozinha: Consumo na loja ou Para viagem."
+                               Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
                     <!-- Tema mora aqui porque é a outra coisa desta MÁQUINA (a luz do
                          balcão, como a bobina), e porque grava na hora: não passa pelo
                          Salvar nem pelo pareamento. -->

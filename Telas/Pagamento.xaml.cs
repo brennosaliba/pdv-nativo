@@ -86,6 +86,8 @@ public partial class Pagamento : UserControl
     private readonly string? _lojaId;
 
     private string? _documento;
+    // 13/10/2026: "Para a cozinha" (PedidoCozinha). null = não manda nada para a TV da cozinha.
+    private DestinoCozinha? _cozinha;
     private string _digitado = "";
     private Fase _fase = Fase.Forma;
     private CancellationTokenSource? _cobranca;
@@ -134,6 +136,7 @@ public partial class Pagamento : UserControl
 
         MontarFormas();
         MontarAtalhos();
+        MontarCozinha();
         Teclado.Digitou += d => { if (_digitado.Length < 9) { _digitado += d; PintarDinheiro(); } };
         Teclado.Apagou += () => { if (_digitado.Length > 0) { _digitado = _digitado[..^1]; PintarDinheiro(); } };
         Teclado.Limpou += () => { _digitado = ""; PintarDinheiro(); };
@@ -428,6 +431,41 @@ public partial class Pagamento : UserControl
         // hardcoded, viraria rejeição sem ninguém entender de onde veio.
         var v = Vendas.Config(cx, "limite_doc_cent");
         return new Dinheiro(long.TryParse(v, out var c) && c > 0 ? c : 1_000_000);
+    }
+
+    // ── PEDIDO PARA A COZINHA (13/10/2026) ──────────────────────────────────
+    // Só com a chave da TV da cozinha gravada. Escolha padrão: Não (venda de balcão comum).
+    private void MontarCozinha()
+    {
+        bool ligado;
+        try { using var cx = Banco.Abrir(); ligado = PedidoCozinha.Ligado(cx); }
+        catch { ligado = false; }
+        BlocoCozinha.Visibility = ligado ? Visibility.Visible : Visibility.Collapsed;
+        TxtRotuloCozinha.Text = PedidoCozinha.Rotulo;
+        BtnCozinhaNao.Content = PedidoCozinha.TextoNao;
+        BtnCozinhaLoja.Content = PedidoCozinha.TextoLoja;
+        BtnCozinhaViagem.Content = PedidoCozinha.TextoViagem;
+        PintarCozinha();
+    }
+
+    private void EscolherCozinha(object sender, RoutedEventArgs e)
+    {
+        _cozinha = (sender as FrameworkElement)?.Tag as string switch
+        {
+            "loja" => DestinoCozinha.Loja,
+            "viagem" => DestinoCozinha.Viagem,
+            _ => null,
+        };
+        PintarCozinha();
+    }
+
+    private void PintarCozinha()
+    {
+        var principal = (Style)Application.Current.Resources["BotaoPrincipal"];
+        var comum = (Style)Application.Current.Resources["BotaoBase"];
+        BtnCozinhaNao.Style = _cozinha is null ? principal : comum;
+        BtnCozinhaLoja.Style = _cozinha == DestinoCozinha.Loja ? principal : comum;
+        BtnCozinhaViagem.Style = _cozinha == DestinoCozinha.Viagem ? principal : comum;
     }
 
     private void InformarDocumento(object sender, RoutedEventArgs e)
@@ -947,7 +985,7 @@ public partial class Pagamento : UserControl
         {
             using var cx = Banco.Abrir();
             _venda = Vendas.Finalizar(cx, _sessao, _operador, _itens, _partes,
-                _documento, _loja, _lojaId);
+                _documento, _loja, _lojaId, _cozinha);
             // Quem decide se sai nota é Pdv.Nucleo/Vendas.SemNota: loja em modo recibo OU
             // caixa em modo de homologação (venda de teste). A regra mora lá, e não aqui,
             // para não existirem duas cópias dela.

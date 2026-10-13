@@ -1573,6 +1573,13 @@ Console.WriteLine();
 Console.WriteLine("--- Fila de sincronizacao (isolamento por item, poison row, rastro) ---");
 await TestesFila.RodarIsolamentoAsync((cond, nome) => Check("fila: " + nome, cond));
 
+// -- PEDIDO PARA A COZINHA (13/10/2026) ----------------------------------------
+// "caixa faz pedido PDV, coloca se e consumo loja ou viagem, e cai no KDS". Nasce na transacao
+// da venda paga, e so producao (a venda conta uma vez) e espera a rede sem travar a venda.
+Console.WriteLine();
+Console.WriteLine("--- Pedido para a cozinha (TV do KDS) ---");
+await TestesPedidoCozinha.RodarAsync((cond, nome) => Check("cozinha: " + nome, cond));
+
 // -- PENDENCIA: o aviso que nao se apaga -------------------------------------
 // 16 vendas / R$ 102.626,50 em dead-letter sem NENHUMA saida: o dono arrumava o
 // painel, apertava Sincronizar e o numero continuava 16. Aviso sem saida vira ruido.

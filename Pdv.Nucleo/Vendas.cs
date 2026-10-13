@@ -86,7 +86,8 @@ public static class Vendas
     public static VendaGravada Finalizar(
         SqliteConnection cx, Sessao sessao, Operador operador,
         IReadOnlyList<LinhaVenda> itens, IReadOnlyList<PagamentoVenda> pagamentos,
-        string? documento, string loja, string? lojaId)
+        string? documento, string loja, string? lojaId,
+        DestinoCozinha? cozinha = null, string? cliente = null)
     {
         if (itens.Count == 0) throw new InvalidOperationException("Não dá para finalizar uma comanda vazia.");
         if (pagamentos.Count == 0) throw new InvalidOperationException("Informe a forma de pagamento.");
@@ -254,6 +255,14 @@ public static class Vendas
             p_client_key = clientKey,
             p_business_date = sessao.BusinessDate,
         }));
+
+        // PEDIDO PARA A COZINHA (13/10/2026, PedidoCozinha.cs): o caixa marcou "Para a cozinha".
+        // Entra NA MESMA TRANSACAO da venda: ou a venda e o pedido existem, ou nenhum. E so
+        // producao: a venda acima e o unico lancamento (estoque, receita, nota). Venda de teste
+        // (homologacao) nao manda nada para a cozinha de verdade.
+        if (cozinha is { } destino && !homologacao)
+            PedidoCozinha.Enfileirar(cx, tx, vendaId,
+                PedidoCozinha.Corpo(vendaId, numero, itens, destino, operador.Nome, cliente, DateTime.Now));
 
         // A COMANDA VIROU VENDA: o rascunho morre AQUI, na mesma transação. Fora dela
         // (na tela, depois do commit) uma queda entre gravar e limpar deixaria um

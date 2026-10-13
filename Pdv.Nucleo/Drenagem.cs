@@ -53,7 +53,10 @@ public sealed class Drenagem : IDisposable
     internal static readonly (string Tipo, int Janela)[] JanelaPropria =
         { (ChatRaspadinha.TipoNaFila, 5), (EntregadorGestor.TipoNaFila, 3), (ConversaRaspadinha.TipoNaFila, 5),
           // 08/10/2026: o arquivo do chat (banco de conversas) sobe devagar, atras de tudo, 3 por vez
-          (ChatArquivo.TipoNaFila, 3) };
+          (ChatArquivo.TipoNaFila, 3),
+          // 13/10/2026: pedido para a TV da cozinha. Janela propria: com a rota do KDS ainda nao
+          // publicada cada envio volta 404 (espera) e nao pode empurrar a venda para fora da janela.
+          (PedidoCozinha.TipoNaFila, 10) };
 
     /// <summary>
     /// Quanto tempo um transitório espera antes de desistir, POR TIPO. Sete dias é o orçamento da
@@ -68,6 +71,8 @@ public sealed class Drenagem : IDisposable
             ? TimeSpan.FromHours(6)
             // 08/10/2026: o arquivo do chat espera a rede ate 2 dias (depois disso a linha local some)
             : tipo == ChatArquivo.TipoNaFila ? ChatArquivo.GuardaLocal
+            // 13/10/2026: pedido da cozinha com horas de atraso nao serve mais a ninguem
+            : tipo == PedidoCozinha.TipoNaFila ? PedidoCozinha.Validade
             : TimeSpan.FromDays(DiasParaDesistir);
 
     /// <summary>Tamanho da janela principal, a do dinheiro.</summary>
@@ -336,6 +341,10 @@ public sealed class Drenagem : IDisposable
             // e so o que apareceu no chat, ja mascarado. Loja com a captura desligada no ERP: descarta.
             ChatArquivo.TipoNaFila => await ChatArquivo.ResolverNaFilaAsync((string)item.client_key,
                 (nome, corpo) => FuncaoAsync(nome, corpo, token, ct), DateTime.Now).ConfigureAwait(false),
+            // 13/10/2026: pedido para a TV da cozinha (PedidoCozinha). Vai para o servidor do KDS,
+            // nao para a nuvem: chave e endereco lidos AGORA da config do caixa. O servidor
+            // deduplica pelo id da venda, entao o reenvio nunca vira card dobrado.
+            PedidoCozinha.TipoNaFila => await EnviarPedidoCozinhaAsync((string)item.payload, ct).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
             // para o dead-letter abaixo depois de poucas tentativas.
@@ -1019,7 +1028,37 @@ public sealed class Drenagem : IDisposable
         { "venda", "venda_composta", "nfce_vinculo", "venda_cancelada", "fechamento",
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
           Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila,
-          EntregadorGestor.TipoNaFila, ConversaRaspadinha.TipoNaFila, ChatArquivo.TipoNaFila };
+          EntregadorGestor.TipoNaFila, ConversaRaspadinha.TipoNaFila, ChatArquivo.TipoNaFila,
+          PedidoCozinha.TipoNaFila };
+
+    /// <summary>
+    /// 13/10/2026: manda um pedido da fila para a TV da cozinha (POST /api/pdv/pedidos no servidor
+    /// do KDS, chave da loja no cabecalho x-pdv-token). A regra do desfecho mora em
+    /// PedidoCozinha.ResolverNaFilaAsync (pura, testada); aqui so o HTTP.
+    /// </summary>
+    private static async Task<(bool? Ok, string? Erro)> EnviarPedidoCozinhaAsync(string payload, CancellationToken ct)
+    {
+        string? url, token;
+        using (var cx = Banco.Abrir())
+        {
+            url = PedidoCozinha.Url(cx);
+            token = PedidoCozinha.Token(cx);
+        }
+        return await PedidoCozinha.ResolverNaFilaAsync(payload, url, token, async (endereco, chave, corpo) =>
+        {
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(15_000);
+                using var req = new HttpRequestMessage(HttpMethod.Post, endereco);
+                req.Headers.TryAddWithoutValidation("x-pdv-token", chave);
+                req.Content = new StringContent(corpo, Encoding.UTF8, "application/json");
+                using var resp = await Fiscal.Http.SendAsync(req, cts.Token).ConfigureAwait(false);
+                return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
+            }
+            catch { return (0, null); }
+        }, DateTime.Now).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// HISTORICO (04/09/2026): sobe para pdv_estornos_sem_aprovacao as linhas de estorno

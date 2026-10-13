@@ -71,6 +71,10 @@ public static class FotoVenda
         // do gerente), para a foto mostrar o botão fixo acima do cupom de cortesia.
         var promoSenha = args.Any(a => a.Equals("promo-senha", StringComparison.OrdinalIgnoreCase));
         args = args.Where(a => !a.Equals("promo-senha", StringComparison.OrdinalIgnoreCase)).ToArray();
+        // 13/10/2026: "cozinha" = grava na CÓPIA a chave da TV da cozinha, para a foto do pagamento
+        // mostrar a linha "Para a cozinha: Não / Consumo na loja / Para viagem".
+        var cozinha = args.Any(a => a.Equals("cozinha", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("cozinha", StringComparison.OrdinalIgnoreCase)).ToArray();
         var modo = args.FirstOrDefault(a => a.Equals("tef", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("tef+pos", StringComparison.OrdinalIgnoreCase)
                                          || a.Equals("semtef", StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant();
@@ -132,6 +136,7 @@ public static class FotoVenda
             if (semTef) Vendas.GravarConfig(cx, "tef_habilitado", "0");
             if (loja) Vendas.GravarConfig(cx, "homologacao", "0");
             if (raspadinha) Vendas.GravarConfig(cx, Brindes.ChaveConfigLoja, "1");
+            if (cozinha) Vendas.GravarConfig(cx, PedidoCozinha.ChaveToken, "chave-da-foto-0123456789abcdef");
             if (promoSenha)
                 cx.Execute("INSERT OR REPLACE INTO promo (id, payload, atualizado_em) VALUES ('foto-func', @P, @a)", new
                 {
