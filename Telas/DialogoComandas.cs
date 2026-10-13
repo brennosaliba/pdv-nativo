@@ -160,7 +160,7 @@ public static class DialogoComandas
                 var comItens = Botao(ContasAbertas.Textos.AbrirComItens(itensNoCarrinho), true);
                 comItens.Click += (_, _) => Fechar(new Nova(Nome(), consumo, ComCarrinho: true));
                 rodape.Children.Add(comItens);
-                var vazia = Botao(ContasAbertas.Textos.AbrirVazia, false);
+                var vazia = Botao(ContasAbertas.Textos.GuardarCarrinhoEAbrirVazia, false);
                 vazia.Margin = new Thickness(8, 0, 0, 0);
                 vazia.Click += (_, _) => Fechar(new Nova(Nome(), consumo, ComCarrinho: false));
                 rodape.Children.Add(vazia);

@@ -7,6 +7,7 @@
 --   conta_atravessou_fechamento      comanda que ficou aberta no fechamento do turno (uma linha por comanda)
 --   conta_lote_reenviado             lote que nao chegou a TV e foi mandado de novo
 --   conta_cancelada_automatica       comanda vazia cancelada sozinha (fechamento, ou conta_vazia_horas)
+--   conta_fechada_sem_venda          comanda inteira coberta por cupom de cortesia (nao ha o que cobrar)
 --
 -- Esta RPC SO REGISTRA (padrao adotado). Lancar desperdicio por ficha tecnica dos itens com lote fica
 -- como opcao futura, aqui mesmo. Idempotente por p_client_key (o caixa reenvia ate confirmar).
@@ -80,4 +81,33 @@ REVOKE ALL ON FUNCTION public.pdv_conta_evento(text, text, text, jsonb) FROM PUB
 GRANT EXECUTE ON FUNCTION public.pdv_conta_evento(text, text, text, jsonb) TO authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';
+-- A porta da API do caixa (caixa_superficie) passa a conhecer a RPC nova, do mesmo jeito do SQL 168.
+-- Sem a funcao (base sem a porta) ou com o corpo diferente do esperado, so avisa: a porta esta em
+-- observar e o caixa passa igual.
+DO $porta$
+DECLARE
+  v_def  text;
+  v_novo text;
+BEGIN
+  IF to_regprocedure('public.caixa_superficie()') IS NULL THEN
+    RAISE NOTICE 'pdv_conta_evento: sem caixa_superficie, passo pulado';
+    RETURN;
+  END IF;
+  v_def := replace(pg_get_functiondef('public.caixa_superficie()'::regprocedure), chr(13), '');
+  IF position('pdv_conta_evento' in v_def) > 0 THEN
+    RETURN;
+  END IF;
+  v_novo := regexp_replace(
+    v_def,
+    '\)\s*\$function\$\s*$',
+    '),' || chr(10)
+      || '    (''rpc'', ''POST'', ''pdv_conta_evento'', ''rastro da comanda aberta, Pdv.Nucleo/Drenagem.cs conta_evento'', false)'
+      || chr(10) || '$function$' || chr(10));
+  IF v_novo = v_def THEN
+    RAISE NOTICE 'pdv_conta_evento: nao consegui acrescentar a linha em caixa_superficie (porta em observar: o caixa passa igual)';
+    RETURN;
+  END IF;
+  EXECUTE v_novo;
+END $porta$;
+
 SELECT 'pdv_conta_evento pronta' AS resultado;

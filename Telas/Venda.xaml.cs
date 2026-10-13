@@ -46,6 +46,9 @@ public sealed class ItemComanda
     public bool ForaDoCardapio { get; init; }
     /// <summary>Qtd - CozinhaMilesimos: o que o botao "Cozinha N" leva desta linha.</summary>
     public long PendenteMilesimos => Math.Max(0, Qtd.Milesimos - CozinhaMilesimos);
+    /// <summary>Revisao 13/10: quanto do CozinhaMilesimos esta num lote que NAO FOI (sem substituto). So
+    /// para a tela: "N na cozinha" mostra CozinhaMilesimos menos isto. Atualizado a cada PintarComanda.</summary>
+    public long PerdidoMilesimos { get; set; }
 }
 
 /// <summary>
@@ -2091,6 +2094,17 @@ public partial class Venda : UserControl
         // entra na aba promocao". Então agora ela vira um BOTÃO ao lado do total: só
         // aparece quando valeria, e o código só é pedido se alguém tocar nele.
         PintarBotaoPromoComSenha();
+        // COMANDA ABERTA (revisao 13/10): lote que NAO FOI nao conta como "na cozinha" na sub-linha
+        if (_contaAberta is { } contaNaTela)
+        {
+            try
+            {
+                using var cxPerdido = Banco.Abrir();
+                var perdidos = ContasAbertas.PerdidosPorLinha(cxPerdido, contaNaTela.Id);
+                foreach (var it in _comanda) it.PerdidoMilesimos = perdidos.GetValueOrDefault(it.LinhaId);
+            }
+            catch { /* conforto da tela: sem banco, mostra o que o disco tinha */ }
+        }
         ListaComanda.Items.Clear();
         foreach (var item in _comanda) ListaComanda.Items.Add(LinhaComanda(item));
 
@@ -2483,7 +2497,8 @@ public partial class Venda : UserControl
                  // COMANDA ABERTA (13/10/2026): "· 2 na cozinha" mostra a regra do PIN antes do toque;
                  // "saiu do cardápio" e a linha que barra Pedir a cozinha e Fechar conta
                  + (item.ForaDoCardapio ? $" · {ContasAbertas.Textos.SaiuDoCardapio}"
-                    : item.CozinhaMilesimos > 0 ? $" · {ContasAbertas.Textos.NaCozinha(item.CozinhaMilesimos / 1000)}" : ""),
+                    : item.CozinhaMilesimos - item.PerdidoMilesimos > 0
+                        ? $" · {ContasAbertas.Textos.NaCozinha((item.CozinhaMilesimos - item.PerdidoMilesimos) / 1000)}" : ""),
             FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
             Foreground = (Brush)Application.Current.Resources[item.ForaDoCardapio ? "Erro" : "TextoFraco"],
             Margin = new Thickness(0, 10, 0, 0),
@@ -2885,6 +2900,16 @@ public partial class Venda : UserControl
         }
         Caixa.Auditar(Banco.Abrir(), null, "cortesia_entregue", _operador.Id, null,
             $"cupom={_cortesiaCodigo} (comanda inteira em cortesia)");
+        // COMANDA ABERTA (revisao 13/10, achado alto): a conta toda em cortesia nao passa pelo
+        // Vendas.Finalizar; sem isto ela ficava aberta para sempre. Fecha sem venda ANTES de esvaziar
+        // (com a conta ainda carregada, o esvaziar tentaria gravar a lista vazia nela).
+        if (_contaAberta is { } contaCortesia)
+        {
+            try { using var cxC = Banco.Abrir(); ContasAbertas.FecharSemVenda(cxC, contaCortesia.Id, _operador, $"cortesia {_cortesiaCodigo}"); }
+            catch (Exception ex) { Dialogo.Avisar(dono, "Comandas", ex.Message, "erro"); }
+            _contaAberta = null;
+            _contaConferida = false;
+        }
         EsvaziarComanda();                                   // esvazia antes de repintar (ver Finalizar)
         RemoverCortesia(this, new RoutedEventArgs());
         Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");

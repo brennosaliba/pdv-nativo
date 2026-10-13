@@ -124,9 +124,9 @@ public static class TestesComandaTela
                && Ordem(pedir, "ContasAbertas.PedirCozinha(", "GuardarConta();") && pedir.Contains("PedidoNaCozinhaGuardada(numero)", StringComparison.Ordinal)
                && pedir.Contains("ComboIncompleto(dono)", StringComparison.Ordinal) && pedir.Contains("NadaNovo", StringComparison.Ordinal),
             "CA-5 Pedir a cozinha: barra combo e cardapio, lote pelo nucleo, guarda sozinho e avisa; nada novo = 'Nada novo para a cozinha.'");
-        checar(Metodo(comanda, "private void CutucarCozinha(string loteId)").Contains("DispatcherTimer", StringComparison.Ordinal)
-               && comanda.Contains("Textos.CozinhaRecebeu, \"ok\"", StringComparison.Ordinal),
-            "CA-5 o toast honesto: a confirmacao da TV vem por timer (a tela segue viva) e vira 'Cozinha recebeu o pedido.'");
+        checar(Metodo(comanda, "private void CutucarCozinha(string loteId, long numero)").Contains("DispatcherTimer", StringComparison.Ordinal)
+               && comanda.Contains("Textos.CozinhaRecebeuEGuardou(numero), \"ok\"", StringComparison.Ordinal),
+            "CA-5 o toast honesto: a confirmacao da TV vem por timer (a tela segue viva) e vira 'Cozinha recebeu. Comanda N guardada.'");
         var cancelar = Metodo(comanda, "private void CancelarContaComAutorizacao(string id)");
         checar(cancelar.Contains("PedirTexto.Mostrar(", StringComparison.Ordinal) && cancelar.Contains("PedirOutroGerente(", StringComparison.Ordinal)
                && cancelar.Contains("ContasAbertas.Cancelar(cx, id, _operador, null, null);", StringComparison.Ordinal)
@@ -161,7 +161,7 @@ public static class TestesComandaTela
 
         // o dialogo e o pagamento
         foreach (var t in new[] { "Textos.NovaComanda", "Textos.MandarDeNovo", "Textos.CancelarComanda(", "Textos.NaLoja", "Textos.ParaViagem",
-                                  "Textos.NomeOuMesa", "Textos.AbrirComItens(", "Textos.AbrirVazia", "Textos.Abrir,", "Textos.CarrinhoTem(", "Textos.Mesa(", "Textos.Balcao" })
+                                  "Textos.NomeOuMesa", "Textos.AbrirComItens(", "Textos.GuardarCarrinhoEAbrirVazia", "Textos.Abrir,", "Textos.CarrinhoTem(", "Textos.Mesa(", "Textos.Balcao" })
             checar(dialogo.Contains(t, StringComparison.Ordinal), $"CT-2 DialogoComandas usa {t}");
         checar(dialogo.Contains("Dialogo.Base(dono, Largura)", StringComparison.Ordinal) && dialogo.Contains("Dialogo.Moldura(", StringComparison.Ordinal)
                && dialogo.Contains("MinHeight = 58, FontSize = 17", StringComparison.Ordinal) && !dialogo.Contains("\"Comanda aberta\"", StringComparison.Ordinal)
@@ -507,8 +507,9 @@ public static class TestesComandaTela
         host.UpdateLayout();
         Invocar(tela, "PedirCozinhaDaConta");
         checar(Conta() is not null && Toast() == ContasAbertas.Textos.NadaNovo, $"CT-11 sem pendente: 'Nada novo para a cozinha.' e a conta fica ('{Toast()}')");
-        checar(Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text.StartsWith("⚠ Cozinha 0", StringComparison.Ordinal),
-            $"CT-11 com o ultimo lote ainda na fila o botao diz '⚠ Cozinha 0' ({Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text})");
+        // revisao 13/10: a 1024 o rotulo com aviso encolhe para "⚠ N" (o "⚠ Cozinha N" cortava)
+        checar(Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text == "⚠ 0",
+            $"CT-11 com o ultimo lote ainda na fila o botao diz '⚠ 0' a 1024 ({Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text})");
 
         // ── Fechar conta: o Pagamento com a comanda ────────────────────────
         Invocar(tela, "Adicionar", agua);   // 1 pendente para o bloco da cozinha aparecer

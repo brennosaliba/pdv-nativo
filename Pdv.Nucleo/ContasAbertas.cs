@@ -205,6 +205,12 @@ public static class ContasAbertas
         public static string Mesa(int i) => $"Mesa {i}";
         public static string CozinhaDeN(long pedidos, long total) => $"cozinha {pedidos} de {total}";
         public static string ContaGuardada(long n) => $"Comanda {n} guardada.";
+        /// <summary>Revisao 13/10: o carrinho solto que virou comanda automatica diz onde foi parar.</summary>
+        public static string CarrinhoFicouNa(long n) => $"O carrinho ficou na comanda {n}.";
+        /// <summary>Revisao 13/10: o segundo toast do pedido repete o numero (o primeiro some em 2 s).</summary>
+        public static string CozinhaRecebeuEGuardou(long n) => $"Cozinha recebeu. Comanda {n} guardada.";
+        public const string MotivoDoCancelamento = "Por que está cancelando? Ex.: cliente desistiu";
+        public const string GuardarCarrinhoEAbrirVazia = "Guardar e abrir vazia";
         public static string ContaCancelada(long n) => $"Comanda {n} cancelada.";
         public static string CancelarPergunta(long n) => $"Cancelar a comanda {n}?";
         public static string NaCozinha(long unidades) => unidades == 1 ? "1 na cozinha" : $"{unidades} na cozinha";
@@ -357,7 +363,8 @@ public static class ContasAbertas
             var donoMorto = !naTela && !emUso;
             var conferir = (c.FechandoEm is not null && c.VendaId is null) || (donoMorto && cobrado is { Positivo: true });
             var unidades = c.Itens.Sum(i => i.QtdMilesimos) / 1000m;
-            var pedidas = c.Itens.Sum(i => i.CozinhaMilesimos) / 1000m;
+            // revisao 13/10: lote que NAO FOI nao conta como "na cozinha" (a mesma regua do botao Cozinha N)
+            var pedidas = Math.Max(0m, unidades - Pendentes(cx, c).Sum(p => p.Milesimos) / 1000m);
             var lotes = Lotes(cx, c.Id).Where(l => !l.Homologacao).ToList();
             var ultimo = lotes.OrderByDescending(l => l.N).FirstOrDefault();
             var estado = ultimo is null ? EstadoLote.Teste : EstadoDoLote(cx, ultimo.Id);
@@ -389,6 +396,44 @@ public static class ContasAbertas
     /// <summary>Guardar: solta o dono. A conta continua aberta, com os itens, para qualquer tela carregar.</summary>
     public static void Soltar(SqliteConnection cx, string id)
         => cx.Execute("UPDATE conta_aberta SET dono = NULL WHERE id = @Id", new { Id = id });
+
+    /// <summary>
+    /// Revisao 13/10 (achado alto): comanda INTEIRA coberta por cupom de cortesia nao vira venda (nao ha o
+    /// que cobrar) e por isso nao passa pelo Vendas.Finalizar. Sem isto ela ficava 'aberta' para sempre e,
+    /// com lote na cozinha, nem dava para esvaziar. Fecha sem venda (venda_id nulo), com auditoria e o
+    /// evento para o ERP (producao sem venda). Idempotente: devolve false se ja nao estava aberta.
+    /// </summary>
+    public static bool FecharSemVenda(SqliteConnection cx, string id, Operador operador, string motivo)
+    {
+        var c = Ler(cx, id);
+        if (c is null || c.Status != "aberta") return false;
+        var lotes = Lotes(cx, id);
+        var idOp = Operadores.IdCanonico(cx, operador.Id);
+        using var tx = cx.BeginTransaction();
+        var n = cx.Execute("""
+            UPDATE conta_aberta SET status = 'fechada', fechada_em = @Em, venda_id = NULL, fechando_em = NULL, dono = NULL
+             WHERE id = @Id AND status = 'aberta'
+            """, new { Em = Agora, Id = id }, tx);
+        if (n == 0) { tx.Rollback(); return false; }
+        Caixa.Auditar(cx, tx, "conta_fechada_sem_venda", idOp, null,
+            $"comanda={c.Numero} nome={c.Nome ?? "(sem nome)"} itens={ResumoItens(c.Itens)} valor={c.ValorTabela.Formatado()} lotes={lotes.Count} motivo={motivo}");
+        if (!c.Teste) EnfileirarEvento(cx, tx, "conta_fechada_sem_venda", c, lotes, operador, null, motivo);
+        tx.Commit();
+        return true;
+    }
+
+    /// <summary>
+    /// Revisao 13/10: por linha, quanto do que foi pedido a cozinha esta num lote que NAO FOI (sem
+    /// substituto). A tela tira isso do "N na cozinha" e a lista conta como pendente, a mesma regua do botao.
+    /// </summary>
+    public static IReadOnlyDictionary<string, long> PerdidosPorLinha(SqliteConnection cx, string contaId)
+    {
+        var perdidos = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var lote in LotesPerdidos(cx, contaId, null))
+            foreach (var i in ItensQueFicam(lote))
+                perdidos[i.LinhaId] = perdidos.GetValueOrDefault(i.LinhaId) + i.QtdMilesimos;
+        return perdidos;
+    }
 
     /// <summary>
     /// Grava os itens e a cortesia da conta (a cada PintarComanda com a conta carregada). Lista vazia NAO
