@@ -2942,7 +2942,8 @@ public partial class Venda : UserControl
                 Cortesia r;
                 try { r = await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja); }
                 catch { r = new Cortesia(false, "sem_rede", codigo, null, Array.Empty<ItemCortesia>()); }
-                EsconderAvisoLeve();
+                // so recolhe se o toast ainda e o do cupom (outro aviso que chegou na espera fica os 8 s dele)
+                if (TxtToastAviso.Text == ContasAbertas.Textos.UsandoCupom) EsconderAvisoLeve();
                 if (!r.Ok)
                 {
                     Dialogo.Avisar(dono, "Cortesia não saiu", r.Erro switch

@@ -127,8 +127,9 @@ public static class TestesComandaTela
             "CA-12b a validacao do cupom no Fechar conta trava a tela e nao mexe em nada se a comanda ou o cupom mudaram na espera");
         var resgateTrava = Metodo(venda, "private async Task ResgatarEConcluirBrindeAsync()");
         checar(Regex.Matches(resgateTrava, @"IsEnabled = true").Count == 1 && Ordem(resgateTrava, "await Task.Delay(300)", "finally { IsEnabled = true; }")
-               && Ordem(resgateTrava, "var conta = _contaAberta;", "await _cortesias.ResgatarAsync(codigo"),
-            "CA-12b o resgate le a conta antes do await e so destrava a tela no fim (as tentativas do fechamento esperam travadas)");
+               && Ordem(resgateTrava, "var conta = _contaAberta;", "await _cortesias.ResgatarAsync(codigo")
+               && resgateTrava.Contains("if (TxtToastAviso.Text == ContasAbertas.Textos.UsandoCupom) EsconderAvisoLeve();", StringComparison.Ordinal),
+            "CA-12b o resgate le a conta antes do await, so destrava a tela no fim e so recolhe o toast se ainda for o do cupom");
         var pedir = Metodo(comanda, "private void PedirCozinhaDaConta()");
         checar(pedir.Contains("ContasAbertas.PedirCozinha(cx, conta.Id, conta.Destino, _operador, TurnoDeTeste)", StringComparison.Ordinal)
                && Ordem(pedir, "ContasAbertas.PedirCozinha(", "GuardarConta();") && pedir.Contains("PedidoNaCozinhaGuardada(numero)", StringComparison.Ordinal)
