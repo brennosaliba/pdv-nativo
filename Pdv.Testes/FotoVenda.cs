@@ -63,6 +63,12 @@ public static class FotoVenda
         // do jeito que a vigia pinta; a vigia de verdade precisa de 60 s de tela de QR.
         var waCaido = args.Any(a => a.Equals("wa-caido", StringComparison.OrdinalIgnoreCase));
         args = args.Where(a => !a.Equals("wa-caido", StringComparison.OrdinalIgnoreCase)).ToArray();
+        // 1.0.33 (14/10/2026): "chat-desligado" (pagina parada, com Reabrir) e "chat-login" (o Gestor
+        // pediu login) pintam o aviso fixo do chat do iFood como a vigia pinta
+        var chatParado = args.Any(a => a.Equals("chat-desligado", StringComparison.OrdinalIgnoreCase));
+        var chatLogin = args.Any(a => a.Equals("chat-login", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("chat-desligado", StringComparison.OrdinalIgnoreCase)
+                            && !a.Equals("chat-login", StringComparison.OrdinalIgnoreCase)).ToArray();
         // 21/09: "raspadinha" = a loja com a raspadinha ligada no caixa, para a foto
         // mostrar o cartao do validador no topo da aba Promocoes.
         var raspadinha = args.Any(a => a.Equals("raspadinha", StringComparison.OrdinalIgnoreCase));
@@ -155,7 +161,7 @@ public static class FotoVenda
             try
             {
                 codigo = Fotografar(saida, w, h, categoria, tema, itens, operador, sessao, pagar, menu, comTef, abrirPos,
-                                    combo, comboAberto, waCaido);
+                                    combo, comboAberto, waCaido, chatParado ? "parado" : chatLogin ? "login" : null);
             }
             catch (Exception ex)
             {
@@ -218,7 +224,7 @@ public static class FotoVenda
                                   string[] itens, Operador operador, Sessao sessao, decimal? pagar,
                                   string? menu = null, bool abrirPagamento = false, bool abrirPos = false,
                                   (string ComboId, List<Escolha> Escolhas)? combo = null, bool comboAberto = false,
-                                  bool waCaido = false)
+                                  bool waCaido = false, string? chatFora = null)
     {
         // a tela de pagamento abre com "pagar:" (lança uma parte) ou com tef/tef+pos (só abre)
         abrirPagamento |= pagar is not null;
@@ -288,6 +294,11 @@ public static class FotoVenda
                         ((System.Windows.Controls.Border)tipo.GetField("AvisoWhatsAppCaido", P)!.GetValue(tela)!).Visibility = Visibility.Visible;
                         ((System.Windows.Controls.TextBlock)tipo.GetField("TxtAvisoWhatsAppCaido", P)!.GetValue(tela)!).Text = $"{titulo} (09:14)";
                         ((System.Windows.Controls.TextBlock)tipo.GetField("TxtAvisoWhatsAppCaidoAcao", P)!.GetValue(tela)!).Text = acao;
+                    }
+                    if (chatFora is not null)
+                    {
+                        var motivo = chatFora == "login" ? Pdv.Nucleo.EstadoChatIfood.Login : Pdv.Nucleo.EstadoChatIfood.Parado;
+                        tipo.GetMethod("PintarAvisoChat", P)!.Invoke(tela, new object?[] { motivo, DateTime.Today.AddHours(20).AddMinutes(41), null });
                     }
                     if (combo is { } cb)
                     {

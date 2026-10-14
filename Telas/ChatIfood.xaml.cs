@@ -38,6 +38,27 @@ public partial class ChatIfood : UserControl
     public event Action? Voltou;
 
     private const string UrlGestor = "https://gestordepedidos.ifood.com.br/";
+
+    /// <summary>
+    /// 1.0.33 (14/10/2026): o Gestor fica acordado com o caixa na frente, como o programa do iFood
+    /// no PC (que liga o mesmo freio desligado). Sem isto o Chromium freia os timers da página
+    /// escondida (a camada mora fora da janela) e desliga a página coberta: o chat dormia, a
+    /// conexão do chat caía e o caixa não via. Só neste perfil (o do WhatsApp tem os dele).
+    /// </summary>
+    public const string ArgumentosDoNavegador =
+        "--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
+
+    /// <summary>1.0.33: a última fala da página (ticks; 0 = nunca). Lida também pelo sinal, fora da tela.</summary>
+    private long _falouTicks;
+    private DateTime? PaginaFalouEm => Interlocked.Read(ref _falouTicks) is var t && t > 0 ? new DateTime(t) : null;
+    /// <summary>1.0.33: a última navegação do Gestor ("carregando", "ok", "falhou"), para o sinal.</summary>
+    private volatile string _navegacao = "carregando";
+    private int _recuoNavegacao;
+    /// <summary>1.0.33: a vigia do chat (Núcleo) e o relógio dela, vivo desde o construtor.</summary>
+    private readonly VigiaChatIfood _vigia = new(DateTime.Now);
+    private readonly DispatcherTimer _relogioVigia = new() { Interval = TimeSpan.FromSeconds(15) };
+    /// <summary>A saúde da página para o sinal, tirada na thread da tela a cada batida da vigia.</summary>
+    private volatile object? _saude;
     private bool _pronto;
     private bool _iniciando;
     /// <summary>Cada inicialização ganha um número; a que foi passada para trás (controle recriado no meio) não mexe mais na tela.</summary>
@@ -82,8 +103,15 @@ public partial class ChatIfood : UserControl
             "PdvNativo", "webview");
         // 15/09/2026 (Castelo): o ambiente, o Ensure e a troca do controle que falhou moram no
         // hospedeiro, igual para o WhatsApp. Ver Telas/HospedeWebView2.cs.
-        Hospede = new HospedeWebView2("chat", Dispatcher, () => Web, w => Web = w, _perfil, Diag);
+        Hospede = new HospedeWebView2("chat", Dispatcher, () => Web, w => Web = w, _perfil, Diag,
+            () => new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = ArgumentosDoNavegador });
         Hospede.Quebrou += AoQuebrar;
+        // 1.0.33: a vigia bate desde já, com ou sem o Gestor pronto (o caso de 13/10 era justamente
+        // a página que nunca dizia nada). A venda fala com ela pelo ServicoVigiaChat.
+        _relogioVigia.Tick += (_, _) => BaterVigia();
+        _relogioVigia.Start();
+        ServicoVigiaChat.AoAdiar = () => _vigia.Adiar(DateTime.Now);
+        ServicoVigiaChat.AoReabrir = ReabrirAsync;
         Loaded += async (_, _) =>
         {
             // O aviso do bônus na TELA DO CHAT. O toast mora na tela de venda, e quem está com o
@@ -197,9 +225,14 @@ public partial class ChatIfood : UserControl
 
             core.NavigationCompleted += (_, e) =>
             {
-                TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: toque em Recarregar";
+                // 1.0.33: a navegação deixa rastro, e a que falhou tenta de novo sozinha (30, 60 e
+                // 120 s). Antes ficava "toque em Recarregar" e o chat parado até alguém ver.
+                _navegacao = e.IsSuccess ? "ok" : "falhou";
+                Diag(e.IsSuccess ? "navegou: ok" : $"navegou: falhou {e.WebErrorStatus}");
+                TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: tentando de novo sozinho";
                 // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
-                if (e.IsSuccess) _ = DefinirRespostasAsync(core);
+                if (e.IsSuccess) { _recuoNavegacao = 0; _ = DefinirRespostasAsync(core); }
+                else if (e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled) _ = NavegarDeNovoAsync(minha);
             };
 
             // mensagens do DOM (não lidas + modo do painel)
@@ -251,7 +284,10 @@ public partial class ChatIfood : UserControl
                 EnviarPeloSdk = EnviarPeloSdkAsync,
                 AbrirEColar = AbrirEColarAsync,
                 DiagSdk = DiagSdkAsync,
-                Gestor = () => !_pronto ? "ausente" : _gestorPedeLogin ? "login" : "logado",
+                // 1.0.33: "logado" só com a página falando (antes dizia logado com a página morta)
+                Gestor = () => VigiaChatIfood.GestorParaOSinal(_pronto, _gestorPedeLogin, PaginaFalouEm, DateTime.Now),
+                Saude = () => _saude is ConversaRaspadinha.SaudeDoChat s ? s
+                    : new ConversaRaspadinha.SaudeDoChat(false, _navegacao, "abrindo", 0),
                 // 1.0.25: aquece o SDK abrindo a conversa do pedido (com o numero) ou so a lista
                 AquecerConversa = AquecerConversaAsync,
             });
@@ -346,13 +382,14 @@ public partial class ChatIfood : UserControl
     /// O processo do navegador morreu (ou o Recarregar lançou): o controle é inútil. Controle novo
     /// no mesmo lugar, com ambiente novo, e inicia de novo. No máximo 6 por hora.
     /// </summary>
-    private async Task RecriarAsync(string motivo)
+    private async Task RecriarAsync(string motivo, bool porGente = false)
     {
-        if (!Dispatcher.CheckAccess()) { await HospedeWebView2.NaTela(Dispatcher, () => RecriarAsync(motivo)); return; }
+        if (!Dispatcher.CheckAccess()) { await HospedeWebView2.NaTela(Dispatcher, () => RecriarAsync(motivo, porGente)); return; }
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(3));
-            if (!_tetoRecriar.Permitir(DateTime.UtcNow))
+            // o Reabrir do aviso é gesto de gente: sem espera e sem o teto da hora
+            if (!porGente) await Task.Delay(TimeSpan.FromSeconds(3));
+            if (!porGente && !_tetoRecriar.Permitir(DateTime.UtcNow))
             {
                 Diag("recriar: teto da hora");
                 MostrarFalha(FalhaWebView2.Painel(TipoFalhaWeb.NavegadorCaiu, "O chat"));
@@ -369,6 +406,60 @@ public partial class ChatIfood : UserControl
         catch (Exception ex) { Diag("recriar: " + ex.GetType().Name + " " + ex.Message); }
     }
 
+    // ── A VIGIA DO CHAT (1.0.33) ─────────────────────────────────────────────
+    // Quem decide é o Núcleo (VigiaChatIfood, testado em TestesVigiaChat). Aqui só a leitura, a
+    // execução (recarregar, controle novo) e o aviso para a venda pelo ServicoVigiaChat.
+
+    private void BaterVigia()
+    {
+        try
+        {
+            var agora = DateTime.Now;
+            var antes = _vigia.Estado;
+            var r = _vigia.Bater(new VigiaChatIfood.Leitura(_pronto, _gestorPedeLogin, PaginaFalouEm, IsHitTestVisible), agora);
+            _saude = new ConversaRaspadinha.SaudeDoChat(
+                PaginaFalouEm is { } f && agora - f < VigiaChatIfood.Silencio, _navegacao, _vigia.Fase, _vigia.RecriacoesNaHora(agora));
+            if (r.Estado != antes) Diag($"vigia: {antes} -> {r.Estado}");
+            if (r.Recarregar)
+            {
+                Diag("vigia: pagina muda, recarregando uma vez");
+                try { Web.CoreWebView2?.Reload(); }
+                catch (Exception ex) { Diag("vigia recarregar: " + ex.GetType().Name); }
+            }
+            if (r.Recriar) { Diag("vigia: pagina muda, controle novo"); _ = RecriarAsync("vigia: pagina muda"); }
+            if (r.Avisar)
+            {
+                Diag($"vigia: aviso na venda ({_vigia.Motivo} desde {_vigia.ForaDesde:HH:mm})");
+                ServicoVigiaChat.Avisar(_vigia.Motivo, _vigia.ForaDesde);
+            }
+            if (r.Voltou) { Diag("vigia: o chat voltou"); ServicoVigiaChat.AvisarVoltou(); }
+        }
+        catch (Exception ex) { Diag("vigia: " + ex.GetType().Name + " " + ex.Message); }
+    }
+
+    /// <summary>"Reabrir" do aviso na venda: controle novo agora, sem o teto (é gesto de gente).</summary>
+    public Task ReabrirAsync() => HospedeWebView2.NaTela(Dispatcher, async () =>
+    {
+        Diag("reabrir: pedido pelo aviso da venda");
+        _vigia.Reabriu(DateTime.Now);
+        await RecriarAsync("reabrir pelo aviso", porGente: true);
+    });
+
+    /// <summary>A navegação falhou (sem rede, DNS): tenta de novo em 30, 60 e 120 s, sem recriar nada.</summary>
+    private async Task NavegarDeNovoAsync(int minha)
+    {
+        try
+        {
+            var espera = TimeSpan.FromSeconds(30 * (1 << Math.Min(_recuoNavegacao, 2)));
+            _recuoNavegacao++;
+            Diag($"navegou: tenta de novo em {espera.TotalSeconds:0} s");
+            await Task.Delay(espera);
+            if (minha != _tentativa || !_pronto || _navegacao != "falhou") return;
+            Web.CoreWebView2?.Navigate(UrlGestor);
+        }
+        catch (Exception ex) { Diag("navegar de novo: " + ex.GetType().Name); }
+    }
+
     // ── mensagens vindas do DOM ──────────────────────────────────────────────
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -376,6 +467,8 @@ public partial class ChatIfood : UserControl
         try { txt = e.TryGetWebMessageAsString(); }
         catch { return; }
         if (string.IsNullOrEmpty(txt)) return;
+        // 1.0.33: qualquer fala da página prova que ela está viva (a vigia e o sinal leem isto)
+        Interlocked.Exchange(ref _falouTicks, DateTime.Now.Ticks);
 
         // ⚠️ O PACOTE DOS ENTREGADORES NÃO É PARSEADO AQUI. Isto roda no Dispatcher, a MESMA
         // thread de todas as janelas do caixa, e este é o único pacote que carrega os objetos
@@ -408,6 +501,11 @@ public partial class ChatIfood : UserControl
             {
                 var texto = doc.RootElement.TryGetProperty("texto", out var v) ? v.GetString() : null;
                 ServicoChat.ReportarTexto(texto);
+                // 1.0.33: o login do Gestor vem junto, a cada 5 s. Antes só o diagnóstico do SDK o
+                // lia, e sem o chat carregado o diagnóstico estourava o prazo: o caixa dizia
+                // "logado" com a tela de login aberta (Savassi, 13/10 20:41 a 14/10 16:10).
+                if (doc.RootElement.TryGetProperty("login", out var lg) && lg.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    _gestorPedeLogin = lg.ValueKind == JsonValueKind.True;
             }
             else if (tipo == "modo")
             {
@@ -865,7 +963,7 @@ public partial class ChatIfood : UserControl
         {
             var args = JsonSerializer.Serialize(new { id, canais = canais.Take(5).ToArray(), ws });
             await core.ExecuteScriptAsync($"window.pdvSb ? window.pdvSb.diag({args}) : false");
-            var fim = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(6)));
+            var fim = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
             return fim == tcs.Task ? tcs.Task.Result : null;
         }
         catch { return null; }
@@ -1239,7 +1337,7 @@ public partial class ChatIfood : UserControl
               txt = (num && /\d/.test(num.textContent)) ? num.textContent : '';
             }
           }
-          envia({ tipo: 'naolidas', texto: txt });
+          envia({ tipo: 'naolidas', texto: txt, login: !!document.querySelector('input[type="password"]') });
         } catch (e) { envia({ tipo: 'naolidas', texto: '' }); }
       };
 
@@ -2329,6 +2427,9 @@ public partial class ChatIfood : UserControl
             r.modulos = achados.length;
             r.runtimes = Object.keys(reqs).length;
             if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
+            // 1.0.33: sem instancia nao ha canal para conferir: responde na hora (antes esperava
+            // 1,5 s por canal e estourava o prazo do caixa, e o achou=false nunca chegava)
+            if (!lista.length) { r.conferidos = 0; envia(r); return; }
             var canais = (a && a.canais) || [], conferidos = 0, comUuid = 0, congeladas = 0, uidQueAchou = '';
             for (var i = 0; i < canais.length && i < 5; i++) {
               var ch = null;

@@ -311,7 +311,7 @@ public static class TestesAprovacaoDono
             "AF-13 o script procura pelas fábricas (req.m), guarda o achado e desce em shadowRoot; não depende mais de req.c");
 
         var csproj = Ler("Pdv.csproj");
-        checar(csproj.Contains("<Version>1.0.32</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.32 (comanda aberta por mesa; lote para a TV; conta_evento)");
+        checar(csproj.Contains("<Version>1.0.33</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.33 (chat do iFood sempre vivo: vigia, aviso fixo e Reabrir)");
         var testes = new[] { Ler("Pdv.Testes", "TestesAprovacaoDono.cs"), Ler("Pdv.Testes", "TestesScriptSendbird.cs") };
         var novos = new[] { servico, js }.Concat(testes).ToArray();
         checar(testes.All(t => t.Length > 0) && novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),

@@ -50,8 +50,9 @@ public static class TestesSpotifyNoCaixa
             "a Configuração tem a opção e já aplica ao salvar");
         checar(musica.Contains("_sp.AparelhosAsync()") && musica.Contains("SpotifyNoCaixa.EsteCaixaNaLista(aps, Environment.MachineName)"),
             "a janela da música diz se este caixa está na lista de aparelhos");
-        checar(sp.Contains("SW_MINIMIZE") && sp.Contains("\"--minimized\"") && sp.Contains("TimeSpan.FromMinutes(2)"),
-            "o Spotify sobe minimizado, a janela é minimizada se aparecer, e a reabertura tem folga de 2 min (não briga com quem fechou de propósito)");
+        checar(sp.Contains("SW_HIDE") && !sp.Contains("SW_MINIMIZE") && sp.Contains("EnumWindows(") && sp.Contains("\"--minimized\"")
+               && sp.Contains("TimeSpan.FromMinutes(2)") && sp.Contains("TimeSpan.FromSeconds(5)"),
+            "1.0.33: o Spotify sobe minimizado e toda janela dele é ESCONDIDA (fora do Alt+Tab) a cada 5 s; a reabertura tem folga de 2 min");
         checar(!sp.Contains("Kill(") && !sp.Contains("senha", StringComparison.OrdinalIgnoreCase) || sp.Contains("Senha é dele"),
             "o PDV nunca mata o Spotify nem mexe em senha: só abre e esconde");
     }

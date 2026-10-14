@@ -82,7 +82,7 @@ public static class TestesRespostasProntas
             "o toque copia (com plano B) e tenta colar direto na caixa de mensagem");
         checar(chat.Contains("!guardado(c) && !/^pdv-/.test(c.id || '')"), "o holofote do chat não esconde os cartões (nem os alvos guardados)");
         checar(chat.Contains("window.pdvDefinirRespostas(window.__pdvRespostas);"), "ao isolar o chat, os cartões (re)aparecem");
-        checar(chat.Contains("RespostasProntas.Json(") && chat.Contains("if (e.IsSuccess) _ = DefinirRespostasAsync(core);"),
+        checar(chat.Contains("RespostasProntas.Json(") && chat.Contains("if (e.IsSuccess) { _recuoNavegacao = 0; _ = DefinirRespostasAsync(core); }"),
             "a lista é lida do banco e entregue à página a cada carga (editar + Recarregar basta)");
         checar(cfgXaml.Contains("x:Name=\"TxtRespostasChat\"") && cfgXaml.Contains("AcceptsReturn=\"True\""),
             "a Configuração tem o editor (caixa de texto de várias linhas)");

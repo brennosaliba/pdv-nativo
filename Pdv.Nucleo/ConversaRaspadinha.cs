@@ -725,7 +725,8 @@ public static class ConversaRaspadinha
     /// SDK vem da página (dado não confiável) e passa por uma lista branca de campos e tipos.
     /// </summary>
     public static string EstadoDoSinal(string gestor, bool wsVivo, DateTime? ultimoQuadro, int fila,
-        JsonObject? quadros, JsonObject? sdkDaPagina, IReadOnlyDictionary<string, int>? canaisPorMerchant)
+        JsonObject? quadros, JsonObject? sdkDaPagina, IReadOnlyDictionary<string, int>? canaisPorMerchant,
+        SaudeDoChat? saude = null)
     {
         var sdk = new JsonObject();
         if (sdkDaPagina is not null)
@@ -756,8 +757,23 @@ public static class ConversaRaspadinha
             ["quadros"] = quadros?.DeepClone() ?? new JsonObject(),
             ["sdk"] = sdk,
         };
+        // 1.0.33: a saude da pagina, so com os valores do contrato. A chave "vigia" diz ao ERP que
+        // este caixa tem o aviso vermelho com Reabrir (SQL 171: tem_reabrir).
+        if (saude is { } sd)
+        {
+            o["pagina_viva"] = sd.PaginaViva;
+            o["navegacao"] = sd.Navegacao is "ok" or "falhou" or "carregando" ? sd.Navegacao : "carregando";
+            o["vigia"] = new JsonObject
+            {
+                ["fase"] = sd.Fase is "ok" or "abrindo" or "login" or "parado" or "aviso" ? sd.Fase : "abrindo",
+                ["recriacoes_hora"] = Math.Clamp(sd.RecriacoesNaHora, 0, 100),
+            };
+        }
         return o.ToJsonString(Json);
     }
+
+    /// <summary>1.0.33: a saude da pagina do chat para o sinal (ver <see cref="VigiaChatIfood"/>).</summary>
+    public readonly record struct SaudeDoChat(bool PaginaViva, string Navegacao, string Fase, int RecriacoesNaHora);
 
     // ── O PAPEL (orquestração testável) ──────────────────────────────────────
 

@@ -48,7 +48,7 @@ public partial class ChatWhatsApp : UserControl
     /// política de "site chato" do navegador não se aplica.
     /// </summary>
     public const string ArgumentosDoNavegador =
-        "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding";
+        "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
 
     private bool _pronto, _iniciando;
     /// <summary>Cada inicialização ganha um número; a que foi passada para trás (controle recriado no meio) não mexe mais na tela.</summary>

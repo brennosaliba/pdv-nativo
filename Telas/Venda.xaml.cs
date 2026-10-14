@@ -221,6 +221,11 @@ public partial class Venda : UserControl
             ServicoWhatsApp.Caiu -= WhatsAppCaiu; ServicoWhatsApp.Caiu += WhatsAppCaiu;
             ServicoWhatsApp.Voltou -= WhatsAppVoltou; ServicoWhatsApp.Voltou += WhatsAppVoltou;
             WhatsAppSessaoMudou(ServicoWhatsApp.Sessao);
+            // 1.0.33: a vigia do chat do iFood (Gestor pediu login, pagina parada): aviso fixo e som
+            ServicoVigiaChat.Caiu -= ChatCaiu; ServicoVigiaChat.Caiu += ChatCaiu;
+            ServicoVigiaChat.Voltou -= ChatVoltou; ServicoVigiaChat.Voltou += ChatVoltou;
+            AvisosFixos.SizeChanged -= AvisosFixosMudaram; AvisosFixos.SizeChanged += AvisosFixosMudaram;
+            if (ServicoVigiaChat.Desde is { } dc) PintarAvisoChat(ServicoVigiaChat.Motivo, dc, null);
         };
         Unloaded += (_, _) =>
         {
@@ -237,6 +242,9 @@ public partial class Venda : UserControl
             ServicoWhatsApp.SessaoMudou -= WhatsAppSessaoMudou;
             ServicoWhatsApp.Caiu -= WhatsAppCaiu;
             ServicoWhatsApp.Voltou -= WhatsAppVoltou;
+            ServicoVigiaChat.Caiu -= ChatCaiu;
+            ServicoVigiaChat.Voltou -= ChatVoltou;
+            AvisosFixos.SizeChanged -= AvisosFixosMudaram;
         };
     }
 
@@ -411,6 +419,20 @@ public partial class Venda : UserControl
     /// </summary>
     private void AvisoDaConversa(AvisoDoChat a) => Dispatcher.BeginInvoke(() =>
     {
+        // 1.0.33: o "chat fora" e o "voltou" da vigia do ERP (SQL 171) caem no aviso fixo do chat,
+        // o mesmo da vigia do caixa: o operador nunca ve dois avisos do mesmo problema
+        if (a.Tipo == "chat_fora")
+        {
+            ServicoVigiaChat.DoServidor(a.Texto);
+            PintarAvisoChat(ServicoVigiaChat.Motivo, ServicoVigiaChat.Desde, a.Texto);
+            if (_comanda.Count == 0) Alerta.WhatsAppCaiu();
+            return;
+        }
+        if (a.Tipo == "chat_voltou")
+        {
+            if (ServicoVigiaChat.ServidorVoltou()) AvisoChatDesligado.Visibility = Visibility.Collapsed;
+            return;
+        }
         // Aviso que só informa não cobre o que pede ação: com "Abrir e colar" na tela, o texto
         // para colar sumiria (o sinal traz os avisos dos outros caixas a cada minuto). Ele sai
         // no aviso leve, e o toast com os botões fica.
@@ -564,6 +586,69 @@ public partial class Venda : UserControl
     {
         ServicoWhatsApp.Adiar();
         AvisoWhatsAppCaido.Visibility = Visibility.Collapsed;
+    }
+
+    // ── a vigia do chat do iFood (1.0.33) ────────────────────────────────────
+
+    /// <summary>Hora de avisar (1ª vez ou repetição a cada 15 min): aviso fixo e som com a comanda vazia.</summary>
+    private void ChatCaiu(Nucleo.EstadoChatIfood? motivo, DateTime? desde) => Dispatcher.Invoke(() =>
+    {
+        PintarAvisoChat(motivo, desde, null);
+        if (_comanda.Count == 0) Alerta.WhatsAppCaiu();
+    });
+
+    private void ChatVoltou() => Dispatcher.Invoke(() => AvisoChatDesligado.Visibility = Visibility.Collapsed);
+
+    /// <summary>
+    /// O aviso fixo do chat. Login pede a pessoa no Gestor (o toque abre o chat); parado oferece
+    /// Reabrir. O texto do ERP (chat_fora), quando vem, vale como está: ele já diz o que fazer.
+    /// </summary>
+    private void PintarAvisoChat(Nucleo.EstadoChatIfood? motivo, DateTime? desde, string? textoDoServidor)
+    {
+        var (titulo, acao) = Nucleo.VigiaChatIfood.Aviso(motivo);
+        if (textoDoServidor is { Length: > 0 } && motivo is null)
+        {
+            titulo = "Chat do iFood fora";
+            acao = textoDoServidor;
+        }
+        TxtAvisoChat.Text = desde is { } d ? $"{titulo} ({d:HH:mm})" : titulo;
+        TxtAvisoChatAcao.Text = acao;
+        BtnChatReabrir.Visibility = motivo == Nucleo.EstadoChatIfood.Login ? Visibility.Collapsed : Visibility.Visible;
+        AvisoChatDesligado.Visibility = Visibility.Visible;
+    }
+
+    private void AbrirChatPeloAviso(object sender, System.Windows.Input.MouseButtonEventArgs e) => PediuChat?.Invoke();
+
+    /// <summary>"Reabrir": troca o controle do chat por um novo (o login do Gestor fica no perfil).</summary>
+    private async void ReabrirChatPeloAviso(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        BtnChatReabrir.IsEnabled = false;
+        try
+        {
+            AvisoLeve("Reabrindo o chat do iFood…");
+            await ServicoVigiaChat.ReabrirAsync();
+        }
+        finally { BtnChatReabrir.IsEnabled = true; }
+    }
+
+    /// <summary>"Depois": cala o aviso do chat por 30 min.</summary>
+    private void AdiarAvisoChat(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        ServicoVigiaChat.Adiar();
+        AvisoChatDesligado.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>Os avisos fixos mudaram de altura: o toast do WhatsApp e o da conversa descem para baixo deles.</summary>
+    private void AvisosFixosMudaram(object sender, SizeChangedEventArgs e) => ReposicionarToasts();
+
+    private void ReposicionarToasts()
+    {
+        var h = AvisosFixos.ActualHeight;
+        var desce = h > 0 ? h + 8 : 0;
+        ToastWhatsApp.Margin = new Thickness(0, 134 + desce, 14, 0);
+        ToastConversa.Margin = new Thickness(0, 204 + desce, 14, 0);
     }
 
     // ── aviso leve (uma linha, sem modal) ────────────────────────────────────

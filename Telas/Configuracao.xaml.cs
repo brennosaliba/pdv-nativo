@@ -122,6 +122,7 @@ public partial class Configuracao : UserControl
         // Modo quiosque: o que está no Windows agora (não no banco: o registro é a verdade).
         BlocoQuiosque.Visibility = Se(_jaConfigurado);
         ChkQuiosque.IsChecked = Quiosque.Ligado;
+        ChkTravarAtalhos.IsChecked = Quiosque.Travado;
         BtnSairWindows.Visibility = Se(Quiosque.Ligado);
         // Spotify escondido: a opção e o que este PC tem (instalado? aberto?).
         ChkSpotifyEscondido.IsChecked = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
@@ -129,6 +130,8 @@ public partial class Configuracao : UserControl
             ? (SpotifyNoCaixa.Rodando ? "O Spotify está instalado e aberto neste PC." : "O Spotify está instalado neste PC (fechado agora).")
               + " Ele precisa estar logado na conta da empresa uma vez; o PDV só abre e esconde o programa."
             : "O Spotify não está instalado neste PC. Instale e entre com a conta da empresa; depois marque a opção.";
+        // 1.0.33: os programas da inicialização do Windows deste PC, cada um com a sua caixinha
+        PintarInicioWindows(Vendas.Config(cx, InicioDoWindows.ChaveLigado), Vendas.Config(cx, InicioDoWindows.ChaveMarcados));
         // As quatro políticas de impressão, carregadas SEMPRE (inclusive em caixa novo):
         // com três estados, deixar o combo no valor do XAML gravaria uma escolha que
         // ninguém fez na primeira instalação. O padrão de cada papel vem de Impressoes,
@@ -522,6 +525,26 @@ public partial class Configuracao : UserControl
         else { texto = "✗ Inscrição estadual fora do tamanho: são de 8 a 14 dígitos. Se a loja não tem, toque em ISENTO."; cor = "Erro"; }
         TxtStatusIe.Text = texto;
         TxtStatusIe.Foreground = (System.Windows.Media.Brush)Application.Current.Resources[cor];
+    }
+
+    /// <summary>
+    /// 1.0.33: a lista dos programas da inicialização deste Windows (mais o AnyDesk instalado), cada
+    /// um com uma caixinha. Antes de salvar, vêm marcados só o Spotify e o AnyDesk.
+    /// </summary>
+    private void PintarInicioWindows(string? ligado, string? marcados)
+    {
+        ChkInicioWindows.IsChecked = InicioDoWindows.Ligado(ligado);
+        ListaInicioWindows.Children.Clear();
+        var programas = InicioDoWindowsNoCaixa.Ler();
+        foreach (var prog in programas)
+            ListaInicioWindows.Children.Add(new CheckBox
+            {
+                Content = prog.Nome, Tag = prog.Nome, IsChecked = InicioDoWindows.Marcado(prog, marcados),
+                Foreground = (System.Windows.Media.Brush)FindResource("Texto"), FontSize = 14, Margin = new Thickness(0, 2, 0, 2),
+            });
+        TxtInicioWindows.Text = programas.Count == 0
+            ? "Este PC não tem programa na inicialização do Windows."
+            : "Valem no modo quiosque: fora dele, quem abre é o próprio Windows. O que já estiver aberto não abre de novo.";
     }
 
     /// <summary>Quiosque ligado e o dono quer a área de trabalho de volta agora: abre o Explorer (o PDV continua).</summary>
@@ -1626,6 +1649,17 @@ public partial class Configuracao : UserControl
                         "Não consegui gravar no Windows: " + erroQuiosque + ". O resto da configuração foi salvo.", "erro");
                 BtnSairWindows.Visibility = Se(Quiosque.Ligado);
             }
+            // 1.0.33: a trava do Ctrl+Alt+Del só existe com o quiosque; desligar o quiosque desfaz
+            var travarQuer = ChkTravarAtalhos.IsChecked == true && Quiosque.Ligado;
+            if (travarQuer != Quiosque.Travado)
+            {
+                var erroTrava = Quiosque.Travar(travarQuer);
+                Caixa.Auditar(cx, null, travarQuer ? "ctrl_alt_del_travado" : "ctrl_alt_del_destravado", null, null, erroTrava);
+                if (erroTrava is not null)
+                    Dialogo.Avisar(Window.GetWindow(this)!, "Ctrl+Alt+Del",
+                        "Não consegui gravar no Windows: " + erroTrava + ". O resto da configuração foi salvo.", "erro");
+                ChkTravarAtalhos.IsChecked = Quiosque.Travado;
+            }
             // Spotify escondido (12/09/2026): grava e já aplica (liga a vigia ou para).
             var spotifyQuer = ChkSpotifyEscondido.IsChecked == true;
             var spotifyAntes = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
@@ -1641,6 +1675,10 @@ public partial class Configuracao : UserControl
                 }
                 else SpotifyNoCaixa.Parar();
             }
+            // 1.0.33: os programas da inicialização do Windows que o PDV abre no quiosque
+            Vendas.GravarConfig(cx, InicioDoWindows.ChaveLigado, ChkInicioWindows.IsChecked == true ? "1" : "0");
+            Vendas.GravarConfig(cx, InicioDoWindows.ChaveMarcados, InicioDoWindows.EscreverLista(
+                ListaInicioWindows.Children.OfType<CheckBox>().Where(c => c.IsChecked == true).Select(c => (string)c.Tag)));
             GravarTef(cx);
             _tefSalvo = true;
 

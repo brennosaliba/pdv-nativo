@@ -200,6 +200,11 @@ public partial class App : Application
             // e o mantém minimizado, para este PC aparecer na lista de aparelhos da Música.
             // Falha aqui não derruba nada: a janela da música diz se o caixa está na lista.
             if (Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1") SpotifyNoCaixa.Iniciar();
+            // 1.0.33 (14/10/2026): no quiosque o Windows não abre os programas da inicialização
+            // (o PDV é a área de trabalho). O PDV abre os marcados na Configuração (AnyDesk,
+            // Spotify...), depois do Spotify escondido, e só o que ainda não está aberto.
+            InicioDoWindowsNoCaixa.AbrirNoQuiosque(Vendas.Config(cx, InicioDoWindows.ChaveLigado),
+                Vendas.Config(cx, InicioDoWindows.ChaveMarcados), TimeSpan.FromSeconds(8));
         }
         catch { /* banco indisponível aqui vira erro de verdade logo adiante, com mensagem melhor */ }
 

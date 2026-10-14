@@ -33,6 +33,8 @@ public sealed class PonteDoChat
     /// alguem tocar numa conversa (12:27 e 17:15 de 08/10). Opcional: a bateria nao precisa dela.
     /// </summary>
     public Func<string?, string?, Task<bool>>? AquecerConversa { get; init; }
+    /// <summary>1.0.33: a saude da pagina (viva, navegacao, fase da vigia) para o sinal. Opcional.</summary>
+    public Func<ConversaRaspadinha.SaudeDoChat>? Saude { get; init; }
 }
 
 /// <summary>
@@ -564,7 +566,7 @@ public static class ServicoConversaChat
                 try
                 {
                     sdk = await p.DiagSdk(CanaisParaConferir(), _wsUserId)
-                        .WaitAsync(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
+                        .WaitAsync(TimeSpan.FromSeconds(12)).ConfigureAwait(false);
                 }
                 catch { sdk = null; }
                 if (sdk is not null && sdk.TryGetPropertyValue("uid", out var uid)
@@ -593,7 +595,7 @@ public static class ServicoConversaChat
             var ultimo = Contadores.UltimoQuadro;
             var estado = ConversaRaspadinha.EstadoDoSinal(_ponte?.Gestor() ?? "ausente",
                 ultimo is { } uq && uq > agora - TimeSpan.FromMinutes(2), ultimo, fila,
-                Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant());
+                Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant(), _ponte?.Saude?.Invoke());
             var corpo = ConversaRaspadinha.CorpoSinal(Terminal, Versao, estado);
             var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
                 .ConfigureAwait(false);

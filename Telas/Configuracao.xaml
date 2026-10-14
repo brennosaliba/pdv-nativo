@@ -679,7 +679,12 @@
                                    FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
                         <CheckBox x:Name="ChkQuiosque" Content="Abrir o Windows direto no PDV, sem área de trabalho, barra ou outros programas"
                                   Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,0,0,6"/>
-                        <TextBlock Text="Vale para este usuário do Windows a partir da próxima entrada. Para o caixa ligar sozinho, o Windows precisa entrar sem pedir senha (netplwiz, desmarque 'os usuários devem digitar um nome e senha'). Nada mais carrega: nem Spotify nem outros programas. Para voltar ao normal, desmarque aqui ou use o botão abaixo."
+                        <TextBlock Text="Vale para este usuário do Windows a partir da próxima entrada. Para o caixa ligar sozinho, o Windows precisa entrar sem pedir senha (netplwiz, desmarque 'os usuários devem digitar um nome e senha'). Dos outros programas, só abrem os marcados logo abaixo. Para voltar ao normal, desmarque aqui ou use o botão abaixo."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <!-- 1.0.33 (14/10/2026, pedido do dono): o Ctrl+Alt+Del sem opcoes (Quiosque.Travar) -->
+                        <CheckBox x:Name="ChkTravarAtalhos" Content="Travar o Ctrl+Alt+Del: sem Gerenciador de Tarefas, Bloquear, Trocar senha nem Sair"
+                                  Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,0,0,4"/>
+                        <TextBlock Text="Só vale com o quiosque ligado e é desfeito ao desligar o quiosque. O botão de desligar o PC continua. Para mexer no Windows depois, use a Configuração do PDV ou o AnyDesk."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <Button x:Name="BtnSairWindows" Click="SairParaOWindows" Style="{StaticResource BotaoBase}" HorizontalAlignment="Left"
                                 MinHeight="44" Padding="16,0" Margin="0,0,0,8" Visibility="Collapsed">
@@ -691,6 +696,13 @@
                         <CheckBox x:Name="ChkSpotifyEscondido" Content="Abrir o Spotify escondido atrás do PDV, para este caixa aparecer na lista de aparelhos da Música"
                                   Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,6,0,6"/>
                         <TextBlock x:Name="TxtSpotifyEstado" Text=""
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <!-- 1.0.33 (14/10/2026, pedido do dono): no quiosque o Windows nao abre os
+                             programas da inicializacao; o PDV abre os marcados aqui (InicioDoWindows). -->
+                        <CheckBox x:Name="ChkInicioWindows" Content="Abrir junto com o PDV os programas da inicialização do Windows marcados abaixo"
+                                  Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,6,0,6"/>
+                        <StackPanel x:Name="ListaInicioWindows" Margin="24,0,0,4"/>
+                        <TextBlock x:Name="TxtInicioWindows" Text=""
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     </StackPanel>
 

@@ -23,10 +23,15 @@ public static class SpotifyNoCaixa
     /// <summary>Config local: "1" = o PDV abre e esconde o Spotify ao iniciar.</summary>
     public const string Chave = "spotify_escondido";
 
-    private const int SW_MINIMIZE = 6;
+    // 1.0.33 (14/10/2026, o dono): "esconder o Spotify sem mostrar ele no minimizar do PDV nem no
+    // Alt+Tab". Minimizada a janela continua no Alt+Tab; ESCONDIDA (SW_HIDE) ela some de tudo e o
+    // app segue aberto e logado (o aparelho continua na lista da Música).
+    private const int SW_HIDE = 0;
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     private static DispatcherTimer? _vigia;
     private static DateTime _ultimaAbertura = DateTime.MinValue;
@@ -71,7 +76,8 @@ public static class SpotifyNoCaixa
         var erro = Abrir(caminho);
         if (_vigia is null)
         {
-            _vigia = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            // 1.0.33: a cada 5 s (era 30): janela que o Spotify reabre some antes de alguém ver no Alt+Tab
+            _vigia = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             _vigia.Tick += (_, _) => Vigiar();
             _vigia.Start();
         }
@@ -111,23 +117,32 @@ public static class SpotifyNoCaixa
         }
     }
 
-    /// <summary>Minimiza toda janela visível do Spotify. true = achou e minimizou alguma.</summary>
+    /// <summary>
+    /// Esconde (SW_HIDE) toda janela visível dos processos do Spotify, inclusive a minimizada: fora
+    /// da tela, do Alt+Tab e de trás do PDV minimizado. true = achou e escondeu alguma.
+    /// </summary>
     public static bool Esconder()
     {
         var alguma = false;
         try
         {
+            var pids = new HashSet<uint>();
             foreach (var p in Process.GetProcessesByName("Spotify"))
+            {
+                try { pids.Add((uint)p.Id); } catch { }
+                finally { p.Dispose(); }
+            }
+            if (pids.Count == 0) return false;
+            EnumWindows((h, _) =>
             {
                 try
                 {
-                    var h = p.MainWindowHandle;
-                    if (h == IntPtr.Zero) continue;
-                    if (IsWindowVisible(h) && !IsIconic(h)) { ShowWindow(h, SW_MINIMIZE); alguma = true; }
+                    GetWindowThreadProcessId(h, out var pid);
+                    if (pids.Contains(pid) && IsWindowVisible(h)) { ShowWindow(h, SW_HIDE); alguma = true; }
                 }
                 catch { }
-                finally { p.Dispose(); }
-            }
+                return true;
+            }, IntPtr.Zero);
         }
         catch { }
         return alguma;

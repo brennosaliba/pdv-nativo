@@ -81,6 +81,56 @@ public static class Quiosque
         catch (Exception ex) { return ex.Message; }
     }
 
+    // ── A TRAVA DO CTRL+ALT+DEL (1.0.33, 14/10/2026, pedido do dono) ──────────
+    // Nenhum programa bloqueia o Ctrl+Alt+Del em si (é a tecla segura do Windows). O que dá é
+    // esvaziar a tela dele pelas políticas DO USUÁRIO (HKCU, sem UAC): sem Gerenciador de Tarefas,
+    // sem Bloquear, sem Trocar senha e sem Sair. Sobra o Cancelar (e o botão de desligar, para a
+    // loja poder desligar o PC). Desligar o quiosque desfaz a trava. Saída de emergência: a
+    // Configuração do PDV (senha de administrador) e o AnyDesk, que roda como serviço.
+    private const string ChaveSistema = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+    private const string ChaveExplorer = @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
+    /// <summary>(chave, valor) que a trava grava como 1.</summary>
+    public static readonly (string Chave, string Valor)[] Travas =
+    {
+        (ChaveSistema, "DisableTaskMgr"), (ChaveSistema, "DisableLockWorkstation"),
+        (ChaveSistema, "DisableChangePassword"), (ChaveExplorer, "NoLogoff"),
+    };
+
+    /// <summary>A trava está gravada neste usuário (todas as quatro)?</summary>
+    public static bool Travado
+    {
+        get
+        {
+            try
+            {
+                foreach (var (chave, valor) in Travas)
+                {
+                    using var k = Registry.CurrentUser.OpenSubKey(chave);
+                    if (k?.GetValue(valor) is not int v || v != 1) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+    }
+
+    /// <summary>Grava (ou apaga) as quatro políticas. Devolve a mensagem de erro, ou null.</summary>
+    public static string? Travar(bool travar)
+    {
+        try
+        {
+            foreach (var (chave, valor) in Travas)
+            {
+                using var k = Registry.CurrentUser.CreateSubKey(chave);
+                if (k is null) return "não consegui abrir a chave do Windows";
+                if (travar) k.SetValue(valor, 1, RegistryValueKind.DWord);
+                else k.DeleteValue(valor, throwOnMissingValue: false);
+            }
+            return null;
+        }
+        catch (Exception ex) { return ex.Message; }
+    }
+
     /// <summary>Abre a área de trabalho do Windows (Explorer) por cima de nada: para sair do quiosque.</summary>
     public static void AbrirExplorer()
     {

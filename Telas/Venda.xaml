@@ -707,10 +707,15 @@
         <!-- WhatsApp CAIU (tela do QR): aviso que NAO some sozinho, so quando a sessao
              volta ou o operador toca em Depois (cala 2 h; o selo QR fica). Mesmo lugar do
              aviso de mensagem: nao chega mensagem enquanto esta caido. -->
-        <Border x:Name="AvisoWhatsAppCaido" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed"
-                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,134,14,0"
+        <!-- 1.0.33 (14/10/2026): os avisos que NAO somem sozinhos ficam empilhados no mesmo lugar
+             (WhatsApp caido e chat do iFood fora); os toasts de mensagem descem para baixo deles
+             (ReposicionarToasts). -->
+        <StackPanel x:Name="AvisosFixos" Grid.Row="0" Grid.RowSpan="3" HorizontalAlignment="Right"
+                    VerticalAlignment="Top" Margin="0,134,14,0" Panel.ZIndex="99">
+        <Border x:Name="AvisoWhatsAppCaido" Visibility="Collapsed"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
                 Background="{DynamicResource PainelDegrade}" BorderBrush="{DynamicResource Erro}"
-                BorderThickness="2" CornerRadius="14" Cursor="Hand" Panel.ZIndex="99"
+                BorderThickness="2" CornerRadius="14" Cursor="Hand"
                 MouseLeftButtonUp="AbrirWhatsAppPeloAviso">
             <StackPanel Orientation="Horizontal" Margin="16,10,12,12">
                 <TextBlock Text="🔴" FontSize="22" VerticalAlignment="Center"/>
@@ -724,6 +729,31 @@
                         Click="AdiarAvisoWhatsApp" Margin="14,0,0,0" Padding="8,4" VerticalAlignment="Center"/>
             </StackPanel>
         </Border>
+
+        <!-- CHAT DO iFOOD FORA (1.0.33, 14/10/2026): o Gestor pediu login ou a pagina parou. Nao
+             some sozinho: so quando o chat volta ou o operador toca em Depois (cala 30 min). O
+             toque abre o chat (o login se faz la); Reabrir troca o controle do chat por um novo.
+             O "chat fora" do ERP (vigia do servidor) cai neste mesmo aviso. -->
+        <Border x:Name="AvisoChatDesligado" Visibility="Collapsed" Margin="0,8,0,0" MaxWidth="460"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Background="{DynamicResource PainelDegrade}" BorderBrush="{DynamicResource Erro}"
+                BorderThickness="2" CornerRadius="14" Cursor="Hand"
+                MouseLeftButtonUp="AbrirChatPeloAviso">
+            <StackPanel Orientation="Horizontal" Margin="16,10,12,12">
+                <TextBlock Text="🔴" FontSize="22" VerticalAlignment="Center"/>
+                <StackPanel Margin="12,0,0,0" VerticalAlignment="Center" MaxWidth="250">
+                    <TextBlock x:Name="TxtAvisoChat" Foreground="{DynamicResource Texto}"
+                               FontSize="15" FontWeight="Bold" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="TxtAvisoChatAcao" Foreground="{DynamicResource TextoFraco}"
+                               FontSize="12" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button x:Name="BtnChatReabrir" Style="{StaticResource BotaoTexto}" Content="Reabrir"
+                        Click="ReabrirChatPeloAviso" Margin="14,0,0,0" Padding="8,4" VerticalAlignment="Center"/>
+                <Button x:Name="BtnChatDepois" Style="{StaticResource BotaoTexto}" Content="Depois"
+                        Click="AdiarAvisoChat" Margin="6,0,0,0" Padding="8,4" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+        </StackPanel>
 
         <!-- Aviso de mensagem nova no chat: mesmo formato do delivery, so na
              SUBIDA (mensagem nova). Um toque abre o chat. Some sozinho em 60 s. -->
