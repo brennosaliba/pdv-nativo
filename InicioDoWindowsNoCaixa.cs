@@ -92,7 +92,11 @@ public static class InicioDoWindowsNoCaixa
                 try
                 {
                     await Task.Delay(espera);
-                    var rodando = new HashSet<string>(Process.GetProcesses().Select(p => { try { return p.ProcessName.ToLowerInvariant(); } catch { return ""; } }));
+                    // só os processos DESTA sessão: o AnyDesk de serviço (sessão 0) não é a janelinha dele
+                    var sessao = Process.GetCurrentProcess().SessionId;
+                    var rodando = new HashSet<string>(Process.GetProcesses()
+                        .Where(p => { try { return p.SessionId == sessao; } catch { return false; } })
+                        .Select(p => { try { return p.ProcessName.ToLowerInvariant(); } catch { return ""; } }));
                     var abrir = InicioDoWindows.AAbrir(Ler(), marcados, rodando, Quiosque.ExeAtual);
                     Anotar($"abrir: {(abrir.Count == 0 ? "nada" : string.Join(", ", abrir.Select(p => p.Nome)))}");
                     foreach (var p in abrir)

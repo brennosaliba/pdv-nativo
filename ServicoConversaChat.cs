@@ -332,7 +332,9 @@ public static class ServicoConversaChat
         // avisos vão ao WhatsApp do dono pelo ERP; aqui não toca som nem aparece nada.
         // Revisão 07/10: o que o ERP mandou na resposta da fala (doErp) passa: com o dono ele não
         // manda, e quando manda é porque a aprovação foi desligada ou o WhatsApp do dono caiu.
-        if (_ultimo.Sinal.CaixaMudo && !doErp) { Diag($"aviso {a.Tipo} calado (aprovacao do dono)"); return; }
+        // 1.0.33: o chat_fora/chat_voltou da vigia do ERP (SQL 171) é sobre o próprio caixa: passa sempre
+        if (_ultimo.Sinal.CaixaMudo && !doErp && a.Tipo is not ("chat_fora" or "chat_voltou"))
+        { Diag($"aviso {a.Tipo} calado (aprovacao do dono)"); return; }
         // ⚠️ Regra da casa: nada com travessão chega na tela, nem se vier do ERP.
         if (!ConversaRaspadinha.TextoLimpo(a.Texto, 160)) { Diag($"aviso {a.Tipo} recusado (texto fora da regra)"); return; }
         if (a.TextoParaColar is not null && !ConversaRaspadinha.TextoLimpo(a.TextoParaColar, ConversaRaspadinha.TetoTexto))

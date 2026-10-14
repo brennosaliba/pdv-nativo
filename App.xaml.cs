@@ -203,6 +203,8 @@ public partial class App : Application
             // 1.0.33 (14/10/2026): no quiosque o Windows não abre os programas da inicialização
             // (o PDV é a área de trabalho). O PDV abre os marcados na Configuração (AnyDesk,
             // Spotify...), depois do Spotify escondido, e só o que ainda não está aberto.
+            // e a trava do Ctrl+Alt+Del nunca fica sem o quiosque (desligado por fora, por exemplo)
+            if (!Quiosque.Ligado && Quiosque.AlgumaTrava) Quiosque.Travar(false);
             InicioDoWindowsNoCaixa.AbrirNoQuiosque(Vendas.Config(cx, InicioDoWindows.ChaveLigado),
                 Vendas.Config(cx, InicioDoWindows.ChaveMarcados), TimeSpan.FromSeconds(8));
         }
@@ -251,6 +253,9 @@ public partial class App : Application
                     "O caixa não abriu", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             catch { }
+            // 1.0.33 (revisão): no quiosque, caixa que não abre deixava a tela preta (e com a trava do
+            // Ctrl+Alt+Del, sem saída nenhuma). A área de trabalho abre antes de sair.
+            try { if (Quiosque.Ligado) Quiosque.AbrirExplorer(); } catch { }
             // Sem janela o processo ficaria vivo, invisível e com a trava: o próximo clique no
             // ícone ouviria "já está aberto" de um caixa que ninguém vê.
             Environment.Exit(1);

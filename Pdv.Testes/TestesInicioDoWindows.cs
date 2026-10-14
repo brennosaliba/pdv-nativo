@@ -86,6 +86,15 @@ public static class TestesInicioDoWindows
                && cfg.Contains("var travarQuer = ChkTravarAtalhos.IsChecked == true && Quiosque.Ligado;")
                && cfgXaml.Contains("x:Name=\"ChkTravarAtalhos\""),
             "IW-12 a trava do Ctrl+Alt+Del grava só as 4 políticas do usuário (HKCU, nunca a máquina), só com o quiosque ligado, e desligar o quiosque desfaz");
+        // IW-13 a saída de emergência: caixa que não abre no quiosque abre a área de trabalho; trava sem
+        // quiosque é desfeita ao abrir o PDV; desmarcar sempre destrava (até a trava pela metade)
+        checar(app.Contains("try { if (Quiosque.Ligado) Quiosque.AbrirExplorer(); } catch { }")
+               && app.IndexOf("Quiosque.AbrirExplorer(); } catch { }", StringComparison.Ordinal) < app.IndexOf("Environment.Exit(1);", StringComparison.Ordinal)
+               && app.Contains("if (!Quiosque.Ligado && Quiosque.AlgumaTrava) Quiosque.Travar(false);")
+               && cfg.Contains("if (travarQuer != Quiosque.Travado || (!travarQuer && Quiosque.AlgumaTrava))"),
+            "IW-13 caixa que não abre no quiosque abre a área de trabalho antes de sair; trava sem quiosque é desfeita; desmarcar destrava até a trava pela metade");
+        checar(no.Contains("p.SessionId == sessao"),
+            "IW-14 o AnyDesk de serviço (outra sessão) não conta como aberto: a janelinha dele abre");
         // só informação: o que este PC tem na inicialização (não é teste)
         try { Console.WriteLine("  (info) inicialização deste PC: " + string.Join(", ", InicioDoWindowsNoCaixa.Ler().Select(p => $"{p.Nome} [{p.Origem}]"))); }
         catch { }

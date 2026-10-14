@@ -19,6 +19,7 @@ public static class ServicoVigiaChat
     private static EstadoChatIfood? _motivo;
     private static DateTime? _desde;
     private static string? _textoDoServidor;
+    private static DateTime? _caladoAte;
 
     /// <summary>Hora de avisar (1ª vez ou repetição): motivo (Login ou Parado) e desde quando.</summary>
     public static event Action<EstadoChatIfood?, DateTime?>? Caiu;
@@ -33,18 +34,25 @@ public static class ServicoVigiaChat
     public static bool Fora { get { lock (_trava) return _desde is not null || _textoDoServidor is not null; } }
     public static EstadoChatIfood? Motivo { get { lock (_trava) return _motivo; } }
     public static DateTime? Desde { get { lock (_trava) return _desde; } }
+    /// <summary>O último texto do ERP (chat_fora) que ainda vale.</summary>
+    public static string? TextoDoServidor { get { lock (_trava) return _textoDoServidor; } }
+    /// <summary>O operador tocou em Depois há menos de 30 min: o aviso não volta à tela nem toca.</summary>
+    public static bool Calado { get { lock (_trava) return _caladoAte is { } c && DateTime.Now < c; } }
 
     /// <summary>A vigia do caixa decidiu avisar.</summary>
     public static void Avisar(EstadoChatIfood? motivo, DateTime? desde)
     {
-        lock (_trava) { _motivo = motivo; _desde = desde ?? DateTime.Now; }
+        lock (_trava) { _motivo = motivo; _desde = desde ?? DateTime.Now; _caladoAte = null; }
         Caiu?.Invoke(motivo, desde);
     }
 
-    /// <summary>A vigia do caixa viu o chat de volta.</summary>
+    /// <summary>
+    /// A vigia do caixa viu o chat de volta. O texto do ERP fica: o que só o servidor vê (conexão do
+    /// chat caída, sdk) pode continuar, e o ERP manda o chat_voltou quando acabar.
+    /// </summary>
     public static void AvisarVoltou()
     {
-        lock (_trava) { _motivo = null; _desde = null; _textoDoServidor = null; }
+        lock (_trava) { _motivo = null; _desde = null; _caladoAte = null; }
         Voltou?.Invoke();
     }
 
@@ -61,7 +69,11 @@ public static class ServicoVigiaChat
         }
     }
 
-    public static void Adiar() { try { AoAdiar?.Invoke(); } catch { /* o aviso some de qualquer jeito */ } }
+    public static void Adiar()
+    {
+        lock (_trava) _caladoAte = DateTime.Now + VigiaChatIfood.Adiamento;
+        try { AoAdiar?.Invoke(); } catch { /* o aviso some de qualquer jeito */ }
+    }
 
     public static async Task ReabrirAsync()
     {
@@ -72,6 +84,6 @@ public static class ServicoVigiaChat
     /// <summary>Só para a bateria: volta ao estado de processo recém-aberto.</summary>
     public static void ZerarParaTeste()
     {
-        lock (_trava) { _motivo = null; _desde = null; _textoDoServidor = null; }
+        lock (_trava) { _motivo = null; _desde = null; _textoDoServidor = null; _caladoAte = null; }
     }
 }

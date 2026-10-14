@@ -34,6 +34,9 @@ public static class SpotifyNoCaixa
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     private static DispatcherTimer? _vigia;
+    /// <summary>As janelas que o PDV escondeu: voltam (minimizadas) quando a opção é desligada.</summary>
+    private static readonly HashSet<IntPtr> _escondidas = new();
+    private const int SW_SHOWMINNOACTIVE = 7;
     private static DateTime _ultimaAbertura = DateTime.MinValue;
 
     /// <summary>Os lugares onde o Spotify costuma estar no Windows, na ordem em que se procura.</summary>
@@ -64,9 +67,9 @@ public static class SpotifyNoCaixa
     }
 
     /// <summary>
-    /// Liga: abre o Spotify (se não estiver aberto) e passa a vigiar a cada 30 s: janela
-    /// visível vira minimizada; processo que morreu é reaberto (no máximo uma vez a cada
-    /// 2 minutos, para não brigar com alguém fechando de propósito).
+    /// Liga: abre o Spotify (se não estiver aberto) e passa a vigiar a cada 5 s: janela
+    /// visível é escondida (fora do Alt+Tab); processo que morreu é reaberto (no máximo uma vez
+    /// a cada 2 minutos, para não brigar com alguém fechando de propósito).
     /// Devolve a mensagem de erro, ou null.
     /// </summary>
     public static string? Iniciar()
@@ -86,11 +89,19 @@ public static class SpotifyNoCaixa
         return erro;
     }
 
-    /// <summary>Desliga a vigia (o Spotify que já está aberto fica como está).</summary>
+    /// <summary>
+    /// Desliga a vigia e devolve as janelas que o PDV escondeu (minimizadas, sem roubar o foco):
+    /// sem isso, um Spotify pedindo login ficava escondido para sempre.
+    /// </summary>
     public static void Parar()
     {
         _vigia?.Stop();
         _vigia = null;
+        lock (_escondidas)
+        {
+            foreach (var h in _escondidas) { try { ShowWindow(h, SW_SHOWMINNOACTIVE); } catch { } }
+            _escondidas.Clear();
+        }
     }
 
     private static string? Abrir(string caminho)
@@ -138,7 +149,11 @@ public static class SpotifyNoCaixa
                 try
                 {
                     GetWindowThreadProcessId(h, out var pid);
-                    if (pids.Contains(pid) && IsWindowVisible(h)) { ShowWindow(h, SW_HIDE); alguma = true; }
+                    if (pids.Contains(pid) && IsWindowVisible(h))
+                    {
+                        ShowWindow(h, SW_HIDE); alguma = true;
+                        lock (_escondidas) _escondidas.Add(h);
+                    }
                 }
                 catch { }
                 return true;

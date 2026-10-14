@@ -1651,7 +1651,8 @@ public partial class Configuracao : UserControl
             }
             // 1.0.33: a trava do Ctrl+Alt+Del só existe com o quiosque; desligar o quiosque desfaz
             var travarQuer = ChkTravarAtalhos.IsChecked == true && Quiosque.Ligado;
-            if (travarQuer != Quiosque.Travado)
+            // destravar sempre que não quer (é idempotente: tira também a trava pela metade)
+            if (travarQuer != Quiosque.Travado || (!travarQuer && Quiosque.AlgumaTrava))
             {
                 var erroTrava = Quiosque.Travar(travarQuer);
                 Caixa.Auditar(cx, null, travarQuer ? "ctrl_alt_del_travado" : "ctrl_alt_del_destravado", null, null, erroTrava);

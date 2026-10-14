@@ -128,20 +128,28 @@ public static class TestesVigiaChat
             checar(avisos.Count >= 2 && avisos[0] == T0.AddSeconds(135) && avisos[1] == T0.AddMinutes(33) && v.ForaDesde is not null,
                 $"VG-7 Depois cala por 30 min e o aviso volta depois ({string.Join(",", avisos.Select(a => a.ToString("HH:mm")))})");
         }
-        // VG-8 abrindo pela primeira vez: sem aviso nos primeiros 3 min; depois disso é parado e avisa
+        // VG-8 controle que não abre (ou quebrou e ficou no painel de erro): parado aos 3 min, aviso e
+        // controle novo na hora; os seguintes com recuo e teto (revisão 14/10: antes só gente curava)
         {
             var v = new VigiaChatIfood(T0);
-            DateTime? aviso = null;
-            for (var s = 15; s <= 6 * 60; s += 15)
+            DateTime? aviso = null; var recriacoes = new List<DateTime>(); var recarregou = false;
+            for (var s = 15; s <= 60 * 60; s += 15)
             {
                 var t = T0.AddSeconds(s);
                 var r = v.Bater(L(pronto: false), t);
                 if (r.Avisar) aviso ??= t;
-                checar(!r.Recriar && !r.Recarregar, "VG-8a o controle que nunca abriu é do vigia da inicialização: a vigia não recria");
-                if (r.Recriar || r.Recarregar) break;
+                if (r.Recriar) recriacoes.Add(t);
+                recarregou |= r.Recarregar;
             }
-            checar(aviso == T0.AddMinutes(3) && v.Motivo == EstadoChatIfood.Parado && v.ForaDesde == T0,
-                $"VG-8 controle que não abre: parado aos 3 min, fora desde que começou a abrir, aviso na hora ({aviso:HH:mm:ss})");
+            checar(aviso == T0.AddMinutes(3) && v.Motivo == EstadoChatIfood.Parado && v.ForaDesde == T0
+                   && recriacoes.Count == VigiaChatIfood.TetoRecriarPorHora && recriacoes[0] == T0.AddMinutes(3)
+                   && recriacoes.Zip(recriacoes.Skip(1), (a, b) => (b - a).TotalMinutes).All(m => m >= 3) && !recarregou,
+                $"VG-8 controle que não abre: aviso e controle novo aos 3 min, depois com recuo, no máximo 4 por hora, nunca recarga ({string.Join(",", recriacoes.Select(r => r.ToString("HH:mm")))})");
+            // com o operador na tela do chat, nada de controle novo
+            var v2 = new VigiaChatIfood(T0);
+            var mexeu = false;
+            for (var s = 15; s <= 10 * 60; s += 15) mexeu |= v2.Bater(L(pronto: false, naTela: true), T0.AddSeconds(s)).Recriar;
+            checar(!mexeu, "VG-8b controle que não abre com o operador na tela do chat: a vigia não troca o controle");
         }
         // VG-9 pronto mas a página nunca falou: abrindo até 2 min, depois parado
         {
@@ -170,6 +178,29 @@ public static class TestesVigiaChat
             for (var s = 15; s <= 5 * 60; s += 15) if (v.Bater(L(login: true, falou: T0.AddSeconds(s)), T0.AddSeconds(s)).Avisar) n++;
             checar(n == 1, $"VG-11 o relógio voltando atrás não repete o aviso ({n})");
         }
+        // VG-13 caixa em que o Gestor nunca esteve logado: sem aviso (segundo caixa, PC de teste), mas
+        // a cura continua; o primeiro login arma (e a tela grava a memória)
+        {
+            var v = new VigiaChatIfood(T0, jaLogou: false);
+            var avisos = 0;
+            for (var s = 15; s <= 8 * 60 * 60; s += 15) if (v.Bater(L(login: true, falou: T0.AddSeconds(s)), T0.AddSeconds(s)).Avisar) avisos++;
+            var armou = v.Bater(L(falou: T0.AddHours(8).AddSeconds(20)), T0.AddHours(8).AddSeconds(30)).Armou;
+            var avisosDepois = 0;
+            for (var s = 45; s <= 10 * 60; s += 15)
+            {
+                var t = T0.AddHours(8).AddSeconds(s);
+                if (v.Bater(L(login: true, falou: t), t).Avisar) avisosDepois++;
+            }
+            checar(avisos == 0 && armou && v.Armada && avisosDepois == 1,
+                $"VG-13 sem login nenhum neste caixa: 8 h no login sem aviso ({avisos}); o 1o login arma e a queda seguinte avisa ({avisosDepois})");
+        }
+        // VG-14 o relógio que pula (acerto de hora, volta do sono) não decide nada
+        checar(VigiaChatIfood.RelogioPulou(TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(15))
+               && VigiaChatIfood.RelogioPulou(TimeSpan.FromMinutes(-3), TimeSpan.FromSeconds(15))
+               && VigiaChatIfood.RelogioPulou(TimeSpan.FromMinutes(40), TimeSpan.FromMinutes(40))
+               && !VigiaChatIfood.RelogioPulou(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15))
+               && !VigiaChatIfood.RelogioPulou(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(16)),
+            "VG-14 relógio de parede que pula mais de 30 s, ou batida atrasada (sono), conta como pulo; a batida normal não");
         // VG-12 os textos: curtos, sem travessão, login pede a conta da loja, parado oferece Reabrir
         {
             var (tl, al) = VigiaChatIfood.Aviso(EstadoChatIfood.Login);
@@ -233,7 +264,7 @@ public static class TestesVigiaChat
             "CV-36 o chat passa ao ambiente os 3 flags que mantêm o Gestor acordado (timers, renderer, janela coberta)");
         checar(whats.Contains("--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"),
             "CV-36b o WhatsApp continua com o autoplay e os dois flags, e ganha o da janela coberta");
-        checar(chat.Contains("envia({ tipo: 'naolidas', texto: txt, login: !!document.querySelector('input[type=\"password\"]') });")
+        checar(chat.Contains("envia({ tipo: 'naolidas', texto: txt, login: !!document.querySelector('input[type=\"password\"]') ||")
                && chat.Contains("_gestorPedeLogin = lg.ValueKind == JsonValueKind.True;"),
             "CV-37 o login do Gestor vem com o contador de não lidas (a cada 5 s), não só do diagnóstico do SDK");
         checar(chat.Contains("Interlocked.Exchange(ref _falouTicks, DateTime.Now.Ticks);")
@@ -254,9 +285,15 @@ public static class TestesVigiaChat
                && ctor.Contains("ServicoVigiaChat.AoReabrir = ReabrirAsync;"),
             "CV-40 o relógio da vigia nasce no construtor (roda com o Gestor ainda não pronto) e o Reabrir da venda chega na tela do chat");
         checar(chat.Contains("_vigia.Bater(new VigiaChatIfood.Leitura(_pronto, _gestorPedeLogin, PaginaFalouEm, IsHitTestVisible), agora)")
-               && chat.Contains("_ = RecriarAsync(\"vigia: pagina muda\");") && chat.Contains("await RecriarAsync(\"reabrir pelo aviso\", porGente: true);")
+               && chat.Contains("if (r.Recriar && !_iniciando) { Diag(\"vigia: chat parado, controle novo\"); _ = RecriarAsync(\"vigia: chat parado\"); }")
+               && chat.Contains("await RecriarAsync(\"reabrir pelo aviso\", porGente: true);")
                && chat.Contains("if (!porGente && !_tetoRecriar.Permitir(DateTime.UtcNow))"),
-            "CV-41 a vigia lê o operador na tela (o toque da camada); o controle novo da vigia passa pelo teto, o Reabrir de gente não");
+            "CV-41 a vigia lê o operador na tela; o controle novo da vigia passa pelo teto e não briga com o vigia da inicialização; o Reabrir de gente não tem teto");
+        checar(chat.Contains("new(DateTime.Now, GestorJaLogou())") && chat.Contains("Vendas.GravarConfig(cx, ChaveGestorLogou, agora.ToString(\"o\"))")
+               && chat.Contains("var pulou = VigiaChatIfood.RelogioPulou(agora - _batidaParede, mono - _batidaMono);"),
+            "CV-42 a vigia nasce armada só se o Gestor já logou neste caixa (memória na config) e pula a batida do relógio que pulou");
+        checar(chat.Contains("/\\/login|\\/entrar|#\\/auth/i.test(location.href)"),
+            "CV-43 o login também é visto pelo endereço da página (login em dois passos, sem campo de senha ainda)");
 
         var stack = System.Text.RegularExpressions.Regex.Match(vendaXaml, @"<StackPanel x:Name=""AvisosFixos"".*?</Border>\s*</StackPanel>",
             System.Text.RegularExpressions.RegexOptions.Singleline).Value;
@@ -282,6 +319,35 @@ public static class TestesVigiaChat
             "VD-6 o chat_fora e o chat_voltou do ERP vão para o aviso fixo, antes do toast da conversa (nunca dois avisos)");
         checar(venda.Contains("ToastConversa.Margin = new Thickness(0, 204 + desce, 14, 0);") && venda.Contains("ToastWhatsApp.Margin = new Thickness(0, 134 + desce, 14, 0);"),
             "VD-7 com aviso fixo na tela, os toasts do WhatsApp e da conversa descem para baixo dele");
+        var repintar = Trecho(venda, "private void RepintarAvisoChat()", "}\n    }");
+        checar(venda.Contains("RepintarAvisoChat();") && venda.Contains("private void ChatVoltou() => Dispatcher.Invoke(RepintarAvisoChat);")
+               && repintar.Contains("if (ServicoVigiaChat.Calado) { AvisoChatDesligado.Visibility = Visibility.Collapsed; return; }")
+               && repintar.Contains("else AvisoChatDesligado.Visibility = Visibility.Collapsed;"),
+            "VD-8 ao voltar do KDS e a cada voltou o aviso segue o estado de agora (some se o chat voltou, respeita o Depois)");
+        checar(venda.Contains("if (ServicoVigiaChat.Calado) return;   // o operador tocou em Depois: nem tela nem som"),
+            "VD-9 o chat_fora do ERP não repinta nem toca durante o Depois");
+        // VD-10 o serviço: Depois cala 30 min; o voltou da vigia do caixa não apaga o texto do ERP
+        ServicoVigiaChat.ZerarParaTeste();
+        ServicoVigiaChat.DoServidor("O chat do iFood caiu. Toque em Reabrir.");
+        ServicoVigiaChat.Avisar(EstadoChatIfood.Parado, DateTime.Now.AddMinutes(-3));
+        ServicoVigiaChat.AvisarVoltou();
+        var textoFica = ServicoVigiaChat.TextoDoServidor is not null && ServicoVigiaChat.Desde is null;
+        ServicoVigiaChat.Adiar();
+        var calado = ServicoVigiaChat.Calado;
+        ServicoVigiaChat.ZerarParaTeste();
+        checar(textoFica && calado && !ServicoVigiaChat.Calado,
+            "VD-10 o voltou do caixa deixa o texto do ERP valendo; o Depois cala");
+        var servico2 = Fonte("ServicoConversaChat.cs") ?? "";
+        checar(servico2.Contains("if (_ultimo.Sinal.CaixaMudo && !doErp && a.Tipo is not (\"chat_fora\" or \"chat_voltou\"))"),
+            "VD-11 o chat_fora/chat_voltou do ERP chega ao caixa mesmo com o caixa mudo (aprovação do dono)");
+    }
+
+    private static string Trecho(string s, string de, string ate)
+    {
+        var i = s.IndexOf(de, StringComparison.Ordinal);
+        if (i < 0) return "";
+        var j = s.IndexOf(ate, i + de.Length, StringComparison.Ordinal);
+        return j < 0 ? s[i..] : s[i..(j + ate.Length)];
     }
 
     private static string? Fonte(string relativo)

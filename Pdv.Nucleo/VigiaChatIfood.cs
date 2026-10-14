@@ -58,7 +58,14 @@ public sealed class VigiaChatIfood
     /// <c>Avisar</c>: aviso vermelho + som, agora. <c>Voltou</c>: apague o aviso. <c>Recarregar</c>:
     /// recarregue a página uma vez. <c>Recriar</c>: troque o controle por um novo.
     /// </summary>
-    public readonly record struct Resultado(EstadoChatIfood Estado, bool Avisar, bool Voltou, bool Recarregar, bool Recriar);
+    public readonly record struct Resultado(EstadoChatIfood Estado, bool Avisar, bool Voltou, bool Recarregar, bool Recriar, bool Armou = false);
+
+    /// <summary>
+    /// Revisão 14/10: a vigia só avisa num caixa em que o Gestor já esteve logado (a memória fica na
+    /// config local). Um segundo caixa, um PC de teste ou a fábrica, que nunca entram no Gestor, não
+    /// ganham aviso e som a cada 15 min. A cura sozinha vale sempre.
+    /// </summary>
+    public bool Armada { get; private set; }
 
     public EstadoChatIfood Estado { get; private set; } = EstadoChatIfood.Abrindo;
     /// <summary>Desde quando o chat está fora (null = ok ou ainda abrindo pela primeira vez).</summary>
@@ -75,7 +82,16 @@ public sealed class VigiaChatIfood
     private int _recriacoesNestaQueda;
     private readonly List<DateTime> _recriacoes = new();
 
-    public VigiaChatIfood(DateTime agora) => _abrindoDesde = agora;
+    public VigiaChatIfood(DateTime agora, bool jaLogou = true) { _abrindoDesde = agora; Armada = jaLogou; }
+
+    /// <summary>
+    /// Revisão 14/10: o relógio do Windows pulou (acerto de hora, volta do sono)? Entre duas batidas o
+    /// relógio de parede andou <paramref name="parede"/> e o monotônico <paramref name="monotonico"/>.
+    /// Diferença de mais de 30 s, ou batida atrasada mais de 45 s: a batida não decide nada (a página
+    /// ganha o tempo de novo), senão vinha aviso, som e recarga à toa.
+    /// </summary>
+    public static bool RelogioPulou(TimeSpan parede, TimeSpan monotonico)
+        => (parede - monotonico).Duration() > TimeSpan.FromSeconds(30) || monotonico > TimeSpan.FromSeconds(45);
 
     /// <summary>A última fala da página que vale para o controle de agora (a de um controle anterior não conta).</summary>
     private DateTime? FalaValida(Leitura l)
@@ -107,20 +123,32 @@ public sealed class VigiaChatIfood
         if (estado == EstadoChatIfood.Ok && mudaHa < RecarregarAos)
         {
             var voltou = ForaDesde is not null && UltimoAviso is not null;
+            var armou = !Armada;
+            Armada = true;
             ForaDesde = null; Motivo = null; UltimoAviso = null; _caladoAte = null;
             _recarregouNestaQueda = false; _recriacoesNestaQueda = 0;
-            return new Resultado(estado, false, voltou, false, false);
+            return new Resultado(estado, false, voltou, false, false, armou);
         }
 
         // a queda: Parado conta desde a última fala (ou desde que abriu); Login, desde agora
         if (estado == EstadoChatIfood.Parado) { ForaDesde ??= mudaDesde; Motivo = estado; }
         else if (estado == EstadoChatIfood.Login) { ForaDesde ??= agora; Motivo = estado; }
 
-        // a cura sozinha: só com a página que já abriu (a que nunca abre tem o vigia da
-        // inicialização), nunca no login e nunca com o operador na tela do chat. A recarga vem
-        // aos 90 s de silêncio, antes de a página contar como parada (2 min)
+        // a cura sozinha: nunca no login e nunca com o operador na tela do chat. A recarga vem aos
+        // 90 s de silêncio, antes de a página contar como parada (2 min). Revisão 14/10: o controle
+        // que não fica pronto (quebrou e ficou no painel de erro, ou não abriu) também ganha um
+        // controle novo, com o mesmo teto e o mesmo recuo (antes só uma pessoa resolvia)
         var recarregar = false; var recriar = false;
-        if ((estado is EstadoChatIfood.Parado or EstadoChatIfood.Ok) && l.Pronto && !l.OperadorNaTela && mudaHa >= RecarregarAos)
+        if (estado == EstadoChatIfood.Parado && !l.Pronto && !l.OperadorNaTela
+            && agora - _abrindoDesde >= RecriarAos && PodeRecriar(agora))
+        {
+            recriar = true;
+            _ultimaRecriacao = agora;
+            _recriacoesNestaQueda++;
+            _recriacoes.Add(agora);
+            _abrindoDesde = agora;
+        }
+        else if ((estado is EstadoChatIfood.Parado or EstadoChatIfood.Ok) && l.Pronto && !l.OperadorNaTela && mudaHa >= RecarregarAos)
         {
             if (!_recarregouNestaQueda)
             {
@@ -138,7 +166,7 @@ public sealed class VigiaChatIfood
             }
         }
 
-        var avisar = ForaDesde is { } desde && agora - desde >= Carencia
+        var avisar = Armada && ForaDesde is { } desde && agora - desde >= Carencia
                      && (_caladoAte is not { } c || agora >= c)
                      && (UltimoAviso is not { } u || agora - u >= IntervaloAviso);
         if (avisar) UltimoAviso = agora;

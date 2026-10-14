@@ -114,6 +114,24 @@ public static class Quiosque
         }
     }
 
+    /// <summary>Alguma das quatro políticas está gravada? (para desfazer mesmo a trava pela metade)</summary>
+    public static bool AlgumaTrava
+    {
+        get
+        {
+            try
+            {
+                foreach (var (chave, valor) in Travas)
+                {
+                    using var k = Registry.CurrentUser.OpenSubKey(chave);
+                    if (k?.GetValue(valor) is not null) return true;
+                }
+                return false;
+            }
+            catch { return false; }
+        }
+    }
+
     /// <summary>Grava (ou apaga) as quatro políticas. Devolve a mensagem de erro, ou null.</summary>
     public static string? Travar(bool travar)
     {

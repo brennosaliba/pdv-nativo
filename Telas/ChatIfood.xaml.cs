@@ -55,7 +55,18 @@ public partial class ChatIfood : UserControl
     private volatile string _navegacao = "carregando";
     private int _recuoNavegacao;
     /// <summary>1.0.33: a vigia do chat (Núcleo) e o relógio dela, vivo desde o construtor.</summary>
-    private readonly VigiaChatIfood _vigia = new(DateTime.Now);
+    private readonly VigiaChatIfood _vigia = new(DateTime.Now, GestorJaLogou());
+    /// <summary>Config local: quando o Gestor esteve logado neste caixa pela 1ª vez (arma o aviso da vigia).</summary>
+    public const string ChaveGestorLogou = "chat_ifood_logou_em";
+    /// <summary>A batida anterior da vigia: relógio de parede e monotônico (para ver o relógio pular).</summary>
+    private DateTime _batidaParede = DateTime.Now;
+    private TimeSpan _batidaMono = _relogio.Elapsed;
+
+    private static bool GestorJaLogou()
+    {
+        try { using var cx = Banco.Abrir(); return !string.IsNullOrWhiteSpace(Vendas.Config(cx, ChaveGestorLogou)); }
+        catch { return true; }   // sem banco, avisa (melhor um aviso a mais que um chat parado em silêncio)
+    }
     private readonly DispatcherTimer _relogioVigia = new() { Interval = TimeSpan.FromSeconds(15) };
     /// <summary>A saúde da página para o sinal, tirada na thread da tela a cada batida da vigia.</summary>
     private volatile object? _saude;
@@ -415,8 +426,23 @@ public partial class ChatIfood : UserControl
         try
         {
             var agora = DateTime.Now;
+            var mono = _relogio.Elapsed;
+            var pulou = VigiaChatIfood.RelogioPulou(agora - _batidaParede, mono - _batidaMono);
+            _batidaParede = agora; _batidaMono = mono;
+            if (pulou)
+            {
+                // acerto de hora ou volta do sono: a página ganha o tempo de novo e esta batida não decide
+                Diag("vigia: o relogio pulou (sono ou acerto de hora); a pagina ganha o tempo de novo");
+                if (PaginaFalouEm is not null) Interlocked.Exchange(ref _falouTicks, agora.Ticks);
+                return;
+            }
             var antes = _vigia.Estado;
             var r = _vigia.Bater(new VigiaChatIfood.Leitura(_pronto, _gestorPedeLogin, PaginaFalouEm, IsHitTestVisible), agora);
+            if (r.Armou)
+            {
+                try { using var cx = Banco.Abrir(); Vendas.GravarConfig(cx, ChaveGestorLogou, agora.ToString("o")); }
+                catch (Exception ex) { Diag("vigia armou, memoria: " + ex.GetType().Name); }
+            }
             _saude = new ConversaRaspadinha.SaudeDoChat(
                 PaginaFalouEm is { } f && agora - f < VigiaChatIfood.Silencio, _navegacao, _vigia.Fase, _vigia.RecriacoesNaHora(agora));
             if (r.Estado != antes) Diag($"vigia: {antes} -> {r.Estado}");
@@ -426,7 +452,8 @@ public partial class ChatIfood : UserControl
                 try { Web.CoreWebView2?.Reload(); }
                 catch (Exception ex) { Diag("vigia recarregar: " + ex.GetType().Name); }
             }
-            if (r.Recriar) { Diag("vigia: pagina muda, controle novo"); _ = RecriarAsync("vigia: pagina muda"); }
+            // o controle que ainda está abrindo é do vigia da inicialização (não recria em dobro)
+            if (r.Recriar && !_iniciando) { Diag("vigia: chat parado, controle novo"); _ = RecriarAsync("vigia: chat parado"); }
             if (r.Avisar)
             {
                 Diag($"vigia: aviso na venda ({_vigia.Motivo} desde {_vigia.ForaDesde:HH:mm})");
@@ -1337,7 +1364,7 @@ public partial class ChatIfood : UserControl
               txt = (num && /\d/.test(num.textContent)) ? num.textContent : '';
             }
           }
-          envia({ tipo: 'naolidas', texto: txt, login: !!document.querySelector('input[type="password"]') });
+          envia({ tipo: 'naolidas', texto: txt, login: !!document.querySelector('input[type="password"]') || /\/login|\/entrar|#\/auth/i.test(location.href) });
         } catch (e) { envia({ tipo: 'naolidas', texto: '' }); }
       };
 

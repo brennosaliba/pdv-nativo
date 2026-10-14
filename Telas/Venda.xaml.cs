@@ -225,7 +225,8 @@ public partial class Venda : UserControl
             ServicoVigiaChat.Caiu -= ChatCaiu; ServicoVigiaChat.Caiu += ChatCaiu;
             ServicoVigiaChat.Voltou -= ChatVoltou; ServicoVigiaChat.Voltou += ChatVoltou;
             AvisosFixos.SizeChanged -= AvisosFixosMudaram; AvisosFixos.SizeChanged += AvisosFixosMudaram;
-            if (ServicoVigiaChat.Desde is { } dc) PintarAvisoChat(ServicoVigiaChat.Motivo, dc, null);
+            // o estado de agora (o Voltou pode ter caído enquanto o KDS estava na tela)
+            RepintarAvisoChat();
         };
         Unloaded += (_, _) =>
         {
@@ -424,13 +425,15 @@ public partial class Venda : UserControl
         if (a.Tipo == "chat_fora")
         {
             ServicoVigiaChat.DoServidor(a.Texto);
+            if (ServicoVigiaChat.Calado) return;   // o operador tocou em Depois: nem tela nem som
             PintarAvisoChat(ServicoVigiaChat.Motivo, ServicoVigiaChat.Desde, a.Texto);
             if (_comanda.Count == 0) Alerta.WhatsAppCaiu();
             return;
         }
         if (a.Tipo == "chat_voltou")
         {
-            if (ServicoVigiaChat.ServidorVoltou()) AvisoChatDesligado.Visibility = Visibility.Collapsed;
+            ServicoVigiaChat.ServidorVoltou();
+            RepintarAvisoChat();
             return;
         }
         // Aviso que só informa não cobre o que pede ação: com "Abrir e colar" na tela, o texto
@@ -597,7 +600,19 @@ public partial class Venda : UserControl
         if (_comanda.Count == 0) Alerta.WhatsAppCaiu();
     });
 
-    private void ChatVoltou() => Dispatcher.Invoke(() => AvisoChatDesligado.Visibility = Visibility.Collapsed);
+    private void ChatVoltou() => Dispatcher.Invoke(RepintarAvisoChat);
+
+    /// <summary>
+    /// O aviso como o estado está agora: fora pela vigia do caixa, ou pelo texto do ERP que ainda
+    /// vale, e não calado pelo Depois; senão some. Chamado ao entrar na venda e a cada "voltou".
+    /// </summary>
+    private void RepintarAvisoChat()
+    {
+        if (ServicoVigiaChat.Calado) { AvisoChatDesligado.Visibility = Visibility.Collapsed; return; }
+        if (ServicoVigiaChat.Desde is { } d) PintarAvisoChat(ServicoVigiaChat.Motivo, d, null);
+        else if (ServicoVigiaChat.TextoDoServidor is { Length: > 0 } t) PintarAvisoChat(null, null, t);
+        else AvisoChatDesligado.Visibility = Visibility.Collapsed;
+    }
 
     /// <summary>
     /// O aviso fixo do chat. Login pede a pessoa no Gestor (o toque abre o chat); parado oferece

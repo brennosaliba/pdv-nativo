@@ -248,13 +248,13 @@ public static class TestesAprovacaoDono
             "AF-1 com Aprovacao == dono o serviço não toca Alerta.Resgate() (uma chamada só, com a guarda)");
 
         var iEmitir = servico.IndexOf("private static void Emitir(AvisoDoChat a, bool doErp = false)", StringComparison.Ordinal);
-        var iMudo = iEmitir < 0 ? -1 : servico.IndexOf("if (_ultimo.Sinal.CaixaMudo && !doErp) {", iEmitir, StringComparison.Ordinal);
+        var iMudo = iEmitir < 0 ? -1 : servico.IndexOf("if (_ultimo.Sinal.CaixaMudo && !doErp && a.Tipo is not (\"chat_fora\" or \"chat_voltou\"))", iEmitir, StringComparison.Ordinal);
         var iSom = iEmitir < 0 ? -1 : servico.IndexOf("Alerta.MensagemChat();", iEmitir, StringComparison.Ordinal);
         var iAvisou = iEmitir < 0 ? -1 : servico.IndexOf("Avisou?.Invoke(a)", iEmitir, StringComparison.Ordinal);
         checar(iEmitir > 0 && iMudo > iEmitir && iSom > iMudo && iAvisou > iMudo
                && Regex.Matches(servico, @"Alerta\.MensagemChat\(\)").Count == 1
                && Regex.Matches(servico, @"Avisou\?\.Invoke\(").Count == 1,
-            "AF-2 com o caixa mudo, Emitir sai antes do som de mensagem e do aviso na tela (e é o único caminho dos dois)");
+            "AF-2 com o caixa mudo, Emitir sai antes do som de mensagem e do aviso na tela (e é o único caminho dos dois); 1.0.33: só o chat_fora/chat_voltou do ERP passa");
 
         var iTratar = servico.IndexOf("private static bool TratarSaida(", StringComparison.Ordinal);
         var tratar = iTratar < 0 ? "" : servico[iTratar..Math.Min(servico.Length, iTratar + 1400)];

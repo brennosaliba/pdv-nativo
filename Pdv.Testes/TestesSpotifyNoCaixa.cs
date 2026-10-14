@@ -53,6 +53,9 @@ public static class TestesSpotifyNoCaixa
         checar(sp.Contains("SW_HIDE") && !sp.Contains("SW_MINIMIZE") && sp.Contains("EnumWindows(") && sp.Contains("\"--minimized\"")
                && sp.Contains("TimeSpan.FromMinutes(2)") && sp.Contains("TimeSpan.FromSeconds(5)"),
             "1.0.33: o Spotify sobe minimizado e toda janela dele é ESCONDIDA (fora do Alt+Tab) a cada 5 s; a reabertura tem folga de 2 min");
+        checar(sp.Contains("lock (_escondidas) _escondidas.Add(h);") && sp.Contains("ShowWindow(h, SW_SHOWMINNOACTIVE)")
+               && sp.IndexOf("ShowWindow(h, SW_SHOWMINNOACTIVE)", StringComparison.Ordinal) > sp.IndexOf("public static void Parar()", StringComparison.Ordinal),
+            "1.0.33 (revisão): desligar a opção devolve as janelas que o PDV escondeu (um Spotify pedindo login não some para sempre)");
         checar(!sp.Contains("Kill(") && !sp.Contains("senha", StringComparison.OrdinalIgnoreCase) || sp.Contains("Senha é dele"),
             "o PDV nunca mata o Spotify nem mexe em senha: só abre e esconde");
     }
