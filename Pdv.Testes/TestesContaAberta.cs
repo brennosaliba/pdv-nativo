@@ -765,6 +765,10 @@ public static class TestesContaAberta
             "CA-15c a conta fecha e o lote dela ainda vai (fechada nao e cancelada)");
         checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento='conta_fechada_sem_venda' AND detalhe LIKE '%pendentes no lote 2%'") == 1,
             "CA-15c a auditoria diz em que lote foram os pendentes");
+        var evento = JsonDocument.Parse(cx.ExecuteScalar<string>("SELECT payload FROM outbox WHERE client_key=@k", new { k = $"{c.Id}:conta_fechada_sem_venda:1" })!).RootElement;
+        checar(evento.GetProperty("itens").EnumerateArray().All(i => i.GetProperty("cozinha_milesimos").GetInt64() == i.GetProperty("qtd_milesimos").GetInt64())
+               && evento.GetProperty("lotes").GetArrayLength() == 2,
+            "CA-15c o conta_evento leva os itens ja marcados pelo lote final (cozinha_milesimos = qtd) e os 2 lotes");
 
         // turno de teste: o lote existe so no banco (homologacao), nada na fila
         var t = ContasAbertas.Abrir(cx, sessao, op, "Cortesia teste", itens: new List<ItemRascunho> { Item(Agua, "AGUA", 500, 1000) });
@@ -844,6 +848,22 @@ public static class TestesContaAberta
                && lvLista.LoteParaMandarDeNovo is null && lvLista.Selo == ContasAbertas.Textos.NaTv,
             $"CA-14d lote esvaziado e descartado nao acende aviso; o selo vem do lote 1, na TV ({lvLista.Selo})");
         ContasAbertas.Cancelar(cx, v.Id, op, "teste", gerente);
+
+        // perdido, Mandar de novo, e o substituto esvaziado com PIN e descartado: o lote substituido nao
+        // volta a mandar no selo (terceira rodada da revisao)
+        var s = ContasAbertas.Abrir(cx, sessao, op, "Substituto vazio", itens: new List<ItemRascunho> { Item(Ninho, "DONUT NINHO", 1200, 1000) });
+        var s1 = ContasAbertas.PedirCozinha(cx, s.Id, null, op, false)!;
+        cx.Execute("UPDATE outbox SET desistido_em=@e WHERE tipo=@t AND ref_id=@r", new { e = agora, t = PedidoCozinha.TipoNaFila, r = s1.Id });
+        var s2 = ContasAbertas.ReenviarLote(cx, s1.Id, op);
+        ContasAbertas.RetirarProduzido(cx, s.Id, ContasAbertas.Ler(cx, s.Id)!.Itens[0].LinhaId!, 0, op, gerente);
+        checar(ContasAbertas.LerLote(cx, s2.Id)!.Retirados.Sum(r => r.QtdMilesimos) == 1000 && ContasAbertas.LerLote(cx, s1.Id)!.Retirados.Count == 0,
+            "CA-14e a retirada vai para o substituto (o substituido nao recebe)");
+        cx.Execute("UPDATE outbox SET enviado_em=@e, ultimo_erro='descartado: todos os itens foram tirados antes de ir para a cozinha' WHERE tipo=@t AND ref_id=@r",
+            new { e = agora, t = PedidoCozinha.TipoNaFila, r = s2.Id });
+        var sLista = ContasAbertas.LinhasDaLista(cx, sessao, null, teste: false).First(l => l.Conta.Id == s.Id);
+        checar(!ContasAbertas.UltimoLoteNaoChegou(cx, s.Id) && sLista.Selo != ContasAbertas.Textos.SeloNaoFoi && sLista.LoteParaMandarDeNovo is null,
+            $"CA-14e substituto esvaziado e descartado: sem aviso, sem 'nao foi' e sem Mandar de novo ({sLista.Selo})");
+        ContasAbertas.Cancelar(cx, s.Id, op, "teste", gerente);
     }
 
     // ── CA-8: turno de teste nao cruza ──────────────────────────────────────

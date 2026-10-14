@@ -221,7 +221,7 @@ public static class ContasAbertas
         /// <summary>Revisao 14/10: a comanda toda em cortesia mandou a cozinha o que ainda nao tinha ido.</summary>
         public const string CortesiaFoiParaCozinha = "O que faltava foi para a cozinha.";
         /// <summary>Revisao 14/10: o cupom foi usado e a comanda nao fechou (falha do disco): ela fica na tela.</summary>
-        public static string CortesiaSemFechar(long n) => $"O cupom foi usado, mas a comanda {n} não fechou. Chame o gerente.";
+        public static string CortesiaSemFechar(long n) => $"O cupom foi usado, mas a comanda {n} não fechou. Toque em Fechar conta de novo.";
         public const string UsandoCupom = "Usando o cupom...";
         public static string ContaCancelada(long n) => $"Comanda {n} cancelada.";
         public static string CancelarPergunta(long n) => $"Cancelar a comanda {n}?";
@@ -448,10 +448,12 @@ public static class ContasAbertas
         if (destinoDosPendentes is { } destino)
             loteFinal = CriarLoteNoTx(cx, tx, c, destino, operador with { Id = idOp }, homologacao || c.Teste);
         var lotes = Lotes(cx, id, tx);
+        // o evento descreve a conta DEPOIS do lote final (cozinha_milesimos marcados), igual aos lotes dele
+        var paraEvento = loteFinal is null ? c : Ler(cx, id, tx) ?? c;
         Caixa.Auditar(cx, tx, "conta_fechada_sem_venda", idOp, null,
             $"comanda={c.Numero} nome={c.Nome ?? "(sem nome)"} itens={ResumoItens(c.Itens)} valor={c.ValorTabela.Formatado()} lotes={lotes.Count} motivo={motivo}"
             + (loteFinal is null ? "" : $" (pendentes no lote {loteFinal.N})"));
-        if (!c.Teste) EnfileirarEvento(cx, tx, "conta_fechada_sem_venda", c, lotes, operador, null, motivo);
+        if (!c.Teste) EnfileirarEvento(cx, tx, "conta_fechada_sem_venda", paraEvento, lotes, operador, null, motivo);
         tx.Commit();
         return true;
     }
@@ -630,9 +632,13 @@ public static class ContasAbertas
     private static ContaLote? PerdidoComItem(SqliteConnection cx, string contaId)
         => LotesPerdidos(cx, contaId, null).Where(l => ItensQueFicam(l).Count > 0).OrderByDescending(l => l.N).FirstOrDefault();
 
-    /// <summary>O ultimo lote de verdade (nao homologacao) que ainda tem item.</summary>
+    /// <summary>
+    /// O ultimo lote de verdade (nao homologacao, nao substituido) que ainda tem item. O substituido nao
+    /// conta: os itens dele estao no substituto (terceira rodada da revisao, 14/10).
+    /// </summary>
     private static ContaLote? UltimoComItem(SqliteConnection cx, string contaId)
-        => Lotes(cx, contaId).Where(l => !l.Homologacao && ItensQueFicam(l).Count > 0).OrderByDescending(l => l.N).FirstOrDefault();
+        => Lotes(cx, contaId).Where(l => !l.Homologacao && l.SubstituidoPor is null && ItensQueFicam(l).Count > 0)
+            .OrderByDescending(l => l.N).FirstOrDefault();
 
     /// <summary>
     /// O que ainda nao foi para a cozinha, linha a linha: Qtd menos CozinhaMilesimos, MAIS o que pertence

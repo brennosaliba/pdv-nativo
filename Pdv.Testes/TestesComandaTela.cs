@@ -121,6 +121,14 @@ public static class TestesComandaTela
         checar(Metodo(venda, "private void LimparComanda(object sender, RoutedEventArgs e)").Contains("if (_contaAberta is not null) { LimparSoOPendente(); return; }", StringComparison.Ordinal)
                && Metodo(comanda, "private void LimparSoOPendente()").Contains("JaPedidosFicam", StringComparison.Ordinal),
             "CA-7 o Limpar em modo comanda tira so o que nao foi pedido (nunca vira cancelar comanda)");
+        var conferirTrava = Metodo(comanda, "private async Task ConferirContaEFinalizarAsync()");
+        checar(Ordem(conferirTrava, "IsEnabled = false;", "await _cortesias.ValidarAsync(codigo)")
+               && conferirTrava.Contains("if (_contaAberta?.Id != conta.Id || _cortesiaCodigo != codigo) return;", StringComparison.Ordinal),
+            "CA-12b a validacao do cupom no Fechar conta trava a tela e nao mexe em nada se a comanda ou o cupom mudaram na espera");
+        var resgateTrava = Metodo(venda, "private async Task ResgatarEConcluirBrindeAsync()");
+        checar(Regex.Matches(resgateTrava, @"IsEnabled = true").Count == 1 && Ordem(resgateTrava, "await Task.Delay(300)", "finally { IsEnabled = true; }")
+               && Ordem(resgateTrava, "var conta = _contaAberta;", "await _cortesias.ResgatarAsync(codigo"),
+            "CA-12b o resgate le a conta antes do await e so destrava a tela no fim (as tentativas do fechamento esperam travadas)");
         var pedir = Metodo(comanda, "private void PedirCozinhaDaConta()");
         checar(pedir.Contains("ContasAbertas.PedirCozinha(cx, conta.Id, conta.Destino, _operador, TurnoDeTeste)", StringComparison.Ordinal)
                && Ordem(pedir, "ContasAbertas.PedirCozinha(", "GuardarConta();") && pedir.Contains("PedidoNaCozinhaGuardada(numero)", StringComparison.Ordinal)
@@ -789,6 +797,58 @@ public static class TestesComandaTela
         checar(rotuloReenviado == $"⚠ {ContasAbertas.Textos.CozinhaCurta(0)}" && subReenviada.Contains(ContasAbertas.Textos.NaCozinha(1), StringComparison.Ordinal)
                && !subReenviada.Contains(ContasAbertas.Textos.NaoChegou(1), StringComparison.Ordinal),
             $"CT-21 depois do Mandar de novo a tela repinta: '⚠ Coz. 0' e '1 na cozinha' ({rotuloReenviado} / {subReenviada})");
+
+        // CT-22 (revisao 14/10, terceira rodada): o cupom foi usado e o fechamento falhou (disco): a comanda
+        // fica na tela com o aviso, e o proximo Fechar conta fecha sem validar nem resgatar de novo
+        string TextoDe(Window d) => string.Join(" ", Descendentes<TextBlock>(d).Select(t => t.Text));
+        string idFalha; long numFalha;
+        using (var cx = Banco.Abrir())
+        {
+            var c = ContasAbertas.Abrir(cx, sessao, op, "Mesa 9", itens: new List<ItemRascunho> { Item(Agua, "AGUA 500ML", 500, 1000) });
+            ContasAbertas.Soltar(cx, c.Id);
+            idFalha = c.Id; numFalha = c.Numero;
+            cx.Execute($"CREATE TRIGGER teste_disco_de_mentira BEFORE UPDATE OF status ON conta_aberta WHEN NEW.status = 'fechada' AND OLD.id = '{c.Id}' BEGIN SELECT RAISE(ABORT, 'disco de mentira'); END;");
+        }
+        if (Conta() is not null) Invocar(tela, "GuardarConta");
+        Invocar(tela, "CarregarConta", idFalha);
+        Definir(tela, "_cortesiaCodigo", "AD-FALHA01");
+        Campo<Dictionary<string, int>>(tela, "_cortesiaCobertura")[chaveAgua] = 1;
+        Invocar(tela, "PintarComanda");
+        host.UpdateLayout();
+        var avisoFalha = "";
+        Roteiro(host, d => { avisoFalha = TextoDe(d); Clicar(Botao(d, "Entendi")); });
+        var quadroFalha = new DispatcherFrame();
+        Task? resgateFalha = null;
+        Dispatcher.CurrentDispatcher.BeginInvoke((Action)(() =>
+        {
+            resgateFalha = (Task)Invocar(tela, "ResgatarEConcluirBrindeAsync")!;
+            resgateFalha.ContinueWith(_ => quadroFalha.Continue = false, TaskScheduler.FromCurrentSynchronizationContext());
+        }));
+        var limiteFalha = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+        limiteFalha.Tick += (_, _) => { limiteFalha.Stop(); quadroFalha.Continue = false; };
+        limiteFalha.Start();
+        Dispatcher.PushFrame(quadroFalha);
+        limiteFalha.Stop();
+        host.UpdateLayout();
+        using (var cx = Banco.Abrir())
+        {
+            checar(resgateFalha?.IsCompleted == true && tela.IsEnabled && Conta()?.Id == idFalha && ContasAbertas.Ler(cx, idFalha)!.Status == "aberta"
+                   && avisoFalha.Contains(ContasAbertas.Textos.CortesiaSemFechar(numFalha), StringComparison.Ordinal),
+                $"CT-22 o fechamento falhou depois do cupom usado: a comanda fica na tela, aberta, com o aviso ('{avisoFalha}')");
+            checar(fakeCupom.Resgatadas.ContainsKey("AD-FALHA01") && Campo<string>(tela, "_cortesiaCodigo") == "AD-FALHA01",
+                "CT-22 o cupom foi queimado uma vez e a cortesia continua na comanda (nao cobra)");
+            cx.Execute("DROP TRIGGER teste_disco_de_mentira");
+        }
+        var avisoDepois = "";
+        Roteiro(host,
+            d => Clicar(Botao(d, "Entregar os itens")),
+            d => { avisoDepois = TextoDe(d); Clicar(Botao(d, "Entendi")); });
+        Invocar(tela, "Finalizar", tela, new RoutedEventArgs());
+        host.UpdateLayout();
+        using (var cx = Banco.Abrir())
+            checar(ContasAbertas.Ler(cx, idFalha)!.Status == "fechada" && Conta() is null && comanda.Count == 0
+                   && avisoDepois.StartsWith("Cortesia entregue", StringComparison.Ordinal),
+                $"CT-22 o segundo Fechar conta fecha sem validar nem resgatar de novo (o servidor recusaria) ('{avisoDepois}')");
 
         using (var cx = Banco.Abrir())
             foreach (var c in ContasAbertas.Listar(cx, false)) ContasAbertas.Cancelar(cx, c.Id, op, "fim do teste", c.Itens.Count > 0 ? Operadores.PorId(cx, "ger-ui") : null);

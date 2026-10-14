@@ -574,6 +574,13 @@ public partial class Venda : UserControl
     /// sem bloquear nada e some sozinho em 8 s. Para o que o operador precisa
     /// saber mas não precisa confirmar (ex.: promoção não aplicada).
     /// </summary>
+    /// <summary>Recolhe o toast na hora (o "Usando o cupom..." nao fica depois da resposta).</summary>
+    private void EsconderAvisoLeve()
+    {
+        _toastAvisoSome?.Stop();
+        ToastAviso.Visibility = Visibility.Collapsed;
+    }
+
     private void AvisoLeve(string texto)
     {
         TxtToastAviso.Text = texto;
@@ -2837,6 +2844,9 @@ public partial class Venda : UserControl
         }
 
         var cortesiaAplicada = _cortesiaCodigo;
+        // revisao 14/10: o cupom que esta comanda ja queimou (fechamento em cortesia que falhou) nao e
+        // resgatado de novo se a comanda virar venda
+        var cortesiaJaUsada = CortesiaJaUsadaNesta(_contaAberta?.Id, cortesiaAplicada);
         // COMANDA ABERTA: o Pagamento recebe a conta (numero, nome, consumo e o que ainda nao foi
         // pedido) e fechando_em e marcado ANTES de qualquer dinheiro (ver ContaParaOPagamento).
         var contaNoPagamento = ContaParaOPagamento();
@@ -2861,7 +2871,8 @@ public partial class Venda : UserControl
             {
                 // Cupom só morre com a venda concluída (dinheiro entrou). Falha no
                 // resgate não desfaz a venda — a cortesia já foi dada; loga e segue.
-                if (cortesiaAplicada is not null) _ = ResgatarSilenciosoAsync(cortesiaAplicada);
+                if (cortesiaAplicada is not null && !cortesiaJaUsada) _ = ResgatarSilenciosoAsync(cortesiaAplicada);
+                if (cortesiaJaUsada) _cortesiaJaUsada = null;
                 // COMANDA ABERTA: a conta ja fechou dentro da transacao da venda. Solta ANTES
                 // de esvaziar, senao a repintura gravaria o carrinho vazio numa conta fechada.
                 ContaVirouVenda();
@@ -2902,83 +2913,104 @@ public partial class Venda : UserControl
         catch { /* último recurso: nada mais a fazer sem derrubar a venda */ }
     }
 
+    /// <summary>
+    /// Revisao 14/10 (terceira rodada): o cupom que ESTA comanda ja queimou no servidor quando o
+    /// fechamento sem venda falhou logo depois (disco). O proximo "Fechar conta" dela nao valida nem
+    /// resgata de novo (voltaria already_redeemed e cobraria a cortesia): vai direto ao fechamento. So
+    /// em memoria, como a liberacao 2FA: reiniciar o caixa esquece (o caso e falha de disco).
+    /// </summary>
+    private (string ContaId, string Codigo)? _cortesiaJaUsada;
+
+    private bool CortesiaJaUsadaNesta(string? contaId, string? codigo)
+        => contaId is not null && codigo is not null && _cortesiaJaUsada is { } u && u.ContaId == contaId
+           && string.Equals(u.Codigo, codigo, StringComparison.OrdinalIgnoreCase);
+
     private async Task ResgatarEConcluirBrindeAsync()
     {
         var dono = Window.GetWindow(this)!;
-        // REVISAO 14/10 (corrida): o codigo e a conta sao lidos ANTES do await e a tela fica travada
-        // ate o fim. Antes, com a rede lenta (ate 12 s), o operador podia trocar de comanda no meio e o
-        // FecharSemVenda fechava a comanda errada, ou nenhuma, com o cupom ja queimado.
+        // REVISAO 14/10 (corrida): o codigo e a conta sao lidos ANTES do await e a tela fica travada do
+        // resgate ate a limpeza, num finally so (as tentativas do fechamento tambem esperam com ela
+        // travada). Antes, com a rede lenta, dava para trocar de comanda no meio e fechar a errada.
         var codigo = _cortesiaCodigo!;
         var conta = _contaAberta;
-        Cortesia r;
         IsEnabled = false;
-        AvisoLeve(ContasAbertas.Textos.UsandoCupom, "neutro");
-        try { r = await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja); }
-        catch { r = new Cortesia(false, "sem_rede", codigo, null, Array.Empty<ItemCortesia>()); }
-        finally { IsEnabled = true; }
-        if (!r.Ok)
-        {
-            Dialogo.Avisar(dono, "Cortesia não saiu", r.Erro switch
-            {
-                "already_redeemed" => "O cupom já tinha sido usado. Não entregue de graça: cobre a venda normal.",
-                "loja_errada" => "O cupom é de outra loja. Só pode ser usado lá.",
-                "sem_rede" => "Sem internet para usar o cupom agora. Tente de novo em alguns segundos.",
-                _ => "Não deu para usar o cupom agora. Tente de novo.",
-            }, "erro");
-            return;
-        }
         try
         {
-            using var cxA = Banco.Abrir();
-            Caixa.Auditar(cxA, null, "cortesia_entregue", _operador.Id, null,
-                $"cupom={codigo} (comanda inteira em cortesia){(conta is null ? "" : $" comanda={conta.Numero}")}");
-        }
-        catch { /* o rastro local nao segura a entrega: o cupom ja foi usado no servidor */ }
-        // COMANDA ABERTA (revisoes 13 e 14/10): a conta toda em cortesia nao passa pelo Vendas.Finalizar;
-        // fecha sem venda a conta LIDA ANTES do resgate (nunca a que estiver na tela agora) e, com a TV
-        // da cozinha ligada, o que ainda nao tinha ido (e o lote que nao chegou) vai junto, no consumo da
-        // conta, como o Pagamento faz por padrao no caminho pago.
-        var foiParaCozinha = false;
-        if (conta is not null)
-        {
-            // tres tentativas (disco ocupado); se nao fechar, a comanda FICA na tela com o aviso, em vez de
-            // dizer "Cortesia entregue" com ela ainda aberta (revisao 14/10)
-            Exception? falha = null;
-            for (var tentativa = 0; tentativa < 3; tentativa++)
+            if (!CortesiaJaUsadaNesta(conta?.Id, codigo))
             {
+                AvisoLeve(ContasAbertas.Textos.UsandoCupom, "neutro");
+                Cortesia r;
+                try { r = await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja); }
+                catch { r = new Cortesia(false, "sem_rede", codigo, null, Array.Empty<ItemCortesia>()); }
+                EsconderAvisoLeve();
+                if (!r.Ok)
+                {
+                    Dialogo.Avisar(dono, "Cortesia não saiu", r.Erro switch
+                    {
+                        "already_redeemed" => "O cupom já tinha sido usado. Não entregue de graça: cobre a venda normal.",
+                        "loja_errada" => "O cupom é de outra loja. Só pode ser usado lá.",
+                        "sem_rede" => "Sem internet para usar o cupom agora. Tente de novo em alguns segundos.",
+                        _ => "Não deu para usar o cupom agora. Tente de novo.",
+                    }, "erro");
+                    return;
+                }
+                if (conta is not null) _cortesiaJaUsada = (conta.Id, codigo);
                 try
                 {
-                    using var cxC = Banco.Abrir();
-                    DestinoCozinha? destino = PedidoCozinha.Ligado(cxC) ? conta.Destino : null;
-                    ContasAbertas.FecharSemVenda(cxC, conta.Id, _operador, $"cortesia {codigo}", destino, TurnoDeTeste, out var loteFinal);
-                    if (loteFinal is not null)
-                    {
-                        foiParaCozinha = !loteFinal.Homologacao;
-                        if (foiParaCozinha) CutucarDreno();
-                    }
-                    falha = null;
-                    break;
+                    using var cxA = Banco.Abrir();
+                    Caixa.Auditar(cxA, null, "cortesia_entregue", _operador.Id, null,
+                        $"cupom={codigo} (comanda inteira em cortesia){(conta is null ? "" : $" comanda={conta.Numero}")}");
                 }
-                catch (Exception ex) { falha = ex; await Task.Delay(300); }
+                catch { /* o rastro local nao segura a entrega: o cupom ja foi usado no servidor */ }
             }
-            if (falha is not null)
+            // COMANDA ABERTA (revisoes 13 e 14/10): a conta toda em cortesia nao passa pelo Vendas.Finalizar;
+            // fecha sem venda a conta LIDA ANTES do resgate (nunca a que estiver na tela agora) e, com a TV
+            // da cozinha ligada, o que ainda nao tinha ido (e o lote que nao chegou) vai junto, no consumo da
+            // conta, como o Pagamento faz por padrao no caminho pago.
+            var foiParaCozinha = false;
+            if (conta is not null)
             {
-                Dialogo.Avisar(dono, "Comandas", $"{ContasAbertas.Textos.CortesiaSemFechar(conta.Numero)} ({falha.Message})", "erro");
-                return;
+                // tres tentativas (disco ocupado); se nao fechar, a comanda FICA na tela com o aviso e o
+                // proximo Fechar conta tenta so o fechamento (o cupom ja usado fica lembrado acima)
+                Exception? falha = null;
+                for (var tentativa = 0; tentativa < 3; tentativa++)
+                {
+                    try
+                    {
+                        using var cxC = Banco.Abrir();
+                        DestinoCozinha? destino = PedidoCozinha.Ligado(cxC) ? conta.Destino : null;
+                        ContasAbertas.FecharSemVenda(cxC, conta.Id, _operador, $"cortesia {codigo}", destino, TurnoDeTeste, out var loteFinal);
+                        if (loteFinal is not null)
+                        {
+                            foiParaCozinha = !loteFinal.Homologacao;
+                            if (foiParaCozinha) CutucarDreno();
+                        }
+                        falha = null;
+                        break;
+                    }
+                    catch (Exception ex) { falha = ex; if (tentativa < 2) await Task.Delay(300); }
+                }
+                if (falha is not null)
+                {
+                    Dialogo.Avisar(dono, "Comandas", $"{ContasAbertas.Textos.CortesiaSemFechar(conta.Numero)} ({falha.Message})", "erro");
+                    return;
+                }
+                _cortesiaJaUsada = null;
+                if (_contaAberta?.Id != conta.Id)
+                {
+                    // a tela travada nao deixa trocar; se mesmo assim mudou, nao mexe no que esta na tela
+                    Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");
+                    return;
+                }
+                _contaAberta = null;
+                _contaConferida = false;
             }
-            if (_contaAberta?.Id != conta.Id)
-            {
-                // a tela travada nao deixa trocar; se mesmo assim mudou, nao mexe no que esta na tela
-                Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");
-                return;
-            }
-            _contaAberta = null;
-            _contaConferida = false;
+            EsvaziarComanda();                                   // esvazia antes de repintar (ver Finalizar)
+            RemoverCortesia(this, new RoutedEventArgs());
+            Dialogo.Avisar(dono, "Cortesia entregue",
+                "O cupom foi usado e não vale mais." + (foiParaCozinha ? $" {ContasAbertas.Textos.CortesiaFoiParaCozinha}" : ""), "ok");
         }
-        EsvaziarComanda();                                   // esvazia antes de repintar (ver Finalizar)
-        RemoverCortesia(this, new RoutedEventArgs());
-        Dialogo.Avisar(dono, "Cortesia entregue",
-            "O cupom foi usado e não vale mais." + (foiParaCozinha ? $" {ContasAbertas.Textos.CortesiaFoiParaCozinha}" : ""), "ok");
+        finally { IsEnabled = true; }
     }
 
     // ── BRINDE DA RASPADINHA (21/09/2026) ───────────────────────────────────

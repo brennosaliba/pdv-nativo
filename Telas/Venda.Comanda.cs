@@ -600,11 +600,17 @@ public partial class Venda
                 Dialogo.Avisar(dono, "Item fora do cardápio", $"{fora.Produto.Nome}: {ContasAbertas.Textos.SaiuDoCardapio}", "erro");
                 return;
             }
-            if (_cortesiaCodigo is { } codigo)
+            // o cupom que esta comanda ja queimou (fechamento em cortesia que falhou) nao se valida de novo
+            if (_cortesiaCodigo is { } codigo && !CortesiaJaUsadaNesta(conta.Id, codigo))
             {
-                // o cupom pode ter morrido enquanto a comanda ficou guardada (usado, vencido, cancelado)
+                // o cupom pode ter morrido enquanto a comanda ficou guardada (usado, vencido, cancelado).
+                // Revisao 14/10: a tela fica travada na espera (ate 12 s com a rede lenta) e, se mesmo assim
+                // a comanda ou o cupom mudaram, nada e feito (antes tirava o cupom de OUTRA comanda)
                 Cortesia? c = null;
+                IsEnabled = false;
                 try { c = await _cortesias.ValidarAsync(codigo); } catch { /* sem rede: segue com a cortesia */ }
+                finally { IsEnabled = true; }
+                if (_contaAberta?.Id != conta.Id || _cortesiaCodigo != codigo) return;
                 if (c is { Ok: false } && c.Erro is "expired" or "already_redeemed" or "cancelled" or "not_found")
                 {
                     RemoverCortesia(this, new RoutedEventArgs());
