@@ -67,6 +67,9 @@ public static class TestesContaAberta
             Cortesia(cx, sessao, op, checar);
             CortesiaInteiraFechaSemVenda(cx, sessao, op, gerente, checar);
             LotePerdidoNaoEProducao(cx, sessao, op, gerente, checar);
+            CortesiaInteiraMandaOQueFaltava(cx, sessao, op, gerente, checar);
+            RetiradaDescontaDoLotePerdido(cx, sessao, op, gerente, checar);
+            AvisoOlhaQualquerLotePerdido(cx, sessao, op, gerente, checar);
             TurnoDeTesteCruzado(cx, sessao, op, checar);
             FechamentoDoCaixa(cx, sessao, op, gerente, checar);
             await EventoNaFilaAsync(cx, sessao, op, gerente, checar);
@@ -741,6 +744,106 @@ public static class TestesContaAberta
             $"CA-14b depois de Mandar de novo nada fica perdido e a lista volta a 3 de 3 ({Linha().Cozinha})");
         checar(novo.N == 2, "CA-14b o reenvio e o lote 2");
         ContasAbertas.Cancelar(cx, c.Id, op, "teste", gerente);
+    }
+
+    // ── CA-15c (revisao 14/10): a cortesia inteira manda a cozinha o que faltava ──
+    private static void CortesiaInteiraMandaOQueFaltava(SqliteConnection cx, Sessao sessao, Operador op, Operador gerente, Action<bool, string> checar)
+    {
+        var c = ContasAbertas.Abrir(cx, sessao, op, "Cortesia pendente", itens: new List<ItemRascunho> { Item(Ninho, "DONUT NINHO", 1200, 1000) });
+        var l1 = ContasAbertas.PedirCozinha(cx, c.Id, null, op, false)!;
+        cx.Execute("UPDATE outbox SET desistido_em=@e WHERE tipo=@t AND ref_id=@r", new { e = DateTime.Now.ToString("o"), t = PedidoCozinha.TipoNaFila, r = l1.Id });
+        var lida = ContasAbertas.Ler(cx, c.Id)!;
+        ContasAbertas.Gravar(cx, c.Id, lida.Itens.Append(Item(Agua, "AGUA", 500, 1000)).ToList(), "AD-PEND01", new Dictionary<string, int> { ["DONUT NINHO"] = 1, ["AGUA"] = 1 }, op);
+        var fechou = ContasAbertas.FecharSemVenda(cx, c.Id, op, "cortesia AD-PEND01", DestinoCozinha.Viagem, false, out var lote);
+        checar(fechou && lote is { N: 2, Consumo: "viagem" } && lote.Itens.Sum(i => i.QtdMilesimos) == 2000,
+            $"CA-15c fechar em cortesia com destino: o lote 2 leva o que nunca foi pedido e o que estava no lote que nao foi ({lote?.Itens.Sum(i => i.QtdMilesimos)})");
+        checar(ContasAbertas.LerLote(cx, l1.Id)!.SubstituidoPor == lote!.Id, "CA-15c o lote que nao foi fica substituido pelo novo (nao vai duas vezes)");
+        checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo=@t AND ref_id=@r AND enviado_em IS NULL", new { t = PedidoCozinha.TipoNaFila, r = lote.Id }) == 1,
+            "CA-15c o lote novo entra na fila da cozinha, na mesma transacao do fechamento");
+        checar(ContasAbertas.Ler(cx, c.Id)!.Status == "fechada" && ContasAbertas.PrepararEnvio(cx,
+                   cx.ExecuteScalar<string>("SELECT payload FROM outbox WHERE tipo=@t AND ref_id=@r", new { t = PedidoCozinha.TipoNaFila, r = lote.Id })!) is { Descartar: false },
+            "CA-15c a conta fecha e o lote dela ainda vai (fechada nao e cancelada)");
+        checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento='conta_fechada_sem_venda' AND detalhe LIKE '%pendentes no lote 2%'") == 1,
+            "CA-15c a auditoria diz em que lote foram os pendentes");
+
+        // turno de teste: o lote existe so no banco (homologacao), nada na fila
+        var t = ContasAbertas.Abrir(cx, sessao, op, "Cortesia teste", itens: new List<ItemRascunho> { Item(Agua, "AGUA", 500, 1000) });
+        var filaAntes = cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo=@t", new { t = PedidoCozinha.TipoNaFila });
+        ContasAbertas.FecharSemVenda(cx, t.Id, op, "cortesia", DestinoCozinha.Loja, true, out var loteTeste);
+        checar(loteTeste is { Homologacao: true } && cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo=@t", new { t = PedidoCozinha.TipoNaFila }) == filaAntes,
+            "CA-15c em homologacao o lote final nao vai para a TV de verdade");
+
+        // sem destino (TV desligada): fecha sem lote, como antes
+        var s = ContasAbertas.Abrir(cx, sessao, op, "Cortesia sem tv", itens: new List<ItemRascunho> { Item(Agua, "AGUA", 500, 1000) });
+        ContasAbertas.FecharSemVenda(cx, s.Id, op, "cortesia", null, false, out var semLote);
+        checar(semLote is null && ContasAbertas.Lotes(cx, s.Id).Count == 0 && ContasAbertas.Ler(cx, s.Id)!.Status == "fechada",
+            "CA-15c sem a TV da cozinha a conta fecha sem lote");
+    }
+
+    // ── CA-18b (revisao 14/10): tirar com PIN desconta primeiro do lote que nao foi ──
+    private static void RetiradaDescontaDoLotePerdido(SqliteConnection cx, Sessao sessao, Operador op, Operador gerente, Action<bool, string> checar)
+    {
+        var c = ContasAbertas.Abrir(cx, sessao, op, "Retira perdido", itens: new List<ItemRascunho> { Item(Ninho, "DONUT NINHO", 1200, 2000) });
+        var l1 = ContasAbertas.PedirCozinha(cx, c.Id, null, op, false)!;
+        cx.Execute("UPDATE outbox SET desistido_em=@e WHERE tipo=@t AND ref_id=@r", new { e = DateTime.Now.ToString("o"), t = PedidoCozinha.TipoNaFila, r = l1.Id });
+        var linha = ContasAbertas.Ler(cx, c.Id)!.Itens[0].LinhaId!;
+        ContasAbertas.RetirarProduzido(cx, c.Id, linha, 1000, op, gerente);
+        checar(ContasAbertas.LerLote(cx, l1.Id)!.Retirados.Sum(r => r.QtdMilesimos) == 1000,
+            "CA-18b a retirada com PIN fica gravada no lote que nao foi");
+        checar(ContasAbertas.Pendentes(cx, ContasAbertas.Ler(cx, c.Id)!).Sum(p => p.Milesimos) == 1000
+               && ContasAbertas.PerdidosPorLinha(cx, c.Id).GetValueOrDefault(linha) == 1000,
+            "CA-18b o botao Cozinha e a linha passam a contar 1 (nao 2)");
+        var l2 = ContasAbertas.ReenviarLote(cx, l1.Id, op);
+        checar(l2.Itens.Sum(i => i.QtdMilesimos) == 1000, $"CA-18b Mandar de novo leva so o que ficou (1, nao 2): {l2.Itens.Sum(i => i.QtdMilesimos)}");
+        ContasAbertas.Cancelar(cx, c.Id, op, "teste", gerente);
+
+        // a linha tirada inteira: o lote perdido fica sem item, nada a mandar e nenhum aviso
+        var d = ContasAbertas.Abrir(cx, sessao, op, "Retira tudo", itens: new List<ItemRascunho> { Item(Ninho, "DONUT NINHO", 1200, 1000) });
+        var m1 = ContasAbertas.PedirCozinha(cx, d.Id, null, op, false)!;
+        cx.Execute("UPDATE outbox SET desistido_em=@e WHERE tipo=@t AND ref_id=@r", new { e = DateTime.Now.ToString("o"), t = PedidoCozinha.TipoNaFila, r = m1.Id });
+        ContasAbertas.RetirarProduzido(cx, d.Id, ContasAbertas.Ler(cx, d.Id)!.Itens[0].LinhaId!, 0, op, gerente);
+        var nada = false;
+        try { ContasAbertas.ReenviarLote(cx, m1.Id, op); } catch (InvalidOperationException e) { nada = e.Message == ContasAbertas.Textos.NadaParaMandarDeNovo; }
+        var linhaLista = ContasAbertas.LinhasDaLista(cx, sessao, null, teste: false).First(l => l.Conta.Id == d.Id);
+        checar(nada && !ContasAbertas.UltimoLoteNaoChegou(cx, d.Id) && linhaLista.LoteParaMandarDeNovo is null && linhaLista.Selo != ContasAbertas.Textos.SeloNaoFoi,
+            $"CA-18b item tirado inteiro: o lote perdido vazio nao acende aviso nem oferece Mandar de novo (selo '{linhaLista.Selo}')");
+        ContasAbertas.Cancelar(cx, d.Id, op, "teste", gerente);
+    }
+
+    // ── CA-14d (revisao 14/10): o aviso olha qualquer lote perdido; lote esvaziado nao conta ──
+    private static void AvisoOlhaQualquerLotePerdido(SqliteConnection cx, Sessao sessao, Operador op, Operador gerente, Action<bool, string> checar)
+    {
+        var agora = DateTime.Now.ToString("o");
+        // lote 1 perdido, lote 2 na TV: o aviso e o Mandar de novo apontam o lote 1
+        var c = ContasAbertas.Abrir(cx, sessao, op, "Perdido antigo", itens: new List<ItemRascunho> { Item(Ninho, "DONUT NINHO", 1200, 2000) });
+        var l1 = ContasAbertas.PedirCozinha(cx, c.Id, null, op, false)!;
+        var lida = ContasAbertas.Ler(cx, c.Id)!;
+        ContasAbertas.Gravar(cx, c.Id, lida.Itens.Append(Item(Agua, "AGUA", 500, 1000)).ToList(), null, null, op);
+        var l2 = ContasAbertas.PedirCozinha(cx, c.Id, null, op, false)!;
+        cx.Execute("UPDATE outbox SET desistido_em=@e WHERE tipo=@t AND ref_id=@r", new { e = agora, t = PedidoCozinha.TipoNaFila, r = l1.Id });
+        cx.Execute("UPDATE outbox SET enviado_em=@e WHERE tipo=@t AND ref_id=@r", new { e = agora, t = PedidoCozinha.TipoNaFila, r = l2.Id });
+        var linha = ContasAbertas.LinhasDaLista(cx, sessao, null, teste: false).First(l => l.Conta.Id == c.Id);
+        checar(l2.N == 2 && ContasAbertas.UltimoLoteNaoChegou(cx, c.Id), "CA-14d lote 1 perdido com o lote 2 na TV: o botao Cozinha ganha o aviso");
+        checar(linha.Selo == ContasAbertas.Textos.SeloNaoFoi && linha.LoteParaMandarDeNovo == l1.Id,
+            $"CA-14d a lista mostra 'nao foi' e o Mandar de novo aponta o lote 1 ({linha.Selo}, {linha.LoteParaMandarDeNovo})");
+        ContasAbertas.Cancelar(cx, c.Id, op, "teste", gerente);
+
+        // lote esvaziado com PIN e descartado pelo dreno: nada de "⚠ Cozinha 0" para sempre
+        var v = ContasAbertas.Abrir(cx, sessao, op, "Esvaziado", itens: new List<ItemRascunho> { Item(Ninho, "DONUT NINHO", 1200, 1000) });
+        var v1 = ContasAbertas.PedirCozinha(cx, v.Id, null, op, false)!;
+        cx.Execute("UPDATE outbox SET enviado_em=@e WHERE tipo=@t AND ref_id=@r", new { e = agora, t = PedidoCozinha.TipoNaFila, r = v1.Id });
+        var lv = ContasAbertas.Ler(cx, v.Id)!;
+        ContasAbertas.Gravar(cx, v.Id, lv.Itens.Append(Item(Agua, "AGUA", 500, 1000)).ToList(), null, null, op);
+        var v2 = ContasAbertas.PedirCozinha(cx, v.Id, null, op, false)!;
+        var linhaAgua = ContasAbertas.Ler(cx, v.Id)!.Itens.First(i => i.ProdutoId == Agua).LinhaId!;
+        ContasAbertas.RetirarProduzido(cx, v.Id, linhaAgua, 0, op, gerente);
+        cx.Execute("UPDATE outbox SET enviado_em=@e, ultimo_erro='descartado: todos os itens foram tirados antes de ir para a cozinha' WHERE tipo=@t AND ref_id=@r",
+            new { e = agora, t = PedidoCozinha.TipoNaFila, r = v2.Id });
+        var lvLista = ContasAbertas.LinhasDaLista(cx, sessao, null, teste: false).First(l => l.Conta.Id == v.Id);
+        checar(ContasAbertas.EstadoDoLote(cx, v2.Id) == EstadoLote.NaoFoi && !ContasAbertas.UltimoLoteNaoChegou(cx, v.Id)
+               && lvLista.LoteParaMandarDeNovo is null && lvLista.Selo == ContasAbertas.Textos.NaTv,
+            $"CA-14d lote esvaziado e descartado nao acende aviso; o selo vem do lote 1, na TV ({lvLista.Selo})");
+        ContasAbertas.Cancelar(cx, v.Id, op, "teste", gerente);
     }
 
     // ── CA-8: turno de teste nao cruza ──────────────────────────────────────

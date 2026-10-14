@@ -1,9 +1,11 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Dapper;
 using Microsoft.Data.Sqlite;
@@ -507,9 +509,22 @@ public static class TestesComandaTela
         host.UpdateLayout();
         Invocar(tela, "PedirCozinhaDaConta");
         checar(Conta() is not null && Toast() == ContasAbertas.Textos.NadaNovo, $"CT-11 sem pendente: 'Nada novo para a cozinha.' e a conta fica ('{Toast()}')");
-        // revisao 13/10: a 1024 o rotulo com aviso encolhe para "⚠ N" (o "⚠ Cozinha N" cortava)
-        checar(Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text == "⚠ 0",
-            $"CT-11 com o ultimo lote ainda na fila o botao diz '⚠ 0' a 1024 ({Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text})");
+        // revisoes 13 e 14/10: a 1024 o rotulo com aviso fica "⚠ Coz. N" (o "⚠ Cozinha N" cortava e o "⚠ N" nao dizia de que era)
+        var rotuloCozinha = Campo<TextBlock>(tela, "TxtCozinhaRotulo");
+        checar(rotuloCozinha.Text == $"⚠ {ContasAbertas.Textos.CozinhaCurta(0)}",
+            $"CT-11 com o ultimo lote ainda na fila o botao diz '⚠ Coz. 0' a 1024 ({rotuloCozinha.Text})");
+        var rotuloDeAntes = rotuloCozinha.Text;
+        foreach (var t in new[] { $"⚠ {ContasAbertas.Textos.CozinhaCurta(0)}", $"⚠ {ContasAbertas.Textos.CozinhaCurta(12)}" })
+        {
+            rotuloCozinha.Text = t;
+            host.UpdateLayout();
+            var natural = new FormattedText(t, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                new Typeface(rotuloCozinha.FontFamily, rotuloCozinha.FontStyle, rotuloCozinha.FontWeight, rotuloCozinha.FontStretch),
+                rotuloCozinha.FontSize, Brushes.Black, VisualTreeHelper.GetDpi(rotuloCozinha).PixelsPerDip).WidthIncludingTrailingWhitespace;
+            checar(natural <= rotuloCozinha.ActualWidth + 0.5, $"CT-11 '{t}' cabe inteiro no botao a 1024 ({natural:0.0} de {rotuloCozinha.ActualWidth:0.0} px)");
+        }
+        rotuloCozinha.Text = rotuloDeAntes;
+        host.UpdateLayout();
 
         // ── Fechar conta: o Pagamento com a comanda ────────────────────────
         Invocar(tela, "Adicionar", agua);   // 1 pendente para o bloco da cozinha aparecer
@@ -665,8 +680,118 @@ public static class TestesComandaTela
             var lotes = ContasAbertas.Lotes(cx, naoFoiId);
             checar(lotes.Count == 2 && lotes[0].SubstituidoPor == lotes[1].Id && ContasAbertas.EstadoDoLote(cx, lotes[1].Id) == EstadoLote.NaFila,
                 "CT-18 [Mandar de novo] na linha perdida cria o lote n+1 e marca o velho como substituido");
-            foreach (var c in ContasAbertas.Listar(cx, false)) ContasAbertas.Cancelar(cx, c.Id, op, "fim do teste", c.Itens.Count > 0 ? Operadores.PorId(cx, "ger-ui") : null);
         }
+
+        // CT-19 (revisao 14/10): "Levar para a N" soma na linha que a conta ja tem e leva o cupom do carrinho
+        var chaveAgua = (string)typeof(Pdv.Telas.Venda).GetMethod("NormalizarNome", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, new object[] { agua.Nome })!;
+        string autoId; long numAuto;
+        using (var cx = Banco.Abrir())
+        {
+            var auto = ContasAbertas.Listar(cx, false).First(c => c.Nome is null && c.Itens.Count == 1 && c.Itens[0].ProdutoId == Agua);
+            autoId = auto.Id; numAuto = auto.Numero;
+        }
+        if (Conta() is not null) Invocar(tela, "GuardarConta");
+        Invocar(tela, "Adicionar", agua);
+        Definir(tela, "_cortesiaCodigo", "AD-LEVA01");
+        Campo<Dictionary<string, int>>(tela, "_cortesiaCobertura")[chaveAgua] = 1;
+        host.UpdateLayout();
+        Roteiro(host,
+            d => Clicar(Botao(d, $"Comanda {numAuto}")),
+            d => Clicar(Botao(d, ContasAbertas.Textos.LevarPara(numAuto))));
+        Invocar(tela, "AbrirDialogoComandas");
+        host.UpdateLayout();
+        var linhasAgua = comanda.Where(i => i.Produto.Id == Agua).ToList();
+        checar(Conta()?.Id == autoId && linhasAgua.Count == 1 && linhasAgua[0].Qtd.Milesimos == 2000,
+            $"CT-19 'Levar para a N' soma a agua na linha que a conta ja tinha ({linhasAgua.Count} linha(s), {linhasAgua.Sum(i => i.Qtd.Milesimos)})");
+        using (var cx = Banco.Abrir())
+            checar(Campo<string>(tela, "_cortesiaCodigo") == "AD-LEVA01" && ContasAbertas.Ler(cx, autoId)!.CortesiaCodigo == "AD-LEVA01",
+                "CT-19 o cupom do carrinho vai junto para a comanda (tela e disco)");
+        checar(linhasAgua.Count == 1 && (int)Invocar(tela, "CoberturaDe", linhasAgua[0])! == 1, "CT-19 o cupom de 1 cobre 1 das 2 aguas");
+        var extra = new Pdv.Telas.ItemComanda { Produto = agua, Qtd = new Quantidade(1000) };
+        comanda.Insert(0, extra);
+        var somaCobertura = comanda.Where(i => i.Produto.Id == Agua).Sum(i => (int)Invocar(tela, "CoberturaDe", i)!);
+        comanda.Remove(extra);
+        checar(somaCobertura == 1, $"CT-19 duas linhas do mesmo nome com cupom de 1: a cobertura total e 1, nao 2 ({somaCobertura})");
+
+        // CT-20 (revisao 14/10): comanda INTEIRA em cortesia, de ponta a ponta com o servidor de mentira
+        using var fakeCupom = new FakePostgrest(4747);
+        Definir(tela, "_cortesias", new Cortesias(fakeCupom.Url));
+        string idCortesia;
+        using (var cx = Banco.Abrir())
+        {
+            var c = ContasAbertas.Abrir(cx, sessao, op, "Mesa 6", itens: new List<ItemRascunho> { Item(Agua, "AGUA 500ML", 500, 1000) });
+            ContasAbertas.Soltar(cx, c.Id);
+            idCortesia = c.Id;
+        }
+        Invocar(tela, "GuardarConta");
+        Invocar(tela, "CarregarConta", idCortesia);
+        Definir(tela, "_cortesiaCodigo", "AD-TODA01");
+        Campo<Dictionary<string, int>>(tela, "_cortesiaCobertura")[chaveAgua] = 1;
+        Invocar(tela, "PintarComanda");
+        host.UpdateLayout();
+        var avisoFinal = "";
+        var travou = false;
+        Task? resgate = null;
+        Roteiro(host, d => { avisoFinal = string.Join(" ", Descendentes<TextBlock>(d).Select(t => t.Text)); Clicar(Botao(d, "Entendi")); });
+        var quadro = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke((Action)(() =>
+        {
+            resgate = (Task)Invocar(tela, "ResgatarEConcluirBrindeAsync")!;
+            travou = !tela.IsEnabled;
+            resgate.ContinueWith(_ => quadro.Continue = false, TaskScheduler.FromCurrentSynchronizationContext());
+        }));
+        var limite = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+        limite.Tick += (_, _) => { limite.Stop(); quadro.Continue = false; };
+        limite.Start();
+        Dispatcher.PushFrame(quadro);
+        limite.Stop();
+        host.UpdateLayout();
+        using (var cx = Banco.Abrir())
+        {
+            var c = ContasAbertas.Ler(cx, idCortesia)!;
+            var lotesCortesia = ContasAbertas.Lotes(cx, idCortesia);
+            checar(resgate?.IsCompleted == true && travou && tela.IsEnabled, $"CT-20 a tela fica travada durante o resgate e volta no fim (travou {travou})");
+            checar(c.Status == "fechada" && c.VendaId is null && Conta() is null && comanda.Count == 0,
+                $"CT-20 a comanda toda em cortesia fecha sem venda e a tela volta ao balcao ({c.Status})");
+            checar(lotesCortesia.Count == 1 && cx.ExecuteScalar<int>("SELECT COUNT(*) FROM outbox WHERE tipo=@t AND ref_id=@r",
+                       new { t = PedidoCozinha.TipoNaFila, r = lotesCortesia[0].Id }) == 1,
+                "CT-20 a agua que ainda nao tinha ido foi para a cozinha (lote na fila)");
+            checar(fakeCupom.Resgatadas.ContainsKey("AD-TODA01"), "CT-20 o cupom foi queimado no servidor");
+            checar(avisoFinal.Contains(ContasAbertas.Textos.CortesiaFoiParaCozinha, StringComparison.Ordinal),
+                $"CT-20 o aviso final diz que o que faltava foi para a cozinha ('{avisoFinal}')");
+        }
+
+        // CT-21 (revisao 14/10): lote que nao chegou: a linha diz "1 não chegou"; Mandar de novo da comanda
+        // que esta na tela repinta o botao e a linha
+        string idPerdida; long numPerdida;
+        using (var cx = Banco.Abrir())
+        {
+            var c = ContasAbertas.Abrir(cx, sessao, op, "Mesa 7", itens: new List<ItemRascunho> { Item(Homer, "DONUT HOMER", 1200, 1000) });
+            var l = ContasAbertas.PedirCozinha(cx, c.Id, null, op, false)!;
+            cx.Execute("UPDATE outbox SET desistido_em=@e WHERE tipo=@t AND ref_id=@r", new { e = DateTime.Now.ToString("o"), t = PedidoCozinha.TipoNaFila, r = l.Id });
+            ContasAbertas.Soltar(cx, c.Id);
+            idPerdida = c.Id; numPerdida = c.Numero;
+        }
+        if (Conta() is not null) Invocar(tela, "GuardarConta");
+        Invocar(tela, "CarregarConta", idPerdida);
+        host.UpdateLayout();
+        var nomeHomer = comanda[0].Produto.Nome;
+        var rotuloPerdido = Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text;
+        var subPerdida = SubLinha(tela, nomeHomer) ?? "";
+        checar(rotuloPerdido == $"⚠ {ContasAbertas.Textos.CozinhaCurta(1)}" && subPerdida.Contains(ContasAbertas.Textos.NaoChegou(1), StringComparison.Ordinal)
+               && !subPerdida.Contains(ContasAbertas.Textos.NaCozinha(1), StringComparison.Ordinal),
+            $"CT-21 lote que nao chegou: botao '⚠ Coz. 1' e a linha diz '1 não chegou' ({rotuloPerdido} / {subPerdida})");
+        Roteiro(host, d => { Clicar(Botao(d, $"{ContasAbertas.Textos.MandarDeNovo} {numPerdida}")); Clicar(Botao(d, "Voltar")); });
+        Invocar(tela, "AbrirDialogoComandas");
+        host.UpdateLayout();
+        var rotuloReenviado = Campo<TextBlock>(tela, "TxtCozinhaRotulo").Text;
+        var subReenviada = SubLinha(tela, nomeHomer) ?? "";
+        checar(rotuloReenviado == $"⚠ {ContasAbertas.Textos.CozinhaCurta(0)}" && subReenviada.Contains(ContasAbertas.Textos.NaCozinha(1), StringComparison.Ordinal)
+               && !subReenviada.Contains(ContasAbertas.Textos.NaoChegou(1), StringComparison.Ordinal),
+            $"CT-21 depois do Mandar de novo a tela repinta: '⚠ Coz. 0' e '1 na cozinha' ({rotuloReenviado} / {subReenviada})");
+
+        using (var cx = Banco.Abrir())
+            foreach (var c in ContasAbertas.Listar(cx, false)) ContasAbertas.Cancelar(cx, c.Id, op, "fim do teste", c.Itens.Count > 0 ? Operadores.PorId(cx, "ger-ui") : null);
 
         host.Content = null;
         host.Close();
@@ -778,7 +903,8 @@ public static class TestesComandaTela
             if (File.Exists(Path.Combine(dir.FullName, "Pdv.csproj")))
             {
                 var c = Path.Combine(new[] { dir.FullName }.Concat(partes).ToArray());
-                return File.Exists(c) ? File.ReadAllText(c) : "";
+                // CRLF do checkout (core.autocrlf) ou LF da arvore de trabalho: os trechos procuram "\n"
+                return File.Exists(c) ? File.ReadAllText(c).Replace("\r\n", "\n") : "";
             }
         return "";
     }

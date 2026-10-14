@@ -196,8 +196,9 @@ public static class ContasAbertas
         public static string ComandasAbertas(int n, Dinheiro valor) => $"Comandas abertas: {n} ({valor.Formatado()})";
         public static string ComandasCanceladasNoTurno(int n, Dinheiro valor) => $"Comandas canceladas no turno: {n} ({valor.Formatado()})";
         public static string CupomJaNaComanda(long n) => $"Esse cupom já está na comanda {n}.";
-        public static string CarrinhoTem(int n) => n == 1 ? "O carrinho tem 1 item." : $"O carrinho tem {n} itens.";
-        public static string AbrirComItens(int n) => n == 1 ? "Abrir com o item" : $"Abrir com os {n} itens";
+        // revisao 14/10: UNIDADES, como o chip da tela ("3 itens"), nao linhas
+        public static string CarrinhoTem(decimal unidades) => $"O carrinho tem {Rascunho.TextoItens(unidades)}.";
+        public static string AbrirComItens(decimal unidades) => unidades == 1m ? "Abrir com o item" : $"Abrir com os {Rascunho.TextoItens(unidades)}";
         public static string GuardarEAbrir(long n) => $"Guardar e abrir a {n}";
         public static string LevarPara(long n) => $"Levar para a {n}";
         public static string JaEstaAberta(string nome) => $"{nome} já está aberta";
@@ -211,6 +212,17 @@ public static class ContasAbertas
         public static string CozinhaRecebeuEGuardou(long n) => $"Cozinha recebeu. Comanda {n} guardada.";
         public const string MotivoDoCancelamento = "Por que está cancelando? Ex.: cliente desistiu";
         public const string GuardarCarrinhoEAbrirVazia = "Guardar e abrir vazia";
+        /// <summary>Revisao 14/10: a parte de um lote que NAO chegou a TV (a linha continua pedindo PIN).</summary>
+        public static string NaoChegou(long unidades) => unidades == 1 ? "1 não chegou" : $"{unidades} não chegaram";
+        /// <summary>Revisao 14/10: o botao da cozinha a 1024 com aviso ("⚠ Cozinha 12" cortava; "⚠ 12" nao dizia de que era).</summary>
+        public static string CozinhaCurta(long pendentes) => $"Coz. {pendentes}";
+        /// <summary>Revisao 14/10: "Levar para a N" com cupom no carrinho e outro cupom na comanda.</summary>
+        public static string ComandaJaTemCupom(long n) => $"A comanda {n} já tem cupom. Use Guardar e abrir.";
+        /// <summary>Revisao 14/10: a comanda toda em cortesia mandou a cozinha o que ainda nao tinha ido.</summary>
+        public const string CortesiaFoiParaCozinha = "O que faltava foi para a cozinha.";
+        /// <summary>Revisao 14/10: o cupom foi usado e a comanda nao fechou (falha do disco): ela fica na tela.</summary>
+        public static string CortesiaSemFechar(long n) => $"O cupom foi usado, mas a comanda {n} não fechou. Chame o gerente.";
+        public const string UsandoCupom = "Usando o cupom...";
         public static string ContaCancelada(long n) => $"Comanda {n} cancelada.";
         public static string CancelarPergunta(long n) => $"Cancelar a comanda {n}?";
         public static string NaCozinha(long unidades) => unidades == 1 ? "1 na cozinha" : $"{unidades} na cozinha";
@@ -245,6 +257,11 @@ public static class ContasAbertas
             JaEstaAberta("Mesa 5"), CriarOutra("Mesa 5"), Mesa(8), CozinhaDeN(2, 3), ContaGuardada(12), ContaCancelada(12),
             CancelarPergunta(12), NaCozinha(2), NaCozinha(1), ItensEValor(3, Dinheiro.DeReais(45)),
             ResumoDoPagamento(12, "Mesa 5", 3, 5), ResumoDoPagamento(12, null, 1, 1),
+            // revisoes de 13 e 14/10
+            CarrinhoFicouNa(12), CozinhaRecebeuEGuardou(12), MotivoDoCancelamento, GuardarCarrinhoEAbrirVazia,
+            NaoChegou(1), NaoChegou(2), CozinhaCurta(12), ComandaJaTemCupom(12), CortesiaFoiParaCozinha, UsandoCupom,
+            CortesiaSemFechar(12),
+            CarrinhoTem(2.5m), AbrirComItens(2.5m),
         };
     }
 
@@ -366,15 +383,18 @@ public static class ContasAbertas
             // revisao 13/10: lote que NAO FOI nao conta como "na cozinha" (a mesma regua do botao Cozinha N)
             var pedidas = Math.Max(0m, unidades - Pendentes(cx, c).Sum(p => p.Milesimos) / 1000m);
             var lotes = Lotes(cx, c.Id).Where(l => !l.Homologacao).ToList();
-            var ultimo = lotes.OrderByDescending(l => l.N).FirstOrDefault();
-            var estado = ultimo is null ? EstadoLote.Teste : EstadoDoLote(cx, ultimo.Id);
+            // revisao 14/10: um lote perdido com item manda no selo e no Mandar de novo, seja qual for a
+            // posicao dele; lote esvaziado com PIN nao conta
+            var perdido = PerdidoComItem(cx, c.Id);
+            var ultimo = UltimoComItem(cx, c.Id);
+            var estado = perdido is not null ? EstadoLote.NaoFoi : ultimo is null ? EstadoLote.Teste : EstadoDoLote(cx, ultimo.Id);
             var itens = c.Itens.Count == 0 ? Textos.ZeroItens : Textos.ItensEValor(unidades, c.ValorTabela);
             var cozinha = lotes.Count == 0 && pedidas == 0 ? "" : Textos.CozinhaDeN((long)pedidas, (long)unidades);
             var selo = naTela ? Textos.NaTela
                 : emUso ? Textos.EmUsoNoOutroCaixa
                 : conferir ? Textos.ConfiraMaquininha
                 : Textos.Selo(estado);
-            var reenviar = estado == EstadoLote.NaoFoi && ultimo is { SubstituidoPor: null } ? ultimo.Id : null;
+            var reenviar = perdido?.Id;
             r.Add(new LinhaDaLista(c, c.Titulo, itens, cozinha, selo, naTela, emUso, conferir, reenviar));
         }
         return r;
@@ -404,10 +424,20 @@ public static class ContasAbertas
     /// evento para o ERP (producao sem venda). Idempotente: devolve false se ja nao estava aberta.
     /// </summary>
     public static bool FecharSemVenda(SqliteConnection cx, string id, Operador operador, string motivo)
+        => FecharSemVenda(cx, id, operador, motivo, null, false, out _);
+
+    /// <summary>
+    /// Revisao 14/10: com <paramref name="destinoDosPendentes"/>, o que ainda nao foi para a cozinha (e o
+    /// lote que NAO FOI) vira o lote n+1 NA MESMA TRANSACAO do fechamento, como o Vendas.Finalizar faz
+    /// no caminho pago. Sem isto a comanda toda em cortesia fechava e a cozinha nunca via os itens
+    /// (depois de fechada nao ha Mandar de novo). <paramref name="loteFinal"/> = o lote criado ou null.
+    /// </summary>
+    public static bool FecharSemVenda(SqliteConnection cx, string id, Operador operador, string motivo,
+        DestinoCozinha? destinoDosPendentes, bool homologacao, out ContaLote? loteFinal)
     {
+        loteFinal = null;
         var c = Ler(cx, id);
         if (c is null || c.Status != "aberta") return false;
-        var lotes = Lotes(cx, id);
         var idOp = Operadores.IdCanonico(cx, operador.Id);
         using var tx = cx.BeginTransaction();
         var n = cx.Execute("""
@@ -415,8 +445,12 @@ public static class ContasAbertas
              WHERE id = @Id AND status = 'aberta'
             """, new { Em = Agora, Id = id }, tx);
         if (n == 0) { tx.Rollback(); return false; }
+        if (destinoDosPendentes is { } destino)
+            loteFinal = CriarLoteNoTx(cx, tx, c, destino, operador with { Id = idOp }, homologacao || c.Teste);
+        var lotes = Lotes(cx, id, tx);
         Caixa.Auditar(cx, tx, "conta_fechada_sem_venda", idOp, null,
-            $"comanda={c.Numero} nome={c.Nome ?? "(sem nome)"} itens={ResumoItens(c.Itens)} valor={c.ValorTabela.Formatado()} lotes={lotes.Count} motivo={motivo}");
+            $"comanda={c.Numero} nome={c.Nome ?? "(sem nome)"} itens={ResumoItens(c.Itens)} valor={c.ValorTabela.Formatado()} lotes={lotes.Count} motivo={motivo}"
+            + (loteFinal is null ? "" : $" (pendentes no lote {loteFinal.N})"));
         if (!c.Teste) EnfileirarEvento(cx, tx, "conta_fechada_sem_venda", c, lotes, operador, null, motivo);
         tx.Commit();
         return true;
@@ -580,13 +614,25 @@ public static class ContasAbertas
         return EstadoLote.NaFila;
     }
 
-    /// <summary>O ultimo lote da conta ainda nao esta na TV (fila ou nao foi): o botao Cozinha ganha o aviso.</summary>
+    /// <summary>
+    /// O botao Cozinha ganha o aviso: algum lote NAO FOI (qualquer um, nao so o ultimo) e ainda tem item,
+    /// ou o ultimo lote com item ainda esta na fila. Revisao 14/10: lote esvaziado com PIN (descartado
+    /// pelo dreno sem item) nao acende nada; antes ficava "⚠ Cozinha 0" para sempre.
+    /// </summary>
     public static bool UltimoLoteNaoChegou(SqliteConnection cx, string contaId)
     {
-        var ultimo = Lotes(cx, contaId).Where(l => !l.Homologacao).OrderByDescending(l => l.N).FirstOrDefault();
-        if (ultimo is null) return false;
-        return EstadoDoLote(cx, ultimo.Id) is EstadoLote.NaFila or EstadoLote.NaoFoi;
+        if (PerdidoComItem(cx, contaId) is not null) return true;
+        var ultimo = UltimoComItem(cx, contaId);
+        return ultimo is not null && EstadoDoLote(cx, ultimo.Id) == EstadoLote.NaFila;
     }
+
+    /// <summary>O lote perdido (NAO FOI, sem substituto) mais recente que ainda tem item: o do "Mandar de novo".</summary>
+    private static ContaLote? PerdidoComItem(SqliteConnection cx, string contaId)
+        => LotesPerdidos(cx, contaId, null).Where(l => ItensQueFicam(l).Count > 0).OrderByDescending(l => l.N).FirstOrDefault();
+
+    /// <summary>O ultimo lote de verdade (nao homologacao) que ainda tem item.</summary>
+    private static ContaLote? UltimoComItem(SqliteConnection cx, string contaId)
+        => Lotes(cx, contaId).Where(l => !l.Homologacao && ItensQueFicam(l).Count > 0).OrderByDescending(l => l.N).FirstOrDefault();
 
     /// <summary>
     /// O que ainda nao foi para a cozinha, linha a linha: Qtd menos CozinhaMilesimos, MAIS o que pertence
@@ -786,12 +832,21 @@ public static class ContasAbertas
         cx.Execute("UPDATE conta_aberta SET itens_json = @Itens, atualizado_em = @Em, ultimo_toque_em = @Em WHERE id = @Id AND status = 'aberta'",
             new { Itens = JsonSerializer.Serialize(novos), Em = agora, Id = id }, tx);
 
-        // o que ainda esta na fila nao precisa ser produzido: o corpo e refeito antes do POST
+        // o que ainda esta na fila nao precisa ser produzido: o corpo e refeito antes do POST.
+        // Revisao 14/10: e o que esta num lote que NAO FOI (sem substituto) sai PRIMEIRO dele, porque essas
+        // unidades nunca chegaram a cozinha. Antes o lote perdido ficava intacto e o "Mandar de novo" (ou o
+        // dreno depois de a chave voltar) mandava a unidade ja tirada, e o "Cozinha N" pedia de novo.
         var restante = retirada;
-        foreach (var lote in Lotes(cx, id, tx).OrderByDescending(l => l.N))
+        var candidatos = Lotes(cx, id, tx)
+            .Where(l => l.SubstituidoPor is null)
+            .Select(l => (Lote: l, Estado: EstadoDoLote(cx, l.Id, tx)))
+            .Where(x => x.Estado is EstadoLote.NaoFoi or EstadoLote.NaFila)
+            .OrderBy(x => x.Estado == EstadoLote.NaoFoi ? 0 : 1).ThenByDescending(x => x.Lote.N)
+            .Select(x => x.Lote)
+            .ToList();
+        foreach (var lote in candidatos)
         {
             if (restante <= 0) break;
-            if (lote.SubstituidoPor is not null || EstadoDoLote(cx, lote.Id, tx) != EstadoLote.NaFila) continue;
             var item = lote.Itens.FirstOrDefault(i => i.LinhaId == linhaId);
             if (item is null) continue;
             var disponivel = item.QtdMilesimos - lote.Retirados.Where(r => r.LinhaId == linhaId).Sum(r => r.QtdMilesimos);

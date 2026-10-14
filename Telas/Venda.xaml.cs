@@ -2045,10 +2045,26 @@ public partial class Venda : UserControl
                 != System.Globalization.UnicodeCategory.NonSpacingMark).ToArray())
             .ToUpperInvariant().Trim() is var t ? System.Text.RegularExpressions.Regex.Replace(t, @"\s+", " ") : "";
 
-    /// <summary>Quantas UNIDADES deste item a cortesia cobre (limitado ao que há na linha).</summary>
+    /// <summary>
+    /// Quantas UNIDADES deste item a cortesia cobre. Revisao 14/10: a cobertura e do NOME, repartida
+    /// entre as linhas desse nome na ordem da comanda (saldo). Antes cada linha levava o total: duas
+    /// linhas de AGUA (combo repetido, "Levar para a N") com cupom de 1 saiam as duas de graca.
+    /// </summary>
     private int CoberturaDe(ItemComanda item)
-        => _cortesiaCobertura.TryGetValue(NormalizarNome(item.Produto.Nome), out var n)
-            ? (int)Math.Min(n, item.Qtd.Milesimos / 1000) : 0;
+    {
+        var nome = NormalizarNome(item.Produto.Nome);
+        if (!_cortesiaCobertura.TryGetValue(nome, out var total) || total <= 0) return 0;
+        long saldo = total;
+        foreach (var i in _comanda)
+        {
+            if (NormalizarNome(i.Produto.Nome) != nome) continue;
+            var leva = Math.Min(saldo, i.Qtd.Milesimos / 1000);
+            if (ReferenceEquals(i, item)) return (int)Math.Max(0, leva);
+            saldo -= Math.Max(0, leva);
+            if (saldo <= 0) return 0;
+        }
+        return (int)Math.Max(0, Math.Min(saldo, item.Qtd.Milesimos / 1000));
+    }
 
     private Nucleo.Promocoes.Avaliacao? _avaliacao;
 
@@ -2497,8 +2513,11 @@ public partial class Venda : UserControl
                  // COMANDA ABERTA (13/10/2026): "· 2 na cozinha" mostra a regra do PIN antes do toque;
                  // "saiu do cardápio" e a linha que barra Pedir a cozinha e Fechar conta
                  + (item.ForaDoCardapio ? $" · {ContasAbertas.Textos.SaiuDoCardapio}"
-                    : item.CozinhaMilesimos - item.PerdidoMilesimos > 0
-                        ? $" · {ContasAbertas.Textos.NaCozinha((item.CozinhaMilesimos - item.PerdidoMilesimos) / 1000)}" : ""),
+                    // revisao 14/10: o que esta num lote que NAO chegou sai do "na cozinha" mas continua
+                    // na linha como "N não chegou": tirar o item ainda pede o PIN (a regra do nucleo)
+                    : (item.CozinhaMilesimos - item.PerdidoMilesimos > 0
+                        ? $" · {ContasAbertas.Textos.NaCozinha((item.CozinhaMilesimos - item.PerdidoMilesimos) / 1000)}" : "")
+                      + (item.PerdidoMilesimos > 0 ? $" · {ContasAbertas.Textos.NaoChegou(item.PerdidoMilesimos / 1000)}" : "")),
             FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
             Foreground = (Brush)Application.Current.Resources[item.ForaDoCardapio ? "Erro" : "TextoFraco"],
             Margin = new Thickness(0, 10, 0, 0),
@@ -2886,7 +2905,17 @@ public partial class Venda : UserControl
     private async Task ResgatarEConcluirBrindeAsync()
     {
         var dono = Window.GetWindow(this)!;
-        var r = await _cortesias.ResgatarAsync(_cortesiaCodigo!, _operador.Nome, _loja);
+        // REVISAO 14/10 (corrida): o codigo e a conta sao lidos ANTES do await e a tela fica travada
+        // ate o fim. Antes, com a rede lenta (ate 12 s), o operador podia trocar de comanda no meio e o
+        // FecharSemVenda fechava a comanda errada, ou nenhuma, com o cupom ja queimado.
+        var codigo = _cortesiaCodigo!;
+        var conta = _contaAberta;
+        Cortesia r;
+        IsEnabled = false;
+        AvisoLeve(ContasAbertas.Textos.UsandoCupom, "neutro");
+        try { r = await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja); }
+        catch { r = new Cortesia(false, "sem_rede", codigo, null, Array.Empty<ItemCortesia>()); }
+        finally { IsEnabled = true; }
         if (!r.Ok)
         {
             Dialogo.Avisar(dono, "Cortesia não saiu", r.Erro switch
@@ -2898,21 +2927,58 @@ public partial class Venda : UserControl
             }, "erro");
             return;
         }
-        Caixa.Auditar(Banco.Abrir(), null, "cortesia_entregue", _operador.Id, null,
-            $"cupom={_cortesiaCodigo} (comanda inteira em cortesia)");
-        // COMANDA ABERTA (revisao 13/10, achado alto): a conta toda em cortesia nao passa pelo
-        // Vendas.Finalizar; sem isto ela ficava aberta para sempre. Fecha sem venda ANTES de esvaziar
-        // (com a conta ainda carregada, o esvaziar tentaria gravar a lista vazia nela).
-        if (_contaAberta is { } contaCortesia)
+        try
         {
-            try { using var cxC = Banco.Abrir(); ContasAbertas.FecharSemVenda(cxC, contaCortesia.Id, _operador, $"cortesia {_cortesiaCodigo}"); }
-            catch (Exception ex) { Dialogo.Avisar(dono, "Comandas", ex.Message, "erro"); }
+            using var cxA = Banco.Abrir();
+            Caixa.Auditar(cxA, null, "cortesia_entregue", _operador.Id, null,
+                $"cupom={codigo} (comanda inteira em cortesia){(conta is null ? "" : $" comanda={conta.Numero}")}");
+        }
+        catch { /* o rastro local nao segura a entrega: o cupom ja foi usado no servidor */ }
+        // COMANDA ABERTA (revisoes 13 e 14/10): a conta toda em cortesia nao passa pelo Vendas.Finalizar;
+        // fecha sem venda a conta LIDA ANTES do resgate (nunca a que estiver na tela agora) e, com a TV
+        // da cozinha ligada, o que ainda nao tinha ido (e o lote que nao chegou) vai junto, no consumo da
+        // conta, como o Pagamento faz por padrao no caminho pago.
+        var foiParaCozinha = false;
+        if (conta is not null)
+        {
+            // tres tentativas (disco ocupado); se nao fechar, a comanda FICA na tela com o aviso, em vez de
+            // dizer "Cortesia entregue" com ela ainda aberta (revisao 14/10)
+            Exception? falha = null;
+            for (var tentativa = 0; tentativa < 3; tentativa++)
+            {
+                try
+                {
+                    using var cxC = Banco.Abrir();
+                    DestinoCozinha? destino = PedidoCozinha.Ligado(cxC) ? conta.Destino : null;
+                    ContasAbertas.FecharSemVenda(cxC, conta.Id, _operador, $"cortesia {codigo}", destino, TurnoDeTeste, out var loteFinal);
+                    if (loteFinal is not null)
+                    {
+                        foiParaCozinha = !loteFinal.Homologacao;
+                        if (foiParaCozinha) CutucarDreno();
+                    }
+                    falha = null;
+                    break;
+                }
+                catch (Exception ex) { falha = ex; await Task.Delay(300); }
+            }
+            if (falha is not null)
+            {
+                Dialogo.Avisar(dono, "Comandas", $"{ContasAbertas.Textos.CortesiaSemFechar(conta.Numero)} ({falha.Message})", "erro");
+                return;
+            }
+            if (_contaAberta?.Id != conta.Id)
+            {
+                // a tela travada nao deixa trocar; se mesmo assim mudou, nao mexe no que esta na tela
+                Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");
+                return;
+            }
             _contaAberta = null;
             _contaConferida = false;
         }
         EsvaziarComanda();                                   // esvazia antes de repintar (ver Finalizar)
         RemoverCortesia(this, new RoutedEventArgs());
-        Dialogo.Avisar(dono, "Cortesia entregue", "O cupom foi usado e não vale mais.", "ok");
+        Dialogo.Avisar(dono, "Cortesia entregue",
+            "O cupom foi usado e não vale mais." + (foiParaCozinha ? $" {ContasAbertas.Textos.CortesiaFoiParaCozinha}" : ""), "ok");
     }
 
     // ── BRINDE DA RASPADINHA (21/09/2026) ───────────────────────────────────

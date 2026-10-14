@@ -51,7 +51,7 @@ public static class DialogoComandas
     /// <param name="naTela">A conta carregada, se houver (o rodape ganha Cancelar comanda N).</param>
     /// <param name="mandarDeNovo">Reenvia um lote que nao foi; devolve o erro ou null.</param>
     public static Decisao? Mostrar(Window dono, Func<IReadOnlyList<LinhaDaLista>> linhas, int mesas,
-        int itensNoCarrinho, ContaAberta? naTela, Func<string, string?> mandarDeNovo)
+        decimal itensNoCarrinho, ContaAberta? naTela, Func<string, string?> mandarDeNovo)
     {
         Decisao? resultado = null;
         var janela = Dialogo.Base(dono, Largura);

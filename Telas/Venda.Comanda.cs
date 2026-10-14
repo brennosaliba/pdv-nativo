@@ -108,8 +108,11 @@ public partial class Venda
             catch (Exception ex) { return ex.Message; }
         }
 
-        var carrinhoSolto = _contaAberta is null ? _comanda.Count : 0;
+        // revisao 14/10: UNIDADES, como o chip da tela ("3 itens"), nao linhas
+        var carrinhoSolto = _contaAberta is null ? _comanda.Sum(i => i.Qtd.Milesimos) / 1000m : 0m;
         var decisao = DialogoComandas.Mostrar(dono, Linhas, mesas, carrinhoSolto, _contaAberta, MandarDeNovo);
+        // revisao 14/10: o Mandar de novo da comanda que esta na tela muda o botao Cozinha e as sub-linhas
+        if (_contaAberta is not null) PintarComanda();
         switch (decisao)
         {
             case DialogoComandas.Carregar c: TocouNaConta(c.ContaId); break;
@@ -126,38 +129,56 @@ public partial class Venda
         if (_contaAberta is null && _comanda.Count > 0)
         {
             // carrinho solto cheio: nunca entra na outra conta em silencio
-            long numero;
-            using (var cx = Banco.Abrir()) numero = ContasAbertas.Ler(cx, id)?.Numero ?? 0;
-            var escolha = Dialogo.Escolher(dono, $"Comanda {numero}", ContasAbertas.Textos.CarrinhoTem(_comanda.Count),
+            ContaAberta? alvo;
+            using (var cx = Banco.Abrir()) alvo = ContasAbertas.Ler(cx, id);
+            var numero = alvo?.Numero ?? 0;
+            // revisao 14/10: so mexe no carrinho se a comanda ainda carrega (aberta, livre, do mesmo modo)
+            if (alvo is null || !alvo.Aberta || ContasAbertas.EmUsoPorOutroPdv(alvo) || alvo.Teste != TurnoDeTeste)
+            {
+                CarregarConta(id);   // so para dizer o motivo; o carrinho fica como esta
+                return;
+            }
+            var unidades = _comanda.Sum(i => i.Qtd.Milesimos) / 1000m;
+            var escolha = Dialogo.Escolher(dono, $"Comanda {numero}", ContasAbertas.Textos.CarrinhoTem(unidades),
                 ContasAbertas.Textos.GuardarEAbrir(numero), ContasAbertas.Textos.LevarPara(numero));
             if (escolha < 0) return;
             if (escolha == 0)
             {
                 // o carrinho vira uma conta nova automatica (numero novo, sem nome, na loja) e fica guardada
-                var itens = ItensDoDisco();
-                long guardadaNumero;
-                try
-                {
-                    using var cx = Banco.Abrir();
-                    var nova = ContasAbertas.Abrir(cx, _sessao, _operador, null, DestinoCozinha.Loja, itens, _cortesiaCodigo, _cortesiaCobertura);
-                    ContasAbertas.Soltar(cx, nova.Id);
-                    Rascunho.Apagar(cx);
-                    guardadaNumero = nova.Numero;
-                }
-                catch (Exception ex) { Dialogo.Avisar(dono, "Comandas", ex.Message, "erro"); return; }
-                EsvaziarComanda();
-                _cortesiaCodigo = null; _cortesiaCobertura.Clear(); CaixaCortesia.Visibility = Visibility.Collapsed;
-                PintarComanda();
-                if (CarregarConta(id)) AvisoLeve(ContasAbertas.Textos.CarrinhoFicouNa(guardadaNumero), "neutro");
+                var guardada = GuardarCarrinhoNumaComanda(dono, "Comandas");
+                if (guardada is null) return;
+                if (CarregarConta(id)) AvisoLeve(ContasAbertas.Textos.CarrinhoFicouNa(guardada.Value), "neutro");
+                else Dialogo.Avisar(dono, "Comandas", ContasAbertas.Textos.CarrinhoFicouNa(guardada.Value), "erro");
                 return;
             }
-            // "Levar para a N": os itens do carrinho entram na conta carregada
+            // "Levar para a N": os itens do carrinho entram na conta carregada. Revisao 14/10: o cupom do
+            // carrinho vai junto (a conta so guarda um: com outro cupom la, nao leva) e item simples soma
+            // na linha que a conta ja tem, como o toque no produto faz (linha repetida dobrava o cupom).
+            var cupomDoCarrinho = _cortesiaCodigo;
+            var coberturaDoCarrinho = new Dictionary<string, int>(_cortesiaCobertura);
+            if (cupomDoCarrinho is not null && alvo.CortesiaCodigo is not null
+                && !string.Equals(alvo.CortesiaCodigo, cupomDoCarrinho, StringComparison.OrdinalIgnoreCase))
+            {
+                Dialogo.Avisar(dono, $"Comanda {numero}", ContasAbertas.Textos.ComandaJaTemCupom(numero), "erro");
+                return;
+            }
             var levar = _comanda.Select(i => new ItemComanda
             {
                 Produto = i.Produto, Qtd = i.Qtd, Escolhas = i.Escolhas, ForaDoCardapio = i.ForaDoCardapio,
             }).ToList();
             if (!CarregarConta(id)) return;
-            foreach (var i in levar) _comanda.Insert(0, i);
+            foreach (var i in levar)
+            {
+                var mesma = i.EhCombo ? null : _comanda.FirstOrDefault(x => x.Produto.Id == i.Produto.Id && !x.EhCombo);
+                if (mesma is not null) mesma.Qtd = new Quantidade(mesma.Qtd.Milesimos + i.Qtd.Milesimos);
+                else _comanda.Insert(0, i);
+            }
+            if (cupomDoCarrinho is not null && _cortesiaCodigo is null)
+            {
+                _cortesiaCodigo = cupomDoCarrinho;
+                foreach (var kv in coberturaDoCarrinho) _cortesiaCobertura[kv.Key] = kv.Value;
+                MostrarCortesiaNaTela();
+            }
             PintarComanda();
             return;
         }
@@ -185,18 +206,11 @@ public partial class Venda
         long? carrinhoFicouNa = null;
         if (!comCarrinho && _contaAberta is null && _comanda.Count > 0)
         {
-            try
-            {
-                using var cx = Banco.Abrir();
-                var guardada = ContasAbertas.Abrir(cx, _sessao, _operador, null, DestinoCozinha.Loja, ItensDoDisco(), _cortesiaCodigo, _cortesiaCobertura);
-                ContasAbertas.Soltar(cx, guardada.Id);
-                Rascunho.Apagar(cx);
-                carrinhoFicouNa = guardada.Numero;
-            }
-            catch (Exception ex) { Dialogo.Avisar(dono, "Nova comanda", ex.Message, "erro"); return; }
-            EsvaziarComanda();
-            _cortesiaCodigo = null; _cortesiaCobertura.Clear(); CaixaCortesia.Visibility = Visibility.Collapsed;
+            carrinhoFicouNa = GuardarCarrinhoNumaComanda(dono, ContasAbertas.Textos.NovaComanda);
+            if (carrinhoFicouNa is null) return;
         }
+        // revisao 14/10: depois de o carrinho ir para a comanda automatica, qualquer erro diz onde ele ficou
+        string ComOndeFicou(string texto) => carrinhoFicouNa is { } f ? $"{texto} {ContasAbertas.Textos.CarrinhoFicouNa(f)}" : texto;
         var itens = comCarrinho ? ItensDoDisco() : null;
         var codigo = comCarrinho ? _cortesiaCodigo : null;
         var cobertura = comCarrinho ? new Dictionary<string, int>(_cortesiaCobertura) : null;
@@ -206,11 +220,41 @@ public partial class Venda
             using var cx = Banco.Abrir();
             conta = ContasAbertas.Abrir(cx, _sessao, _operador, nome, consumo, itens, codigo, cobertura);
         }
-        catch (Exception ex) { Dialogo.Avisar(dono, "Nova comanda", ex.Message, "erro"); return; }
-        if (CarregarConta(conta.Id))
-            AvisoLeve(carrinhoFicouNa is { } n
-                ? $"{ContasAbertas.Textos.ComandaAberta(conta.Numero)} {ContasAbertas.Textos.CarrinhoFicouNa(n)}"
-                : ContasAbertas.Textos.ComandaAberta(conta.Numero), "neutro");
+        catch (Exception ex) { Dialogo.Avisar(dono, ContasAbertas.Textos.NovaComanda, ComOndeFicou(ex.Message), "erro"); return; }
+        if (CarregarConta(conta.Id)) AvisoLeve(ComOndeFicou(ContasAbertas.Textos.ComandaAberta(conta.Numero)), "neutro");
+        else if (carrinhoFicouNa is { } f) Dialogo.Avisar(dono, ContasAbertas.Textos.NovaComanda, ContasAbertas.Textos.CarrinhoFicouNa(f), "erro");
+    }
+
+    /// <summary>
+    /// Revisao 14/10: o carrinho SOLTO vira uma comanda automatica guardada (numero novo, sem nome, na
+    /// loja, com o cupom dele). Devolve o numero, ou null se nada mudou (erro avisado). Depois que o
+    /// Abrir gravou, o resto (soltar, apagar o rascunho) e conforto: falha ali NAO deixa o carrinho
+    /// tambem na tela (antes: itens duplicados e, no toque seguinte, uma terceira copia).
+    /// </summary>
+    private long? GuardarCarrinhoNumaComanda(Window dono, string titulo)
+    {
+        ContaAberta guardada;
+        try
+        {
+            using var cx = Banco.Abrir();
+            guardada = ContasAbertas.Abrir(cx, _sessao, _operador, null, DestinoCozinha.Loja, ItensDoDisco(), _cortesiaCodigo, _cortesiaCobertura);
+        }
+        catch (Exception ex) { Dialogo.Avisar(dono, titulo, ex.Message, "erro"); return null; }
+        try { using var cx = Banco.Abrir(); ContasAbertas.Soltar(cx, guardada.Id); } catch { /* o dono morto tambem libera */ }
+        try { using var cx = Banco.Abrir(); Rascunho.Apagar(cx); } catch { /* a repintura abaixo regrava o rascunho vazio */ }
+        EsvaziarComanda();
+        _cortesiaCodigo = null; _cortesiaCobertura.Clear(); CaixaCortesia.Visibility = Visibility.Collapsed;
+        PintarComanda();
+        return guardada.Numero;
+    }
+
+    /// <summary>A caixa "Cortesia X aplicada" com os itens cobertos (carga da conta e Levar para a N).</summary>
+    private void MostrarCortesiaNaTela()
+    {
+        TxtCortesiaTitulo.Text = $"Cortesia {_cortesiaCodigo} aplicada";
+        TxtCortesiaItens.Text = string.Join(", ",
+            _comanda.Where(i => CoberturaDe(i) > 0).Select(i => $"{CoberturaDe(i)}× {i.Produto.Nome} grátis"));
+        CaixaCortesia.Visibility = Visibility.Visible;
     }
 
     // ── carregar, gravar, guardar ───────────────────────────────────────────
@@ -282,10 +326,7 @@ public partial class Venda
             {
                 _cortesiaCodigo = conta.CortesiaCodigo;
                 foreach (var kv in conta.CortesiaCobertura) _cortesiaCobertura[kv.Key] = kv.Value;
-                TxtCortesiaTitulo.Text = $"Cortesia {_cortesiaCodigo} aplicada";
-                TxtCortesiaItens.Text = string.Join(", ",
-                    _comanda.Where(i => CoberturaDe(i) > 0).Select(i => $"{CoberturaDe(i)}× {i.Produto.Nome} grátis"));
-                CaixaCortesia.Visibility = Visibility.Visible;
+                MostrarCortesiaNaTela();
             }
         }
         _contaAberta = conta;
@@ -471,7 +512,8 @@ public partial class Venda
         }
         catch (InvalidOperationException ex) { Dialogo.Avisar(dono, "Cozinha", ex.Message, "erro"); return; }
         catch (Exception ex) { Dialogo.Avisar(dono, "Cozinha", ex.Message, "erro"); return; }
-        if (lote is null) { AvisoLeve(ContasAbertas.Textos.NadaNovo, "neutro"); return; }
+        // revisao 14/10: o botao pode estar velho (Mandar de novo noutro lugar): repinta antes do aviso
+        if (lote is null) { PintarComanda(); AvisoLeve(ContasAbertas.Textos.NadaNovo, "neutro"); return; }
         CutucarDreno();
         GuardarConta();
         AvisoLeve(ContasAbertas.Textos.PedidoNaCozinhaGuardada(numero), "neutro");
@@ -642,7 +684,7 @@ public partial class Venda
             {
                 // revisao 13/10: a caixa vem VAZIA (antes vinha "cliente desistiu" pronto e um toque passava)
                 var motivo = PedirTexto.Mostrar(dono, ContasAbertas.Textos.CancelarComanda(numero),
-                    ContasAbertas.Textos.MotivoDoCancelamento, "");
+                    ContasAbertas.Textos.MotivoDoCancelamento, "", seVazio: ContasAbertas.Textos.MotivoObrigatorio);
                 if (string.IsNullOrWhiteSpace(motivo)) return;
                 var sup = PedirOutroGerente(ContasAbertas.Textos.CancelarComanda(numero), ContasAbertas.Textos.AvisoAutorizador);
                 if (sup is null) return;
@@ -799,8 +841,8 @@ public partial class Venda
                 naoChegou = ContasAbertas.UltimoLoteNaoChegou(cx, conta.Id);
             }
             catch { pendentes = _comanda.Sum(i => i.PendenteMilesimos) / 1000; }
-            // revisao 13/10: a 1024 o "⚠ Cozinha 12" cortava; na tela estreita com aviso fica so "⚠ 12"
-            TxtCozinhaRotulo.Text = naoChegou && estreita ? $"⚠ {pendentes}"
+            // revisoes 13 e 14/10: a 1024 o "⚠ Cozinha 12" cortava e o "⚠ 12" nao dizia de que era o botao
+            TxtCozinhaRotulo.Text = naoChegou && estreita ? $"⚠ {ContasAbertas.Textos.CozinhaCurta(pendentes)}"
                 : (naoChegou ? "⚠ " : "") + ContasAbertas.Textos.CozinhaN(pendentes);
             BtnCozinha.IsEnabled = _comanda.Count > 0;
         }

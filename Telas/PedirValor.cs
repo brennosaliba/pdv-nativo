@@ -284,19 +284,23 @@ public static class PedirTexto
         }
     }
 
-    public static string? Mostrar(Window dono, string titulo, string rotulo, string sugestao)
+    /// <param name="seVazio">Revisao 14/10: com texto, Confirmar com a caixa em branco NAO fecha: o
+    /// rotulo vira este aviso e a janela fica (antes Confirmar vazio e Cancelar davam o mesmo null e a
+    /// tela saia calada). Null = comportamento de sempre.</param>
+    public static string? Mostrar(Window dono, string titulo, string rotulo, string sugestao, string? seVazio = null)
     {
         string? resultado = null;
         var janela = Dialogo.Base(dono, 480);
         var painel = new StackPanel();
         painel.Children.Add(PedirValor.Cabecalho(janela, titulo));
-        painel.Children.Add(new TextBlock
+        var textoRotulo = new TextBlock
         {
             Text = rotulo,
             Style = (Style)Application.Current.Resources["Rotulo"],
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 8),
-        });
+        };
+        painel.Children.Add(textoRotulo);
         var caixa = new TextBox { Text = sugestao, FontSize = 18, MinHeight = 54, TextWrapping = TextWrapping.Wrap };
         painel.Children.Add(caixa);
 
@@ -308,7 +312,18 @@ public static class PedirTexto
         cancelar.Margin = new Thickness(0, 0, 5, 0);
         ok.Margin = new Thickness(5, 0, 0, 0);
         cancelar.Click += (_, _) => janela.Close();
-        ok.Click += (_, _) => { resultado = caixa.Text.Trim(); janela.Close(); };
+        ok.Click += (_, _) =>
+        {
+            if (seVazio is not null && string.IsNullOrWhiteSpace(caixa.Text))
+            {
+                textoRotulo.Text = seVazio;
+                textoRotulo.SetResourceReference(TextBlock.ForegroundProperty, "Erro");
+                caixa.Focus();
+                return;
+            }
+            resultado = caixa.Text.Trim();
+            janela.Close();
+        };
         Grid.SetColumn(cancelar, 0); Grid.SetColumn(ok, 1);
         linha.Children.Add(cancelar); linha.Children.Add(ok);
         painel.Children.Add(linha);
