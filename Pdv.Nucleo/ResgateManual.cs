@@ -93,6 +93,11 @@ public static class ResgateManual
     public const string TextoDesfazerPedidoSaiu = "O pedido já saiu com o brinde. Para desfazer, use o CRM.";
     public const string TextoPedirCodigoDono = "Peça ao dono o código do autenticador.";
     public const string TextoBalcao = "Balcão (cliente na loja)";
+    /// <summary>
+    /// 1.0.34 (14/10/2026, o dono): no balcão, brownie ou item pronto não precisa da TV da cozinha.
+    /// A caixinha só aparece no balcão e nasce desmarcada; no pedido do iFood a cozinha monta junto.
+    /// </summary>
+    public const string TextoCozinha = "Mandar para a cozinha (precisa preparar)";
     public const string TextoSemPedido = "Nenhum pedido aberto: só o balcão.";
     public const string TextoDesligado = "A tela de resgate está desligada nesta loja.";
     public const string RotuloToast = "Resgatar aqui";
@@ -116,8 +121,10 @@ public static class ResgateManual
         }, Json);
 
     /// <param name="destinoBalcao">true = balcao; false = o pedido do iFood em <paramref name="ifoodOrderId"/>.</param>
+    /// <param name="cozinha">1.0.34: no balcão, vai para a TV da cozinha? (o ERP 173 grava a comanda só no
+    /// caixa quando é false). No pedido do iFood não vai no corpo: a cozinha monta junto, sempre.</param>
     public static string CorpoResgatar(string? terminal, string? operador, string? codigo, bool destinoBalcao,
-        string? ifoodOrderId, IReadOnlyList<string> sabores, bool avisar)
+        string? ifoodOrderId, IReadOnlyList<string> sabores, bool avisar, bool cozinha = true)
         => JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["acao"] = AcaoResgatar,
@@ -125,7 +132,7 @@ public static class ResgateManual
             ["operador"] = Operador(operador),
             ["codigo"] = Limpo(codigo, MaxCodigo),
             ["destino"] = destinoBalcao
-                ? new Dictionary<string, object?> { ["tipo"] = "balcao" }
+                ? new Dictionary<string, object?> { ["tipo"] = "balcao", ["cozinha"] = cozinha }
                 : new Dictionary<string, object?> { ["tipo"] = "ifood", ["ifood_order_id"] = (ifoodOrderId ?? "").Trim() },
             ["sabores"] = sabores.Select(s => s.Trim()).Where(s => s.Length > 0).Take(2).ToList(),
             ["avisar"] = avisar,

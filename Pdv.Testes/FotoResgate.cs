@@ -246,6 +246,23 @@ public static class FotoResgate
         if (rolDonut is { ScrollableHeight: > 0 })
             erros.Add($"{pre}: o donut com 15 opcoes precisou rolar {rolDonut.ScrollableHeight:0} px");
         Foto(dir, "donut15", w, h, tema, host, jDonut);
+        // 1.0.34: o mesmo pior caso com o BALCAO marcado: aparece "Mandar para a cozinha" (desmarcada)
+        // e tem de caber sem rolar tambem
+        var balcao = Campo<WrapPanel>(telaDonut, "_destinos").Children.OfType<RadioButton>().FirstOrDefault(r => r.Tag is null);
+        if (balcao is null) erros.Add($"{pre}: o balcao nao esta entre os destinos");
+        else
+        {
+            balcao.IsChecked = true;
+            await Task.Delay(300);
+            jDonut.UpdateLayout();
+            var chk = Campo<CheckBox>(telaDonut, "_chkCozinha");
+            if (chk.Visibility != Visibility.Visible || chk.IsChecked == true)
+                erros.Add($"{pre}: no balcao a caixinha da cozinha nao apareceu desmarcada");
+            Medidas(pre + " balcao", telaDonut, jDonut, host);
+            if (Rolagem(telaDonut) is { ScrollableHeight: > 0 } rb)
+                erros.Add($"{pre}: o donut no balcao com a caixinha da cozinha precisou rolar {rb.ScrollableHeight:0} px");
+            Foto(dir, "balcao", w, h, tema, host, jDonut);
+        }
         jDonut.Close();
 
         host.Close();

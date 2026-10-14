@@ -77,6 +77,8 @@ public sealed class ResgateRaspadinha
     private readonly WrapPanel _sabores;
     private readonly TextBlock _txtApoioSabor;
     private readonly CheckBox _chkAvisar;
+    /// <summary>1.0.34: só no balcão, desmarcada: brownie ou item pronto não vai para a TV da cozinha.</summary>
+    private readonly CheckBox _chkCozinha;
     private readonly Grid _rodape;
     private readonly Button _btnResgatar;
     private readonly Button _btnVoltar;
@@ -183,6 +185,13 @@ public sealed class ResgateRaspadinha
         };
         miolo.Children.Add(_chkAvisar);
 
+        _chkCozinha = new CheckBox
+        {
+            Content = ResgateManual.TextoCozinha, IsChecked = false, FontSize = 15, Margin = new Thickness(0, 12, 0, 0),
+            Foreground = R("Texto"), Visibility = Visibility.Collapsed,
+        };
+        miolo.Children.Add(_chkCozinha);
+
         _rolagem = new ScrollViewer
         {
             Content = miolo, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -277,6 +286,7 @@ public sealed class ResgateRaspadinha
             _sabores.Children.Clear();
             _escolhidos.Clear();
             _chkAvisar.Visibility = Visibility.Collapsed;
+            _chkCozinha.Visibility = Visibility.Collapsed;
             Habilitar();
             return;
         }
@@ -425,6 +435,8 @@ public sealed class ResgateRaspadinha
     {
         var (escolheu, pedido) = Destino();
         _chkAvisar.Visibility = escolheu && pedido is not null && _chatAtivo ? Visibility.Visible : Visibility.Collapsed;
+        // 1.0.34: a caixinha da cozinha só no balcão (no pedido do iFood a cozinha monta junto)
+        _chkCozinha.Visibility = escolheu && pedido is null ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void Habilitar()
@@ -480,7 +492,8 @@ public sealed class ResgateRaspadinha
         Ocupar(true);
         Mostrar(ResgateManual.TextoResgatando, "fraco");
         var avisar = pedido is not null && _chkAvisar.Visibility == Visibility.Visible && _chkAvisar.IsChecked == true;
-        var corpoPedido = ResgateManual.CorpoResgatar(null, _operador, cod.Codigo, pedido is null, pedido?.IfoodOrderId, _escolhidos, avisar);
+        var cozinha = pedido is not null || _chkCozinha.IsChecked == true;
+        var corpoPedido = ResgateManual.CorpoResgatar(null, _operador, cod.Codigo, pedido is null, pedido?.IfoodOrderId, _escolhidos, avisar, cozinha);
         int st = -1; string? corpo = null;
         try { (st, corpo) = await _servidor(ResgateManual.Edge, corpoPedido); }
         catch { st = -1; }
@@ -522,6 +535,7 @@ public sealed class ResgateRaspadinha
         foreach (var rb in _destinos.Children.OfType<RadioButton>()) rb.IsEnabled = false;
         foreach (var chip in _sabores.Children.OfType<Button>()) chip.IsEnabled = false;
         _chkAvisar.IsEnabled = false;
+        _chkCozinha.IsEnabled = false;
         _ = frase; _ = desfazerAte;
     }
 

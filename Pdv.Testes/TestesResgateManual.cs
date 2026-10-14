@@ -140,6 +140,20 @@ public static class TestesResgateManual
         var b = JsonNode.Parse(ResgateManual.CorpoResgatar("CX1", "Ingrid", "AD-RB684S", true, OID, Array.Empty<string>(), false))!;
         checar((string)b["destino"]!["tipo"]! == "balcao" && b["destino"]!["ifood_order_id"] is null && b["sabores"]!.AsArray().Count == 0 && !(bool)b["avisar"]!,
             "CP-4 resgatar no balcao: sem pedido no destino, sem sabor, sem avisar");
+        // 1.0.34 (SQL 173): o balcão diz se vai para a cozinha; o pedido do iFood não leva a chave
+        var bSem = JsonNode.Parse(ResgateManual.CorpoResgatar("CX1", "Ingrid", "AD-RB684S", true, null, Array.Empty<string>(), false, cozinha: false))!;
+        var bCom = JsonNode.Parse(ResgateManual.CorpoResgatar("CX1", "Ingrid", "AD-RB684S", true, null, Array.Empty<string>(), false, cozinha: true))!;
+        var iFood = JsonNode.Parse(ResgateManual.CorpoResgatar("CX1", "Ingrid", "AD-RB684S", false, OID, Array.Empty<string>(), false, cozinha: false))!;
+        checar(bSem["destino"]!["cozinha"]!.GetValue<bool>() == false && bCom["destino"]!["cozinha"]!.GetValue<bool>()
+               && iFood["destino"]!.AsObject().ContainsKey("cozinha") == false,
+            "CP-4b 1.0.34: no balcão o corpo leva cozinha true/false; no pedido do iFood não (a cozinha monta junto)");
+        {
+            var tela = File.ReadAllText(Path.Combine(RaizDoRepo(), "Telas", "ResgateRaspadinha.cs")).Replace("\r\n", "\n");
+            checar(tela.Contains("Content = ResgateManual.TextoCozinha, IsChecked = false")
+                   && tela.Contains("_chkCozinha.Visibility = escolheu && pedido is null ? Visibility.Visible : Visibility.Collapsed;")
+                   && tela.Contains("var cozinha = pedido is not null || _chkCozinha.IsChecked == true;"),
+                "CP-4c 1.0.34: a caixinha da cozinha só aparece no balcão, nasce desmarcada, e o pedido do iFood vai sempre");
+        }
         var o = JsonNode.Parse(ResgateManual.CorpoResgatar("CX1", "  ", "AD-RB684S", true, null, new[] { "a", "b", "c" }, false))!;
         checar((string)o["operador"]! == "Caixa" && o["sabores"]!.AsArray().Count == 2, "CP-5 operador vazio vira Caixa; no maximo 2 sabores");
         checar(ResgateManual.Operador("Ana" + Trav + "Bia " + Traco) == "Ana-Bia -" && ResgateManual.Operador(new string('x', 60)).Length == 40,
@@ -892,5 +906,12 @@ public static class TestesResgateManual
         for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
             if (File.Exists(Path.Combine(dir.FullName, "Pdv.csproj"))) return dir.FullName;
         return null;
+    }
+
+    private static string RaizDoRepo()
+    {
+        var d = new DirectoryInfo(AppContext.BaseDirectory);
+        while (d is not null && !File.Exists(Path.Combine(d.FullName, "Pdv.csproj"))) d = d.Parent;
+        return d?.FullName ?? AppContext.BaseDirectory;
     }
 }
