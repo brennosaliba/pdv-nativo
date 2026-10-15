@@ -686,7 +686,7 @@
                                   Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,0,0,4"/>
                         <!-- 1.0.36: a trava precisa do administrador do Windows (Quiosque.MudarTrava). Quem
                              sobe e o cmd.exe do Windows, nao o PDV: o aviso mostra esse nome. -->
-                        <TextBlock Text="Só vale com o quiosque ligado e é desfeito ao desligar o quiosque. Ao salvar, o Windows pode pedir uma permissão de administrador, com o nome Processador de Comandos do Windows. O botão de desligar o PC continua. Para mexer no Windows depois, use a Configuração do PDV ou o AnyDesk."
+                        <TextBlock Text="Só vale com o quiosque ligado e é desfeito ao desligar o quiosque. Ao salvar, o Windows pode pedir uma permissão de administrador, com o nome Processador de comandos do Windows. O botão de desligar o PC continua. Para mexer no Windows depois, use a Configuração do PDV ou o AnyDesk."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <Button x:Name="BtnSairWindows" Click="SairParaOWindows" Style="{StaticResource BotaoBase}" HorizontalAlignment="Left"
                                 MinHeight="44" Padding="16,0" Margin="0,0,0,8" Visibility="Collapsed">

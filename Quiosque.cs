@@ -97,7 +97,7 @@ public static class Quiosque
     // Policies do usuário é protegida: o usuário só lê, e só o SYSTEM e os Administradores
     // ELEVADOS escrevem. Com o UAC ligado a trava nunca gravou ("Access to the registry key ...
     // is denied" na tela). Agora: tenta direto (UAC desligado ou PDV já elevado) e, negado, pede
-    // ao Windows para rodar como administrador só o cmd.exe de System32 com quatro reg.exe, que
+    // ao Windows para rodar como administrador só o cmd.exe de System32 com reg.exe (as quatro e a marca), que
     // gravam em HKEY_USERS\SID. O Pdv.exe NUNCA sobe como administrador (ele extrai bibliotecas
     // numa pasta que o usuário grava). A regra pura e a ordem moram em Nucleo/TravaDoCtrlAltDel.cs.
 
@@ -144,13 +144,14 @@ public static class Quiosque
 
     /// <summary>
     /// O GRAVADOR: liga (cria a chave e grava DWORD 1) ou desliga (apaga o valor, sem criar chave
-    /// vazia e sem abrir para escrita o que não tem nada para apagar) as quatro políticas embaixo
-    /// de <paramref name="raiz"/>. Lança em erro. A raiz vem de fora: HKCU (direto) ou a chave
-    /// isolada da bateria. O caminho com administrador não passa por aqui: é o reg.exe do Windows.
+    /// vazia e sem abrir para escrita o que não tem nada para apagar) as quatro políticas e a marca
+    /// da trava embaixo de <paramref name="raiz"/>, na ordem do núcleo (marca primeiro ao ligar, por
+    /// último ao desligar). Lança em erro. A raiz vem de fora: HKCU (direto) ou a chave isolada da
+    /// bateria. O caminho com administrador não passa por aqui: é o reg.exe do Windows.
     /// </summary>
     public static void GravarTravas(RegistryKey raiz, bool travar)
     {
-        foreach (var (chave, valor) in Travas)
+        foreach (var (chave, valor) in TravaDoCtrlAltDel.NaOrdem(travar))
         {
             if (travar)
             {
@@ -208,7 +209,7 @@ public static class Quiosque
 
     /// <summary>
     /// Pede ao Windows para rodar como administrador o cmd.exe de System32 com a linha do núcleo
-    /// (quatro reg.exe de System32, só constantes e o SID) e espera até 20 s. O Não no aviso chega
+    /// (reg.exe de System32 para as quatro políticas e a marca, só constantes e o SID) e espera até 20 s. O Não no aviso chega
     /// aqui como Win32Exception 1223 e sobe (TravaDoCtrlAltDel.Mudar transforma em Cancelou).
     /// Devolve só se o cmd terminou: o código de saída de um processo elevado não volta para quem
     /// pediu, e quem diz se deu certo é o registro relido.

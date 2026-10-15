@@ -26,7 +26,9 @@ e dos programas de inicialização, abre o PDV. Nada mais carrega.
 
 - **Fechar / Sair** no caixa pergunta: **Reiniciar o PDV** ou **Sair para o Windows**
   (abre a área de trabalho). Nunca deixa a tela preta.
-- **Atualizar** continua igual: o instalador troca o programa e reabre o PDV.
+- **Atualizar**: o instalador troca o programa e o PDV se reabre sozinho, sem
+  administrador (ver "Atualizar no quiosque" abaixo). A primeira atualização para a 1.0.36,
+  feita por um caixa antigo, pede para reiniciar o computador.
 - Se o PDV cair por um erro grave, ele abre a área de trabalho antes de fechar (o dono
   tem por onde mexer).
 - Na Configuração há o botão **Abrir a área de trabalho do Windows agora** (o PDV
@@ -64,11 +66,11 @@ Como funciona desde a 1.0.36:
 2. O PDV tenta gravar direto. Dá certo só com o UAC desligado ou com o PDV aberto como
    administrador; aí não aparece aviso nenhum.
 3. Negado, o PDV pede ao Windows para rodar como administrador **um programa do próprio
-   Windows**: o `cmd.exe` de `C:\Windows\System32`, com quatro `reg.exe` (também de
-   System32) que gravam (ou apagam) as quatro políticas em `HKEY_USERS\<SID do caixa>`.
-   O Windows escurece a tela e mostra **Processador de Comandos do Windows**, editor
-   verificado **Microsoft Windows**. Usuário administrador toca em **Sim**; usuário comum
-   digita a senha de um administrador. Um aviso só para as quatro políticas.
+   Windows**: o `cmd.exe` de `C:\Windows\System32`, com `reg.exe` (também de System32)
+   que gravam (ou apagam) as quatro políticas e a **marca da trava** em
+   `HKEY_USERS\<SID do caixa>`. O Windows escurece a tela e mostra
+   **Processador de comandos do Windows**, editor verificado **Microsoft Windows**. Usuário
+   administrador toca em **Sim**; usuário comum digita a senha de um administrador. Um aviso só.
 4. `HKEY_USERS\<SID>` e não `HKCU`: com usuário comum quem digita a senha é outra conta, e
    o HKCU do processo elevado seria o dela. O SID vem da conta do processo do PDV (nunca de
    arquivo nem de texto digitado) e passa por um formato estrito; a linha do cmd é montada
@@ -79,6 +81,12 @@ Como funciona desde a 1.0.36:
    permissão do Windows, a trava do Ctrl+Alt+Del não foi ligada. O resto foi salvo." O
    detalhe técnico vai só para a auditoria (`ctrl_alt_del_travado`, `_destravado`,
    `_recusado`, `_falhou`).
+
+**A marca da trava.** Junto das quatro políticas o PDV grava `PdvNativoTrava` = DWORD 1 em
+`Policies\System`, a mesma chave protegida (só administrador escreve). Ligar grava a marca
+primeiro; desligar tira a marca por último. É ela que diz ao desinstalador que aquelas
+políticas são do PDV, e não da TI ou de uma GPO local. O usuário não consegue fingir a marca
+(o `Shell` ele consegue, é chave dele). O Windows ignora um valor que não conhece.
 
 **Por que não o próprio Pdv.exe (revisão de segurança da 1.0.36).** O rascunho da 1.0.36
 relançava o `Pdv.exe --travas on|off --sid SID` como administrador. O Pdv.exe é publicado em
@@ -109,11 +117,25 @@ comum (sem administrador) contra essa chave.
 Desinstalar apagava o Pdv.exe e deixava no registro do usuário do caixa o `Shell` apontando
 para ele e as quatro políticas da trava: na próxima entrada, tela preta e um Ctrl+Alt+Del só
 com Cancelar. Agora o desinstalador (que já roda como administrador), **antes** de apagar o
-programa, percorre os perfis carregados em `HKEY_USERS` e, onde o `Shell` é o do PDV
-(`"...\Pdv.exe" --quiosque` apontando para o Pdv.exe que sai, ou para um que já não existe),
-apaga as políticas da trava que estão em DWORD 1 e depois o `Shell`. Shell de outro programa,
-política em 0 ou de outro tipo, `.DEFAULT`, SYSTEM e os perfis sem o nosso Shell ficam como
-estão. A mensagem final diz "O modo quiosque foi desfeito" quando houve.
+programa, percorre os perfis carregados em `HKEY_USERS` e desfaz só o que é nosso:
+
+- o `Shell` do PDV (`"...\Pdv.exe" --quiosque` apontando para o Pdv.exe que sai, ou para um
+  que já não existe);
+- as políticas da trava em DWORD 1, **só com a marca** `PdvNativoTrava` (e a marca depois
+  delas). Sem a marca, um `DisableTaskMgr = 1` pode ser da TI ou de uma GPO local, e fica. Com
+  a marca, a trava sai mesmo que o quiosque já tenha sido desligado por fora;
+- perfil cujo `Shell` é de **outro** Pdv.exe que continua no disco: nada sai (é daquela
+  instalação). Shell de outro programa, política em 0 ou de outro tipo, `.DEFAULT` e SYSTEM
+  ficam como estão.
+
+A ordem: o `Shell` sai **primeiro** (é ele que evita a tela preta), depois cada política, e a
+marca por último, só se todas saíram. Se o `Shell` nosso não sair (o Windows não deixou), a
+desinstalação **para antes de apagar qualquer coisa**: "Não consegui remover: o modo quiosque
+não saiu de um usuário do Windows. Desligue o quiosque na Configuração do caixa e tente de
+novo." O Pdv.exe fica, e aquele perfil fica inteiro como estava. Se só uma política não sair,
+a desinstalação segue e a mensagem final avisa "A trava do Ctrl+Alt+Del não saiu de um
+usuário do Windows: chame o suporte." (a marca fica, para a próxima tentativa reconhecer).
+Quando houve, a mensagem final diz "O modo quiosque foi desfeito".
 
 O instalador não sabe quem é o usuário do caixa, por isso olha os perfis **carregados**:
 desinstale com o usuário do caixa logado (pelo botão "Sair para o Windows" da Configuração).
@@ -122,6 +144,45 @@ Perfil não carregado (o caixa deslogado) não é tocado.
 Por dentro: regra pura em `Pdv.Nucleo/DesfazerQuiosque.cs` (o mesmo formato de Shell que o
 `Quiosque.cs` grava), registro em `Pdv.Instalador/QuiosqueDoCaixa.cs`, chamada no começo de
 `Instalacao.Desinstalar`.
+
+### Atualizar no quiosque: quem reabre o caixa (1.0.36)
+
+O instalador roda como administrador (o Windows pede a permissão dele). Até a 1.0.35, no fim
+da atualização era ele quem reabria o caixa; no quiosque, sem a área de trabalho, abria o
+Pdv.exe direto, e o caixa passava o turno inteiro **como administrador** (WebView2 do chat
+elevado, a trava gravando sem aviso, bibliotecas extraídas em `%TEMP%\.net` carregadas por
+um processo elevado).
+
+Agora:
+
+1. O caixa chama o instalador com `--atualizar --sem-abrir` e, assim que ele sobe, deixa um
+   `cmd` **comum** (filho do caixa, mesma conta, sem administrador) esperando o instalador
+   sair. Saiu, o `cmd` abre o Pdv.exe novo (com `--quiosque` no quiosque) e fecha. A linha
+   é montada só de constantes, do número do processo do instalador e do caminho do Pdv.exe
+   (`Pdv.Nucleo/ReabrirOCaixa.cs`). Se o instalador falhar, depois do OK da mensagem dele o
+   caixa volta na versão anterior.
+2. Se o caixa não consegue deixar essa espera de pé, ele **não fecha**: "A versão nova está
+   sendo instalada. Daqui a alguns minutos, feche e abra o caixa."
+3. O instalador, elevado, **nunca** abre o Pdv.exe direto. Chamado por um caixa antigo (sem
+   `--sem-abrir`): com a área de trabalho aberta, abre pelo Explorer da sessão (como o
+   usuário comum); sem ela (quiosque), diz "O caixa foi atualizado. Reinicie o computador
+   para abrir o caixa." É o que acontece **uma vez**, na atualização de um caixa 1.0.35 (ou
+   anterior) para a 1.0.36 no quiosque: reinicie o PC.
+
+O instalador também deixou de chamar programas do Windows pelo nome (`icacls`, `wscript`,
+`explorer.exe`): pelo nome, o Windows procura antes na pasta do instalador (na atualização,
+o TEMP do usuário), e um homônimo plantado ali rodaria como administrador. Agora vão pelo
+caminho absoluto de System32 (e da pasta do Windows). O VBScript do atalho nasce na pasta do
+programa, com nome único, e não mais no TEMP do usuário. A conferência `Pdv.exe --cupom-teste`
+(que roda elevada com o instalador) extrai as bibliotecas nativas ao lado do exe, em
+`Program Files\...\.conferencia` (`DOTNET_BUNDLE_EXTRACT_BASE_DIR`), apagada no fim.
+
+**Pendente (antes já era assim, fica para depois da 1.0.36):** o próprio `InstalarPdv.exe`
+é de arquivo único e extrai as bibliotecas dele em `%TEMP%\.net` do usuário que eleva. Na
+atualização ele roda do TEMP, desempacota ali o pacote e baixa ali o instalador do componente
+da Microsoft; na janela, o PayGo também sai no TEMP. Tudo isso é usado como administrador.
+Fechar pede mudar o empacotamento e a entrega (pasta só de administrador para o instalador e
+para o que ele desempacota), com teste numa máquina de loja.
 
 ## 2. Música da loja (Spotify)
 

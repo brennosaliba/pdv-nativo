@@ -11,7 +11,8 @@ namespace Pdv.Testes;
 /// A TRAVA DO CTRL+ALT+DEL COM O ADMINISTRADOR DO WINDOWS (1.0.36, 14/10/2026, Savassi, caixa 1.0.34).
 /// O dono marcou a trava e viu "Access to the registry key ... Policies ... is denied": a chave
 /// Policies do usuário só aceita escrita de administrador elevado. Agora o PDV pede ao Windows para
-/// rodar como administrador só o cmd.exe de System32 com quatro reg.exe (de System32), que gravam
+/// rodar como administrador só o cmd.exe de System32 com reg.exe (de System32), que gravam as
+/// quatro políticas e a marca da trava (PdvNativoTrava, para o desinstalador saber que são nossas)
 /// em HKEY_USERS\SID. Revisão de segurança: o Pdv.exe NUNCA sobe como administrador (ele extrai
 /// bibliotecas numa pasta que o usuário grava, %TEMP%\.net).
 ///
@@ -37,7 +38,10 @@ public static class TestesTravaCtrlAltDel
         const string Reg = "\"" + Sys + @"\reg.exe" + "\"";
         const string HkuSys = "\"HKU\\" + Eu + @"\Software\Microsoft\Windows\CurrentVersion\Policies\System" + "\"";
         const string HkuExp = "\"HKU\\" + Eu + @"\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" + "\"";
+        // 1.0.36 (revisão do desinstalador): a MARCA da trava (PdvNativoTrava) vai primeiro ao ligar e
+        // sai por último ao desligar, na mesma chave protegida das políticas
         var esperadoOn = "/d /v:off /s /c \""
+            + Reg + " add " + HkuSys + " /v PdvNativoTrava /t REG_DWORD /d 1 /f & "
             + Reg + " add " + HkuSys + " /v DisableTaskMgr /t REG_DWORD /d 1 /f & "
             + Reg + " add " + HkuSys + " /v DisableLockWorkstation /t REG_DWORD /d 1 /f & "
             + Reg + " add " + HkuSys + " /v DisableChangePassword /t REG_DWORD /d 1 /f & "
@@ -46,11 +50,12 @@ public static class TestesTravaCtrlAltDel
             + Reg + " delete " + HkuSys + " /v DisableTaskMgr /f & "
             + Reg + " delete " + HkuSys + " /v DisableLockWorkstation /f & "
             + Reg + " delete " + HkuSys + " /v DisableChangePassword /f & "
-            + Reg + " delete " + HkuExp + " /v NoLogoff /f\"";
+            + Reg + " delete " + HkuExp + " /v NoLogoff /f & "
+            + Reg + " delete " + HkuSys + " /v PdvNativoTrava /f\"";
         var on = TravaDoCtrlAltDel.MontarComando(true, Eu, Sys);
         var off = TravaDoCtrlAltDel.MontarComando(false, Eu, Sys);
-        checar(on == esperadoOn, "TC-1 ligar: um cmd /d /v:off /s /c com quatro reg.exe add de System32 em HKU\\SID (DWORD 1)" + (on == esperadoOn ? "" : " [saiu: " + on + "]"));
-        checar(off == esperadoOff, "TC-1b desligar: os quatro reg.exe delete, separados por & (a trava pela metade não para no primeiro)" + (off == esperadoOff ? "" : " [saiu: " + off + "]"));
+        checar(on == esperadoOn, "TC-1 ligar: um cmd /d /v:off /s /c com reg.exe add de System32 em HKU\\SID (DWORD 1): a marca primeiro, depois as quatro" + (on == esperadoOn ? "" : " [saiu: " + on + "]"));
+        checar(off == esperadoOff, "TC-1b desligar: os reg.exe delete separados por & (a trava pela metade não para no primeiro), a marca por último" + (off == esperadoOff ? "" : " [saiu: " + off + "]"));
         checar(TravaDoCtrlAltDel.MontarComando(true, Entra, @"D:\WINNT\SysWOW64").Contains("\"HKU\\" + Entra + "\\", StringComparison.Ordinal)
                && TravaDoCtrlAltDel.CaminhoDoCmd(Sys) == Sys + @"\cmd.exe",
             "TC-1c conta Entra e Windows em outro disco também; o que o Windows eleva é o cmd.exe de System32, por caminho absoluto");
@@ -98,6 +103,11 @@ public static class TestesTravaCtrlAltDel
                && TravaDoCtrlAltDel.Travas.All(t => t.Chave == TravaDoCtrlAltDel.ChaveSistema || t.Chave == TravaDoCtrlAltDel.ChaveExplorer)
                && ReferenceEquals(Quiosque.Travas, TravaDoCtrlAltDel.Travas),
             "TC-3b a linha só conhece as quatro políticas (e a lista é uma só)");
+        checar(TravaDoCtrlAltDel.Marca == (TravaDoCtrlAltDel.ChaveSistema, "PdvNativoTrava")
+               && TravaDoCtrlAltDel.NaOrdem(true).SequenceEqual(new[] { TravaDoCtrlAltDel.Marca }.Concat(TravaDoCtrlAltDel.Travas))
+               && TravaDoCtrlAltDel.NaOrdem(false).SequenceEqual(TravaDoCtrlAltDel.Travas.Append(TravaDoCtrlAltDel.Marca))
+               && !TravaDoCtrlAltDel.Travas.Contains(TravaDoCtrlAltDel.Marca),
+            "TC-3c a marca da trava mora na chave protegida (Policies\\System, só administrador grava): entra primeiro ao ligar e sai por último ao desligar");
 
         // ── TC-4 quando NÃO pedir ao Windows ──
         var todosExistem = new Func<string, bool>(_ => true);
@@ -115,7 +125,7 @@ public static class TestesTravaCtrlAltDel
         // ── TC-5..10 o gravador numa chave isolada ──
         // Nunca Registry.CurrentUser direto: tudo embaixo de HKCU\Software\PdvNativoTeste\<guid>,
         // criada aqui e apagada no finally. As políticas de verdade deste PC são lidas antes e depois.
-        var antes = (Quiosque.Travado, Quiosque.AlgumaTrava);
+        var antes = (Quiosque.Travado, Quiosque.AlgumaTrava, MarcaDeVerdade());
         const string Pai = @"Software\PdvNativoTeste";
         var nome = Pai + @"\" + Guid.NewGuid().ToString("N");
         try
@@ -132,15 +142,16 @@ public static class TestesTravaCtrlAltDel
                 using (var r = Abrir()!)
                 {
                     Quiosque.GravarTravas(r, true);
-                    checar(Quiosque.LerTravas(r) == (true, true) && QuatroDwords(r), "TC-6 o gravador liga: as quatro políticas como DWORD 1");
+                    checar(Quiosque.LerTravas(r) == (true, true) && QuatroDwords(r) && MarcaDword(r),
+                        "TC-6 o gravador liga: as quatro políticas e a marca da trava como DWORD 1");
                 }
 
-                // TC-9 desligar: nenhuma sobra; desligar de novo não lança
+                // TC-9 desligar: nenhuma sobra, nem a marca; desligar de novo não lança
                 using (var r = Abrir()!)
                 {
                     Quiosque.GravarTravas(r, false);
                     var deNovo = !Lanca(() => Quiosque.GravarTravas(r, false));
-                    checar(Quiosque.LerTravas(r) == (false, false) && deNovo, "TC-9 o gravador desliga as quatro, e desligar de novo é inofensivo");
+                    checar(Quiosque.LerTravas(r) == (false, false) && !TemMarca(r) && deNovo, "TC-9 o gravador desliga as quatro e a marca, e desligar de novo é inofensivo");
                 }
 
                 // TC-8 raiz aberta só para leitura (sem permissão de escrita): ligar lança acesso
@@ -169,8 +180,8 @@ public static class TestesTravaCtrlAltDel
                     var depois = Quiosque.LerTravas(r);
                     Quiosque.GravarTravas(r, true);
                     var ligada = Quiosque.LerTravas(r);
-                    checar(semChave && metade == (false, true) && depois == (false, false) && ligada == (true, true) && QuatroDwords(r),
-                        "TC-10 desligar sem nada gravado não cria chave; a trava pela metade aparece como 'alguma' e desligar tira; ligar grava as quatro");
+                    checar(semChave && metade == (false, true) && depois == (false, false) && ligada == (true, true) && QuatroDwords(r) && MarcaDword(r),
+                        "TC-10 desligar sem nada gravado não cria chave; a trava pela metade aparece como 'alguma' e desligar tira; ligar grava as quatro e a marca");
                 }
 
                 // TC-10d um DWORD 0 (o que as ferramentas de "reativar o Gerenciador de Tarefas"
@@ -202,26 +213,26 @@ public static class TestesTravaCtrlAltDel
                     string NaChaveDeTeste(string c) => c.Replace("\"HKU\\" + Eu + "\\", "\"HKCU\\" + raizCmd + "\\", StringComparison.Ordinal);
                     var linhaOn = NaChaveDeTeste(TravaDoCtrlAltDel.MontarComando(true, Eu, sys));
                     var linhaOff = NaChaveDeTeste(TravaDoCtrlAltDel.MontarComando(false, Eu, sys));
-                    var trocou = !linhaOn.Contains("HKU\\", StringComparison.Ordinal) && Contar(linhaOn, "\"HKCU\\" + raizCmd + "\\") == 4
-                                 && !linhaOff.Contains("HKU\\", StringComparison.Ordinal) && Contar(linhaOff, "\"HKCU\\" + raizCmd + "\\") == 4;
-                    checar(trocou, "TC-36a a linha de teste só troca a raiz (as quatro HKU\\SID viram a chave isolada; nenhuma sobra)");
+                    var trocou = !linhaOn.Contains("HKU\\", StringComparison.Ordinal) && Contar(linhaOn, "\"HKCU\\" + raizCmd + "\\") == 5
+                                 && !linhaOff.Contains("HKU\\", StringComparison.Ordinal) && Contar(linhaOff, "\"HKCU\\" + raizCmd + "\\") == 5;
+                    checar(trocou, "TC-36a a linha de teste só troca a raiz (as cinco HKU\\SID viram a chave isolada; nenhuma sobra)");
                     if (trocou)
                     {
                         var terminouOn = RodarCmdComum(sys, linhaOn);
-                        bool ligouPeloCmd, quatro;
-                        using (var r = Registry.CurrentUser.OpenSubKey(raizCmd)!) { ligouPeloCmd = Quiosque.LerTravas(r) == (true, true); quatro = QuatroDwords(r); }
-                        checar(terminouOn && ligouPeloCmd && quatro,
-                            "TC-36 o cmd /d /v:off /s /c com os quatro reg.exe add grava as quatro políticas como DWORD 1 (cmd comum, chave isolada)");
+                        bool ligouPeloCmd, quatro, marca;
+                        using (var r = Registry.CurrentUser.OpenSubKey(raizCmd)!) { ligouPeloCmd = Quiosque.LerTravas(r) == (true, true); quatro = QuatroDwords(r); marca = MarcaDword(r); }
+                        checar(terminouOn && ligouPeloCmd && quatro && marca,
+                            "TC-36 o cmd /d /v:off /s /c com os reg.exe add grava as quatro políticas e a marca como DWORD 1 (cmd comum, chave isolada)");
 
-                        // metade: tira uma à mão; o desligar com & tem que tirar as outras três mesmo
-                        // com o primeiro delete falhando
+                        // metade: tira uma à mão; o desligar com & tem que tirar as outras três e a
+                        // marca mesmo com o primeiro delete falhando
                         using (var k = Registry.CurrentUser.OpenSubKey(raizCmd + @"\" + TravaDoCtrlAltDel.ChaveSistema, writable: true)!)
                             k.DeleteValue("DisableTaskMgr");
                         var terminouOff = RodarCmdComum(sys, linhaOff);
-                        bool desligouPeloCmd;
-                        using (var r = Registry.CurrentUser.OpenSubKey(raizCmd)!) desligouPeloCmd = Quiosque.LerTravas(r) == (false, false);
-                        checar(terminouOff && desligouPeloCmd,
-                            "TC-36b o desligar com & tira as outras três mesmo com o primeiro delete falhando (trava pela metade)");
+                        bool desligouPeloCmd, semMarca;
+                        using (var r = Registry.CurrentUser.OpenSubKey(raizCmd)!) { desligouPeloCmd = Quiosque.LerTravas(r) == (false, false); semMarca = !TemMarca(r); }
+                        checar(terminouOff && desligouPeloCmd && semMarca,
+                            "TC-36b o desligar com & tira as outras três e a marca mesmo com o primeiro delete falhando (trava pela metade)");
                     }
                 }
                 else checar(false, "TC-36 este PC não tem cmd.exe e reg.exe em " + sys + " no formato esperado");
@@ -241,7 +252,7 @@ public static class TestesTravaCtrlAltDel
         bool sobrou;
         using (var k = Registry.CurrentUser.OpenSubKey(nome)) sobrou = k is not null;
         checar(!sobrou, "TC-10b a chave de teste foi apagada no fim");
-        checar((Quiosque.Travado, Quiosque.AlgumaTrava) == antes, "TC-10c as políticas de verdade deste PC não mudaram");
+        checar((Quiosque.Travado, Quiosque.AlgumaTrava, MarcaDeVerdade()) == antes, "TC-10c as políticas e a marca de verdade deste PC não mudaram");
 
         // ── TC-11..19 a ordem das tentativas (sem registro nem processo) ──
         var negado = new UnauthorizedAccessException(@"Access to the registry key 'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Policies\System' is denied.");
@@ -379,11 +390,20 @@ public static class TestesTravaCtrlAltDel
                && !cfg.Contains("\"Não consegui gravar no Windows: \" + erroQuiosque", StringComparison.Ordinal)
                && cfg.Contains("\"Não consegui mudar o modo quiosque no Windows. O resto foi salvo.\"", StringComparison.Ordinal),
             "TC-30 nenhum texto do Windows (em inglês, com caminho de registro) vai para a tela, nem da trava nem do quiosque");
-        checar(cfgXaml.Contains("Ao salvar, o Windows pode pedir uma permissão de administrador, com o nome Processador de Comandos do Windows.", StringComparison.Ordinal)
+        checar(cfgXaml.Contains("Ao salvar, o Windows pode pedir uma permissão de administrador, com o nome Processador de comandos do Windows.", StringComparison.Ordinal)
                // "pode" (nem sempre pede: UAC desligado ou PDV já elevado), sem "toque em Sim" (o
                // usuário comum digita a senha de um administrador) e com o nome que o aviso mostra
                && !cfgXaml.Contains("toque em Sim", StringComparison.Ordinal),
             "TC-31 o texto da opção avisa que o Windows PODE pedir permissão e com que nome o aviso aparece, sem prometer um Sim");
+        // TC-31b o nome é o que o Windows em português mostra no aviso: a descrição do cmd.exe deste PC
+        // (só dá para conferir num Windows pt-BR; em outro idioma o aviso mostra outro nome)
+        var descricaoCmd = FileVersionInfo.GetVersionInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe")).FileDescription ?? "";
+        var docQuiosque = Fonte("docs", "QUIOSQUE_E_MUSICA.md") ?? "";
+        checar((!descricaoCmd.StartsWith("Processador", StringComparison.Ordinal) || descricaoCmd == "Processador de comandos do Windows")
+               && !cfgXaml.Contains("Processador de Comandos", StringComparison.Ordinal)
+               && docQuiosque.Contains("Processador de comandos do Windows", StringComparison.Ordinal)
+               && !docQuiosque.Contains("Processador de Comandos", StringComparison.Ordinal),
+            "TC-31b a tela e o roteiro usam a grafia do aviso do Windows pt-BR ('" + descricaoCmd + "'): Processador de comandos do Windows");
 
         var novos = new[] { trava, Trecho(cfg, "var quiosqueQuer =", "var travarQuer ="), Trecho(cfgXaml, "x:Name=\"ChkTravarAtalhos\"", "x:Name=\"BtnSairWindows\""), nucleo };
         checar(novos.All(t => t.Length > 0 && !t.Contains('\u2014') && !t.Contains('\u2013')),
@@ -420,12 +440,12 @@ public static class TestesTravaCtrlAltDel
             var partes = miolo.Split(" & ");
             var forma = new Regex("^\"" + Regex.Escape(Sys) + @"\\reg\.exe"" (add|delete) ""HKU\\" + Regex.Escape(Eu) + @"\\([A-Za-z\\]+)"" /v ([A-Za-z]+)( /t REG_DWORD /d 1)? /f\z");
             var lidas = partes.Select(p => forma.Match(p)).ToList();
-            checar(TravaDoCtrlAltDel.ComandoLimpo(c) && partes.Length == 4 && lidas.All(m => m.Success)
-                   && lidas.Select(m => (m.Groups[2].Value, m.Groups[3].Value)).SequenceEqual(TravaDoCtrlAltDel.Travas)
+            checar(TravaDoCtrlAltDel.ComandoLimpo(c) && partes.Length == 5 && lidas.All(m => m.Success)
+                   && lidas.Select(m => (m.Groups[2].Value, m.Groups[3].Value)).SequenceEqual(TravaDoCtrlAltDel.NaOrdem(rotulo == "ligar"))
                    && lidas.All(m => m.Groups[1].Value == (rotulo == "ligar" ? "add" : "delete") && m.Groups[4].Success == (rotulo == "ligar"))
                    && c.IndexOfAny(new[] { '%', '^', '|', '<', '>', '!', '\n', '\r', '(', ')' }) < 0
                    && c.Count(ch => ch == '"') % 2 == 0,
-                $"TC-37 ({rotulo}) a linha é só /d /v:off /s /c e quatro reg.exe de System32 em HKU\\SID, nas quatro políticas, sem % ^ | < > ! nem quebra de linha");
+                $"TC-37 ({rotulo}) a linha é só /d /v:off /s /c e cinco reg.exe de System32 em HKU\\SID, nas quatro políticas e na marca, sem % ^ | < > ! nem quebra de linha");
         }
         checar(!TravaDoCtrlAltDel.ComandoLimpo(on + " & calc%x%") && !TravaDoCtrlAltDel.ComandoLimpo(on + "|more") && !TravaDoCtrlAltDel.ComandoLimpo(on + "\n")
                && !TravaDoCtrlAltDel.ComandoLimpo(on + "^") && !TravaDoCtrlAltDel.ComandoLimpo(on + "!x!") && !TravaDoCtrlAltDel.ComandoLimpo(null),
@@ -452,6 +472,32 @@ public static class TestesTravaCtrlAltDel
         p.WaitForExit();
         _ = saida.Result; _ = erro.Result;
         return true;
+    }
+
+    /// <summary>A marca da trava embaixo da raiz é DWORD 1?</summary>
+    private static bool MarcaDword(RegistryKey raiz)
+    {
+        using var k = raiz.OpenSubKey(TravaDoCtrlAltDel.Marca.Chave);
+        return k is not null && k.GetValueKind(TravaDoCtrlAltDel.Marca.Valor) == RegistryValueKind.DWord
+               && k.GetValue(TravaDoCtrlAltDel.Marca.Valor) is int v && v == 1;
+    }
+
+    /// <summary>A marca da trava existe embaixo da raiz (em qualquer tipo)?</summary>
+    private static bool TemMarca(RegistryKey raiz)
+    {
+        using var k = raiz.OpenSubKey(TravaDoCtrlAltDel.Marca.Chave);
+        return k?.GetValue(TravaDoCtrlAltDel.Marca.Valor) is not null;
+    }
+
+    /// <summary>A marca DE VERDADE deste usuário (só leitura), para comparar antes e depois.</summary>
+    private static string MarcaDeVerdade()
+    {
+        try
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(TravaDoCtrlAltDel.Marca.Chave);
+            return k?.GetValue(TravaDoCtrlAltDel.Marca.Valor)?.ToString() ?? "-";
+        }
+        catch { return "(não li)"; }
     }
 
     /// <summary>As quatro políticas embaixo da raiz são DWORD 1?</summary>

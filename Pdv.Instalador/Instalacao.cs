@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using Microsoft.Win32;
+using DesfazerQuiosque = Pdv.Nucleo.DesfazerQuiosque;
 
 namespace Pdv.Instalador;
 
@@ -754,16 +755,19 @@ public static class Instalacao
 
     /// <summary>
     /// Remove programa, atalho e registro, e ANTES desfaz o quiosque do usuário do caixa (1.0.36):
-    /// <paramref name="quiosquesDesfeitos"/> diz em quantos perfis do Windows o Shell do PDV e a trava
-    /// do Ctrl+Alt+Del saíram. Os DADOS ficam, sempre.
+    /// <paramref name="quiosque"/> diz em quantos perfis do Windows o Shell do PDV e a trava do
+    /// Ctrl+Alt+Del saíram, e em quantos algo ficou. Os DADOS ficam, sempre.
     /// </summary>
-    public static string? Desinstalar(out int quiosquesDesfeitos)
+    public static string? Desinstalar(out DesfazerQuiosque.Resumo quiosque)
     {
         // PRIMEIRO o quiosque: depois que o Pdv.exe sai, o Shell do usuário do caixa apontaria para
         // um arquivo que não existe (tela preta na próxima entrada, com a trava do Ctrl+Alt+Del só
         // com Cancelar). E antes de apagar a chave de desinstalação, que é onde PastaInstalada acha
-        // o InstallLocation. Nunca segura a desinstalação: erro aqui vira zero desfeitos.
-        quiosquesDesfeitos = DesfazerQuiosqueDoCaixa();
+        // o InstallLocation. Um Shell nosso que NÃO saiu segura a desinstalação inteira (nada foi
+        // apagado ainda): apagar o Pdv.exe agora seria a tela preta, e este desinstalador se apaga
+        // junto, sem como rodar de novo. Erro ao percorrer os perfis não segura (não há o que provar).
+        quiosque = DesfazerQuiosqueDoCaixa();
+        if (DesfazerQuiosque.ImpedeDesinstalar(quiosque)) return DesfazerQuiosque.MotivoShellFicou;
         try
         {
             using (var run = Registry.LocalMachine.CreateSubKey(ChaveRun))
@@ -805,14 +809,14 @@ public static class Instalacao
     }
 
     /// <summary>
-    /// Desfaz o quiosque nos perfis carregados em HKEY_USERS cujo Shell é o PDV que está saindo
-    /// (regra em Pdv.Nucleo/DesfazerQuiosque, registro em QuiosqueDoCaixa). Devolve em quantos
-    /// perfis desfez. Nunca lança.
+    /// Desfaz o quiosque nos perfis carregados em HKEY_USERS onde há algo nosso: o Shell do PDV que
+    /// está saindo, a trava com a marca do PDV (regra em Pdv.Nucleo/DesfazerQuiosque, registro em
+    /// QuiosqueDoCaixa). Devolve o resumo. Nunca lança.
     /// </summary>
-    public static int DesfazerQuiosqueDoCaixa()
+    public static DesfazerQuiosque.Resumo DesfazerQuiosqueDoCaixa()
     {
-        try { return QuiosqueDoCaixa.DesfazerNosPerfis(Registry.Users, ExesDoCaixa(), File.Exists).Count; }
-        catch { return 0; }
+        try { return QuiosqueDoCaixa.Resumir(QuiosqueDoCaixa.DesfazerNosPerfis(Registry.Users, ExesDoCaixa(), File.Exists)); }
+        catch { return DesfazerQuiosque.Resumo.Nenhum; }
     }
 
     // ── APAGAR TAMBÉM OS DADOS DESTE CAIXA (14/09/2026, loja Castelo) ─────────────

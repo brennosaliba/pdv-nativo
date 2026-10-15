@@ -46,9 +46,10 @@ public partial class App : Application
             if (apagarDados && Instalacao.PastaInstalada() is { } instalada)
                 Instalacao.PararAgente(Instalacao.PastaDoAgente(instalada));
             // 1.0.36: Desinstalar desfaz antes o quiosque do usuário do caixa (Shell e trava do
-            // Ctrl+Alt+Del), senão a próxima entrada no Windows seria uma tela preta sem saída.
-            var erro = Instalacao.Desinstalar(out var quiosques);
-            var avisoQuiosque = Pdv.Nucleo.DesfazerQuiosque.Aviso(quiosques);
+            // Ctrl+Alt+Del), senão a próxima entrada no Windows seria uma tela preta sem saída. Um
+            // Shell nosso que não sai segura a desinstalação (erro, e nada é apagado).
+            var erro = Instalacao.Desinstalar(out var quiosque);
+            var avisoQuiosque = Pdv.Nucleo.DesfazerQuiosque.Aviso(quiosque);
             string? destino = null, erroDados = null;
             if (erro is null && apagarDados)
                 erroDados = Instalacao.ApartarDados(Instalacao.PastaDados, DateTime.Now, out destino);

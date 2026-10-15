@@ -28,8 +28,8 @@ public enum ResultadoDaTrava
 ///
 /// O desenho: o PDV tenta direto (vale com o UAC desligado ou com o PDV já elevado). Negado, ele
 /// pede ao Windows para rodar como administrador UM programa do próprio Windows: o cmd.exe de
-/// System32, com quatro reg.exe (de System32) que gravam ou apagam as quatro políticas em
-/// HKEY_USERS\SID. Um aviso só. HKEY_USERS\SID e não HKCU: com usuário comum quem digita a senha é
+/// System32, com reg.exe (de System32) que gravam ou apagam as quatro políticas e a marca da trava
+/// (<see cref="Marca"/>) em HKEY_USERS\SID. Um aviso só. HKEY_USERS\SID e não HKCU: com usuário comum quem digita a senha é
 /// OUTRA conta, e o HKCU do processo elevado seria o dela. O resultado vem de reler o registro: o
 /// código de saída de um processo elevado não chega de volta a quem pediu.
 ///
@@ -51,12 +51,30 @@ public static class TravaDoCtrlAltDel
     public const string ChaveSistema = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
     public const string ChaveExplorer = @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
 
-    /// <summary>(chave, valor) que a trava grava como DWORD 1. São só estes quatro, e a linha do cmd não conhece outros.</summary>
+    /// <summary>(chave, valor) que a trava grava como DWORD 1. São só estes quatro (mais a marca abaixo), e a linha do cmd não conhece outros.</summary>
     public static readonly (string Chave, string Valor)[] Travas =
     {
         (ChaveSistema, "DisableTaskMgr"), (ChaveSistema, "DisableLockWorkstation"),
         (ChaveSistema, "DisableChangePassword"), (ChaveExplorer, "NoLogoff"),
     };
+
+    /// <summary>
+    /// A MARCA DA TRAVA (1.0.36, revisão do desinstalador): um DWORD 1 com nome nosso, gravado ao
+    /// lado das políticas, na MESMA chave protegida (Policies\System: o usuário só lê). É o que diz
+    /// ao desinstalador que as quatro políticas foram gravadas pelo PDV, e não pela TI ou por uma GPO
+    /// local. Como só administrador escreve ali, o usuário não consegue fingir a marca (o Shell ele
+    /// consegue: Winlogon\Shell é chave dele). O Windows ignora um valor que não conhece.
+    /// </summary>
+    public const string ValorDaMarca = "PdvNativoTrava";
+    public static readonly (string Chave, string Valor) Marca = (ChaveSistema, ValorDaMarca);
+
+    /// <summary>
+    /// A ORDEM em que a trava grava ou apaga: ligar põe a MARCA PRIMEIRO e depois as quatro; desligar
+    /// tira as quatro e a marca POR ÚLTIMO. Se algo parar no meio, sobra marca com política (o
+    /// desinstalador e o próximo Salvar ainda reconhecem como nossa), nunca política sem marca.
+    /// </summary>
+    public static IReadOnlyList<(string Chave, string Valor)> NaOrdem(bool travar)
+        => travar ? new[] { Marca }.Concat(Travas).ToArray() : Travas.Append(Marca).ToArray();
 
     /// <summary>ERROR_CANCELLED do Windows: o Não no aviso do UAC.</summary>
     public const int ErroCancelado = 1223;
@@ -111,8 +129,9 @@ public static class TravaDoCtrlAltDel
 
     /// <summary>
     /// A LINHA DO CMD ELEVADO, só de constantes e do SID:
-    /// <c>/d /v:off /s /c ""C:\WINDOWS\system32\reg.exe" add "HKU\SID\...\Policies\System" /v DisableTaskMgr /t REG_DWORD /d 1 /f &amp; ..."</c>
-    /// (ou <c>delete ... /v Valor /f</c> para desligar). Os quatro com <c>&amp;</c>, não <c>&amp;&amp;</c>:
+    /// <c>/d /v:off /s /c ""C:\WINDOWS\system32\reg.exe" add "HKU\SID\...\Policies\System" /v PdvNativoTrava /t REG_DWORD /d 1 /f &amp; ..."</c>
+    /// (ou <c>delete ... /v Valor /f</c> para desligar), na ordem de <see cref="NaOrdem"/>: ligar põe a
+    /// marca primeiro, desligar tira a marca por último. Os cinco com <c>&amp;</c>, não <c>&amp;&amp;</c>:
     /// ao desligar a trava pela metade, o delete do valor que não existe falha e os outros seguem.
     /// SID ou pasta fora do formato: lança, e nada sobe como administrador.
     /// </summary>
@@ -121,7 +140,7 @@ public static class TravaDoCtrlAltDel
         if (!SidDeUsuario(sid)) throw new ArgumentException("SID fora do formato de conta de pessoa", nameof(sid));
         if (!PastaDoSistema(pastaDoSistema)) throw new ArgumentException("pasta do sistema fora do formato", nameof(pastaDoSistema));
         var reg = "\"" + pastaDoSistema + @"\" + ProgramaReg + "\"";
-        var partes = Travas.Select(t => travar
+        var partes = NaOrdem(travar).Select(t => travar
             ? reg + " add \"HKU\\" + sid + "\\" + t.Chave + "\" /v " + t.Valor + " /t REG_DWORD /d 1 /f"
             : reg + " delete \"HKU\\" + sid + "\\" + t.Chave + "\" /v " + t.Valor + " /f");
         var comando = ChavesDoCmd + " \"" + string.Join(" & ", partes) + "\"";
