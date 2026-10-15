@@ -834,6 +834,19 @@ if (args.Length >= 1 && args[0] == "--so-kds")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (15/10/2026, 1.0.37): so as suites do Spotify no quiosque (abrir, esconder, tocar
+// sozinho com confirmacao), da inicializacao do Windows e da janela da musica. NAO e o gate.
+//   Pdv.Testes.exe --so-spotify
+if (args.Length >= 1 && args[0] == "--so-spotify")
+{
+    TestesSpotifyNoCaixa.Rodar((cond, nome) => Check("spotify-caixa: " + nome, cond));
+    TestesInicioDoWindows.Rodar((cond, nome) => Check("inicio-windows: " + nome, cond));
+    TestesMusica.Rodar((cond, nome) => Check("musica: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so spotify) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 // MODO DE DESENVOLVIMENTO (15/10/2026, fechamento da 1.0.36): so as suites da troca de versao (quem
 // reabre o caixa, o instalador, o quiosque e a trava, e os navegadores do caixa anterior). NAO e o gate.
 //   Pdv.Testes.exe --so-troca

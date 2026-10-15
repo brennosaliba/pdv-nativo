@@ -90,6 +90,20 @@ public sealed class Spotify
         catch { return Array.Empty<Aparelho>(); }
     }
 
+    /// <summary>
+    /// O aparelho com este nome na lista de agora (o ativo primeiro, só com id). 15/10/2026: o
+    /// Spotify diz que o id do aparelho persiste "até certo ponto" e deve ser buscado de novo; o
+    /// nome (o do computador, no app de PC) é o que fica.
+    /// </summary>
+    public static Aparelho? AparelhoPorNome(IEnumerable<Aparelho> aparelhos, string? nome)
+        => string.IsNullOrWhiteSpace(nome) ? null
+           : aparelhos.Where(a => a.Id.Length > 0 && string.Equals(a.Nome.Trim(), nome.Trim(), StringComparison.OrdinalIgnoreCase))
+                      .OrderByDescending(a => a.Ativo).FirstOrDefault();
+
+    /// <summary>O id de agora do aparelho escolhido pelo nome; sem ele na lista, o id guardado (reserva).</summary>
+    public static string? IdAtual(IEnumerable<Aparelho> aparelhos, string? nome, string? idGuardado)
+        => AparelhoPorNome(aparelhos, nome)?.Id ?? (string.IsNullOrEmpty(idGuardado) ? null : idGuardado);
+
     /// <summary>GET /me/player: 204 = nada tocando (null); 200 = o estado.</summary>
     public static Estado? LerEstado(int status, string? corpo)
     {
@@ -170,10 +184,14 @@ public sealed class Spotify
     }
 
     private async Task<string?> ComandoAsync(HttpMethod m, string caminho, string? json, CancellationToken ct)
+        => (await ComandoComStatusAsync(m, caminho, json, ct).ConfigureAwait(false)).Erro;
+
+    /// <summary>O comando e o HTTP que voltou (0 = não saiu: sem rede ou sem token), para o log do caixa.</summary>
+    private async Task<(int Status, string? Erro)> ComandoComStatusAsync(HttpMethod m, string caminho, string? json, CancellationToken ct)
     {
         var (st, corpo) = await ChamarAsync(m, caminho, json, ct).ConfigureAwait(false);
-        if (st == 0) return _erroDoToken() ?? "Sem internet agora.";
-        return st is 200 or 202 or 204 ? null : MensagemErro(st, corpo);
+        if (st == 0) return (0, _erroDoToken() ?? "Sem internet agora.");
+        return (st, st is 200 or 202 or 204 ? null : MensagemErro(st, corpo));
     }
 
     /// <summary>Os aparelhos com o Spotify aberto nesta conta, e o erro se a pergunta falhou.</summary>
@@ -200,6 +218,10 @@ public sealed class Spotify
 
     public Task<string?> TocarPlaylistAsync(string? deviceId, string playlistUri, CancellationToken ct = default)
         => ComandoAsync(HttpMethod.Put, "/me/player/play" + Q(deviceId),
+            JsonSerializer.Serialize(new { context_uri = playlistUri }), ct);
+    /// <summary>O mesmo play, com o HTTP (o caixa anota no início do Windows).</summary>
+    public Task<(int Status, string? Erro)> TocarPlaylistComStatusAsync(string? deviceId, string playlistUri, CancellationToken ct = default)
+        => ComandoComStatusAsync(HttpMethod.Put, "/me/player/play" + Q(deviceId),
             JsonSerializer.Serialize(new { context_uri = playlistUri }), ct);
     public Task<string?> RetomarAsync(string? deviceId, CancellationToken ct = default)
         => ComandoAsync(HttpMethod.Put, "/me/player/play" + Q(deviceId), null, ct);
