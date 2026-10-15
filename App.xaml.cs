@@ -20,20 +20,10 @@ public partial class App : Application
     /// </summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
-        // ── O AJUDANTE DA TRAVA DO CTRL+ALT+DEL (1.0.36, 14/10/2026, Savassi) ──
-        // `Pdv.exe --travas on|off --sid SID` é este mesmo exe chamado como administrador pela
-        // Configuração (Quiosque.MudarTrava), porque a chave Policies do usuário só aceita escrita
-        // elevada. Ele grava as quatro políticas e sai ANTES de tudo: sem guardas de tela, sem
-        // trava de instância (o caixa que pediu está aberto), sem banco, sem agente, sem TEF.
-        // Environment.Exit, como as ferramentas: o OnExit é do caixa.
-        if (LinhaDeComando.Modo(e.Args) == ModoDoExe.Travas) { Environment.Exit(Quiosque.RodarAjudante(e.Args)); return; }
-
-        // Defesa em profundidade: --travas/--sid só valem como o ajudante acima (args[0] == --travas).
-        // Se um dia algo entregar esses argumentos fora de ordem, ou a elevação chegar a um exe que
-        // não os reconhece, a frente de caixa NÃO pode abrir no lugar (e menos ainda elevada). Sai
-        // sem abrir nada. O caixa de verdade nunca é chamado com estes argumentos.
-        if (e.Args.Any(a => a == TravaDoCtrlAltDel.Argumento || a == TravaDoCtrlAltDel.ArgumentoSid))
-        { Environment.Exit(TravaDoCtrlAltDel.SaidaArgumento); return; }
+        // 1.0.36 (revisão de segurança): o Pdv.exe NÃO tem modo de administrador. A trava do
+        // Ctrl+Alt+Del pede ao Windows só o cmd.exe e o reg.exe de System32 (Quiosque.MudarTrava).
+        // Elevar o Pdv.exe daria administrador às bibliotecas que ele extrai numa pasta que o
+        // usuário grava (%TEMP%\.net). Nunca peça ao Windows para abrir ESTE exe como administrador.
 
         // ── O CAIXA NÃO MORRE POR UMA EXCEÇÃO DE TELA ───────────────────────
         //

@@ -27,43 +27,55 @@ public enum ResultadoDaTrava
 /// controla. Com o UAC ligado (o padrão do Windows), a trava nunca funcionou.
 ///
 /// O desenho: o PDV tenta direto (vale com o UAC desligado ou com o PDV já elevado). Negado, ele
-/// chama a si mesmo como administrador (<c>Pdv.exe --travas on|off --sid SID</c>), o Windows mostra
-/// o aviso, e o ajudante grava em HKEY_USERS\SID, não no HKCU dele: com usuário comum quem digita a
-/// senha é OUTRA conta, e o HKCU do processo elevado seria o dela. O resultado vem de reler o
-/// registro, não do código de saída do ajudante.
+/// pede ao Windows para rodar como administrador UM programa do próprio Windows: o cmd.exe de
+/// System32, com quatro reg.exe (de System32) que gravam ou apagam as quatro políticas em
+/// HKEY_USERS\SID. Um aviso só. HKEY_USERS\SID e não HKCU: com usuário comum quem digita a senha é
+/// OUTRA conta, e o HKCU do processo elevado seria o dela. O resultado vem de reler o registro: o
+/// código de saída de um processo elevado não chega de volta a quem pediu.
 ///
-/// Aqui mora só a regra pura (a bateria prova cada pedaço): o argumento, o SID, quando pedir
-/// permissão, a ordem das tentativas e o texto da tela. O registro de verdade fica em Quiosque.cs.
+/// POR QUE NÃO O PRÓPRIO Pdv.exe (revisão de segurança da 1.0.36, antes de ir para a loja). A
+/// primeira versão relançava o Pdv.exe como administrador (--travas on|off --sid SID). O Pdv.exe é
+/// publicado em arquivo único e extrai bibliotecas nativas numa pasta que o usuário grava
+/// (%TEMP%\.net). Elevar o Pdv.exe era dar administrador a código que o usuário comum consegue
+/// plantar. Agora o que sobe é só programa do Windows, por caminho absoluto de System32
+/// (Environment.SystemDirectory), com a linha de comando montada só de constantes e do SID (formato
+/// estrito, vindo da conta do processo, nunca de arquivo nem de texto digitado). O Pdv.exe não tem
+/// mais modo de administrador nenhum.
+///
+/// Aqui mora só a regra pura (a bateria prova cada pedaço): o SID, a pasta do sistema, a linha do
+/// cmd, quando pedir permissão, a ordem das tentativas e o texto da tela. O registro e o processo
+/// de verdade ficam em Quiosque.cs.
 /// </summary>
 public static class TravaDoCtrlAltDel
 {
-    public const string Argumento = "--travas";
-    public const string ArgumentoSid = "--sid";
-
     public const string ChaveSistema = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
     public const string ChaveExplorer = @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
 
-    /// <summary>(chave, valor) que a trava grava como DWORD 1. São só estes quatro, e o ajudante não aceita outros.</summary>
+    /// <summary>(chave, valor) que a trava grava como DWORD 1. São só estes quatro, e a linha do cmd não conhece outros.</summary>
     public static readonly (string Chave, string Valor)[] Travas =
     {
         (ChaveSistema, "DisableTaskMgr"), (ChaveSistema, "DisableLockWorkstation"),
         (ChaveSistema, "DisableChangePassword"), (ChaveExplorer, "NoLogoff"),
     };
 
-    // ── Códigos de saída do ajudante (só vão para o detalhe da auditoria) ────────
-    public const int SaidaOk = 0;
-    public const int SaidaArgumento = 2;
-    public const int SaidaUsuarioFora = 3;
-    public const int SaidaErro = 4;
-    public const int SaidaSemAdministrador = 5;
-    public const int SaidaOutraPessoa = 6;
-
     /// <summary>ERROR_CANCELLED do Windows: o Não no aviso do UAC.</summary>
     public const int ErroCancelado = 1223;
 
+    /// <summary>Os dois programas que sobem como administrador. Só estes, e só de System32.</summary>
+    public const string ProgramaCmd = "cmd.exe";
+    public const string ProgramaReg = "reg.exe";
+
+    /// <summary>
+    /// As chaves do cmd: /d desliga o AutoRun (HKCU\Software\Microsoft\Command Processor\AutoRun:
+    /// o usuário grava ali, e sem o /d um comando dele rodaria junto, como administrador); /v:off
+    /// desliga a expansão atrasada (o !nome! que o registro do usuário também pode ligar); /s /c roda
+    /// o que está entre as aspas de fora, como está.
+    /// </summary>
+    public const string ChavesDoCmd = "/d /v:off /s /c";
+
     // SID de CONTA DE PESSOA: S-1-5-21-a-b-c-d (conta local ou de domínio) ou S-1-12-1-a-b-c-d
     // (conta Microsoft Entra). Nada de S-1-5-18 (SYSTEM), S-1-5-32-544 (grupo Administradores),
-    // ".DEFAULT" nem "SID_Classes": o ajudante só mexe no registro de uma pessoa.
+    // ".DEFAULT" nem "SID_Classes": só o registro de uma pessoa.
     // [0-9] e não \d (\d aceita dígito árabe); \z e não $ ($ aceita um \n no fim); sem zero à esquerda.
     private static readonly Regex FormatoSid = new(
         @"^S-1-(?:5-21|12-1)-(0|[1-9][0-9]{0,9})-(0|[1-9][0-9]{0,9})-(0|[1-9][0-9]{0,9})-(0|[1-9][0-9]{0,9})\z",
@@ -80,27 +92,50 @@ public static class TravaDoCtrlAltDel
         return true;
     }
 
-    /// <summary>A linha de comando do ajudante. SID fora do formato não vira argumento.</summary>
-    public static string MontarArgumentos(bool travar, string sid)
+    // A pasta do sistema como o Windows devolve (C:\WINDOWS\system32): disco local, UMA pasta (a do
+    // Windows) e system32 ou SysWOW64. Sem espaço, sem aspas, sem %, &, ^, |, <, > ou !, sem "..":
+    // nada que o cmd interprete e nada fora da pasta do Windows (um ...\Temp\system32 não passa).
+    private static readonly Regex FormatoPastaDoSistema = new(
+        @"^[A-Za-z]:\\[A-Za-z0-9_][A-Za-z0-9_.\-]*\\(?:system32|SysWOW64)\z",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    /// <summary>É a pasta do sistema do Windows, num formato que pode entrar na linha do cmd?</summary>
+    public static bool PastaDoSistema(string? pasta) => pasta is not null && FormatoPastaDoSistema.IsMatch(pasta);
+
+    /// <summary>O caminho absoluto do cmd.exe que o Windows eleva. Pasta fora do formato: lança.</summary>
+    public static string CaminhoDoCmd(string pastaDoSistema)
     {
-        if (!SidDeUsuario(sid)) throw new ArgumentException("SID fora do formato de conta de pessoa", nameof(sid));
-        return Argumento + " " + (travar ? "on" : "off") + " " + ArgumentoSid + " " + sid;
+        if (!PastaDoSistema(pastaDoSistema)) throw new ArgumentException("pasta do sistema fora do formato", nameof(pastaDoSistema));
+        return pastaDoSistema + @"\" + ProgramaCmd;
     }
 
     /// <summary>
-    /// Lê exatamente <c>--travas on|off --sid SID</c>. Qualquer outra coisa (sem SID, SID de
-    /// sistema, caminho escondido no SID, argumento a mais, ordem trocada) devolve null.
+    /// A LINHA DO CMD ELEVADO, só de constantes e do SID:
+    /// <c>/d /v:off /s /c ""C:\WINDOWS\system32\reg.exe" add "HKU\SID\...\Policies\System" /v DisableTaskMgr /t REG_DWORD /d 1 /f &amp; ..."</c>
+    /// (ou <c>delete ... /v Valor /f</c> para desligar). Os quatro com <c>&amp;</c>, não <c>&amp;&amp;</c>:
+    /// ao desligar a trava pela metade, o delete do valor que não existe falha e os outros seguem.
+    /// SID ou pasta fora do formato: lança, e nada sobe como administrador.
     /// </summary>
-    public static (bool Travar, string Sid)? LerArgumentos(IReadOnlyList<string>? args)
+    public static string MontarComando(bool travar, string sid, string pastaDoSistema)
     {
-        if (args is null || args.Count != 4) return null;
-        if (args[0] != Argumento || args[2] != ArgumentoSid) return null;
-        bool travar;
-        if (args[1] == "on") travar = true;
-        else if (args[1] == "off") travar = false;
-        else return null;
-        return SidDeUsuario(args[3]) ? (travar, args[3]) : null;
+        if (!SidDeUsuario(sid)) throw new ArgumentException("SID fora do formato de conta de pessoa", nameof(sid));
+        if (!PastaDoSistema(pastaDoSistema)) throw new ArgumentException("pasta do sistema fora do formato", nameof(pastaDoSistema));
+        var reg = "\"" + pastaDoSistema + @"\" + ProgramaReg + "\"";
+        var partes = Travas.Select(t => travar
+            ? reg + " add \"HKU\\" + sid + "\\" + t.Chave + "\" /v " + t.Valor + " /t REG_DWORD /d 1 /f"
+            : reg + " delete \"HKU\\" + sid + "\\" + t.Chave + "\" /v " + t.Valor + " /f");
+        var comando = ChavesDoCmd + " \"" + string.Join(" & ", partes) + "\"";
+        // cinto e suspensório: o que sai daqui só tem o que as constantes e o SID têm
+        if (!ComandoLimpo(comando)) throw new InvalidOperationException("a linha do cmd saiu com caractere fora do esperado");
+        return comando;
     }
+
+    /// <summary>
+    /// A linha só tem letra, número, espaço, \ : . " / _ - e o &amp; que separa os reg. Nada de %
+    /// (variável), ^ (escape), |, &lt;, &gt; (redirecionamento), ! (expansão) nem quebra de linha.
+    /// </summary>
+    public static bool ComandoLimpo(string? comando)
+        => comando is not null && Regex.IsMatch(comando, @"^[A-Za-z0-9 \\:.""/_&\-]+\z", RegexOptions.CultureInvariant);
 
     /// <summary>O caminho completo de uma chave da trava no registro do usuário que pediu.</summary>
     public static string CaminhoNoHku(string sid, string chave)
@@ -110,15 +145,18 @@ public static class TravaDoCtrlAltDel
     }
 
     /// <summary>
-    /// O ajudante só mexe no registro de quem pediu. O SID do argumento tem que ser o da conta do
-    /// próprio ajudante (administrador que elevou a si mesmo) ou o de quem está logado nesta sessão
-    /// do Windows (usuário comum que chamou o administrador para digitar a senha). SID de outra
-    /// pessoa: recusado, mesmo com administrador.
+    /// Por que NÃO pedir ao Windows (null = pode pedir): a conta do processo não é de pessoa, a pasta
+    /// do sistema está fora do formato, ou o cmd.exe e o reg.exe não estão nela.
     /// </summary>
-    public static bool SidAceito(string? sidPedido, string? sidDoProcesso, string? sidDaSessao)
-        => SidDeUsuario(sidPedido) && (Igual(sidPedido!, sidDoProcesso) || Igual(sidPedido!, sidDaSessao));
-
-    private static bool Igual(string a, string? b) => b is not null && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+    public static string? MotivoParaNaoPedir(string? sid, string? pastaDoSistema, Func<string, bool> existe)
+    {
+        if (!SidDeUsuario(sid)) return "a conta do Windows não é de pessoa (" + (sid ?? "sem SID") + ")";
+        if (!PastaDoSistema(pastaDoSistema)) return "pasta do sistema fora do esperado (" + (pastaDoSistema ?? "nenhuma") + ")";
+        bool tem;
+        try { tem = existe(pastaDoSistema + @"\" + ProgramaCmd) && existe(pastaDoSistema + @"\" + ProgramaReg); }
+        catch { tem = false; }
+        return tem ? null : "cmd.exe ou reg.exe não estão em " + pastaDoSistema;
+    }
 
     /// <summary>A Configuração precisa mexer? Desmarcado sempre destrava, até a trava pela metade.</summary>
     public static bool PrecisaMudar(bool querTravar, bool travadoAgora, bool algumaTrava)
@@ -133,49 +171,18 @@ public static class TravaDoCtrlAltDel
     /// <summary>O Não no aviso do Windows chega como Win32Exception 1223. Não é falha: é a resposta.</summary>
     public static bool Cancelado(Exception? ex) => ex is Win32Exception { NativeErrorCode: ErroCancelado };
 
-    /// <summary>O nome do exe que pode ser elevado: só o nosso, nunca o host que o carregou.</summary>
-    public const string ExeDoPdv = "Pdv.exe";
-
-    /// <summary>
-    /// Só eleva o nosso <c>Pdv.exe</c> quando ele mora numa pasta que só o administrador troca
-    /// (Arquivos de Programas). O nome importa: rodando como <c>dotnet Pdv.dll</c> o processo é o
-    /// <c>dotnet.exe</c>, e sem conferir o nome o Windows pediria administrador para ELE; um
-    /// <c>atualizador.exe</c> de outro fornecedor na mesma pasta também passaria. Fora da pasta
-    /// protegida, elevar seria dar administrador a um arquivo que o próprio usuário pode trocar.
-    /// Isto garante o CAMINHO do exe; o que o processo carrega depois (o self-extract do publish em
-    /// arquivo único) é outra conversa, anotada como pendência própria.
-    /// </summary>
-    public static bool PodeElevar(string? exe, IEnumerable<string?> pastasProtegidas)
-    {
-        if (string.IsNullOrWhiteSpace(exe) || !exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return false;
-        string cheio;
-        try { cheio = Path.GetFullPath(exe); }
-        catch { return false; }
-        // caminho relativo ou com ".." não passa: o que se eleva é exatamente o que está escrito
-        if (!string.Equals(cheio, exe, StringComparison.OrdinalIgnoreCase)) return false;
-        // só o nosso exe, não o host que o carregou (dotnet.exe) nem outro .exe da mesma pasta
-        if (!string.Equals(Path.GetFileName(cheio), ExeDoPdv, StringComparison.OrdinalIgnoreCase)) return false;
-        foreach (var p in pastasProtegidas)
-        {
-            if (string.IsNullOrWhiteSpace(p)) continue;
-            string raiz;
-            try { raiz = Path.GetFullPath(p).TrimEnd('\\', '/') + "\\"; }
-            catch { continue; }
-            if (raiz.Length > 3 && cheio.StartsWith(raiz, StringComparison.OrdinalIgnoreCase)) return true;
-        }
-        return false;
-    }
-
     /// <summary>
     /// A ORDEM, sem registro nem processo (a bateria troca cada passo por um falso):
     ///  1. tenta direto; deu e ficou como quer: pronto, sem aviso do Windows;
-    ///  2. só ACESSO NEGADO segue para o administrador, e só se o exe pode ser elevado
-    ///     (<paramref name="motivoParaNaoElevar"/> nulo);
+    ///  2. só ACESSO NEGADO segue para o administrador, e só se dá para pedir
+    ///     (<paramref name="motivoParaNaoPedir"/> nulo);
     ///  3. Não no aviso (1223): Cancelou;
-    ///  4. o resultado é o registro RELIDO, nunca o código de saída (que vai só para o detalhe).
+    ///  4. o resultado é o registro RELIDO. <paramref name="pedirAoWindows"/> devolve só se o cmd
+    ///     terminou em 20 s, e isso vai para o detalhe: o código de saída de um processo elevado não
+    ///     volta para quem pediu, e mesmo que voltasse, quem manda é o registro.
     /// </summary>
     public static (ResultadoDaTrava Resultado, string Detalhe) Mudar(
-        Func<Exception?> tentarDireto, Func<bool> ficouComoQuer, string? motivoParaNaoElevar, Func<int?> pedirAoWindows)
+        Func<Exception?> tentarDireto, Func<bool> ficouComoQuer, string? motivoParaNaoPedir, Func<bool> pedirAoWindows)
     {
         Exception? direto;
         try { direto = tentarDireto(); }
@@ -187,17 +194,17 @@ public static class TravaDoCtrlAltDel
 
         var detalhe = "direto: " + Tecnico(direto);
         if (!AcessoNegado(direto)) return (ResultadoDaTrava.Falhou, detalhe);
-        if (motivoParaNaoElevar is not null) return (ResultadoDaTrava.Falhou, detalhe + "; sem pedir ao Windows: " + motivoParaNaoElevar);
+        if (motivoParaNaoPedir is not null) return (ResultadoDaTrava.Falhou, detalhe + "; sem pedir ao Windows: " + motivoParaNaoPedir);
 
-        int? saida;
-        try { saida = pedirAoWindows(); }
+        bool terminou;
+        try { terminou = pedirAoWindows(); }
         catch (Exception ex) when (Cancelado(ex))
         {
             return (ResultadoDaTrava.Cancelou, detalhe + "; o aviso do Windows foi respondido com Não");
         }
         catch (Exception ex) { return (ResultadoDaTrava.Falhou, detalhe + "; pedido ao Windows: " + Tecnico(ex)); }
 
-        detalhe += "; administrador: " + DescreverSaida(saida);
+        detalhe += "; cmd como administrador: " + (terminou ? "terminou" : "não terminou em 20 s");
         return (Relido(ficouComoQuer) ? ResultadoDaTrava.Ok : ResultadoDaTrava.Falhou, detalhe);
     }
 
@@ -210,19 +217,6 @@ public static class TravaDoCtrlAltDel
 
     /// <summary>O texto técnico de uma exceção, para a auditoria (nunca para a tela).</summary>
     public static string Tecnico(Exception ex) => ex.GetType().Name + ": " + ex.Message;
-
-    /// <summary>O código de saída do ajudante em palavras, para a auditoria.</summary>
-    public static string DescreverSaida(int? codigo) => codigo switch
-    {
-        null => "não terminou em 20 s",
-        SaidaOk => "gravou",
-        SaidaArgumento => "argumento recusado",
-        SaidaUsuarioFora => "o registro do usuário não está carregado",
-        SaidaErro => "erro no registro",
-        SaidaSemAdministrador => "rodou sem administrador",
-        SaidaOutraPessoa => "SID de outra pessoa recusado",
-        _ => "saiu com " + codigo.Value.ToString(CultureInfo.InvariantCulture),
-    };
 
     /// <summary>A frase da tela. Uma linha, sem termo técnico e sem nada em inglês.</summary>
     public static string Frase(ResultadoDaTrava resultado, bool travar) => resultado switch

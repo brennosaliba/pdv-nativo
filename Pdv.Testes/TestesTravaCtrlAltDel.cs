@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Security;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
@@ -9,73 +10,82 @@ namespace Pdv.Testes;
 /// <summary>
 /// A TRAVA DO CTRL+ALT+DEL COM O ADMINISTRADOR DO WINDOWS (1.0.36, 14/10/2026, Savassi, caixa 1.0.34).
 /// O dono marcou a trava e viu "Access to the registry key ... Policies ... is denied": a chave
-/// Policies do usuário só aceita escrita de administrador elevado. Agora o PDV pede ao Windows e
-/// um ajudante (o próprio Pdv.exe --travas on|off --sid SID) grava em HKEY_USERS\SID.
+/// Policies do usuário só aceita escrita de administrador elevado. Agora o PDV pede ao Windows para
+/// rodar como administrador só o cmd.exe de System32 com quatro reg.exe (de System32), que gravam
+/// em HKEY_USERS\SID. Revisão de segurança: o Pdv.exe NUNCA sobe como administrador (ele extrai
+/// bibliotecas numa pasta que o usuário grava, %TEMP%\.net).
 ///
-///  TC-1..3   o argumento do ajudante: válido, inválido, o caminho em HKEY_USERS
-///  TC-4      SID de outra pessoa recusado (só o de quem pediu)
-///  TC-5..10  o ajudante e o gravador numa chave ISOLADA (HKCU\Software\PdvNativoTeste\guid),
-///            criada e apagada aqui; as políticas de verdade deste PC não são tocadas
+///  TC-1..4   a linha do cmd: o que sai para ligar e desligar, SID e pasta do sistema recusados,
+///            quando NÃO pedir ao Windows
+///  TC-5..10  o gravador numa chave ISOLADA (HKCU\Software\PdvNativoTeste\guid), criada e apagada
+///            aqui; as políticas de verdade deste PC não são tocadas
 ///  TC-11..19 a ordem: direto, aviso do Windows, o Não (1223) vira frase curta, o registro relido manda
-///  TC-20..   o fonte: a abertura nunca chama o aviso, o ajudante sai antes de tudo, a tela sem inglês
+///  TC-20..35 o fonte: a abertura nunca chama o aviso, o Pdv.exe não tem modo de administrador, a tela
+///  TC-36..37 a linha de VERDADE rodada num cmd comum (sem administrador) contra a chave isolada, e o
+///            que a linha pode conter
+/// Nenhuma prova abre o aviso do Windows nem grava Policies ou Winlogon de verdade.
 /// </summary>
 public static class TestesTravaCtrlAltDel
 {
     private const string Eu = "S-1-5-21-1111111111-2222222222-3333333333-1001";
-    private const string Outra = "S-1-5-21-1111111111-2222222222-3333333333-1002";
-    private const string Admin = "S-1-5-21-1111111111-2222222222-3333333333-500";
     private const string Entra = "S-1-12-1-1234567890-1234567890-1234567890-1234567890";
+    private const string Sys = @"C:\WINDOWS\system32";
 
     public static void Rodar(Action<bool, string> checar)
     {
-        // ── TC-1 argumento válido: on, off, conta Entra, e a ida e volta do que o PDV monta ──
-        var on = LinhaDeComando.LerTravas(new[] { "--travas", "on", "--sid", Eu });
-        var off = LinhaDeComando.LerTravas(new[] { "--travas", "off", "--sid", Eu });
-        var entra = LinhaDeComando.LerTravas(new[] { "--travas", "on", "--sid", Entra });
-        checar(on is { Travar: true, Sid: Eu } && off is { Travar: false, Sid: Eu } && entra is { Travar: true, Sid: Entra },
-            "TC-1 --travas on|off --sid SID é aceito (conta local, de domínio ou Entra)");
-        var montado = TravaDoCtrlAltDel.MontarArgumentos(false, Eu).Split(' ');
-        checar(string.Join(" ", montado) == "--travas off --sid " + Eu
-               && LinhaDeComando.LerTravas(montado) is { Travar: false, Sid: Eu }
-               && LinhaDeComando.Modo(montado) == ModoDoExe.Travas
-               && !LinhaDeComando.PegaATrava(ModoDoExe.Travas) && !LinhaDeComando.AbreOCaixa(ModoDoExe.Travas),
-            "TC-1b o que o PDV monta é o que o ajudante lê; o modo não pega a trava de instância nem abre o caixa");
+        // ── TC-1 a linha do cmd, ligar e desligar, montada à mão aqui (não copiada do núcleo) ──
+        const string Reg = "\"" + Sys + @"\reg.exe" + "\"";
+        const string HkuSys = "\"HKU\\" + Eu + @"\Software\Microsoft\Windows\CurrentVersion\Policies\System" + "\"";
+        const string HkuExp = "\"HKU\\" + Eu + @"\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" + "\"";
+        var esperadoOn = "/d /v:off /s /c \""
+            + Reg + " add " + HkuSys + " /v DisableTaskMgr /t REG_DWORD /d 1 /f & "
+            + Reg + " add " + HkuSys + " /v DisableLockWorkstation /t REG_DWORD /d 1 /f & "
+            + Reg + " add " + HkuSys + " /v DisableChangePassword /t REG_DWORD /d 1 /f & "
+            + Reg + " add " + HkuExp + " /v NoLogoff /t REG_DWORD /d 1 /f\"";
+        var esperadoOff = "/d /v:off /s /c \""
+            + Reg + " delete " + HkuSys + " /v DisableTaskMgr /f & "
+            + Reg + " delete " + HkuSys + " /v DisableLockWorkstation /f & "
+            + Reg + " delete " + HkuSys + " /v DisableChangePassword /f & "
+            + Reg + " delete " + HkuExp + " /v NoLogoff /f\"";
+        var on = TravaDoCtrlAltDel.MontarComando(true, Eu, Sys);
+        var off = TravaDoCtrlAltDel.MontarComando(false, Eu, Sys);
+        checar(on == esperadoOn, "TC-1 ligar: um cmd /d /v:off /s /c com quatro reg.exe add de System32 em HKU\\SID (DWORD 1)" + (on == esperadoOn ? "" : " [saiu: " + on + "]"));
+        checar(off == esperadoOff, "TC-1b desligar: os quatro reg.exe delete, separados por & (a trava pela metade não para no primeiro)" + (off == esperadoOff ? "" : " [saiu: " + off + "]"));
+        checar(TravaDoCtrlAltDel.MontarComando(true, Entra, @"D:\WINNT\SysWOW64").Contains("\"HKU\\" + Entra + "\\", StringComparison.Ordinal)
+               && TravaDoCtrlAltDel.CaminhoDoCmd(Sys) == Sys + @"\cmd.exe",
+            "TC-1c conta Entra e Windows em outro disco também; o que o Windows eleva é o cmd.exe de System32, por caminho absoluto");
 
-        // ── TC-2 argumento inválido: nada passa ──
-        string[][] ruins =
+        // ── TC-2 SID fora do formato nunca vira linha de comando ──
+        string[] sidsRuins =
         {
-            new[] { "--travas", "on" },                                         // sem SID
-            new[] { "--travas", "on", "--sid" },
-            new[] { "--travas", "on", "--sid", "" },
-            new[] { "--travas", "on", "--sid", "S-1-5-18" },                    // SYSTEM
-            new[] { "--travas", "on", "--sid", "S-1-5-32-544" },                // grupo Administradores
-            new[] { "--travas", "on", "--sid", ".DEFAULT" },
-            new[] { "--travas", "on", "--sid", Eu + "_Classes" },
-            new[] { "--travas", "on", "--sid", Eu + @"\..\S-1-5-18" },          // caminho escondido no SID
-            new[] { "--travas", "on", "--sid", @"..\" + Eu },
-            new[] { "--travas", "on", "--sid", Eu + @"\Software" },
-            new[] { "--travas", "on", "--sid", Eu + "\n" },
-            new[] { "--travas", "on", "--sid", " " + Eu },
-            new[] { "--travas", "on", "--sid", "s" + Eu[1..] },                 // minúsculo
-            new[] { "--travas", "on", "--sid", "S-1-5-21-4294967296-1-2-1001" }, // passa de 32 bits
-            new[] { "--travas", "on", "--sid", "S-1-5-21-01-2-3-1001" },         // zero à esquerda
-            new[] { "--travas", "on", "--sid", "S-1-5-21-1-2-1001" },            // número a menos
-            new[] { "--travas", "on", "--sid", "S-1-5-21-1-2-3-4-1001" },        // número a mais
-            new[] { "--travas", "on", "--sid", "S-1-5-21-\u0661-2-3-1001" },     // dígito árabe
-            new[] { "--travas", "on", "--sid", Eu, "--mais" },                   // argumento a mais
-            new[] { "--travas", "ON", "--sid", Eu },
-            new[] { "--travas", "1", "--sid", Eu },
-            new[] { "--travas", "on", "--SID", Eu },
-            new[] { "--sid", Eu, "--travas", "on" },                             // ordem trocada
-            new[] { "--quiosque", "on", "--sid", Eu },
+            "", "S-1-5-18", "S-1-5-19", "S-1-5-32-544", ".DEFAULT", Eu + "_Classes",
+            Eu + @"\..\S-1-5-18", @"..\" + Eu, Eu + @"\Software", Eu + "\n", " " + Eu,
+            "s" + Eu[1..], "S-1-5-21-4294967296-1-2-1001", "S-1-5-21-01-2-3-1001", "S-1-5-21-1-2-1001",
+            "S-1-5-21-1-2-3-4-1001", "S-1-5-21-\u0661-2-3-1001",
+            Eu + " & calc", Eu + "\" & calc & \"", Eu + "%PATH%", Eu + "^", Eu + "|more", Eu + ">x",
         };
-        var passaram = ruins.Where(x => LinhaDeComando.LerTravas(x) is not null).Select(x => string.Join(" ", x)).ToList();
-        checar(passaram.Count == 0 && LinhaDeComando.LerTravas(null) is null && LinhaDeComando.LerTravas(Array.Empty<string>()) is null,
-            "TC-2 recusa sem SID, SID de sistema ou de grupo, caminho no SID, maiúscula, número fora do formato e argumento a mais"
-            + (passaram.Count == 0 ? "" : " [passaram: " + string.Join(" | ", passaram) + "]"));
-        checar(Lanca(() => TravaDoCtrlAltDel.MontarArgumentos(true, "S-1-5-18"))
-               && Lanca(() => TravaDoCtrlAltDel.MontarArgumentos(true, Eu + " --mais")),
-            "TC-2b SID fora do formato nunca vira argumento do administrador");
+        var passaramSid = sidsRuins.Where(s => TravaDoCtrlAltDel.SidDeUsuario(s) || !Lanca(() => TravaDoCtrlAltDel.MontarComando(true, s, Sys))).ToList();
+        checar(passaramSid.Count == 0 && !TravaDoCtrlAltDel.SidDeUsuario(null) && TravaDoCtrlAltDel.SidDeUsuario(Eu) && TravaDoCtrlAltDel.SidDeUsuario(Entra),
+            "TC-2 recusa SID de sistema ou de grupo, caminho no SID, maiúscula, número fora do formato e qualquer & \" % ^ | > (nada vira comando)"
+            + (passaramSid.Count == 0 ? "" : " [passaram: " + string.Join(" | ", passaramSid.Select(s => s.Replace("\n", "\\n"))) + "]"));
+
+        // ── TC-2b a pasta do sistema: só X:\<pasta do Windows>\system32 ou SysWOW64 ──
+        string[] pastasRuins =
+        {
+            "", "system32", @"C:\system32", @"C:\Users\caixa\AppData\Local\Temp\system32", @"C:\Windows\..\system32",
+            @"C:\..\system32", @"C:\Windows\system32\", @"\\servidor\c$\Windows\system32", "C:/Windows/system32",
+            @"C:\Win dows\system32", @"C:\Windows\System", @"C:\Win%x%\system32", @"C:\Win&x\system32",
+            "C:\\Windows\"\\system32", @"C:\Windows\system32x", "C:\\Windows\\system32\n",
+        };
+        var passaramPasta = pastasRuins.Where(p => TravaDoCtrlAltDel.PastaDoSistema(p) || !Lanca(() => TravaDoCtrlAltDel.MontarComando(true, Eu, p))
+                                                   || !Lanca(() => TravaDoCtrlAltDel.CaminhoDoCmd(p))).ToList();
+        checar(passaramPasta.Count == 0 && !TravaDoCtrlAltDel.PastaDoSistema(null)
+               && TravaDoCtrlAltDel.PastaDoSistema(@"C:\WINDOWS\system32") && TravaDoCtrlAltDel.PastaDoSistema(@"C:\Windows\System32")
+               && TravaDoCtrlAltDel.PastaDoSistema(@"D:\WINNT\SysWOW64"),
+            "TC-2b só eleva de X:\\<Windows>\\system32 (ou SysWOW64): nunca Temp, rede, '..', espaço, aspas, % ou &"
+            + (passaramPasta.Count == 0 ? "" : " [passaram: " + string.Join(" | ", passaramPasta.Select(s => s.Replace("\n", "\\n"))) + "]"));
+        checar(TravaDoCtrlAltDel.PastaDoSistema(Environment.SystemDirectory),
+            "TC-2c a pasta do sistema DESTE PC (" + Environment.SystemDirectory + ") passa no formato: o caminho de verdade não fica de fora");
 
         // ── TC-3 o caminho em HKEY_USERS e só as quatro políticas ──
         checar(TravaDoCtrlAltDel.CaminhoNoHku(Eu, TravaDoCtrlAltDel.ChaveSistema)
@@ -87,19 +97,22 @@ public static class TestesTravaCtrlAltDel
         checar(TravaDoCtrlAltDel.Travas.Select(t => t.Valor).SequenceEqual(new[] { "DisableTaskMgr", "DisableLockWorkstation", "DisableChangePassword", "NoLogoff" })
                && TravaDoCtrlAltDel.Travas.All(t => t.Chave == TravaDoCtrlAltDel.ChaveSistema || t.Chave == TravaDoCtrlAltDel.ChaveExplorer)
                && ReferenceEquals(Quiosque.Travas, TravaDoCtrlAltDel.Travas),
-            "TC-3b o ajudante só conhece as quatro políticas (e a lista é uma só)");
+            "TC-3b a linha só conhece as quatro políticas (e a lista é uma só)");
 
-        // ── TC-4 SID de outra pessoa ──
-        checar(TravaDoCtrlAltDel.SidAceito(Eu, Eu, null),
-            "TC-4 administrador que elevou a si mesmo: o SID do argumento é o da conta do ajudante");
-        checar(TravaDoCtrlAltDel.SidAceito(Eu, Admin, Eu),
-            "TC-4b usuário comum com a senha do administrador: o SID é o de quem está logado na sessão");
-        checar(!TravaDoCtrlAltDel.SidAceito(Outra, Admin, Eu) && !TravaDoCtrlAltDel.SidAceito(Outra, Eu, Eu)
-               && !TravaDoCtrlAltDel.SidAceito(Outra, null, null) && !TravaDoCtrlAltDel.SidAceito(null, Eu, Eu)
-               && !TravaDoCtrlAltDel.SidAceito("S-1-5-18", "S-1-5-18", "S-1-5-18"),
-            "TC-4c SID de outra pessoa é recusado, mesmo com administrador (e SYSTEM nunca)");
+        // ── TC-4 quando NÃO pedir ao Windows ──
+        var todosExistem = new Func<string, bool>(_ => true);
+        checar(TravaDoCtrlAltDel.MotivoParaNaoPedir(Eu, Sys, todosExistem) is null,
+            "TC-4 conta de pessoa, pasta do sistema certa e cmd/reg no lugar: pode pedir");
+        var semSid = TravaDoCtrlAltDel.MotivoParaNaoPedir("S-1-5-18", Sys, todosExistem);
+        var semPasta = TravaDoCtrlAltDel.MotivoParaNaoPedir(Eu, @"C:\Users\caixa\system32", todosExistem);
+        var semReg = TravaDoCtrlAltDel.MotivoParaNaoPedir(Eu, Sys, c => !c.EndsWith(@"\reg.exe", StringComparison.Ordinal));
+        var lancaExiste = TravaDoCtrlAltDel.MotivoParaNaoPedir(Eu, Sys, _ => throw new IOException("disco"));
+        checar(semSid?.Contains("não é de pessoa", StringComparison.Ordinal) == true && TravaDoCtrlAltDel.MotivoParaNaoPedir(null, Sys, todosExistem) is not null
+               && semPasta?.Contains("pasta do sistema", StringComparison.Ordinal) == true
+               && semReg?.Contains("reg.exe", StringComparison.Ordinal) == true && lancaExiste is not null,
+            "TC-4b SYSTEM ou sem SID, pasta fora do formato, reg.exe faltando ou conferência que lança: não pede (o motivo vai para a auditoria)");
 
-        // ── TC-5..10 o ajudante e o gravador numa chave isolada ──
+        // ── TC-5..10 o gravador numa chave isolada ──
         // Nunca Registry.CurrentUser direto: tudo embaixo de HKCU\Software\PdvNativoTeste\<guid>,
         // criada aqui e apagada no finally. As políticas de verdade deste PC são lidas antes e depois.
         var antes = (Quiosque.Travado, Quiosque.AlgumaTrava);
@@ -108,43 +121,42 @@ public static class TestesTravaCtrlAltDel
         try
         {
             using (Registry.CurrentUser.CreateSubKey(nome)) { }
-            RegistryKey? Abrir(string _) => Registry.CurrentUser.OpenSubKey(nome, writable: true);
+            RegistryKey? Abrir() => Registry.CurrentUser.OpenSubKey(nome, writable: true);
             bool isolada;
-            using (var r = Abrir(""))
+            using (var r = Abrir())
                 isolada = r is not null && r.Name.StartsWith(@"HKEY_CURRENT_USER\Software\PdvNativoTeste\", StringComparison.OrdinalIgnoreCase);
             checar(isolada, "TC-5 a chave de teste existe e é isolada (HKCU\\Software\\PdvNativoTeste\\guid)");
             if (isolada)
             {
-                // TC-6 ligar pelo ajudante: as quatro como DWORD 1
-                var s1 = Quiosque.RodarAjudante(new[] { "--travas", "on", "--sid", Eu }, Abrir, Eu, null);
-                using (var r = Abrir("")!)
-                    checar(s1 == TravaDoCtrlAltDel.SaidaOk && Quiosque.LerTravas(r) == (true, true) && QuatroDwords(r),
-                        $"TC-6 o ajudante liga: as quatro políticas como DWORD 1 (saída {s1})");
+                // TC-6 ligar: as quatro como DWORD 1
+                using (var r = Abrir()!)
+                {
+                    Quiosque.GravarTravas(r, true);
+                    checar(Quiosque.LerTravas(r) == (true, true) && QuatroDwords(r), "TC-6 o gravador liga: as quatro políticas como DWORD 1");
+                }
 
-                // TC-7 outra pessoa, argumento ruim e usuário fora: saem sem mexer em nada
-                var s2 = Quiosque.RodarAjudante(new[] { "--travas", "off", "--sid", Outra }, Abrir, Eu, Eu);
-                var s3 = Quiosque.RodarAjudante(new[] { "--travas", "off", "--sid", "S-1-5-18" }, Abrir, "S-1-5-18", null);
-                var s4 = Quiosque.RodarAjudante(new[] { "--travas", "off", "--sid", Eu }, _ => null, Eu, null);
-                using (var r = Abrir("")!)
-                    checar(s2 == TravaDoCtrlAltDel.SaidaOutraPessoa && s3 == TravaDoCtrlAltDel.SaidaArgumento
-                           && s4 == TravaDoCtrlAltDel.SaidaUsuarioFora && Quiosque.LerTravas(r) == (true, true),
-                        $"TC-7 SID de outra pessoa ({s2}), argumento ruim ({s3}) e usuário fora ({s4}) não mexem em nada");
+                // TC-9 desligar: nenhuma sobra; desligar de novo não lança
+                using (var r = Abrir()!)
+                {
+                    Quiosque.GravarTravas(r, false);
+                    var deNovo = !Lanca(() => Quiosque.GravarTravas(r, false));
+                    checar(Quiosque.LerTravas(r) == (false, false) && deNovo, "TC-9 o gravador desliga as quatro, e desligar de novo é inofensivo");
+                }
 
-                // TC-9 desligar pelo ajudante: nenhuma sobra; desligar de novo não lança
-                var s6 = Quiosque.RodarAjudante(new[] { "--travas", "off", "--sid", Eu }, Abrir, Admin, Eu);
-                var s7 = Quiosque.RodarAjudante(new[] { "--travas", "off", "--sid", Eu }, Abrir, Admin, Eu);
-                using (var r = Abrir("")!)
-                    checar(s6 == TravaDoCtrlAltDel.SaidaOk && s7 == TravaDoCtrlAltDel.SaidaOk && Quiosque.LerTravas(r) == (false, false),
-                        $"TC-9 o ajudante desliga as quatro (pedido do usuário da sessão), e desligar de novo é inofensivo ({s6}/{s7})");
+                // TC-8 raiz aberta só para leitura (sem permissão de escrita): ligar lança acesso
+                // negado (o CreateSubKey do .NET exige raiz gravável), que é o que leva ao aviso do
+                // Windows, e nada muda
+                Exception? negadoDeVerdade = null;
+                using (var soLeitura = Registry.CurrentUser.OpenSubKey(nome)!)
+                {
+                    try { Quiosque.GravarTravas(soLeitura, true); }
+                    catch (Exception ex) { negadoDeVerdade = ex; }
+                }
+                using (var r = Abrir()!)
+                    checar(TravaDoCtrlAltDel.AcessoNegado(negadoDeVerdade) && Quiosque.LerTravas(r) == (false, false),
+                        "TC-8 sem permissão de escrita o gravador lança acesso negado (" + (negadoDeVerdade?.GetType().Name ?? "nada") + ") e não muda nada");
 
-                // TC-8 raiz aberta só para leitura (o ajudante sem administrador): ligar é recusado com
-                // acesso negado, sai com o código 5 e nada muda (o CreateSubKey do .NET exige raiz gravável)
-                var s5 = Quiosque.RodarAjudante(new[] { "--travas", "on", "--sid", Eu }, _ => Registry.CurrentUser.OpenSubKey(nome), Eu, null);
-                using (var r = Abrir("")!)
-                    checar(s5 == TravaDoCtrlAltDel.SaidaSemAdministrador && Quiosque.LerTravas(r) == (false, false),
-                        $"TC-8 sem permissão de escrita o ajudante sai com 'sem administrador' e não muda nada ({s5})");
-
-                // TC-10 o gravador direto: desligar não cria chave; a trava pela metade é vista e desfeita
+                // TC-10 desligar não cria chave; a trava pela metade é vista e desfeita
                 var limpo = nome + @"\limpo";
                 using (Registry.CurrentUser.CreateSubKey(limpo)) { }
                 using (var r = Registry.CurrentUser.OpenSubKey(limpo, writable: true)!)
@@ -178,6 +190,41 @@ public static class TestesTravaCtrlAltDel
                            && !TravaDoCtrlAltDel.PrecisaMudar(false, lido.Todas, lido.Alguma),
                         "TC-10d DWORD 0 (ou valor de outro tipo) não conta como trava, e um Salvar comum não pede nada ao Windows");
                 }
+
+                // ── TC-36 a linha de VERDADE, rodada num cmd COMUM (sem runas, sem administrador)
+                // contra a chave isolada: só a raiz HKU\SID é trocada pela chave de teste. Prova que
+                // as aspas, o /s /c e os & funcionam no cmd e no reg.exe deste Windows. ──
+                var sys = Environment.SystemDirectory;
+                if (TravaDoCtrlAltDel.MotivoParaNaoPedir(Eu, sys, File.Exists) is null)
+                {
+                    var raizCmd = nome + @"\cmd";
+                    using (Registry.CurrentUser.CreateSubKey(raizCmd)) { }
+                    string NaChaveDeTeste(string c) => c.Replace("\"HKU\\" + Eu + "\\", "\"HKCU\\" + raizCmd + "\\", StringComparison.Ordinal);
+                    var linhaOn = NaChaveDeTeste(TravaDoCtrlAltDel.MontarComando(true, Eu, sys));
+                    var linhaOff = NaChaveDeTeste(TravaDoCtrlAltDel.MontarComando(false, Eu, sys));
+                    var trocou = !linhaOn.Contains("HKU\\", StringComparison.Ordinal) && Contar(linhaOn, "\"HKCU\\" + raizCmd + "\\") == 4
+                                 && !linhaOff.Contains("HKU\\", StringComparison.Ordinal) && Contar(linhaOff, "\"HKCU\\" + raizCmd + "\\") == 4;
+                    checar(trocou, "TC-36a a linha de teste só troca a raiz (as quatro HKU\\SID viram a chave isolada; nenhuma sobra)");
+                    if (trocou)
+                    {
+                        var terminouOn = RodarCmdComum(sys, linhaOn);
+                        bool ligouPeloCmd, quatro;
+                        using (var r = Registry.CurrentUser.OpenSubKey(raizCmd)!) { ligouPeloCmd = Quiosque.LerTravas(r) == (true, true); quatro = QuatroDwords(r); }
+                        checar(terminouOn && ligouPeloCmd && quatro,
+                            "TC-36 o cmd /d /v:off /s /c com os quatro reg.exe add grava as quatro políticas como DWORD 1 (cmd comum, chave isolada)");
+
+                        // metade: tira uma à mão; o desligar com & tem que tirar as outras três mesmo
+                        // com o primeiro delete falhando
+                        using (var k = Registry.CurrentUser.OpenSubKey(raizCmd + @"\" + TravaDoCtrlAltDel.ChaveSistema, writable: true)!)
+                            k.DeleteValue("DisableTaskMgr");
+                        var terminouOff = RodarCmdComum(sys, linhaOff);
+                        bool desligouPeloCmd;
+                        using (var r = Registry.CurrentUser.OpenSubKey(raizCmd)!) desligouPeloCmd = Quiosque.LerTravas(r) == (false, false);
+                        checar(terminouOff && desligouPeloCmd,
+                            "TC-36b o desligar com & tira as outras três mesmo com o primeiro delete falhando (trava pela metade)");
+                    }
+                }
+                else checar(false, "TC-36 este PC não tem cmd.exe e reg.exe em " + sys + " no formato esperado");
             }
         }
         finally
@@ -199,8 +246,8 @@ public static class TestesTravaCtrlAltDel
         // ── TC-11..19 a ordem das tentativas (sem registro nem processo) ──
         var negado = new UnauthorizedAccessException(@"Access to the registry key 'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Policies\System' is denied.");
         var pedidos = 0;
-        int? WindowsGrava() { pedidos++; return TravaDoCtrlAltDel.SaidaOk; }
-        int? WindowsNao() { pedidos++; throw new Win32Exception(TravaDoCtrlAltDel.ErroCancelado); }
+        bool WindowsGrava() { pedidos++; return true; }
+        bool WindowsNao() { pedidos++; throw new Win32Exception(TravaDoCtrlAltDel.ErroCancelado); }
 
         var rDireto = TravaDoCtrlAltDel.Mudar(() => null, () => true, null, WindowsGrava);
         checar(rDireto.Resultado == ResultadoDaTrava.Ok && pedidos == 0,
@@ -230,26 +277,25 @@ public static class TestesTravaCtrlAltDel
             "TC-15 erro que não é acesso negado não abre o aviso do Windows à toa (Falhou)");
 
         pedidos = 0;
-        var rFora = TravaDoCtrlAltDel.Mudar(() => negado, () => false, "o PDV não está na pasta de programas", WindowsGrava);
-        checar(rFora.Resultado == ResultadoDaTrava.Falhou && pedidos == 0 && rFora.Detalhe.Contains("pasta de programas", StringComparison.Ordinal),
-            "TC-16 exe fora da pasta de programas: não pede administrador, e o motivo vai para a auditoria");
+        var rFora = TravaDoCtrlAltDel.Mudar(() => negado, () => false, "cmd.exe ou reg.exe não estão em X", WindowsGrava);
+        checar(rFora.Resultado == ResultadoDaTrava.Falhou && pedidos == 0 && rFora.Detalhe.Contains("reg.exe não estão", StringComparison.Ordinal),
+            "TC-16 sem como pedir (SID, pasta do sistema ou cmd/reg): não pede administrador, e o motivo vai para a auditoria");
 
-        pedidos = 0;
-        var rRelido = TravaDoCtrlAltDel.Mudar(() => negado, () => false, null, WindowsGrava);
-        var rCodigo = TravaDoCtrlAltDel.Mudar(() => negado, () => true, null, () => TravaDoCtrlAltDel.SaidaSemAdministrador);
-        checar(rRelido.Resultado == ResultadoDaTrava.Falhou && rCodigo.Resultado == ResultadoDaTrava.Ok && rCodigo.Detalhe.Contains("rodou sem administrador", StringComparison.Ordinal),
-            "TC-17 o resultado é o registro relido, não o código de saída (que só vai para o detalhe)");
+        var rRelido = TravaDoCtrlAltDel.Mudar(() => negado, () => false, null, () => true);
+        var rSemFim = TravaDoCtrlAltDel.Mudar(() => negado, () => true, null, () => false);
+        checar(rRelido.Resultado == ResultadoDaTrava.Falhou && rSemFim.Resultado == ResultadoDaTrava.Ok
+               && rSemFim.Detalhe.Contains("não terminou em 20 s", StringComparison.Ordinal) && rRelido.Detalhe.Contains("terminou", StringComparison.Ordinal),
+            "TC-17 o resultado é o registro relido, não o fim do cmd (terminou ou não, isso só vai para o detalhe)");
 
         var rOutro = TravaDoCtrlAltDel.Mudar(() => negado, () => false, null, () => throw new Win32Exception(2));
-        var rLento = TravaDoCtrlAltDel.Mudar(() => negado, () => false, null, () => null);
-        var rLanca = TravaDoCtrlAltDel.Mudar(() => throw negado, () => true, null, () => TravaDoCtrlAltDel.SaidaOk);
+        var rLanca = TravaDoCtrlAltDel.Mudar(() => throw negado, () => true, null, () => true);
         pedidos = 0;
         var rReler = TravaDoCtrlAltDel.Mudar(() => null, () => throw new IOException("leitura"), null, WindowsGrava);
         checar(rReler.Resultado == ResultadoDaTrava.Falhou && pedidos == 0,
             "TC-18b reler o registro que lança não derruba o Salvar (Falhou, sem aviso do Windows)");
-        checar(rOutro.Resultado == ResultadoDaTrava.Falhou && rLento.Resultado == ResultadoDaTrava.Falhou
-               && rLento.Detalhe.Contains("não terminou em 20 s", StringComparison.Ordinal) && rLanca.Resultado == ResultadoDaTrava.Ok,
-            "TC-18 outro erro do Windows não é Cancelou; ajudante que não termina é Falhou; tentativa direta que lança é tratada como recusa");
+        var rRelerAdm = TravaDoCtrlAltDel.Mudar(() => negado, () => throw new IOException("leitura"), null, () => true);
+        checar(rOutro.Resultado == ResultadoDaTrava.Falhou && rLanca.Resultado == ResultadoDaTrava.Ok && rRelerAdm.Resultado == ResultadoDaTrava.Falhou,
+            "TC-18 outro erro do Windows não é Cancelou; tentativa direta que lança é tratada como recusa; reler que lança depois do cmd é Falhou");
 
         checar(TravaDoCtrlAltDel.Cancelado(new Win32Exception(1223)) && !TravaDoCtrlAltDel.Cancelado(new Win32Exception(5))
                && !TravaDoCtrlAltDel.Cancelado(negado) && !TravaDoCtrlAltDel.Cancelado(null)
@@ -261,27 +307,9 @@ public static class TestesTravaCtrlAltDel
         var frases = new[] { ResultadoDaTrava.Ok, ResultadoDaTrava.Cancelou, ResultadoDaTrava.Falhou }
             .SelectMany(r => new[] { TravaDoCtrlAltDel.Frase(r, true), TravaDoCtrlAltDel.Frase(r, false) }).ToList();
         var feias = frases.Where(t => t.Length > 100 || t.Contains('\u2014') || t.Contains('\u2013') || t.Contains('\n')
-            || Regex.IsMatch(t, "(?i)access|denied|registry|exception|hkey|polic|runas|uac|1223|sid")).ToList();
+            || Regex.IsMatch(t, "(?i)access|denied|registry|exception|hkey|polic|runas|uac|1223|sid|cmd")).ToList();
         checar(feias.Count == 0 && TravaDoCtrlAltDel.Frase(ResultadoDaTrava.Falhou, true) == "Não consegui mudar a trava do Ctrl+Alt+Del. O resto foi salvo.",
             "TC-20 frases curtas, de uma linha, sem travessão e sem texto do Windows" + (feias.Count == 0 ? "" : " [" + string.Join(" | ", feias) + "]"));
-
-        // ── TC-21 só eleva o exe que mora numa pasta que só o administrador troca ──
-        var pf = new[] { @"C:\Program Files", @"C:\Program Files (x86)" };
-        checar(TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\Pdv.exe", pf)
-               && TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files (x86)\MMFood\Pdv.exe", pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Users\caixa\Downloads\Pdv.exe", pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\..\Users\caixa\Pdv.exe", pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program FilesX\Pdv.exe", pf)
-               && !TravaDoCtrlAltDel.PodeElevar("Pdv.exe", pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\Pdv.dll", pf)
-               && !TravaDoCtrlAltDel.PodeElevar(null, pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\Pdv.exe", new string?[] { null, "", @"C:\" })
-               // 1.0.36: o NOME também. `dotnet Pdv.dll` roda como dotnet.exe; outro fornecedor pode
-               // ter um .exe na pasta de programas. Nenhum dos dois é o nosso Pdv.exe.
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\dotnet\dotnet.exe", pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\QualquerFornecedor\atualizador.exe", pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\pdv.exe.exe", pf),
-            "TC-21 eleva só o Pdv.exe dentro de Arquivos de Programas (nunca Downloads, '..', pasta parecida, caminho relativo, a raiz do disco, o dotnet.exe nem outro exe da pasta)");
 
         // ── TC-22 quando a Configuração mexe ──
         checar(TravaDoCtrlAltDel.PrecisaMudar(true, false, false) && TravaDoCtrlAltDel.PrecisaMudar(true, false, true)
@@ -295,16 +323,16 @@ public static class TestesTravaCtrlAltDel
         var cfg = Fonte("Telas", "Configuracao.xaml.cs") ?? "";
         var cfgXaml = Fonte("Telas", "Configuracao.xaml") ?? "";
         var nucleo = Fonte("Pdv.Nucleo", "TravaDoCtrlAltDel.cs") ?? "";
+        var linha = Fonte("Pdv.Nucleo", "LinhaDeComando.cs") ?? "";
 
-        var iAjudante = app.IndexOf("ModoDoExe.Travas", StringComparison.Ordinal);
-        checar(iAjudante > 0
-               && iAjudante < app.IndexOf("AppDomain.CurrentDomain.UnhandledException +=", StringComparison.Ordinal)
-               && iAjudante < app.IndexOf("InstanciaUnica.Tentar()", StringComparison.Ordinal)
-               && iAjudante < app.IndexOf("Banco.Migrar()", StringComparison.Ordinal)
-               && iAjudante < app.IndexOf("Agente.IniciarVigia()", StringComparison.Ordinal)
-               && iAjudante < app.IndexOf("ResolverPendenciasTefAsync", StringComparison.Ordinal)
-               && app.Contains("Environment.Exit(Quiosque.RodarAjudante(e.Args)); return;", StringComparison.Ordinal),
-            "TC-23 o ajudante sai antes das guardas de tela, da trava de instância, do banco, do agente e do TEF");
+        // TC-23 o Pdv.exe não tem modo de administrador: nem --travas, nem ajudante, nem a guarda dele
+        checar(app.Length > 0 && linha.Length > 0
+               && !app.Contains("--travas", StringComparison.Ordinal) && !app.Contains("ModoDoExe.Travas", StringComparison.Ordinal)
+               && !app.Contains("RodarAjudante", StringComparison.Ordinal) && !app.Contains("TravaDoCtrlAltDel.Argumento", StringComparison.Ordinal)
+               && !linha.Contains("--travas", StringComparison.Ordinal) && !linha.Contains("LerTravas", StringComparison.Ordinal)
+               && !Enum.GetNames<ModoDoExe>().Contains("Travas")
+               && LinhaDeComando.Modo(new[] { "--travas", "on", "--sid", Eu }) == ModoDoExe.Caixa,
+            "TC-23 o Pdv.exe não tem mais modo de administrador (--travas sumiu do App, da linha de comando e do enum)");
         checar(app.IndexOf("var args = e.Args;", StringComparison.Ordinal) > app.IndexOf("DispatcherUnhandledException +=", StringComparison.Ordinal),
             "TC-23b o 'var args = e.Args;' continua depois das guardas (TW-11 corta o texto entre os dois)");
         checar(!app.Contains("runas", StringComparison.OrdinalIgnoreCase) && !app.Contains("MudarTrava(", StringComparison.Ordinal)
@@ -318,14 +346,27 @@ public static class TestesTravaCtrlAltDel
         checar(direto.Contains("Registry.CurrentUser", StringComparison.Ordinal) && !direto.Contains("runas", StringComparison.Ordinal)
                && !direto.Contains("Process.Start", StringComparison.Ordinal) && !direto.Contains("PedirAoWindows", StringComparison.Ordinal),
             "TC-26 TentarDireto grava no HKCU e nunca abre o aviso do Windows");
-        checar(q.Contains("Registry.Users.OpenSubKey(sid, writable: true)", StringComparison.Ordinal)
-               && Corpo(q, "public static int RodarAjudante(IReadOnlyList<string> args, Func<string, RegistryKey?> abrirRaiz,").Contains("TravaDoCtrlAltDel.SidAceito(", StringComparison.Ordinal)
-               && !Corpo(q, "public static int RodarAjudante(IReadOnlyList<string> args, Func<string, RegistryKey?> abrirRaiz,").Contains("Registry.CurrentUser", StringComparison.Ordinal),
-            "TC-27 o ajudante grava em HKEY_USERS\\SID (aberto para escrita), confere o SID e não usa o HKCU dele");
-        checar(q.Contains("Verb = \"runas\"", StringComparison.Ordinal) && q.Contains("ErrorDialogParentHandle = janela", StringComparison.Ordinal)
-               && q.Contains("WaitForExit(20000)", StringComparison.Ordinal) && q.Contains("TravaDoCtrlAltDel.PodeElevar(exe, PastasDeProgramas())", StringComparison.Ordinal)
+
+        // TC-27 o que sobe como administrador é o cmd de System32, nunca o Pdv.exe
+        var pedir = Corpo(q, "private static bool PedirAoWindows(");
+        var mudar = Corpo(q, "public static (ResultadoDaTrava Resultado, string Detalhe) MudarTrava(");
+        checar(pedir.Contains("new ProcessStartInfo(TravaDoCtrlAltDel.CaminhoDoCmd(sistema))", StringComparison.Ordinal)
+               && pedir.Contains("Verb = \"runas\"", StringComparison.Ordinal) && pedir.Contains("WorkingDirectory = sistema", StringComparison.Ordinal)
+               && !pedir.Contains("ExeAtual", StringComparison.Ordinal) && !pedir.Contains("ProcessPath", StringComparison.Ordinal)
+               && mudar.Contains("var sistema = Environment.SystemDirectory;", StringComparison.Ordinal)
+               && mudar.Contains("TravaDoCtrlAltDel.MontarComando(travar, sid!, sistema)", StringComparison.Ordinal)
+               && mudar.Contains("TravaDoCtrlAltDel.MotivoParaNaoPedir(sid, sistema, File.Exists)", StringComparison.Ordinal)
+               && !mudar.Contains("ExeAtual", StringComparison.Ordinal)
+               && !q.Contains("RodarAjudante", StringComparison.Ordinal) && !q.Contains("Registry.Users", StringComparison.Ordinal)
+               && Contar(q, "\"runas\"") == 1,
+            "TC-27 o que o Windows eleva é o cmd.exe de System32 (Environment.SystemDirectory) com a linha do núcleo; o Pdv.exe nunca, e o PDV não grava HKEY_USERS sozinho");
+        var elevaEmOutroLugar = FontesDoCaixa().Where(f => !f.Nome.EndsWith("Quiosque.cs", StringComparison.Ordinal) && f.Texto.Contains("\"runas\"", StringComparison.Ordinal)).Select(f => f.Nome).ToList();
+        checar(elevaEmOutroLugar.Count == 0,
+            "TC-27b nenhum outro fonte do caixa pede administrador ao Windows" + (elevaEmOutroLugar.Count == 0 ? "" : " [" + string.Join(", ", elevaEmOutroLugar) + "]"));
+        checar(pedir.Contains("ErrorDialogParentHandle = janela", StringComparison.Ordinal) && pedir.Contains("WaitForExit(20000)", StringComparison.Ordinal)
+               && pedir.Contains("WindowStyle = ProcessWindowStyle.Hidden", StringComparison.Ordinal)
                && !q.Contains("Registry.LocalMachine", StringComparison.Ordinal),
-            "TC-28 o pedido ao Windows usa a janela do PDV como dona, espera no máximo 20 s, só para exe em Arquivos de Programas, e nunca toca na máquina");
+            "TC-28 o pedido ao Windows usa a janela do PDV como dona, esconde a janela do cmd, espera no máximo 20 s e nunca toca na máquina");
 
         var trava = Trecho(cfg, "var travarQuer =", "ChkTravarAtalhos.IsChecked = Quiosque.Travado;");
         var avisoTrava = Trecho(trava, "Dialogo.Avisar(", ";");
@@ -338,11 +379,11 @@ public static class TestesTravaCtrlAltDel
                && !cfg.Contains("\"Não consegui gravar no Windows: \" + erroQuiosque", StringComparison.Ordinal)
                && cfg.Contains("\"Não consegui mudar o modo quiosque no Windows. O resto foi salvo.\"", StringComparison.Ordinal),
             "TC-30 nenhum texto do Windows (em inglês, com caminho de registro) vai para a tela, nem da trava nem do quiosque");
-        checar(cfgXaml.Contains("Ao salvar, o Windows pode pedir uma permissão de administrador.", StringComparison.Ordinal)
-               // "pode" (nem sempre pede: UAC desligado ou PDV já elevado) e sem "toque em Sim"
-               // (o usuário comum digita a senha de um administrador, não um Sim)
+        checar(cfgXaml.Contains("Ao salvar, o Windows pode pedir uma permissão de administrador, com o nome Processador de Comandos do Windows.", StringComparison.Ordinal)
+               // "pode" (nem sempre pede: UAC desligado ou PDV já elevado), sem "toque em Sim" (o
+               // usuário comum digita a senha de um administrador) e com o nome que o aviso mostra
                && !cfgXaml.Contains("toque em Sim", StringComparison.Ordinal),
-            "TC-31 o texto da opção avisa que o Windows PODE pedir permissão, sem prometer um Sim que o usuário comum não vê");
+            "TC-31 o texto da opção avisa que o Windows PODE pedir permissão e com que nome o aviso aparece, sem prometer um Sim");
 
         var novos = new[] { trava, Trecho(cfg, "var quiosqueQuer =", "var travarQuer ="), Trecho(cfgXaml, "x:Name=\"ChkTravarAtalhos\"", "x:Name=\"BtnSairWindows\""), nucleo };
         checar(novos.All(t => t.Length > 0 && !t.Contains('\u2014') && !t.Contains('\u2013')),
@@ -351,19 +392,16 @@ public static class TestesTravaCtrlAltDel
         // ── TC-33 o reler do destravar não engole a leitura que lança ──
         // MudarTrava relê com LerTravas direto (sem o catch dos getters Travado/AlgumaTrava): uma
         // leitura que falha tem que virar "não ficou", senão um destravar daria Ok sem confirmar.
-        var mudar = Corpo(q, "public static (ResultadoDaTrava Resultado, string Detalhe) MudarTrava(");
         checar(mudar.Contains("LerTravas(Registry.CurrentUser)", StringComparison.Ordinal)
                && mudar.Contains("travar ? todas : !alguma", StringComparison.Ordinal)
                && !mudar.Contains("!AlgumaTrava", StringComparison.Ordinal),
             "TC-33 o reler do MudarTrava usa LerTravas direto (não o getter que engole a exceção), então um destravar com leitura que falha é Falhou, não Ok");
 
-        // ── TC-34 defesa em profundidade: --travas/--sid nunca abrem a frente de caixa ──
-        var iGuarda = app.IndexOf("a == TravaDoCtrlAltDel.Argumento || a == TravaDoCtrlAltDel.ArgumentoSid", StringComparison.Ordinal);
-        checar(iGuarda > 0 && app.Contains("Environment.Exit(TravaDoCtrlAltDel.SaidaArgumento)", StringComparison.Ordinal)
-               && iGuarda > app.IndexOf("ModoDoExe.Travas", StringComparison.Ordinal)
-               && iGuarda < app.IndexOf("InstanciaUnica.Tentar()", StringComparison.Ordinal)
-               && iGuarda < app.IndexOf("Banco.Migrar()", StringComparison.Ordinal),
-            "TC-34 um --travas/--sid que não virou o ajudante sai sem abrir o caixa (nem elevado), antes da trava de instância e do banco");
+        // ── TC-34 nada no caixa passa a rodar o Pdv.exe com argumento de trava ──
+        checar(!q.Contains("--travas", StringComparison.Ordinal) && !q.Contains("--sid", StringComparison.Ordinal)
+               && !nucleo.Contains("\"--travas\"", StringComparison.Ordinal) && !nucleo.Contains("LerArgumentos", StringComparison.Ordinal)
+               && !nucleo.Contains("PodeElevar", StringComparison.Ordinal),
+            "TC-34 o núcleo e o Quiosque não montam nem leem mais --travas/--sid (o ajudante e o PodeElevar saíram)");
 
         // ── TC-35 o quiosque e a trava vêm por último, depois de gravar segredos e o certificado ──
         var iSegredos = cfg.IndexOf("GravarSegredos(seg)", StringComparison.Ordinal);
@@ -373,6 +411,47 @@ public static class TestesTravaCtrlAltDel
         var iConcluiu = iTrava < 0 ? -1 : cfg.IndexOf("Concluiu?.Invoke();", iTrava, StringComparison.Ordinal);
         checar(iSegredos > 0 && iCert > 0 && iQuiosque > iSegredos && iQuiosque > iCert && iTrava > iQuiosque && iConcluiu > iTrava,
             "TC-35 o quiosque e a trava do Ctrl+Alt+Del são o último passo do Salvar (depois de TEF, certificado e segredos), então 'O resto foi salvo' é verdade");
+
+        // ── TC-37 o que a linha do cmd pode conter ──
+        foreach (var (rotulo, c) in new[] { ("ligar", on), ("desligar", off) })
+        {
+            var miolo = c.StartsWith(TravaDoCtrlAltDel.ChavesDoCmd + " \"", StringComparison.Ordinal) && c.EndsWith("\"", StringComparison.Ordinal)
+                ? c[(TravaDoCtrlAltDel.ChavesDoCmd.Length + 2)..^1] : "";
+            var partes = miolo.Split(" & ");
+            var forma = new Regex("^\"" + Regex.Escape(Sys) + @"\\reg\.exe"" (add|delete) ""HKU\\" + Regex.Escape(Eu) + @"\\([A-Za-z\\]+)"" /v ([A-Za-z]+)( /t REG_DWORD /d 1)? /f\z");
+            var lidas = partes.Select(p => forma.Match(p)).ToList();
+            checar(TravaDoCtrlAltDel.ComandoLimpo(c) && partes.Length == 4 && lidas.All(m => m.Success)
+                   && lidas.Select(m => (m.Groups[2].Value, m.Groups[3].Value)).SequenceEqual(TravaDoCtrlAltDel.Travas)
+                   && lidas.All(m => m.Groups[1].Value == (rotulo == "ligar" ? "add" : "delete") && m.Groups[4].Success == (rotulo == "ligar"))
+                   && c.IndexOfAny(new[] { '%', '^', '|', '<', '>', '!', '\n', '\r', '(', ')' }) < 0
+                   && c.Count(ch => ch == '"') % 2 == 0,
+                $"TC-37 ({rotulo}) a linha é só /d /v:off /s /c e quatro reg.exe de System32 em HKU\\SID, nas quatro políticas, sem % ^ | < > ! nem quebra de linha");
+        }
+        checar(!TravaDoCtrlAltDel.ComandoLimpo(on + " & calc%x%") && !TravaDoCtrlAltDel.ComandoLimpo(on + "|more") && !TravaDoCtrlAltDel.ComandoLimpo(on + "\n")
+               && !TravaDoCtrlAltDel.ComandoLimpo(on + "^") && !TravaDoCtrlAltDel.ComandoLimpo(on + "!x!") && !TravaDoCtrlAltDel.ComandoLimpo(null),
+            "TC-37b a conferência final da linha recusa %, |, quebra de linha, ^ e !");
+        checar(TravaDoCtrlAltDel.ChavesDoCmd == "/d /v:off /s /c",
+            "TC-37c o cmd sobe sem AutoRun (/d: o usuário grava o AutoRun do HKCU) e sem expansão atrasada (/v:off)");
+    }
+
+    /// <summary>
+    /// Roda a linha num cmd COMUM (UseShellExecute=false, sem runas: nada de aviso do Windows nem
+    /// administrador), escondido, e espera até 20 s. Só a bateria usa, e só contra a chave isolada.
+    /// </summary>
+    private static bool RodarCmdComum(string sys, string linha)
+    {
+        using var p = Process.Start(new ProcessStartInfo(TravaDoCtrlAltDel.CaminhoDoCmd(sys), linha)
+        {
+            UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = sys,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+        });
+        if (p is null) return false;
+        var saida = p.StandardOutput.ReadToEndAsync();
+        var erro = p.StandardError.ReadToEndAsync();
+        if (!p.WaitForExit(20000)) { try { p.Kill(); } catch { } return false; }
+        p.WaitForExit();
+        _ = saida.Result; _ = erro.Result;
+        return true;
     }
 
     /// <summary>As quatro políticas embaixo da raiz são DWORD 1?</summary>
@@ -384,6 +463,13 @@ public static class TestesTravaCtrlAltDel
             if (k is null || k.GetValueKind(valor) != RegistryValueKind.DWord || k.GetValue(valor) is not int v || v != 1) return false;
         }
         return true;
+    }
+
+    private static int Contar(string texto, string pedaco)
+    {
+        var n = 0;
+        for (var i = texto.IndexOf(pedaco, StringComparison.Ordinal); i >= 0; i = texto.IndexOf(pedaco, i + pedaco.Length, StringComparison.Ordinal)) n++;
+        return n;
     }
 
     private static bool Lanca(Action a)
@@ -413,14 +499,27 @@ public static class TestesTravaCtrlAltDel
         return f < 0 ? "" : todo[i..f];
     }
 
-    private static string? Fonte(params string[] partes)
+    private static string? Raiz()
     {
         for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
-            if (File.Exists(Path.Combine(d.FullName, "Pdv.csproj")))
-            {
-                var c = Path.Combine(new[] { d.FullName }.Concat(partes).ToArray());
-                return File.Exists(c) ? File.ReadAllText(c).Replace("\r\n", "\n") : null;
-            }
+            if (File.Exists(Path.Combine(d.FullName, "Pdv.csproj"))) return d.FullName;
         return null;
+    }
+
+    private static string? Fonte(params string[] partes)
+    {
+        if (Raiz() is not { } raiz) return null;
+        var c = Path.Combine(new[] { raiz }.Concat(partes).ToArray());
+        return File.Exists(c) ? File.ReadAllText(c).Replace("\r\n", "\n") : null;
+    }
+
+    /// <summary>Os .cs do caixa (o Pdv.exe): a raiz e Telas, sem testes, instalador, núcleo nem bin/obj.</summary>
+    private static IEnumerable<(string Nome, string Texto)> FontesDoCaixa()
+    {
+        if (Raiz() is not { } raiz) yield break;
+        var pastas = new[] { raiz, Path.Combine(raiz, "Telas") };
+        foreach (var pasta in pastas.Where(Directory.Exists))
+            foreach (var f in Directory.GetFiles(pasta, "*.cs", SearchOption.TopDirectoryOnly))
+                yield return (Path.GetRelativePath(raiz, f), File.ReadAllText(f));
     }
 }
