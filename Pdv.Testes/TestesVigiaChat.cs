@@ -260,7 +260,7 @@ public static class TestesVigiaChat
         var venda = Fonte(Path.Combine("Telas", "Venda.xaml.cs")) ?? "";
 
         checar(chat.Contains("\"--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows\"")
-               && chat.Contains("() => new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = ArgumentosDoNavegador });"),
+               && chat.Contains("() => new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = ArgumentosDoNavegador })"),
             "CV-36 o chat passa ao ambiente os 3 flags que mantêm o Gestor acordado (timers, renderer, janela coberta)");
         checar(whats.Contains("--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"),
             "CV-36b o WhatsApp continua com o autoplay e os dois flags, e ganha o da janela coberta");
