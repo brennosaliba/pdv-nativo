@@ -1637,30 +1637,6 @@ public partial class Configuracao : UserControl
             if (normalizadas.Length == 0 || normalizadas == RespostasProntas.Escrever(RespostasProntas.Padrao))
                 cx.Execute("DELETE FROM config WHERE chave=@C", new { C = RespostasProntas.Chave });
             else Vendas.GravarConfig(cx, RespostasProntas.Chave, normalizadas);
-            // Modo quiosque (12/09/2026): Shell do usuário do Windows. Só mexe se mudou.
-            var quiosqueQuer = ChkQuiosque.IsChecked == true;
-            if (quiosqueQuer != Quiosque.Ligado)
-            {
-                var erroQuiosque = quiosqueQuer ? Quiosque.Ligar() : Quiosque.Desligar();
-                Caixa.Auditar(cx, null, quiosqueQuer ? "quiosque_ligado" : "quiosque_desligado", null, null,
-                    erroQuiosque ?? "Shell do usuário do Windows: " + (quiosqueQuer ? Quiosque.ValorShell(Quiosque.ExeAtual) : "Explorer"));
-                if (erroQuiosque is not null)
-                    Dialogo.Avisar(Window.GetWindow(this)!, "Modo quiosque",
-                        "Não consegui gravar no Windows: " + erroQuiosque + ". O resto da configuração foi salvo.", "erro");
-                BtnSairWindows.Visibility = Se(Quiosque.Ligado);
-            }
-            // 1.0.33: a trava do Ctrl+Alt+Del só existe com o quiosque; desligar o quiosque desfaz
-            var travarQuer = ChkTravarAtalhos.IsChecked == true && Quiosque.Ligado;
-            // destravar sempre que não quer (é idempotente: tira também a trava pela metade)
-            if (travarQuer != Quiosque.Travado || (!travarQuer && Quiosque.AlgumaTrava))
-            {
-                var erroTrava = Quiosque.Travar(travarQuer);
-                Caixa.Auditar(cx, null, travarQuer ? "ctrl_alt_del_travado" : "ctrl_alt_del_destravado", null, null, erroTrava);
-                if (erroTrava is not null)
-                    Dialogo.Avisar(Window.GetWindow(this)!, "Ctrl+Alt+Del",
-                        "Não consegui gravar no Windows: " + erroTrava + ". O resto da configuração foi salvo.", "erro");
-                ChkTravarAtalhos.IsChecked = Quiosque.Travado;
-            }
             // Spotify escondido (12/09/2026): grava e já aplica (liga a vigia ou para).
             var spotifyQuer = ChkSpotifyEscondido.IsChecked == true;
             var spotifyAntes = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
@@ -1707,6 +1683,47 @@ public partial class Configuracao : UserControl
                 Dialogo.Avisar(Window.GetWindow(this)!, "Senha da configuração",
                     "Esta tela ficou com a senha padrão 1234. Troque com o suporte assim que puder: "
                     + "com ela qualquer um abre a configuração do caixa.", "ok");
+            // Modo quiosque (12/09/2026): Shell do usuário do Windows. Só mexe se mudou.
+            // 1.0.36: o quiosque e a trava do Ctrl+Alt+Del vêm POR ÚLTIMO, depois de tudo gravado
+            // (impressora, TEF, certificado, segredos). Assim a frase "O resto foi salvo" é verdade,
+            // e um erro ao copiar o certificado nunca aparece DEPOIS de dizer que salvou. A trava é
+            // também o único passo que pode abrir o aviso do Windows: deixá-la no fim garante que o
+            // resto já está no banco antes de qualquer espera.
+            var quiosqueQuer = ChkQuiosque.IsChecked == true;
+            if (quiosqueQuer != Quiosque.Ligado)
+            {
+                var erroQuiosque = quiosqueQuer ? Quiosque.Ligar() : Quiosque.Desligar();
+                Caixa.Auditar(cx, null, quiosqueQuer ? "quiosque_ligado" : "quiosque_desligado", null, null,
+                    erroQuiosque ?? "Shell do usuário do Windows: " + (quiosqueQuer ? Quiosque.ValorShell(Quiosque.ExeAtual) : "Explorer"));
+                // 1.0.36: o texto do Windows (em inglês, com o caminho do registro) fica só na
+                // auditoria, logo acima. Na tela, uma linha.
+                if (erroQuiosque is not null)
+                    Dialogo.Avisar(Window.GetWindow(this)!, "Modo quiosque",
+                        "Não consegui mudar o modo quiosque no Windows. O resto foi salvo.", "erro");
+                BtnSairWindows.Visibility = Se(Quiosque.Ligado);
+            }
+            // 1.0.33: a trava do Ctrl+Alt+Del só existe com o quiosque; desligar o quiosque desfaz
+            var travarQuer = ChkTravarAtalhos.IsChecked == true && Quiosque.Ligado;
+            // destravar sempre que não quer (é idempotente: tira também a trava pela metade)
+            if (TravaDoCtrlAltDel.PrecisaMudar(travarQuer, Quiosque.Travado, Quiosque.AlgumaTrava))
+            {
+                // 1.0.36 (14/10/2026, Savassi): a chave das políticas do usuário só aceita escrita de
+                // administrador. MudarTrava tenta direto e, negado, o Windows pede permissão (o aviso
+                // nasce deste toque em Salvar, com a janela do PDV como dona). O resultado é o
+                // registro relido; o detalhe técnico vai só para a auditoria.
+                var (resultadoTrava, comoTrava) = Quiosque.MudarTrava(travarQuer,
+                    new System.Windows.Interop.WindowInteropHelper(Window.GetWindow(this)!).Handle);
+                Caixa.Auditar(cx, null, resultadoTrava switch
+                {
+                    ResultadoDaTrava.Ok => travarQuer ? "ctrl_alt_del_travado" : "ctrl_alt_del_destravado",
+                    ResultadoDaTrava.Cancelou => "ctrl_alt_del_recusado",
+                    _ => "ctrl_alt_del_falhou",
+                }, null, null, (travarQuer ? "travar: " : "destravar: ") + comoTrava);
+                if (resultadoTrava != ResultadoDaTrava.Ok)
+                    Dialogo.Avisar(Window.GetWindow(this)!, "Ctrl+Alt+Del",
+                        TravaDoCtrlAltDel.Frase(resultadoTrava, travarQuer), resultadoTrava == ResultadoDaTrava.Falhou ? "erro" : null);
+                ChkTravarAtalhos.IsChecked = Quiosque.Travado;
+            }
             Concluiu?.Invoke();
         }
         catch (Exception ex)

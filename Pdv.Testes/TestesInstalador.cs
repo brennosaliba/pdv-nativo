@@ -123,7 +123,10 @@ public static class TestesInstalador
         var desinstalar = app.IndexOf("\"--desinstalar\"", StringComparison.Ordinal);
         var trecho = desinstalar >= 0 ? app[desinstalar..Math.Min(app.Length, desinstalar + 2_500)] : "";
         checar(trecho.Contains("PerguntarApagarDados()", StringComparison.Ordinal)
-               && trecho.IndexOf("Instalacao.Desinstalar()", StringComparison.Ordinal) < trecho.IndexOf("Instalacao.ApartarDados(", StringComparison.Ordinal)
+               // 1.0.36: Desinstalar(out var quiosques) (desfaz o quiosque antes); o >= 0 impede que um
+               // nome trocado passe por -1 < índice
+               && trecho.IndexOf("Instalacao.Desinstalar(", StringComparison.Ordinal) >= 0
+               && trecho.IndexOf("Instalacao.Desinstalar(", StringComparison.Ordinal) < trecho.IndexOf("Instalacao.ApartarDados(", StringComparison.Ordinal)
                && app.Contains("MessageBoxResult.No)", StringComparison.Ordinal),
             "o desinstalador pergunta com o Não como padrão e só mexe nos dados depois de remover o programa");
         var janela = FonteDoRepo(Path.Combine("Pdv.Instalador", "JanelaInstalador.xaml")) ?? "";

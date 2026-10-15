@@ -285,7 +285,9 @@ public partial class JanelaInstalador : Window
     private void AbrirPdvEFechar()
     {
         // Como o usuário da área de trabalho, e não como administrador: ver Instalacao.AbrirCaixa.
-        Instalacao.AbrirCaixa(Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe"));
+        // 1.0.36: sem a área de trabalho para abrir sem administrador, não abre; diz como abrir.
+        if (!Instalacao.AbrirCaixa(Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe")))
+            MessageBox.Show(this, Instalacao.AbraPeloAtalho, "Caixa instalado", MessageBoxButton.OK, MessageBoxImage.Information);
         Close();
     }
 

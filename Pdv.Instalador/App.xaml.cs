@@ -21,16 +21,19 @@ public partial class App : Application
         // 03/09: o caixa chama o instalador com --atualizar. Sem tela: troca o
         // programa na pasta de sempre e reabre o caixa. O dono viu o assistente
         // completo abrir numa atualizacao e, com razao, quis so a troca.
-        if (e.Args.Length > 0 && e.Args[0] == "--atualizar")
+        if (e.Args.Length > 0 && e.Args[0] == Pdv.Nucleo.ReabrirOCaixa.ArgumentoAtualizar)
         {
             var falha = AtualizarSilencioso(out var pastaDoCaixa);
             if (falha is not null)
                 MessageBox.Show("Não consegui atualizar: " + falha + "\nO caixa continua na versão anterior.",
                     "Atualizar o caixa", MessageBoxButton.OK, MessageBoxImage.Error);
-            else
-                // Reabre ONDE o caixa está (a loja da Savassi mora em "PDV MMTech") e como o
-                // usuário da área de trabalho, sem herdar o administrador deste instalador.
-                Instalacao.AbrirCaixa(Path.Combine(pastaDoCaixa ?? Instalacao.PastaDestinoPadrao, "Pdv.exe"));
+            // 1.0.36: o caixa novo deixa um cmd comum esperando este instalador sair e se reabre
+            // sozinho, sem administrador (--sem-abrir). Caixa antigo: reabre aqui, ONDE o caixa está
+            // (a Savassi mora em "PDV MMTech") e sem herdar o administrador deste instalador; sem a
+            // área de trabalho para isso (quiosque), pede para reiniciar.
+            else if (Pdv.Nucleo.ReabrirOCaixa.InstaladorAbre(e.Args)
+                     && !Instalacao.AbrirCaixa(Path.Combine(pastaDoCaixa ?? Instalacao.PastaDestinoPadrao, "Pdv.exe")))
+                MessageBox.Show(Instalacao.ReinicieParaAbrir, "Atualizar o caixa", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown(falha is null ? 0 : 1);
             return;
         }
@@ -42,16 +45,20 @@ public partial class App : Application
             var apagarDados = PerguntarApagarDados();
             if (apagarDados && Instalacao.PastaInstalada() is { } instalada)
                 Instalacao.PararAgente(Instalacao.PastaDoAgente(instalada));
-            var erro = Instalacao.Desinstalar();
+            // 1.0.36: Desinstalar desfaz antes o quiosque do usuário do caixa (Shell e trava do
+            // Ctrl+Alt+Del), senão a próxima entrada no Windows seria uma tela preta sem saída. Um
+            // Shell nosso que não sai segura a desinstalação (erro, e nada é apagado).
+            var erro = Instalacao.Desinstalar(out var quiosque);
+            var avisoQuiosque = Pdv.Nucleo.DesfazerQuiosque.Aviso(quiosque);
             string? destino = null, erroDados = null;
             if (erro is null && apagarDados)
                 erroDados = Instalacao.ApartarDados(Instalacao.PastaDados, DateTime.Now, out destino);
             MessageBox.Show(
-                erro is not null ? "Não consegui remover: " + erro
+                erro is not null ? "Não consegui remover: " + erro + avisoQuiosque
                 : !apagarDados ? "Caixa removido desta máquina. As vendas e a configuração da loja "
-                    + "foram PRESERVADAS em C:\\ProgramData\\PdvNativo."
-                : erroDados is not null ? "Caixa removido desta máquina, mas os dados continuam no lugar. " + erroDados
-                : $"Caixa removido desta máquina. Os dados foram guardados em {destino}. A próxima instalação começa do zero.",
+                    + "foram PRESERVADAS em C:\\ProgramData\\PdvNativo." + avisoQuiosque
+                : erroDados is not null ? "Caixa removido desta máquina, mas os dados continuam no lugar. " + erroDados + avisoQuiosque
+                : $"Caixa removido desta máquina. Os dados foram guardados em {destino}. A próxima instalação começa do zero." + avisoQuiosque,
                 "Remover o caixa", MessageBoxButton.OK,
                 erro is null && erroDados is null ? MessageBoxImage.Information : MessageBoxImage.Error);
             Shutdown(erro is null ? 0 : 1);

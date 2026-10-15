@@ -13,6 +13,9 @@ namespace Pdv.Testes;
 ///      conta caía na versão do PRÓPRIO instalador.
 ///   3. O caixa aberto pelo instalador herdava o administrador, e a trava dele não era vista
 ///      pelo clique normal no ícone.
+///   4. (1.0.36, revisão de segurança) No quiosque, sem Explorer, o instalador ainda abria o caixa
+///      direto, como administrador. Elevado, agora ele nunca abre direto; a conferência extrai as
+///      nativas ao lado do exe; programas do Windows vão pelo caminho absoluto.
 /// </summary>
 public static class TestesInstaladorCastelo
 {
@@ -125,10 +128,31 @@ public static class TestesInstaladorCastelo
     {
         checar(Instalacao.DecidirComoAbrir(elevado: true, explorerAberto: true) == Instalacao.ComoAbrir.PeloExplorer,
             "instalador como administrador abre o caixa como o usuário da área de trabalho, sem herdar o administrador");
-        checar(Instalacao.DecidirComoAbrir(elevado: true, explorerAberto: false) == Instalacao.ComoAbrir.Direto,
-            "sem área de trabalho aberta (quiosque) abre direto");
-        checar(Instalacao.DecidirComoAbrir(elevado: false, explorerAberto: true) == Instalacao.ComoAbrir.Direto,
+        // 1.0.36 (revisão de segurança): elevado NUNCA abre direto. No quiosque o caixa aberto daqui
+        // passava o turno inteiro como administrador (WebView2, trava gravando sem aviso, bibliotecas
+        // extraídas na pasta do usuário carregadas elevadas).
+        checar(Instalacao.DecidirComoAbrir(elevado: true, explorerAberto: false) == Instalacao.ComoAbrir.NaoAbre,
+            "elevado e sem área de trabalho (quiosque) NÃO abre o caixa: quem chamou reabre, ou a pessoa reinicia");
+        checar(Instalacao.DecidirComoAbrir(elevado: false, explorerAberto: true) == Instalacao.ComoAbrir.Direto
+               && Instalacao.DecidirComoAbrir(elevado: false, explorerAberto: false) == Instalacao.ComoAbrir.Direto,
             "sem administrador não há o que tirar: abre direto");
+        checar(new[] { true, false }.All(ex => Instalacao.DecidirComoAbrir(elevado: true, explorerAberto: ex) != Instalacao.ComoAbrir.Direto),
+            "elevado nunca abre Direto, com ou sem área de trabalho");
+
+        var inst = Fonte("Pdv.Instalador", "Instalacao.cs") ?? "";
+        var abrir = Corpo(inst, "public static bool AbrirCaixa(string exe)");
+        var direto = abrir.IndexOf("case ComoAbrir.Direto:", StringComparison.Ordinal);
+        var explorer = abrir.IndexOf("case ComoAbrir.PeloExplorer:", StringComparison.Ordinal);
+        var semDireto = explorer < 0 ? "" : abrir[explorer..];
+        checar(abrir.Length > 0 && direto > 0 && explorer > direto
+               && Contar(abrir, "UseShellExecute = true") == 1 && !semDireto.Contains("UseShellExecute = true", StringComparison.Ordinal)
+               && semDireto.Contains("return false;", StringComparison.Ordinal)
+               && abrir.Contains("new ProcessStartInfo(CaminhoDoExplorer())", StringComparison.Ordinal)
+               && !abrir.Contains("\"explorer.exe\"", StringComparison.Ordinal),
+            "o Explorer que não mostrou o caixa NÃO cai para o direto (seria o caixa como administrador), e o Explorer vai pelo caminho da pasta do Windows");
+        checar(Instalacao.CaminhoDoExplorer() == Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe")
+               && File.Exists(Instalacao.CaminhoDoExplorer()),
+            "o Explorer é o da pasta do Windows (" + Instalacao.CaminhoDoExplorer() + ")");
 
         var app = Fonte("Pdv.Instalador", "App.xaml.cs") ?? "";
         var janela = Fonte("Pdv.Instalador", "JanelaInstalador.xaml.cs") ?? "";
@@ -136,6 +160,88 @@ public static class TestesInstaladorCastelo
             "os dois caminhos que reabrem o caixa (fim da instalação e atualização) passam pela mesma regra");
         checar(!app.Contains("Path.Combine(Instalacao.PastaDestinoPadrao, \"Pdv.exe\")", StringComparison.Ordinal),
             "a atualização reabre o caixa onde ele ESTÁ instalado, e não na pasta do nome novo");
+        checar(app.Contains("Pdv.Nucleo.ReabrirOCaixa.InstaladorAbre(e.Args)", StringComparison.Ordinal)
+               && app.Contains("MessageBox.Show(Instalacao.ReinicieParaAbrir", StringComparison.Ordinal)
+               && janela.Contains("if (!Instalacao.AbrirCaixa(", StringComparison.Ordinal) && janela.Contains("Instalacao.AbraPeloAtalho", StringComparison.Ordinal),
+            "com --sem-abrir o instalador não abre nada (o caixa se reabre); sem ele e sem como abrir sem administrador, a frase diz para reiniciar ou usar o atalho");
+        checar(Instalacao.ReinicieParaAbrir.Length <= 80 && Instalacao.AbraPeloAtalho.Length <= 100
+               && new[] { Instalacao.ReinicieParaAbrir, Instalacao.AbraPeloAtalho }.All(t => !t.Contains('—') && !t.Contains('–')
+                   && !System.Text.RegularExpressions.Regex.IsMatch(t, "(?i)administrador|explorer|elevad|uac")),
+            "as frases de quando o caixa não abre sozinho são curtas, sem travessão e sem termo técnico");
+
+        // ── A CONFERÊNCIA NÃO CARREGA BIBLIOTECA DA PASTA DO USUÁRIO ──
+        // O instalador roda elevado e a conferência (Pdv.exe --cupom-teste) nasce elevada com ele. Sem
+        // a variável, o Pdv.exe de arquivo único extrai e carrega as nativas de %TEMP%\.net, que o
+        // usuário grava. Com ela, a extração vai para uma pasta ao lado do exe (Program Files).
+        var exeFalso = Path.Combine(Path.GetTempPath(), "pdv-conf-" + Guid.NewGuid().ToString("N")[..8], "Pdv.exe");
+        var psi = Instalacao.PsiDaConferencia(exeFalso, "x.png");
+        checar(Instalacao.VariavelDaExtracao == "DOTNET_BUNDLE_EXTRACT_BASE_DIR"
+               && psi.Environment.TryGetValue(Instalacao.VariavelDaExtracao, out var base_) && base_ == Instalacao.PastaDaConferencia(exeFalso)
+               && Instalacao.PastaDaConferencia(exeFalso) == Path.Combine(Path.GetDirectoryName(exeFalso)!, ".conferencia")
+               && psi.FileName == exeFalso && psi.ArgumentList.SequenceEqual(new[] { "--cupom-teste", "x.png" }) && !psi.UseShellExecute,
+            "a conferência extrai as bibliotecas nativas AO LADO DO EXE (DOTNET_BUNDLE_EXTRACT_BASE_DIR), com a proteção do próprio exe, nunca em %TEMP%\\.net");
+        var instalado = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "MMFood", "Pdv.exe");
+        checar(Instalacao.PastaDaConferencia(instalado).StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), StringComparison.OrdinalIgnoreCase),
+            "no caixa instalado a pasta da extração fica em Program Files (só administrador grava): " + Instalacao.PastaDaConferencia(instalado));
+        var conferir = Corpo(inst, "public static string? ConferirQueOProgramaAbre(string exe, TimeSpan prazo)");
+        checar(conferir.Contains("RodarComPrazo(PsiDaConferencia(exe, png), prazo)", StringComparison.Ordinal)
+               && conferir.Contains("Directory.Delete(PastaDaConferencia(exe), recursive: true)", StringComparison.Ordinal),
+            "a conferência usa esse processo e apaga a pasta da extração no fim");
+        // de verdade: uma pasta .conferencia que sobrou some depois da conferência
+        var pastaFalsa = Path.GetDirectoryName(exeFalso)!;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(Instalacao.PastaDaConferencia(exeFalso), "Pdv", "abc"));
+            File.WriteAllText(Path.Combine(Instalacao.PastaDaConferencia(exeFalso), "Pdv", "abc", "x.dll"), "x");
+            File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), exeFalso, overwrite: true);
+            var reprovou = Instalacao.ConferirQueOProgramaAbre(exeFalso, TimeSpan.FromSeconds(20)) is not null;
+            checar(reprovou && !Directory.Exists(Instalacao.PastaDaConferencia(exeFalso)),
+                "a pasta da extração da conferência é apagada no fim (processo real)");
+        }
+        finally { try { Directory.Delete(pastaFalsa, recursive: true); } catch { } }
+
+        // ── PROGRAMAS DO WINDOWS PELO CAMINHO ABSOLUTO ──
+        // Pelo nome ("icacls", "wscript", "explorer.exe") o Windows procura antes na pasta do
+        // instalador e na pasta atual (na atualização, o TEMP do usuário): um homônimo plantado ali
+        // rodaria como administrador.
+        var fontes = new[] { "Instalacao.cs", "PayGo.cs", "WebView2Runtime.cs", "Pacote.cs", "App.xaml.cs", "JanelaInstalador.xaml.cs", "QuiosqueDoCaixa.cs" }
+            .Select(n => (Nome: n, Texto: Fonte("Pdv.Instalador", n) ?? "")).ToList();
+        var peloNome = new System.Text.RegularExpressions.Regex(@"(FileName\s*=\s*""[^""\\/]*""|new ProcessStartInfo\(\s*""[^""\\/]*""|Process\.Start\(\s*""[^""\\/]*"")");
+        var achados = fontes.SelectMany(f => peloNome.Matches(f.Texto).Select(m => f.Nome + ": " + m.Value)).ToList();
+        checar(fontes.All(f => f.Texto.Length > 0) && achados.Count == 0,
+            "o instalador não chama programa nenhum pelo nome (sem caminho)" + (achados.Count == 0 ? "" : " [" + string.Join(" | ", achados) + "]"));
+        checar(Instalacao.ProgramaDoSistema("icacls.exe") == Path.Combine(Environment.SystemDirectory, "icacls.exe")
+               && File.Exists(Instalacao.ProgramaDoSistema("icacls.exe")) && File.Exists(Instalacao.ProgramaDoSistema("wscript.exe"))
+               && inst.Contains("FileName = ProgramaDoSistema(\"icacls.exe\")", StringComparison.Ordinal)
+               && inst.Contains("FileName = ProgramaDoSistema(\"wscript.exe\")", StringComparison.Ordinal)
+               && (fontes.First(f => f.Nome == "PayGo.cs").Texto).Contains("FileName = Instalacao.ProgramaDoSistema(\"icacls.exe\")", StringComparison.Ordinal),
+            "icacls e wscript saem de System32, pelo caminho absoluto");
+        var atalho = Corpo(inst, "private static void CriarAtalho(string lnk, string alvo)");
+        var script = Instalacao.ScriptDoAtalho(instalado);
+        checar(atalho.Contains("var vbs = ScriptDoAtalho(alvo);", StringComparison.Ordinal) && !atalho.Contains("GetTempPath", StringComparison.Ordinal)
+               && Path.GetDirectoryName(script) == Path.GetDirectoryName(instalado) && Path.GetFileName(script).StartsWith("atalho-", StringComparison.Ordinal)
+               && script != Instalacao.ScriptDoAtalho(instalado),
+            "o VBScript do atalho nasce na pasta do programa (só administrador grava), com nome único, e não no TEMP do usuário");
+    }
+
+    private static int Contar(string texto, string pedaco)
+    {
+        var n = 0;
+        for (var i = texto.IndexOf(pedaco, StringComparison.Ordinal); i >= 0; i = texto.IndexOf(pedaco, i + pedaco.Length, StringComparison.Ordinal)) n++;
+        return n;
+    }
+
+    private static string Corpo(string fonte, string assinatura)
+    {
+        var i = fonte.IndexOf(assinatura, StringComparison.Ordinal);
+        if (i < 0) return "";
+        var fim = fonte.Length;
+        foreach (var marca in new[] { "\n    private ", "\n    public ", "\n    internal ", "\n    /// <summary>", "\n    // ──" })
+        {
+            var j = fonte.IndexOf(marca, i + assinatura.Length, StringComparison.Ordinal);
+            if (j >= 0 && j < fim) fim = j;
+        }
+        return fonte[i..fim];
     }
 
     private static string? Fonte(params string[] partes)

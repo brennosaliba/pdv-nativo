@@ -37,7 +37,7 @@ public static class TestesQuiosque
             "se o PDV morrer como shell, o App abre o Explorer antes de cair");
         var q = Fonte("Quiosque.cs") ?? "";
         checar(q.Contains("Registry.CurrentUser") && !q.Contains("Registry.LocalMachine") && !q.Contains("AutoAdminLogon") && !q.Contains("DefaultPassword"),
-            "só o registro do USUÁRIO (sem UAC) e nunca senha do Windows no registro");
+            "só o registro do USUÁRIO (HKCU e, para a trava, HKEY_USERS de quem pediu), nunca a máquina, e nunca senha do Windows no registro");
     }
 
     private static string? Fonte(string relativo)
