@@ -41,9 +41,57 @@ Configuração → desmarque a opção → Salvar. Na próxima entrada o Windows
 ### Por dentro
 
 `Quiosque.cs`: grava `"C:\Program Files\MMFood\Pdv.exe" --quiosque` em
-`HKCU\...\Winlogon\Shell` (registro do usuário, sem UAC). `Ligado` lê o registro (o
-registro é a verdade, não o banco). `Desligar` só apaga se o valor for o nosso.
-Nunca toca em `HKLM`, `AutoAdminLogon` ou `DefaultPassword` (a suíte vigia isso).
+`HKCU\...\Winlogon\Shell` (registro do usuário; essa chave o usuário controla, então
+grava sem UAC). `Ligado` lê o registro (o registro é a verdade, não o banco).
+`Desligar` só apaga se o valor for o nosso. Nunca toca em `HKLM`, `AutoAdminLogon` ou
+`DefaultPassword` (a suíte vigia isso).
+
+### A trava do Ctrl+Alt+Del (1.0.33; corrigida na 1.0.36, 14/10/2026)
+
+A opção "Travar o Ctrl+Alt+Del" grava quatro políticas do usuário:
+`Policies\System` (`DisableTaskMgr`, `DisableLockWorkstation`, `DisableChangePassword`)
+e `Policies\Explorer` (`NoLogoff`), todas DWORD 1. Na tela do Ctrl+Alt+Del sobram
+Cancelar e o botão de desligar.
+
+A 1.0.33 achava que essas chaves gravavam sem UAC, como o `Shell`. Não gravam. A chave
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Policies` é protegida: o usuário só lê,
+e só o SYSTEM e os Administradores **elevados** escrevem. Com o UAC ligado (o padrão do
+Windows) a Savassi viu "Access to the registry key ... is denied" e a trava nunca gravou.
+
+Como funciona desde a 1.0.36:
+
+1. Configuração → marque (ou desmarque) a trava → **Salvar alterações**.
+2. O PDV tenta gravar direto. Dá certo só com o UAC desligado ou com o PDV aberto como
+   administrador; aí não aparece aviso nenhum.
+3. Negado, o PDV chama a si mesmo como administrador:
+   `Pdv.exe --travas on|off --sid <SID do usuário do caixa>`. O Windows escurece a tela e
+   pergunta "Pdv.exe, editor desconhecido". Usuário administrador toca em **Sim**; usuário
+   comum digita a senha de um administrador.
+4. O ajudante grava em `HKEY_USERS\<SID>\...` (o registro de quem pediu, não o do
+   administrador que digitou a senha) e sai. Ele só aceita on/off, só os quatro valores,
+   só o SID de quem está logado (ou da própria conta), e só roda se o `Pdv.exe` estiver
+   em Arquivos de Programas.
+5. O PDV relê o registro. Deu certo: nada na tela. Responderam Não: "Sem a permissão do
+   Windows, a trava do Ctrl+Alt+Del não foi ligada. O resto foi salvo." O detalhe técnico
+   vai só para a auditoria (`ctrl_alt_del_travado`, `_destravado`, `_recusado`, `_falhou`).
+
+A abertura do PDV **nunca** pede permissão ao Windows. Se o quiosque foi desligado por fora
+e a trava ficou, ela tenta tirar direto e, sem permissão, deixa `ctrl_alt_del_ficou` na
+auditoria; quem tira é a Configuração (desmarcar e salvar, com o aviso do Windows).
+
+Para conferir no PC da loja (cmd aberto como o usuário do caixa, sem "Executar como
+administrador": o cmd elevado de outra conta lê o HKCU dela):
+
+```
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System"
+reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+```
+
+Por dentro: regra pura em `Pdv.Nucleo/TravaDoCtrlAltDel.cs` (argumento, SID, ordem das
+tentativas, frases); registro e ajudante em `Quiosque.cs` (`GravarTravas`, `TentarDireto`,
+`MudarTrava`, `RodarAjudante`); o modo `--travas` sai no começo de `App.OnStartup`, antes
+da trava de instância, do banco e do TEF. A bateria grava só numa chave isolada
+(`HKCU\Software\PdvNativoTeste\<guid>`), apagada no fim.
 
 ## 2. Música da loja (Spotify)
 
