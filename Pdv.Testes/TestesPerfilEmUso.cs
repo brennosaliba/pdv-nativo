@@ -31,6 +31,11 @@ namespace Pdv.Testes;
 ///    o controle segue vivo depois que o caixa anterior sai; num PC limpo nada muda; o órfão é
 ///    encerrado; e a troca de versão do instalador espera e encerra os navegadores do caixa.
 /// RP-1 é a reprodução: na 1.0.34 (c0fb538) ele falha com o 0x8007139F.
+///
+/// Revisão adversarial de 14/10 (RP-3, RP-11..13; na 684ebf4 os três falham): entrar nas opções
+/// anteriores não pode durar o dia todo (o Gestor dorme sem as 3 da 1.0.33). Com o caixa anterior
+/// fora, o controle novo volta às desta versão; o dono que sai no meio da espera não deixa um
+/// navegador DESTE caixa sem elas; e o Reabrir no meio de uma recuperação para a velha.
 /// </summary>
 public static class TestesPerfilEmUso
 {
@@ -91,14 +96,17 @@ public static class TestesPerfilEmUso
         var chat5 = FalhaWebView2.Painel(TipoFalhaWeb.PerfilEmUso, "O chat", TimeSpan.FromMinutes(5));
         var wa5 = FalhaWebView2.Painel(TipoFalhaWeb.PerfilEmUso, "O WhatsApp", TimeSpan.FromMinutes(30));
         var textos = new[] { chat, wa, chat5, wa5 };
-        checar(chat == "O chat está esperando o caixa anterior fechar." && wa == "O WhatsApp está esperando o caixa anterior fechar."
+        checar(chat == "O chat ainda está abrindo. Aguarde um pouco." && wa == "O WhatsApp ainda está abrindo. Aguarde um pouco."
                && chat5 == "Reinicie o computador para o chat voltar." && wa5 == "Reinicie o computador para o WhatsApp voltar.",
-            $"PE-3 o painel do perfil em uso diz que está esperando e, passados 5 min, manda reiniciar o computador ({string.Join(" | ", textos)})");
+            $"PE-3 o painel do perfil em uso pede para aguardar e, passados 5 min, manda reiniciar o computador ({string.Join(" | ", textos)})");
+        // revisão 14/10: "esperando o caixa anterior fechar" falava de algo que o operador não vê (o
+        // navegador de uma versão anterior), e "caixa" também é a pessoa
         checar(textos.All(t => t.Length is > 10 and <= 80 && !t.Contains('\n') && !t.Contains('—') && !t.Contains('–')
                                && !t.Contains("WebView2", StringComparison.OrdinalIgnoreCase) && !t.Contains("perfil", StringComparison.OrdinalIgnoreCase)
-                               && !t.Contains("0x", StringComparison.Ordinal))
+                               && !t.Contains("0x", StringComparison.Ordinal) && !t.Contains("caixa", StringComparison.OrdinalIgnoreCase)
+                               && !t.Contains("anterior", StringComparison.OrdinalIgnoreCase) && !t.Contains("navegador", StringComparison.OrdinalIgnoreCase))
                && FalhaWebView2.Painel(TipoFalhaWeb.Outra, "O chat", TimeSpan.FromHours(1)) == FalhaWebView2.Painel(TipoFalhaWeb.Outra, "O chat"),
-            "PE-4 uma linha curta, sem travessão, sem 'WebView2', 'perfil' nem código; as outras falhas não mudam com o tempo");
+            "PE-4 uma linha curta, sem travessão, sem 'WebView2', 'perfil', código, nem 'caixa anterior' ou 'navegador'; as outras falhas não mudam com o tempo");
 
         checar(FalhaWebView2.AposFalha(true, false, TipoFalhaWeb.PerfilEmUso) == (true, true)
                && FalhaWebView2.AposFalha(true, true, TipoFalhaWeb.PerfilEmUso) == (true, true)
@@ -219,13 +227,14 @@ public static class TestesPerfilEmUso
         var hospedes = new List<HospedeWebView2>();
         var sondas = new List<SondaPerfilWebView2.Viva>();
 
-        (HospedeWebView2 H, Func<WebView2> Atual, List<string> Diag) Camada(string nome, string perfil, string? argumentos, IReadOnlyList<string?> anteriores)
+        (HospedeWebView2 H, Func<WebView2> Atual, List<string> Diag) Camada(string nome, string perfil, string? argumentos, IReadOnlyList<string?> anteriores,
+            Action<string>? ouvir = null)
         {
             var web = new WebView2 { Visibility = Visibility.Collapsed };
             grade.Children.Add(web);
             var atual = web;
             var diag = new List<string>();
-            var h = new HospedeWebView2(nome, janela.Dispatcher, () => atual, w => atual = w, perfil, l => diag.Add(l),
+            var h = new HospedeWebView2(nome, janela.Dispatcher, () => atual, w => atual = w, perfil, l => { diag.Add(l); ouvir?.Invoke(l); },
                 argumentos is null ? null : () => new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = argumentos })
             {
                 ArgumentosAnteriores = anteriores,
@@ -233,6 +242,18 @@ public static class TestesPerfilEmUso
             hospedes.Add(h);
             return (h, () => atual, diag);
         }
+
+        // os argumentos que o caixa pôs no navegador de core, e se foi ESTE processo que o abriu
+        static (string Args, bool DesteCaixa) Navegador(string perfil, CoreWebView2? core)
+        {
+            if (core is null) return ("?", false);
+            int pid;
+            try { pid = (int)core.BrowserProcessId; } catch { return ("?", false); }
+            var n = NavegadorDoPerfil.Listar(perfil).FirstOrDefault(x => x.Pid == pid);
+            return n is null ? ("?", false) : (string.Join(" ", NavegadorDoPerfil.ArgumentosDeQuemAbriu(n.Linha)), n.PaiPid == Environment.ProcessId);
+        }
+        static bool ComAsDestaVersao(string args)
+            => NavegadorDoPerfil.Argumentos(args).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(NavegadorDoPerfil.Argumentos(Chat133));
 
         async Task<SondaPerfilWebView2.Viva?> Sonda(string perfil, string? argumentos, string rotulo)
         {
@@ -288,13 +309,18 @@ public static class TestesPerfilEmUso
                     checar(saiu && depois == "4" && core is not null && (int)core.BrowserProcessId == antigo.Navegador && SondaPerfilWebView2.Vivo(antigo.Navegador),
                         $"RP-2 o caixa anterior sai e o chat segue vivo no mesmo navegador (saiu={saiu}, script={depois ?? "falhou"})");
 
-                    var linhasAntes = diag.Count(l => l.Contains("o perfil recusou", StringComparison.Ordinal));
+                    // RP-3 (revisão 14/10): antes ficava nas opções anteriores até o caixa fechar, e o Gestor
+                    // passava o dia sem as 3 que o mantêm acordado (o 13/10 que a 1.0.33 resolveu)
                     h.Recriar("vigia: chat parado", descartarAmbiente: true);
                     Exception? erro3 = null;
-                    try { await h.IniciarControleAsync(); } catch (Exception ex) { erro3 = ex; }
-                    checar(erro3 is null && atual().CoreWebView2 is not null && h.ComOpcoesAnteriores
-                           && diag.Count(l => l.Contains("o perfil recusou", StringComparison.Ordinal)) == linhasAntes,
-                        $"RP-3 no mesmo caixa, controle e ambiente novos ficam nas opções que entraram (sem nova recusa); a próxima abertura do caixa tenta as desta versão ({erro3?.GetType().Name ?? "ok"})");
+                    CoreWebView2? core3 = null;
+                    try { core3 = await h.IniciarControleAsync(); } catch (Exception ex) { erro3 = ex; }
+                    var (args3, deste3) = Navegador(perfil, core3);
+                    var velhoSaiu = await SondaPerfilWebView2.NavegadorSaiuAsync(antigo.Navegador, TimeSpan.FromSeconds(10));
+                    checar(erro3 is null && core3 is not null && ReferenceEquals(atual().CoreWebView2, core3) && !h.ComOpcoesAnteriores
+                           && deste3 && ComAsDestaVersao(args3) && velhoSaiu
+                           && diag.Any(l => l.Contains("volta às opções desta versão", StringComparison.Ordinal)),
+                        $"RP-3 o caixa anterior saiu e a vigia troca o controle: o chat volta às opções desta versão, num navegador deste caixa ({erro3?.GetType().Name ?? "ok"}, deste caixa={deste3}, argumentos=[{args3}], navegador velho saiu={velhoSaiu})");
                 }
             }
 
@@ -327,7 +353,7 @@ public static class TestesPerfilEmUso
                     var painel = tipo is { } t ? FalhaWebView2.Painel(t, "O chat", h.EsperandoOPerfil(DateTime.Now)) : "";
                     var depois5 = tipo is { } t5 ? FalhaWebView2.Painel(t5, "O chat", h.EsperandoOPerfil(DateTime.Now.AddMinutes(6))) : "";
                     checar(erro is PerfilEmUsoException && tipo == TipoFalhaWeb.PerfilEmUso && !h.ControleUsado && h.VezesPerfilEmUso == 1
-                           && h.PerfilEmUsoDesde is not null && painel.Contains("esperando o caixa anterior", StringComparison.Ordinal)
+                           && h.PerfilEmUsoDesde is not null && painel.Contains("ainda está abrindo", StringComparison.Ordinal)
                            && depois5.StartsWith("Reinicie o computador", StringComparison.Ordinal),
                         $"RP-5 dono vivo com opções desconhecidas: 'perfil em uso', controle trocado, e o painel espera e depois manda reiniciar ({erro?.GetType().Name ?? "abriu?"}, {painel})");
 
@@ -375,6 +401,104 @@ public static class TestesPerfilEmUso
                         $"RP-8 órfão: encerra SÓ o navegador do perfil e abre com as opções desta versão ({(erro is null ? "abriu" : "lançou " + erro.GetType().Name)}, encerrados={string.Join(",", encerrados)})");
                     await antigo.FecharAsync();
                 }
+            }
+
+            // RP-11 (revisão 14/10) com o caixa anterior VIVO, trocar o controle entra de novo no navegador dele;
+            // depois ele sai, o navegador cai, e o controle novo volta às opções desta versão
+            {
+                var perfil = Path.Combine(raiz, "cai", "webview");
+                var antigo = await Sonda(perfil, null, "RP-11");
+                if (antigo is not null)
+                {
+                    var (h, atual, diag) = Camada("chat", perfil, Chat133, SemOpcao);
+                    Exception? erro = null, erro2 = null;
+                    CoreWebView2? core2 = null;
+                    try { await h.IniciarControleAsync(); } catch (Exception ex) { erro = ex; }
+                    h.Recriar("vigia: chat parado", descartarAmbiente: true);
+                    try { core2 = await h.IniciarControleAsync(); } catch (Exception ex) { erro2 = ex; }
+                    checar(erro is null && erro2 is null && core2 is not null && (int)core2.BrowserProcessId == antigo.Navegador && h.ComOpcoesAnteriores,
+                        $"RP-11 com o caixa anterior ainda vivo, trocar o controle entra de novo no navegador dele, com as opções dele ({(erro ?? erro2)?.GetType().Name ?? "ok"})");
+
+                    await antigo.FecharAsync();
+                    var nav = core2 is null ? 0 : (int)core2.BrowserProcessId;
+                    try { using var p = Process.GetProcessById(nav); p.Kill(); } catch { }
+                    var caiu = await SondaPerfilWebView2.NavegadorSaiuAsync(nav, TimeSpan.FromSeconds(10));
+                    await Task.Delay(500);
+                    // o que o chat faz no BrowserProcessExited: RecriarAsync, Recriar(descartar) e inicia de novo
+                    h.Recriar("navegador caiu", descartarAmbiente: true);
+                    Exception? erro3 = null;
+                    CoreWebView2? core3 = null;
+                    try { core3 = await h.IniciarControleAsync(); } catch (Exception ex) { erro3 = ex; }
+                    var (args3, deste3) = Navegador(perfil, core3);
+                    checar(caiu && erro3 is null && core3 is not null && ReferenceEquals(atual().CoreWebView2, core3) && !h.ComOpcoesAnteriores
+                           && deste3 && ComAsDestaVersao(args3)
+                           && diag.Any(l => l.Contains("nenhum navegador de outro processo no perfil; volta às opções desta versão", StringComparison.Ordinal)),
+                        $"RP-11b o caixa anterior saiu e o navegador caiu: o controle novo abre com as opções desta versão (antes: as anteriores até o caixa fechar) ({erro3?.GetType().Name ?? "ok"}, deste caixa={deste3}, argumentos=[{args3}])");
+                }
+            }
+
+            // RP-12 (revisão 14/10) o caixa anterior sai DURANTE a espera entre a recusa e a tentativa com as
+            // opções dele: o navegador que abre é um NOVO, deste caixa, e tem de ter as opções desta versão
+            {
+                var perfil = Path.Combine(raiz, "sai-no-meio", "webview");
+                var antigo = await Sonda(perfil, null, "RP-12");
+                if (antigo is not null)
+                {
+                    var recusou = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var (h, atual, diag) = Camada("chat", perfil, Chat133, SemOpcao,
+                        l => { if (l.Contains("o perfil recusou as opções", StringComparison.Ordinal)) recusou.TrySetResult(); });
+                    h.EsperaPeloDono = TimeSpan.Zero;                    // direto à tentativa com as opções do dono...
+                    h.EsperaEntreTentativas = TimeSpan.FromSeconds(4);   // ...e o dono sai durante esta espera
+                    var saida = Task.Run(async () =>
+                    {
+                        await recusou.Task;
+                        await antigo.FecharAsync();
+                        return await SondaPerfilWebView2.NavegadorSaiuAsync(antigo.Navegador, TimeSpan.FromSeconds(3));
+                    });
+                    Exception? erro = null;
+                    CoreWebView2? core = null;
+                    try { core = await h.IniciarControleAsync(); } catch (Exception ex) { erro = ex; }
+                    var saiuAntes = await Task.WhenAny(saida, Task.Delay(TimeSpan.FromSeconds(30))) == saida && await saida;
+                    var (args, deste) = Navegador(perfil, core);
+                    checar(saiuAntes && erro is null && core is not null && ReferenceEquals(atual().CoreWebView2, core) && !h.ComOpcoesAnteriores
+                           && deste && ComAsDestaVersao(args)
+                           && !diag.Any(l => l.Contains("no navegador que já estava no perfil", StringComparison.Ordinal)),
+                        $"RP-12 o caixa anterior sai no meio da espera: o navegador novo, deste caixa, abre com as opções desta versão e o diagnóstico não diz que entrou no do caixa anterior ({erro?.GetType().Name ?? "ok"}, anteriores={h.ComOpcoesAnteriores}, deste caixa={deste}, argumentos=[{args}])");
+                }
+            }
+
+            // RP-13 (revisão 14/10) Reabrir no MEIO de uma recuperação que vai entrar (dono vivo com as opções
+            // antigas): a recuperação velha para sem abrir nada, e a do Reabrir abre no controle atual
+            foreach (var (momento, marca, atraso) in new[]
+                     {
+                         ("na espera pelo dono", "o perfil recusou as opções", 1200),
+                         ("na espera entre as tentativas", "controle recriado (perfil em uso)", 300),
+                     })
+            {
+                var perfil = Path.Combine(raiz, "reabrir-" + atraso, "webview");
+                var antigo = await Sonda(perfil, null, "RP-13");
+                if (antigo is null) continue;
+                var viu = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var (h, atual, diag) = Camada("chat", perfil, Chat133, SemOpcao,
+                    l => { if (l.Contains(marca, StringComparison.Ordinal)) viu.TrySetResult(); });
+                Exception? e1 = null, e2 = null;
+                CoreWebView2? c1 = null, c2 = null;
+                var t1 = ((Func<Task>)(async () => { try { c1 = await h.IniciarControleAsync(); } catch (Exception ex) { e1 = ex; } }))();
+                await Task.WhenAny(viu.Task, Task.Delay(TimeSpan.FromSeconds(30)));
+                await Task.Delay(atraso);
+                // o que o ReabrirAsync do chat faz com o hospedeiro: controle novo agora, e inicia
+                h.Recriar("reabrir pelo aviso", descartarAmbiente: true);
+                var t2 = ((Func<Task>)(async () => { try { c2 = await h.IniciarControleAsync(); } catch (Exception ex) { e2 = ex; } }))();
+                await Task.WhenAll(t1, t2);
+                await Task.Delay(300);
+                bool noAtual;
+                try { noAtual = c2 is not null && ReferenceEquals(atual().CoreWebView2, c2); } catch { noAtual = false; }
+                var entradas = diag.Count(l => l.Contains(": abriu com as opções", StringComparison.Ordinal));
+                checar(viu.Task.IsCompleted && e1 is OperationCanceledException && c1 is null && e2 is null && noAtual && h.ComOpcoesAnteriores
+                       && entradas == 1 && (int)c2!.BrowserProcessId == antigo.Navegador,
+                    $"RP-13 Reabrir {momento}: a recuperação velha para sem abrir nada e a do Reabrir abre no controle atual, no navegador do caixa anterior "
+                    + $"(1a={e1?.GetType().Name ?? (c1 is null ? "?" : "abriu")}, 2a={e2?.GetType().Name ?? "abriu"}, no controle atual={noAtual}, entradas={entradas})");
+                await antigo.FecharAsync();
             }
 
             // RP-9/10 A TROCA DE VERSÃO (instalador): espera e encerra os navegadores do caixa anterior, e só eles

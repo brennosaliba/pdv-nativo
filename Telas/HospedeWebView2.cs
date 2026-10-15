@@ -58,14 +58,22 @@ public sealed class HospedeWebView2
     private bool _parado;
     /// <summary>
     /// 1.0.35: com que opções o ambiente nasce. 0 = as desta versão (<c>opcoes</c> do construtor);
-    /// i > 0 = <see cref="ArgumentosAnteriores"/>[i - 1]. Muda só quando o perfil recusou as de agora
-    /// e as anteriores entraram, e fica assim até o caixa fechar: no mesmo processo, um ambiente novo
-    /// com outras opções seria recusado pelo navegador que este mesmo caixa já tem no perfil. A
-    /// próxima abertura do caixa começa de novo pelas desta versão.
+    /// i > 0 = <see cref="ArgumentosAnteriores"/>[i - 1]. Vai para i > 0 só quando o perfil recusou as
+    /// de agora e o caixa entrou no navegador do caixa anterior com as opções dele. Volta a 0 no
+    /// próximo ambiente novo em que quem abriu aquele navegador já não vive
+    /// (<see cref="VoltarAsOpcoesDestaVersaoSeDerAsync"/>): sem elas o Gestor dorme com a camada
+    /// escondida, o problema de 13/10 que a 1.0.33 resolveu.
     /// </summary>
     private int _opcoesDaVez;
-    /// <summary>1.0.35: a geração do controle que a recuperação do perfil espera encontrar (ela mesma troca o controle).</summary>
-    private int _geracaoDaRecuperacao;
+
+    /// <summary>
+    /// 1.0.35: uma recuperação do perfil em curso e a geração do controle que ELA espera encontrar
+    /// (ela mesma troca o controle). Cada recuperação tem a sua (revisão 14/10): com um campo só, a
+    /// recuperação passada para trás pelo Reabrir lia a geração gravada pela nova e seguia viva.
+    /// </summary>
+    private sealed class Recuperacao { public int Geracao; }
+    /// <summary>A recuperação corrente; as outras param na próxima conferência.</summary>
+    private Recuperacao? _recuperacao;
 
     /// <param name="nome">Só para o diagnóstico ("chat", "whatsapp").</param>
     /// <param name="atual">O controle que está na grade agora (o campo x:Name da tela).</param>
@@ -97,7 +105,10 @@ public sealed class HospedeWebView2
     /// <summary>1.0.35: desde quando o perfil está em uso sem a recuperação entrar (null = não está).</summary>
     public DateTime? PerfilEmUsoDesde { get; private set; }
 
-    /// <summary>1.0.35: quantas inicializações seguidas o perfil em uso derrubou (zera quando abre).</summary>
+    /// <summary>
+    /// 1.0.35: quantas inicializações seguidas o perfil em uso derrubou (zera quando abre). Conta só
+    /// a recuperação que desistiu: a passada para trás não conta.
+    /// </summary>
     public int VezesPerfilEmUso { get; private set; }
 
     /// <summary>Há quanto tempo o perfil está em uso (zero quando não está). Para o painel.</summary>
@@ -164,6 +175,7 @@ public sealed class HospedeWebView2
             throw new WebView2RuntimeNotFoundException("Couldn't find a compatible Webview2 Runtime installation to host WebViews.");
 
         var ambienteNovo = _ambiente is null;
+        if (ambienteNovo && _opcoesDaVez > 0) await VoltarAsOpcoesDestaVersaoSeDerAsync();
         CoreWebView2 core;
         try
         {
@@ -181,6 +193,25 @@ public sealed class HospedeWebView2
         PerfilEmUsoDesde = null;
         VezesPerfilEmUso = 0;
         return core;
+    }
+
+    /// <summary>
+    /// 1.0.35 (revisão 14/10): o caixa está nas opções anteriores e vai criar um ambiente novo (o
+    /// navegador caiu, a vigia ou o Reabrir trocou o controle). Se quem abriu o navegador do perfil
+    /// já não vive (ou não há mais navegador nenhum de outro processo), volta às opções desta versão.
+    /// Se o navegador velho ainda estiver saindo, a recusa cai na recuperação, que espera por ele ou
+    /// o encerra como órfão. Com o dono vivo, fica nas anteriores (o mesmo navegador dele).
+    /// </summary>
+    private async Task VoltarAsOpcoesDestaVersaoSeDerAsync()
+    {
+        var geracao = _geracao;
+        var donos = await DonosAsync();
+        if (_encerrado) throw new OperationCanceledException("o PDV está fechando");
+        if (geracao != _geracao) throw new OperationCanceledException("o controle foi trocado enquanto o perfil era conferido");
+        if (_opcoesDaVez == 0 || NavegadorDoPerfil.Classificar(donos) == NavegadorDoPerfil.Dono.Vivo) return;
+        _diag($"{_nome}: {(donos.Count == 0 ? "nenhum navegador de outro processo no perfil" : "quem abriu o navegador do perfil já saiu")}; "
+              + $"volta às opções desta versão ({Rotulo(0)}) no lugar das anteriores ({Rotulo(_opcoesDaVez)})");
+        _opcoesDaVez = 0;
     }
 
     /// <summary>Uma tentativa: o ambiente (se ainda não há) com as opções de índice <paramref name="opcoes"/>, e o Ensure no controle atual.</summary>
@@ -232,18 +263,23 @@ public sealed class HospedeWebView2
     ///  3. sem dono à vista: tenta de novo com as opções de agora;
     ///  4. DONO VIVO: entra no navegador dele com as opções que ele tem (as de uma versão anterior,
     ///     <see cref="ArgumentosAnteriores"/>). Medido: o controle segue vivo depois que o dono sai. O
-    ///     diagnóstico anota, e a próxima abertura do caixa volta às opções desta versão;
-    ///  5. nada entrou: <see cref="PerfilEmUsoException"/>. A tela mostra "esperando" e tenta de novo
+    ///     diagnóstico anota, e o próximo ambiente novo sem o dono vivo volta às opções desta versão
+    ///     (<see cref="VoltarAsOpcoesDestaVersaoSeDerAsync"/>). Se o dono saiu durante a espera e o
+    ///     navegador que abriu é um NOVO, deste caixa, refaz com as opções desta versão;
+    ///  5. nada entrou: <see cref="PerfilEmUsoException"/>. A tela mostra o aviso e tenta de novo
     ///     sozinha (<see cref="FalhaWebView2.EsperaDoPerfil"/>), sem gastar o teto da hora.
     /// Cada tentativa troca o controle usado por um novo (controle com Ensure falho não se reaproveita)
-    /// e espera <see cref="EsperaEntreTentativas"/>.
+    /// e espera <see cref="EsperaEntreTentativas"/>. Uma recuperação passada para trás (outra
+    /// recuperação, o Reabrir, troca de controle de fora) para na próxima conferência, sem recriar
+    /// nada nem mexer nas opções.
     /// </summary>
     private async Task<CoreWebView2> RecuperarPerfilEmUsoAsync(Exception recusa)
     {
-        VezesPerfilEmUso++;
         PerfilEmUsoDesde ??= DateTime.Now;
-        _geracaoDaRecuperacao = _geracao;
+        var eu = new Recuperacao { Geracao = _geracao };
+        _recuperacao = eu;
         var donos = await DonosAsync();
+        ConferirRecuperacao(eu);
         _diag($"{_nome}: o perfil recusou as opções ({Rotulo(_opcoesDaVez)}) com 0x{recusa.HResult:X8}: {NavegadorDoPerfil.Descrever(donos)}");
 
         // 1. o caixa anterior pode estar só terminando de fechar
@@ -253,9 +289,10 @@ public sealed class HospedeWebView2
             while (donos.Count > 0 && relogio.Elapsed < EsperaPeloDono)
             {
                 await Task.Delay(250);
-                ConferirRecuperacao();
+                ConferirRecuperacao(eu);
                 donos = await DonosAsync();
             }
+            ConferirRecuperacao(eu);
             if (donos.Count == 0) _diag($"{_nome}: o navegador que segurava o perfil saiu em {relogio.Elapsed.TotalSeconds:0.0} s");
         }
 
@@ -264,41 +301,70 @@ public sealed class HospedeWebView2
         {
             foreach (var d in donos)
             {
+                ConferirRecuperacao(eu);
                 var saiu = await Task.Run(() => EncerrarDono(d, TimeSpan.FromSeconds(5)));
                 _diag($"{_nome}: navegador órfão no perfil {(saiu ? "encerrado" : "NÃO saiu")}: {NavegadorDoPerfil.Descrever(d)}");
             }
-            ConferirRecuperacao();
+            ConferirRecuperacao(eu);
             donos = await DonosAsync();
         }
 
-        // 3. ninguém no perfil (ou o órfão saiu): de novo, com as opções de agora
-        if (donos.Count == 0 && await TentarDeNovoAsync(_opcoesDaVez) is { } core) return core;
+        // 3. ninguém no perfil (ou o órfão saiu): de novo, com as opções desta versão (perfil livre
+        //    aceita qualquer uma, e sem elas o Gestor dorme com a camada escondida)
+        if (donos.Count == 0 && await TentarDeNovoAsync(eu, 0) is { } core)
+        {
+            _opcoesDaVez = 0;
+            return core;
+        }
 
         // 4. dono vivo: entra no navegador dele, com as opções que ele tem
         if (donos.Count == 0) donos = await DonosAsync();
+        ConferirRecuperacao(eu);
         foreach (var i in NavegadorDoPerfil.OrdemDasOpcoes(TodasAsOpcoes(), _opcoesDaVez, donos.Select(d => d.Linha).ToList()))
         {
-            if (await TentarDeNovoAsync(i) is not { } entrou) continue;
-            _diag($"{_nome}: abriu com as opções {(i == 0 ? "desta versão" : "anteriores")} ({Rotulo(i)}) no navegador que já estava no perfil; "
-                  + "a próxima abertura do caixa tenta as desta versão de novo");
+            if (await TentarDeNovoAsync(eu, i) is not { } entrou) continue;
+            var proprio = i != 0 && await NavegadorDesteCaixaAsync(entrou);
+            ConferirRecuperacao(eu);
+            if (proprio)
+            {
+                // o dono saiu durante a espera (revisão 14/10: saindo entre 3,3 e 4 s depois da recusa) e
+                // o navegador que abriu é um NOVO, deste caixa, sem as opções desta versão: refaz com elas
+                _diag($"{_nome}: o navegador que segurava o perfil saiu no meio e o que abriu com as opções anteriores ({Rotulo(i)}) "
+                      + "é deste caixa; refaz com as opções desta versão");
+                if (await TentarDeNovoAsync(eu, 0) is { } livre)
+                {
+                    _diag($"{_nome}: abriu com as opções desta versão ({Rotulo(0)}) depois que o perfil ficou livre");
+                    _opcoesDaVez = 0;
+                    return livre;
+                }
+                if (await TentarDeNovoAsync(eu, i) is not { } deNovo) continue;
+                entrou = deNovo;
+                proprio = await NavegadorDesteCaixaAsync(entrou);
+                ConferirRecuperacao(eu);
+            }
+            _diag($"{_nome}: abriu com as opções {(i == 0 ? "desta versão" : "anteriores")} ({Rotulo(i)}) "
+                  + (proprio ? "num navegador deste caixa" : "no navegador que já estava no perfil")
+                  + "; o próximo controle sem o dono vivo volta às desta versão");
             _opcoesDaVez = i;
             return entrou;
         }
 
         // 5. nada entrou: a tela espera e tenta de novo sozinha
         donos = await DonosAsync();
+        ConferirRecuperacao(eu);
+        VezesPerfilEmUso++;
         throw new PerfilEmUsoException(NavegadorDoPerfil.Descrever(donos), recusa);
     }
 
     /// <summary>Uma tentativa da recuperação: controle novo (o usado não serve), a espera, e o ambiente com as opções <paramref name="opcoes"/>. Null = o perfil recusou de novo.</summary>
-    private async Task<CoreWebView2?> TentarDeNovoAsync(int opcoes)
+    private async Task<CoreWebView2?> TentarDeNovoAsync(Recuperacao eu, int opcoes)
     {
-        ConferirRecuperacao();
+        ConferirRecuperacao(eu);
         if (_ensureChamado) Recriar("perfil em uso", descartarAmbiente: true);
         else _ambiente = null;
-        _geracaoDaRecuperacao = _geracao;
+        eu.Geracao = _geracao;
         await Task.Delay(EsperaEntreTentativas);
-        ConferirRecuperacao();
+        ConferirRecuperacao(eu);
         try
         {
             return await UmaTentativaAsync(opcoes);
@@ -311,13 +377,32 @@ public sealed class HospedeWebView2
     }
 
     /// <summary>
-    /// A recuperação para se o PDV está fechando, ou se OUTRO caminho trocou o controle no meio (o
-    /// Reabrir do aviso da venda recria e inicia por conta própria): a tentativa nova é a dona dele.
+    /// A recuperação <paramref name="eu"/> para se o PDV está fechando, se outra recuperação começou
+    /// depois dela, ou se OUTRO caminho trocou o controle no meio (o Reabrir do aviso da venda recria
+    /// e inicia por conta própria): a tentativa nova é a dona dele.
     /// </summary>
-    private void ConferirRecuperacao()
+    private void ConferirRecuperacao(Recuperacao eu)
     {
         if (_encerrado) throw new OperationCanceledException("o PDV está fechando");
-        if (_geracao != _geracaoDaRecuperacao) throw new OperationCanceledException("o controle foi trocado enquanto o perfil esperava");
+        if (!ReferenceEquals(_recuperacao, eu)) throw new OperationCanceledException("outra recuperação do perfil começou depois desta");
+        if (_geracao != eu.Geracao) throw new OperationCanceledException("o controle foi trocado enquanto o perfil esperava");
+    }
+
+    /// <summary>O navegador de <paramref name="core"/> foi aberto por ESTE processo (e não é o do caixa anterior)?</summary>
+    private async Task<bool> NavegadorDesteCaixaAsync(CoreWebView2 core)
+    {
+        try
+        {
+            var pid = (int)core.BrowserProcessId;
+            var meu = Environment.ProcessId;
+            var lista = await Task.Run(() => ListarDonos(_perfil));
+            return lista.Any(d => d.Pid == pid && d.PaiPid == meu);
+        }
+        catch (Exception ex)
+        {
+            _diag($"{_nome}: não consegui ver de quem é o navegador que abriu: {ex.GetType().Name}");
+            return false;
+        }
     }
 
     private async Task<IReadOnlyList<NavegadorNoPerfil>> DonosAsync()

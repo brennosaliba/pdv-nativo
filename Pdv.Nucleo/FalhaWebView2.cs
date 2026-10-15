@@ -47,7 +47,7 @@ public static class FalhaWebView2
     private const string EspacoDoSdk = "Microsoft.Web.WebView2.";
     private const int ControllerFechado = unchecked((int)0x8007139F);
 
-    /// <summary>1.0.35: quanto tempo o painel diz "está esperando" antes de mandar reiniciar o computador.</summary>
+    /// <summary>1.0.35: quanto tempo o painel pede para aguardar antes de mandar reiniciar o computador.</summary>
     public static readonly TimeSpan LimiteDaEsperaDoPerfil = TimeSpan.FromMinutes(5);
 
     /// <summary>O botão do painel de erro das camadas.</summary>
@@ -117,16 +117,18 @@ public static class FalhaWebView2
     public static string Painel(TipoFalhaWeb tipo, string oQue) => Painel(tipo, oQue, TimeSpan.Zero);
 
     /// <summary>
-    /// 1.0.35: com o perfil em uso o painel diz que está esperando (o caixa tenta de novo sozinho) e,
+    /// 1.0.35: com o perfil em uso o painel pede para aguardar (o caixa tenta de novo sozinho) e,
     /// passados <see cref="LimiteDaEsperaDoPerfil"/>, manda reiniciar o computador (foi o que resolveu
-    /// na Savassi em 14/10).
+    /// na Savassi em 14/10). Revisão 14/10: dizia "esperando o caixa anterior fechar", e o operador
+    /// não vê caixa anterior nenhum (é o navegador de uma versão anterior, invisível); "caixa" também
+    /// é a pessoa. O painel diz só o que ele vive e o que fazer.
     /// </summary>
     /// <param name="esperando">Há quanto tempo o perfil está em uso (zero nas outras falhas).</param>
     public static string Painel(TipoFalhaWeb tipo, string oQue, TimeSpan esperando) => tipo switch
     {
         TipoFalhaWeb.RuntimeAusente => "Falta um componente da Microsoft neste PC. Chame o suporte.",
         TipoFalhaWeb.PerfilEmUso when esperando >= LimiteDaEsperaDoPerfil => $"Reinicie o computador para {Minuscula(oQue)} voltar.",
-        TipoFalhaWeb.PerfilEmUso => $"{oQue} está esperando o caixa anterior fechar.",
+        TipoFalhaWeb.PerfilEmUso => $"{oQue} ainda está abrindo. Aguarde um pouco.",
         _ => $"{oQue} não abriu agora. Toque em {TentarDeNovo}.",
     };
 
