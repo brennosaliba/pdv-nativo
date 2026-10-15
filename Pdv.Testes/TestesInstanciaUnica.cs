@@ -184,6 +184,11 @@ public static class TestesInstanciaUnica
                 "linha de comando: sem argumento é o caixa, com trava");
             checar(LinhaDeComando.Modo(new[] { "--qualquer-coisa" }) == ModoDoExe.Caixa,
                 "linha de comando: argumento desconhecido abre o caixa normal, com trava");
+            // 1.0.36: o ajudante da trava do Ctrl+Alt+Del (TestesTravaCtrlAltDel prova o resto)
+            checar(LinhaDeComando.Modo(new[] { "--travas", "on", "--sid", "S-1-5-21-1-2-3-1001" }) == ModoDoExe.Travas
+                   && LinhaDeComando.Modo(new[] { "--travas" }) == ModoDoExe.Travas
+                   && !LinhaDeComando.PegaATrava(ModoDoExe.Travas) && !LinhaDeComando.AbreOCaixa(ModoDoExe.Travas),
+                "linha de comando: --travas é o ajudante da trava do Ctrl+Alt+Del, sem trava de instância e sem caixa (mesmo com argumento ruim)");
 
             var app = Fonte("App.xaml.cs") ?? "";
             var xaml = Fonte("App.xaml") ?? "";

@@ -20,6 +20,14 @@ public partial class App : Application
     /// </summary>
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // ── O AJUDANTE DA TRAVA DO CTRL+ALT+DEL (1.0.36, 14/10/2026, Savassi) ──
+        // `Pdv.exe --travas on|off --sid SID` é este mesmo exe chamado como administrador pela
+        // Configuração (Quiosque.MudarTrava), porque a chave Policies do usuário só aceita escrita
+        // elevada. Ele grava as quatro políticas e sai ANTES de tudo: sem guardas de tela, sem
+        // trava de instância (o caixa que pediu está aberto), sem banco, sem agente, sem TEF.
+        // Environment.Exit, como as ferramentas: o OnExit é do caixa.
+        if (LinhaDeComando.Modo(e.Args) == ModoDoExe.Travas) { Environment.Exit(Quiosque.RodarAjudante(e.Args)); return; }
+
         // ── O CAIXA NÃO MORRE POR UMA EXCEÇÃO DE TELA ───────────────────────
         //
         // 09/09/2026: o dono tocou em "exportar logs" no menu do PayGo e o exe
@@ -142,11 +150,14 @@ public partial class App : Application
                         : Path.Combine(Path.GetTempPath(), "cupom-teste.png");
                     erro = await Impressao.PreVisualizarAsync(dados, onde);
                 }
-                else
+                // 1.0.36: só o --imprimir-teste imprime. Modo novo que um dia escape até aqui sai
+                // com FALHOU, e não com um cupom de exemplo no papel da loja.
+                else if (modo == ModoDoExe.ImprimirTeste)
                 {
                     onde = args.Length > 1 ? args[1] : (Impressao.ImpressoraPadrao() ?? "(padrão)");
                     erro = await Impressao.ImprimirAsync(dados, args.Length > 1 ? args[1] : null);
                 }
+                else erro = "modo sem ferramenta: " + modo;
             }
             catch (Exception ex) { erro = ex.GetType().Name + ": " + ex.Message; }
 
@@ -203,8 +214,13 @@ public partial class App : Application
             // 1.0.33 (14/10/2026): no quiosque o Windows não abre os programas da inicialização
             // (o PDV é a área de trabalho). O PDV abre os marcados na Configuração (AnyDesk,
             // Spotify...), depois do Spotify escondido, e só o que ainda não está aberto.
-            // e a trava do Ctrl+Alt+Del nunca fica sem o quiosque (desligado por fora, por exemplo)
-            if (!Quiosque.Ligado && Quiosque.AlgumaTrava) Quiosque.Travar(false);
+            // e a trava do Ctrl+Alt+Del nunca fica sem o quiosque (desligado por fora, por exemplo).
+            // 1.0.36: só com a permissão que o PDV já tem, NUNCA pelo aviso do Windows (abrir o
+            // caixa não pode parar num aviso que ninguém pediu). Sem permissão, fica o rastro; quem
+            // tira é a Configuração, desmarcando e salvando.
+            if (!Quiosque.Ligado && Quiosque.AlgumaTrava && Quiosque.TentarDireto(false) is { } naoTirou)
+                Caixa.Auditar(cx, null, "ctrl_alt_del_ficou", null, null,
+                    "trava sem o quiosque e sem permissão para tirar ao abrir: " + TravaDoCtrlAltDel.Tecnico(naoTirou));
             InicioDoWindowsNoCaixa.AbrirNoQuiosque(Vendas.Config(cx, InicioDoWindows.ChaveLigado),
                 Vendas.Config(cx, InicioDoWindows.ChaveMarcados), TimeSpan.FromSeconds(8));
         }
