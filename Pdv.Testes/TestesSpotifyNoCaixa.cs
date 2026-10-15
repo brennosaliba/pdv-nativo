@@ -85,6 +85,12 @@ public static class TestesSpotifyNoCaixa
         var esc = SpotifyNoCaixa.Escolha();
         var som = SpotifyNoCaixa.SaidaDeSomPadrao();
         checar(som.Length > 0, "SP-18 ler a saída de som padrão deste PC não lança");
+        checar(confXaml.Contains("x:Name=\"BtnMostrarSpotify\"") && confXaml.Contains("Click=\"MostrarSpotify\"")
+               && conf.Contains("TxtSpotifyEstado.Text = SpotifyNoCaixa.Mostrar();") && conf.Contains("spotify.Logada ?")
+               && sp.Contains("_mostrarAte = DateTime.Now + MusicaNoInicio.TempoMostrando;"),
+            "SP-19 a Configuração (admin) diz se o Spotify está logado e mostra a janela por 3 min para entrar na conta pelo AnyDesk");
+        var textos = conf[conf.IndexOf("var spotify = SpotifyNoCaixa.Escolha();", StringComparison.Ordinal)..][..900] + sp;
+        checar(!textos.Contains('—') && !textos.Contains('–'), "SP-20 os textos e o log do Spotify não têm travessão");
         Console.WriteLine($"  (info) Spotify deste PC: {MusicaNoInicio.Descrever(esc)}; saída de som: {som}");
     }
 

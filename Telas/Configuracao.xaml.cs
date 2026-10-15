@@ -126,10 +126,13 @@ public partial class Configuracao : UserControl
         BtnSairWindows.Visibility = Se(Quiosque.Ligado);
         // Spotify escondido: a opção e o que este PC tem (instalado? aberto?).
         ChkSpotifyEscondido.IsChecked = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
-        TxtSpotifyEstado.Text = SpotifyNoCaixa.Instalado
-            ? (SpotifyNoCaixa.Rodando ? "O Spotify está instalado e aberto neste PC." : "O Spotify está instalado neste PC (fechado agora).")
-              + " Ele precisa estar logado na conta da empresa uma vez; o PDV só abre e esconde o programa."
-            : "O Spotify não está instalado neste PC. Instale e entre com a conta da empresa; depois marque a opção.";
+        // 1.0.37: diz também se o Spotify deste PC está logado (sem login ele não vira aparelho da loja)
+        var spotify = SpotifyNoCaixa.Escolha();
+        TxtSpotifyEstado.Text = spotify.Exe is null
+            ? "O Spotify não está instalado neste PC. Instale e entre com a conta da empresa; depois marque a opção."
+            : (spotify.Logada ? "O Spotify está instalado e logado neste PC" : "O Spotify está instalado, mas sem login neste PC")
+              + (SpotifyNoCaixa.Rodando ? ", aberto agora." : ", fechado agora.")
+              + (spotify.Logada ? " Ao ligar o PC, o caixa toca a playlist da loja sozinho." : " Toque em Mostrar o Spotify e entre com a conta da empresa.");
         // 1.0.33: os programas da inicialização do Windows deste PC, cada um com a sua caixinha
         PintarInicioWindows(Vendas.Config(cx, InicioDoWindows.ChaveLigado), Vendas.Config(cx, InicioDoWindows.ChaveMarcados));
         // As quatro políticas de impressão, carregadas SEMPRE (inclusive em caixa novo):
@@ -546,6 +549,9 @@ public partial class Configuracao : UserControl
             ? "Este PC não tem programa na inicialização do Windows."
             : "Valem no modo quiosque: fora dele, quem abre é o próprio Windows. O que já estiver aberto não abre de novo.";
     }
+
+    /// <summary>1.0.37: o admin vê o Spotify por 3 min (entrar na conta, responder um aviso do app); depois o PDV esconde de novo.</summary>
+    private void MostrarSpotify(object sender, RoutedEventArgs e) => TxtSpotifyEstado.Text = SpotifyNoCaixa.Mostrar();
 
     /// <summary>Quiosque ligado e o dono quer a área de trabalho de volta agora: abre o Explorer (o PDV continua).</summary>
     private void SairParaOWindows(object sender, RoutedEventArgs e)

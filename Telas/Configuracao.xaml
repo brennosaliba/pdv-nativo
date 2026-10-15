@@ -699,6 +699,12 @@
                                   Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,6,0,6"/>
                         <TextBlock x:Name="TxtSpotifyEstado" Text=""
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <!-- 1.0.37 (15/10/2026): o Spotify fica escondido; para entrar na conta ou responder um
+                             aviso do app (pelo AnyDesk), o admin ve a janela por 3 min e o PDV esconde de novo. -->
+                        <Button x:Name="BtnMostrarSpotify" Click="MostrarSpotify" Style="{StaticResource BotaoBase}" HorizontalAlignment="Left"
+                                MinHeight="44" Padding="16,0" Margin="0,0,0,8">
+                            <TextBlock Text="Mostrar o Spotify por 3 minutos"/>
+                        </Button>
                         <!-- 1.0.33 (14/10/2026, pedido do dono): no quiosque o Windows nao abre os
                              programas da inicializacao; o PDV abre os marcados aqui (InicioDoWindows). -->
                         <CheckBox x:Name="ChkInicioWindows" Content="Abrir junto com o PDV os programas da inicialização do Windows marcados abaixo"
