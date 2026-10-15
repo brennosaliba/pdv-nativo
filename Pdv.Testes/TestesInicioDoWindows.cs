@@ -111,6 +111,13 @@ public static class TestesInicioDoWindows
                && InicioDoWindows.AbreMinimizado(tv) && !InicioDoWindows.AbreMinimizado(todos[1])
                && no.Contains("if (InicioDoWindows.AbreMinimizado(p)) psi.WindowStyle = ProcessWindowStyle.Minimized;"),
             "IW-16 TeamViewer com serviço não abre janela; sem serviço entra desmarcado e abre minimizado; o AnyDesk segue com --tray");
+        // IW-16b (revisão 15/10) só o serviço automático conta: manual ou desativado não sobe no boot, então o TeamViewer entra na lista
+        checar(InicioDoWindows.ServicoSobeSozinho(2) && !InicioDoWindows.ServicoSobeSozinho(3) && !InicioDoWindows.ServicoSobeSozinho(4)
+               && !InicioDoWindows.ServicoSobeSozinho(-1) && !InicioDoWindows.ServicoSobeSozinho(null)
+               && InicioDoWindows.TeamViewer("C:\\P\\TeamViewer\\TeamViewer.exe", InicioDoWindows.ServicoSobeSozinho(3)) is { Nome: "TeamViewer" }
+               && no.Contains("InicioDoWindows.TeamViewer(tv, InicioDoWindows.ServicoSobeSozinho(InicioDoServico(\"TeamViewer\")))")
+               && !no.Contains("InicioDoServico(\"TeamViewer\") is not null"),
+            "IW-16b TeamViewer com serviço manual ou desativado não sobe no boot: entra na lista (desmarcado); só o automático fica de fora");
         // IW-17 o estado dos serviços de suporte no log
         checar(InicioDoWindows.Servico(null, false) == "sem serviço" && InicioDoWindows.Servico(2, true) == "serviço automático, rodando"
                && InicioDoWindows.Servico(4, false) == "serviço desativado, parado" && no.Contains("Anotar($\"suporte: AnyDesk "),

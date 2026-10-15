@@ -68,6 +68,29 @@ public static class MusicaNoInicio
     public static bool Abrindo(IEnumerable<(string Nome, int Sessao)> processos, int sessao)
         => processos.Any(p => p.Sessao == sessao && p.Nome.ToLowerInvariant() is "spotifymigrator" or "spotifylauncher" or "spotifystartuptask");
 
+    /// <summary>Os processos que a vigia olha (o Spotify e os ajudantes). Filtra a varredura única de cada volta.</summary>
+    public static bool DoSpotify(string? nome)
+        => nome?.ToLowerInvariant() is "spotify" or "spotifymigrator" or "spotifylauncher" or "spotifystartuptask";
+
+    /// <summary>A frase da Configuração. O toque sozinho só é prometido com a opção marcada.</summary>
+    public static string TextoDoEstado(Escolha e, bool aberto, bool opcaoLigada)
+        => e.Exe is null
+            ? "O Spotify não está instalado neste PC. Instale e entre com a conta da empresa; depois marque a opção."
+            : (e.Logada ? "O Spotify está instalado e logado neste PC" : "O Spotify está instalado, mas sem login neste PC")
+              + (aberto ? ", aberto agora." : ", fechado agora.")
+              + (!e.Logada ? " Toque em Mostrar o Spotify e entre com a conta da empresa."
+                 : opcaoLigada ? " Ao ligar o PC, o caixa toca a playlist da loja sozinho."
+                 : " Marque a opção para o caixa tocar a playlist da loja ao ligar o PC.");
+
+    /// <summary>
+    /// A resposta do "Mostrar o Spotify". Com a opção desligada não há vigia: a janela fica até
+    /// alguém fechar, então não se promete esconder de novo.
+    /// </summary>
+    public static string TextoMostrar(bool estavaFechado, bool abriu, bool opcaoLigada)
+        => estavaFechado && !abriu ? "Não consegui abrir o Spotify neste PC."
+         : opcaoLigada ? (estavaFechado ? "Abrindo o Spotify. Ele fica à vista por 3 minutos." : "O Spotify fica à vista por 3 minutos. Depois o PDV esconde de novo.")
+         : (estavaFechado ? "Abrindo o Spotify. Feche quando terminar." : "O Spotify ficou à vista. Feche quando terminar.");
+
     /// <summary>Folga entre duas aberturas: não briga com alguém fechando de propósito.</summary>
     public static readonly TimeSpan FolgaReabrir = TimeSpan.FromMinutes(2);
 
@@ -104,19 +127,32 @@ public static class MusicaNoInicio
     public static Decisao Decidir(string? playlistUri, IReadOnlyList<Spotify.Aparelho> aparelhos, Spotify.Estado? estado, string maquina)
     {
         if (string.IsNullOrWhiteSpace(playlistUri)) return new Decisao(Passo.SemPlaylist, null, "sem playlist escolhida no painel (Música)");
-        if (estado is { Tocando: true })
-            return Mesmo(estado.Aparelho, maquina)
-                ? new Decisao(Passo.JaTocandoAqui, estado.AparelhoId, "já está tocando neste caixa")
-                : new Decisao(Passo.OutroTocando, null, $"a conta está tocando em outro aparelho ({estado.Aparelho ?? "sem nome"}); não mexo");
         var aqui = Spotify.AparelhoPorNome(aparelhos, maquina);
+        // revisão 15/10: o nome não basta. Depois de uma queda de luz o GET /me/player ainda pode trazer
+        // is_playing com o nome deste caixa e o id da sessão que morreu: isso não é "já tocando aqui".
+        var velho = false;
+        if (estado is { Tocando: true })
+        {
+            if (!Mesmo(estado.Aparelho, maquina))
+                return new Decisao(Passo.OutroTocando, null, $"a conta está tocando em outro aparelho ({estado.Aparelho ?? "sem nome"}); não mexo");
+            if (aqui is not null && (string.IsNullOrEmpty(estado.AparelhoId)
+                                     || aparelhos.Any(a => a.Id == estado.AparelhoId && Mesmo(a.Nome, maquina))))
+                return new Decisao(Passo.JaTocandoAqui, estado.AparelhoId, "já está tocando neste caixa");
+            velho = true;
+        }
         if (aqui is null)
             return new Decisao(Passo.CaixaForaDaLista, null,
-                $"este caixa ({maquina}) não está na lista de aparelhos ({(aparelhos.Count == 0 ? "lista vazia" : string.Join(", ", aparelhos.Select(a => a.Nome)))})");
-        return new Decisao(Passo.Tocar, aqui.Id, "conta parada; toco aqui");
+                $"este caixa ({maquina}) não está na lista de aparelhos ({(aparelhos.Count == 0 ? "lista vazia" : string.Join(", ", aparelhos.Select(a => a.Nome)))})"
+                + (velho ? "; o Spotify ainda mostra tocando aqui, mas é de antes" : ""));
+        return new Decisao(Passo.Tocar, aqui.Id, velho ? "o Spotify mostra tocando aqui com um id velho; toco pelo id de agora" : "conta parada; toco aqui");
     }
 
-    /// <summary>Confirmado = o Spotify diz que está tocando e o aparelho é este caixa.</summary>
-    public static bool Confirmado(Spotify.Estado? e, string maquina) => e is { Tocando: true } && Mesmo(e.Aparelho, maquina);
+    /// <summary>
+    /// Confirmado = o Spotify diz que está tocando neste caixa, no aparelho que recebeu o play (pelo
+    /// id; só o nome quando o Spotify não manda o id). Estado velho com o mesmo nome não confirma.
+    /// </summary>
+    public static bool Confirmado(Spotify.Estado? e, string? deviceId, string maquina)
+        => e is { Tocando: true } && Mesmo(e.Aparelho, maquina) && (string.IsNullOrEmpty(e.AparelhoId) || e.AparelhoId == deviceId);
 
     /// <summary>O que o laço precisa do mundo (a Web API, a config, o relógio e o log), para ser testado sem rede.</summary>
     public sealed record Ambiente(
@@ -167,9 +203,10 @@ public static class MusicaNoInicio
                             }
                             await amb.Esperar(EsperaConfirmar, ct).ConfigureAwait(false);
                             var (depois, erroDepois) = await amb.Estado(ct).ConfigureAwait(false);
-                            if (Confirmado(depois, maquina)) { Log("confirmado: tocando neste caixa"); return true; }
+                            if (Confirmado(depois, d.DeviceId, maquina)) { Log("confirmado: tocando neste caixa"); return true; }
                             Log(erroDepois is not null ? "não confirmou: " + erroDepois
-                                : $"não confirmou: tocando={(depois?.Tocando == true ? "sim" : "não")}, aparelho={depois?.Aparelho ?? "nenhum"}");
+                                : $"não confirmou: tocando={(depois?.Tocando == true ? "sim" : "não")}, aparelho={depois?.Aparelho ?? "nenhum"}"
+                                  + (Mesmo(depois?.Aparelho, maquina) && depois?.AparelhoId is { Length: > 0 } idDepois && idDepois != d.DeviceId ? " (id velho)" : ""));
                         }
                     }
                 }

@@ -128,11 +128,8 @@ public partial class Configuracao : UserControl
         ChkSpotifyEscondido.IsChecked = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
         // 1.0.37: diz também se o Spotify deste PC está logado (sem login ele não vira aparelho da loja)
         var spotify = SpotifyNoCaixa.Escolha();
-        TxtSpotifyEstado.Text = spotify.Exe is null
-            ? "O Spotify não está instalado neste PC. Instale e entre com a conta da empresa; depois marque a opção."
-            : (spotify.Logada ? "O Spotify está instalado e logado neste PC" : "O Spotify está instalado, mas sem login neste PC")
-              + (SpotifyNoCaixa.Rodando ? ", aberto agora." : ", fechado agora.")
-              + (spotify.Logada ? " Ao ligar o PC, o caixa toca a playlist da loja sozinho." : " Toque em Mostrar o Spotify e entre com a conta da empresa.");
+        // revisão 15/10: o toque sozinho só é prometido com a opção marcada (desmarcada, nada toca)
+        TxtSpotifyEstado.Text = MusicaNoInicio.TextoDoEstado(spotify, SpotifyNoCaixa.Rodando, ChkSpotifyEscondido.IsChecked == true);
         // 1.0.33: os programas da inicialização do Windows deste PC, cada um com a sua caixinha
         PintarInicioWindows(Vendas.Config(cx, InicioDoWindows.ChaveLigado), Vendas.Config(cx, InicioDoWindows.ChaveMarcados));
         // As quatro políticas de impressão, carregadas SEMPRE (inclusive em caixa novo):

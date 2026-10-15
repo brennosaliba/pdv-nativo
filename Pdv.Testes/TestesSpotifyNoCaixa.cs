@@ -56,24 +56,68 @@ public static class TestesSpotifyNoCaixa
         checar(sp.Contains("SW_HIDE") && !sp.Contains("SW_MINIMIZE") && sp.Contains("EnumWindows(") && nucleo.Contains("\"--minimized\"")
                && nucleo.Contains("FolgaReabrir = TimeSpan.FromMinutes(2)") && sp.Contains("TimeSpan.FromSeconds(5)"),
             "1.0.33: o Spotify sobe minimizado e toda janela dele é ESCONDIDA (fora do Alt+Tab) a cada 5 s; a reabertura tem folga de 2 min");
-        checar(sp.Contains("lock (_escondidas) nova = _escondidas.Add(h);") && sp.Contains("ShowWindow(h, SW_SHOWMINNOACTIVE)")
+        checar(sp.Contains("nova = _escondidas.Add(h);") && sp.Contains("ShowWindow(h, SW_SHOWMINNOACTIVE)")
                && sp.IndexOf("ShowWindow(h, SW_SHOWMINNOACTIVE)", StringComparison.Ordinal) > sp.IndexOf("public static void Parar()", StringComparison.Ordinal),
             "1.0.33 (revisão): desligar a opção devolve as janelas que o PDV escondeu (um Spotify pedindo login não some para sempre)");
         checar(!sp.Contains("Kill(") && !sp.Contains("senha", StringComparison.OrdinalIgnoreCase) || sp.Contains("Senha é dele"),
             "o PDV nunca mata o Spotify nem mexe em senha: só abre e esconde");
 
         // SP-13..17 (1.0.37) o lado Windows, pelo fonte
-        var iEsc = sp.IndexOf("public static bool Esconder()", StringComparison.Ordinal);
-        checar(iEsc > 0 && sp.IndexOf("PidsDoSpotify(Sessao)", iEsc, StringComparison.Ordinal) > iEsc
-               && sp.Contains("if (p.SessionId == sessao) pids.Add((uint)p.Id);")
+        var iEsc = sp.IndexOf("private static bool Esconder(HashSet<uint>? pidsJaVistos)", StringComparison.Ordinal);
+        checar(iEsc > 0 && sp.IndexOf("pidsJaVistos ?? PidsDoSpotify()", iEsc, StringComparison.Ordinal) > iEsc
+               && sp.Contains("if (s == sessao && string.Equals(nome, \"Spotify\", StringComparison.OrdinalIgnoreCase)) pids.Add((uint)p.Id);")
                && sp.Contains("MusicaNoInicio.PodeAbrir(MusicaNoInicio.Rodando(procs, sessao), MusicaNoInicio.Abrindo(procs, sessao), DateTime.Now, _ultimaAbertura)"),
             "SP-13 esconde e conta só o Spotify desta sessão; abrir passa pela regra anti-duplicata");
-        checar(sp.Contains("await EsperarRedeAsync(TimeSpan.FromSeconds(90))") && sp.Contains("await ConfirmarProcessoAsync(sessao, TimeSpan.FromSeconds(30))")
+        checar(sp.Contains("await EsperarRedeAsync(TimeSpan.FromSeconds(90), ct)") && sp.Contains("await ConfirmarProcessoAsync(sessao, TimeSpan.FromSeconds(30), ct)")
                && sp.Contains("Dns.GetHostAddressesAsync(\"api.spotify.com\"") && sp.Contains("Process.GetProcessesByName(\"sihost\")"),
             "SP-14 abre depois da rede (até 90 s), confere o Spotify.exe nesta sessão (até 30 s), e mede o logon pelo sihost (inicialização rápida não zera o relógio)");
-        checar(sp.Contains("if (!_primeiraAberturaFeita) return;") && sp.Contains("try { _pararDeTocar?.Cancel(); } catch { }")
+        checar(sp.Contains("if (!_primeiraAberturaFeita) { ComecarAbertura(false); return; }") && sp.Contains("lock (_trava) { try { _ligado?.Cancel(); } catch { } }")
                && sp.Contains("Abrir(\"mostrar\", aVista: true)") && sp.Contains("var args = aVista ? \"\" : esc.Argumentos;"),
-            "SP-14b a vigia não fura a espera da rede; desligar a opção para o toque sozinho; o Mostrar abre sem --minimized");
+            "SP-14b a vigia não fura a espera da rede; desligar a opção cancela o que está em curso; o Mostrar abre sem --minimized");
+        // SP-21 (revisão 15/10) desligar durante a primeira abertura: a espera da rede, a abertura, o toque sozinho e o esconder param
+        var iParar = sp.IndexOf("public static void Parar()", StringComparison.Ordinal);
+        var iAbrirDepois = sp.IndexOf("private static async Task AbrirDepoisDaRedeAsync(bool tocarSozinho, CancellationToken ct)", StringComparison.Ordinal);
+        checar(iParar > 0 && iAbrirDepois > 0
+               && sp.IndexOf("_ligado?.Cancel()", iParar, StringComparison.Ordinal) < sp.IndexOf("lock (_escondidas)", iParar, StringComparison.Ordinal)
+               && sp.Contains("if (ct.IsCancellationRequested) return false;   // desligaram a opção enquanto esperava a rede")
+               && sp.Contains("if (Abrir(\"início\", ct: ct))") && sp.Contains("await Task.Delay(3000, ct);") && sp.Contains("await Task.Delay(1000, ct);")
+               && sp.Contains("if (tocarSozinho) _ = Task.Run(() => TocarSozinhoAsync(ct));")
+               && sp.IndexOf("ct.ThrowIfCancellationRequested();", iAbrirDepois, StringComparison.Ordinal) < sp.IndexOf("if (tocarSozinho)", iAbrirDepois, StringComparison.Ordinal)
+               && sp.Contains("await EsconderQuandoAparecerAsync(ct);") && sp.Contains("await Task.Delay(500, ct);")
+               && sp.Contains("if (!Ligado) return false;   // desligaram agora: Parar devolve o que já foi escondido")
+               && sp.Contains("if (!Ligado || !MusicaNoInicio.Escondendo(DateTime.Now, _mostrarAte)) return false;")
+               && !sp.Contains("_pararDeTocar"),
+            "SP-21 desligar a opção no meio da primeira abertura cancela a espera da rede, a abertura, o toque sozinho e o esconder (nada fica escondido de vez)");
+        // SP-22 a frase da Configuração e a resposta do Mostrar dependem da opção
+        var logada = new MusicaNoInicio.Escolha(MusicaNoInicio.Versao.Classica, @"C:\R\Spotify\Spotify.exe", "--minimized", true);
+        var semLogin = logada with { Logada = false };
+        checar(MusicaNoInicio.TextoDoEstado(logada, true, opcaoLigada: true).Contains("toca a playlist da loja sozinho")
+               && !MusicaNoInicio.TextoDoEstado(logada, true, opcaoLigada: false).Contains("sozinho")
+               && MusicaNoInicio.TextoDoEstado(logada, false, opcaoLigada: false).Contains("Marque a opção")
+               && MusicaNoInicio.TextoDoEstado(semLogin, false, true).Contains("entre com a conta da empresa")
+               && MusicaNoInicio.TextoDoEstado(new MusicaNoInicio.Escolha(MusicaNoInicio.Versao.Nenhuma, null, "", false), false, true).StartsWith("O Spotify não está instalado")
+               && MusicaNoInicio.TextoMostrar(false, true, opcaoLigada: true).Contains("esconde de novo")
+               && MusicaNoInicio.TextoMostrar(false, true, opcaoLigada: false) == "O Spotify ficou à vista. Feche quando terminar."
+               && MusicaNoInicio.TextoMostrar(true, true, opcaoLigada: false) == "Abrindo o Spotify. Feche quando terminar."
+               && MusicaNoInicio.TextoMostrar(true, false, true) == "Não consegui abrir o Spotify neste PC."
+               && !MusicaNoInicio.TextoMostrar(true, true, false).Contains("3 minutos")
+               && conf.Contains("MusicaNoInicio.TextoDoEstado(spotify, SpotifyNoCaixa.Rodando, ChkSpotifyEscondido.IsChecked == true)")
+               && sp.Contains("return MusicaNoInicio.TextoMostrar(estavaFechado: true, abriu, ligado);")
+               && sp.Contains("return MusicaNoInicio.TextoMostrar(estavaFechado: false, abriu: true, ligado);"),
+            "SP-22 com a opção desmarcada a Configuração não promete o toque sozinho e o Mostrar não promete esconder de novo");
+        // SP-23 sem Spotify no disco a vigia não enche o log (a folga de 2 min vale e o aviso sai uma vez)
+        var iAbrir = sp.IndexOf("private static bool Abrir(", StringComparison.Ordinal);
+        checar(iAbrir > 0 && sp.IndexOf("_ultimaAbertura = DateTime.Now;", iAbrir, StringComparison.Ordinal) < sp.IndexOf("if (esc.Exe is null)", iAbrir, StringComparison.Ordinal)
+               && sp.Contains("if (!_anotouSemSpotify) Log($\"não abri ({motivo}): não instalado\");"),
+            "SP-23 sem Spotify no disco a vigia respeita a folga de 2 min e anota \"não instalado\" uma vez (o log do início não é apagado)");
+        // SP-24 uma varredura de processos por volta da vigia (ela roda no thread da tela)
+        var iVigiar = sp.IndexOf("private static void Vigiar()", StringComparison.Ordinal);
+        var vigiar = iVigiar > 0 ? sp[iVigiar..sp.IndexOf("// ── tocar sozinho", iVigiar, StringComparison.Ordinal)] : "";
+        checar(MusicaNoInicio.DoSpotify("Spotify") && MusicaNoInicio.DoSpotify("SPOTIFYMIGRATOR") && MusicaNoInicio.DoSpotify("SpotifyStartupTask")
+               && MusicaNoInicio.DoSpotify("spotifylauncher") && !MusicaNoInicio.DoSpotify("explorer") && !MusicaNoInicio.DoSpotify(null)
+               && sp.Split("Process.GetProcesses()").Length == 2 && !sp.Contains("GetProcessesByName(\"Spotify")
+               && vigiar.Split("PidsDoSpotify()").Length == 2 && vigiar.Contains("Esconder(pids);") && !vigiar.Contains("!Rodando") && !vigiar.Contains("Processos()"),
+            "SP-24 a vigia de 5 s faz uma varredura só da lista de processos por volta e passa os pids para o esconder");
         checar(sp.Contains("InicioDoWindowsNoCaixa.Anotar(\"[spotify] \" + texto)") && iw.Contains("internal static void Anotar(string texto)")
                && iw.Contains("lock (_travaLog)") && iw.Contains("\"inicio-windows.txt\""),
             "SP-15 o log do Spotify vai para ProgramData/PdvNativo/inicio-windows.txt com [spotify], com trava (escreve de outra thread)");
@@ -89,10 +133,10 @@ public static class TestesSpotifyNoCaixa
         var som = SpotifyNoCaixa.SaidaDeSomPadrao();
         checar(som.Length > 0, "SP-18 ler a saída de som padrão deste PC não lança");
         checar(confXaml.Contains("x:Name=\"BtnMostrarSpotify\"") && confXaml.Contains("Click=\"MostrarSpotify\"")
-               && conf.Contains("TxtSpotifyEstado.Text = SpotifyNoCaixa.Mostrar();") && conf.Contains("spotify.Logada ?")
+               && conf.Contains("TxtSpotifyEstado.Text = SpotifyNoCaixa.Mostrar();") && nucleo.Contains("e.Logada ?")
                && sp.Contains("_mostrarAte = DateTime.Now + MusicaNoInicio.TempoMostrando;"),
             "SP-19 a Configuração (admin) diz se o Spotify está logado e mostra a janela por 3 min para entrar na conta pelo AnyDesk");
-        var textos = conf[conf.IndexOf("var spotify = SpotifyNoCaixa.Escolha();", StringComparison.Ordinal)..][..900] + sp;
+        var textos = conf[conf.IndexOf("var spotify = SpotifyNoCaixa.Escolha();", StringComparison.Ordinal)..][..900] + sp + nucleo;
         checar(!textos.Contains('—') && !textos.Contains('–'), "SP-20 os textos e o log do Spotify não têm travessão");
         Console.WriteLine($"  (info) Spotify deste PC: {MusicaNoInicio.Descrever(esc)}; saída de som: {som}");
     }
@@ -158,7 +202,9 @@ public static class TestesSpotifyNoCaixa
         // SP-9 a decisão de cada tentativa
         var aqui = new Spotify.Aparelho("id-novo", "DESKTOP-7AJ1OD7", "Computer", false);
         var outro = new Spotify.Aparelho("o1", "Celular", "Smartphone", true);
-        Spotify.Estado Est(bool toc, string? ap) => new(toc, "f", "a", ap, ap is null ? null : "x", 50, "spotify:playlist:p");
+        // o id do estado: o do Celular é o1; o deste caixa é o de agora (id-novo), salvo quando o teste diz outro
+        Spotify.Estado Est(bool toc, string? ap, string? id = null)
+            => new(toc, "f", "a", ap, id ?? (ap is null ? null : ap == "Celular" ? "o1" : "id-novo"), 50, "spotify:playlist:p");
         var dSem = MusicaNoInicio.Decidir("", new[] { aqui }, null, "DESKTOP-7AJ1OD7");
         var dFora = MusicaNoInicio.Decidir("spotify:playlist:p", new[] { outro }, null, "DESKTOP-7AJ1OD7");
         var dOutro = MusicaNoInicio.Decidir("spotify:playlist:p", new[] { aqui, outro }, Est(true, "Celular"), "DESKTOP-7AJ1OD7");
@@ -168,9 +214,20 @@ public static class TestesSpotifyNoCaixa
                && dOutro.Passo == MusicaNoInicio.Passo.OutroTocando && dJa.Passo == MusicaNoInicio.Passo.JaTocandoAqui
                && dToca is { Passo: MusicaNoInicio.Passo.Tocar, DeviceId: "id-novo" } && dFora.Motivo.Contains("Celular"),
             "SP-9 sem playlist não toca; caixa fora da lista espera; outro aparelho TOCANDO não perde o som; pausado noutro lugar toca aqui, com o id de agora");
-        checar(MusicaNoInicio.Confirmado(Est(true, "Desktop-7aj1od7"), "DESKTOP-7AJ1OD7") && !MusicaNoInicio.Confirmado(Est(false, "DESKTOP-7AJ1OD7"), "DESKTOP-7AJ1OD7")
-               && !MusicaNoInicio.Confirmado(Est(true, "Celular"), "DESKTOP-7AJ1OD7") && !MusicaNoInicio.Confirmado(null, "DESKTOP-7AJ1OD7"),
-            "SP-10 confirmado só com is_playing e o aparelho com o nome deste caixa");
+        // SP-9b (revisão 15/10) estado velho: o PC voltou de uma queda de luz e o GET /me/player ainda traz
+        // is_playing com o nome deste caixa e o id da sessão que morreu. Não é "já tocando aqui".
+        var velho = Est(true, "DESKTOP-7AJ1OD7", "id-velho");
+        var dVelhoSemLista = MusicaNoInicio.Decidir("spotify:playlist:p", Array.Empty<Spotify.Aparelho>(), velho, "DESKTOP-7AJ1OD7");
+        var dVelhoNaLista = MusicaNoInicio.Decidir("spotify:playlist:p", new[] { aqui }, velho, "DESKTOP-7AJ1OD7");
+        var dSemIdNoEstado = MusicaNoInicio.Decidir("spotify:playlist:p", new[] { aqui }, Est(true, "DESKTOP-7AJ1OD7", ""), "DESKTOP-7AJ1OD7");
+        checar(dVelhoSemLista.Passo == MusicaNoInicio.Passo.CaixaForaDaLista && dVelhoSemLista.Motivo.Contains("é de antes")
+               && dVelhoNaLista is { Passo: MusicaNoInicio.Passo.Tocar, DeviceId: "id-novo" }
+               && dSemIdNoEstado.Passo == MusicaNoInicio.Passo.JaTocandoAqui,
+            "SP-9b estado velho com o nome deste caixa: fora da lista espera, na lista toca pelo id de agora; sem id no estado, vale o nome com o caixa na lista");
+        checar(MusicaNoInicio.Confirmado(Est(true, "Desktop-7aj1od7"), "id-novo", "DESKTOP-7AJ1OD7") && !MusicaNoInicio.Confirmado(Est(false, "DESKTOP-7AJ1OD7"), "id-novo", "DESKTOP-7AJ1OD7")
+               && !MusicaNoInicio.Confirmado(Est(true, "Celular"), "id-novo", "DESKTOP-7AJ1OD7") && !MusicaNoInicio.Confirmado(null, "id-novo", "DESKTOP-7AJ1OD7")
+               && !MusicaNoInicio.Confirmado(velho, "id-novo", "DESKTOP-7AJ1OD7"),
+            "SP-10 confirmado só com is_playing no aparelho que recebeu o play (pelo id): o estado velho com o mesmo nome não confirma");
         // id de agora pelo nome; o guardado é só reserva
         var lista = new[] { new Spotify.Aparelho("", "Caixa", "Computer", false), new Spotify.Aparelho("velho", "Caixa", "Computer", false), new Spotify.Aparelho("ativo", "caixa", "Computer", true) };
         checar(Spotify.IdAtual(lista, "CAIXA", "guardado") == "ativo" && Spotify.IdAtual(lista, "Outro", "guardado") == "guardado"
@@ -221,6 +278,17 @@ public static class TestesSpotifyNoCaixa
             "SP-12g sem rede ou sem token: anota e tenta de novo");
         var r8 = Rodar(_ => (L(aqui), null), _ => Est(true, "DESKTOP-7AJ1OD7"), (204, null));
         checar(r8.Ok && r8.Plays.Count == 0, "SP-12h já tocando neste caixa: nada a fazer");
+        // SP-12j (revisão 15/10) a queda de luz: lista vazia e estado velho com o nome deste caixa. Antes dava
+        // "confirmado" sem play nenhum; agora espera o caixa entrar na lista, toca pelo id de agora e confirma por ele.
+        var r9 = Rodar(n => (n == 0 ? L() : L(aqui), null), n => n < 2 ? velho : Est(true, "DESKTOP-7AJ1OD7"), (204, null));
+        checar(r9.Ok && r9.Plays.SequenceEqual(new[] { "id-novo spotify:playlist:p" }) && r9.Esperas.SequenceEqual(new[] { 20, 6 })
+               && !r9.Log[0].Contains("confirmado") && r9.Log[^1] == "confirmado: tocando neste caixa",
+            $"SP-12j estado velho de antes da queda de luz não vale como tocando: toca pelo id de agora e confirma por ele ({string.Join(" | ", r9.Log)})");
+        var r10 = Rodar(_ => (L(), null), _ => velho, (204, null));
+        var r11 = Rodar(_ => (L(aqui), null), _ => velho, (204, null));
+        checar(!r10.Ok && r10.Plays.Count == 0 && !r10.Log.Any(l => l.StartsWith("confirmado"))
+               && !r11.Ok && r11.Plays.Count == MusicaNoInicio.MaxTentativas && r11.Log.Any(l => l.Contains("(id velho)")),
+            "SP-12k o estado velho que não muda nunca confirma: sem o caixa na lista não manda play; com ele, o play que não pegou tenta de novo");
         checar(r1.Log.Concat(r2.Log).Concat(r4.Log).All(l => !l.Contains('\u2014') && !l.Contains('\u2013')), "SP-12i o log não tem travessão");
     }
 

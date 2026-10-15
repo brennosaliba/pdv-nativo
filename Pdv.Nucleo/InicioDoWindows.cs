@@ -144,6 +144,12 @@ public static class InicioDoWindows
     public static ProgramaDoInicio? TeamViewer(string? exe, bool temServico)
         => string.IsNullOrWhiteSpace(exe) || temServico ? null : new ProgramaDoInicio("TeamViewer", exe, "", "instalado");
 
+    /// <summary>
+    /// O serviço sobe sozinho no boot? Só o Start 2 (automático, com ou sem atraso). Revisão 15/10:
+    /// manual (3) e desativado (4) não sobem, então contam como "sem serviço" para o TeamViewer.
+    /// </summary>
+    public static bool ServicoSobeSozinho(int? inicio) => inicio == 2;
+
     /// <summary>Abre minimizado, sem janela por cima do caixa (o AnyDesk já vai com --tray).</summary>
     public static bool AbreMinimizado(ProgramaDoInicio p) => Processo(p.Exe) == "teamviewer";
 

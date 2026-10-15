@@ -36,10 +36,10 @@ public static class InicioDoWindowsNoCaixa
                 var any = Path.Combine(pasta, "AnyDesk", "AnyDesk.exe");
                 if (File.Exists(any) && !lista.Any(p => InicioDoWindows.Processo(p.Exe) == "anydesk"))
                     lista.Add(new ProgramaDoInicio("AnyDesk", any, "--tray", "instalado"));   // sem janela por cima do caixa
-                // 1.0.37: o TeamViewer com serviço se abre sozinho na sessão; sem serviço, entra desmarcado
+                // 1.0.37: o TeamViewer com serviço automático se abre sozinho na sessão; sem ele (ou manual/desativado), entra desmarcado
                 var tv = Path.Combine(pasta, "TeamViewer", "TeamViewer.exe");
                 if (File.Exists(tv) && !lista.Any(p => InicioDoWindows.Processo(p.Exe) == "teamviewer")
-                    && InicioDoWindows.TeamViewer(tv, InicioDoServico("TeamViewer") is not null) is { } prog)
+                    && InicioDoWindows.TeamViewer(tv, InicioDoWindows.ServicoSobeSozinho(InicioDoServico("TeamViewer"))) is { } prog)
                     lista.Add(prog);
             }
         }
