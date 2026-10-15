@@ -171,7 +171,7 @@ public static class TravaDoCtrlAltDel
         try { direto = tentarDireto(); }
         catch (Exception ex) { direto = ex; }
         if (direto is null)
-            return ficouComoQuer()
+            return Relido(ficouComoQuer)
                 ? (ResultadoDaTrava.Ok, "direto, sem aviso do Windows")
                 : (ResultadoDaTrava.Falhou, "gravou direto, mas o Windows não ficou como pedido");
 
@@ -188,10 +188,14 @@ public static class TravaDoCtrlAltDel
         catch (Exception ex) { return (ResultadoDaTrava.Falhou, detalhe + "; pedido ao Windows: " + Tecnico(ex)); }
 
         detalhe += "; administrador: " + DescreverSaida(saida);
-        bool ficou;
-        try { ficou = ficouComoQuer(); }
-        catch { ficou = false; }
-        return (ficou ? ResultadoDaTrava.Ok : ResultadoDaTrava.Falhou, detalhe);
+        return (Relido(ficouComoQuer) ? ResultadoDaTrava.Ok : ResultadoDaTrava.Falhou, detalhe);
+    }
+
+    /// <summary>Reler o registro nunca derruba o Salvar: leitura que lança conta como "não ficou".</summary>
+    private static bool Relido(Func<bool> ficouComoQuer)
+    {
+        try { return ficouComoQuer(); }
+        catch { return false; }
     }
 
     /// <summary>O texto técnico de uma exceção, para a auditoria (nunca para a tela).</summary>

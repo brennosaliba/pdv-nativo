@@ -1467,6 +1467,7 @@ TestesRetiradaCofre.Rodar((cond, nome) => Check("retirada-cofre: " + nome, cond)
 TestesSpotifyNoCaixa.Rodar((cond, nome) => Check("spotify-caixa: " + nome, cond));
 TestesSubitensIfood.Rodar((cond, nome) => Check("subitens-ifood: " + nome, cond));
 TestesQuiosque.Rodar((cond, nome) => Check("quiosque: " + nome, cond));
+TestesTravaCtrlAltDel.Rodar((cond, nome) => Check("trava-ctrl-alt-del: " + nome, cond));
 TestesConfigLojaPainel.Rodar((cond, nome) => Check("config-painel: " + nome, cond));
 TestesMusica.Rodar((cond, nome) => Check("musica: " + nome, cond));
 
