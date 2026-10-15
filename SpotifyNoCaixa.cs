@@ -58,7 +58,10 @@ public static class SpotifyNoCaixa
     private static DateTime _ultimaAbertura = DateTime.MinValue;
     private static DateTime _mostrarAte = DateTime.MinValue;
     private static bool _viuRodando;
+    /// <summary>A vigia só reabre depois da primeira abertura (que espera a rede); antes disso ela só esconde.</summary>
+    private static volatile bool _primeiraAberturaFeita;
     private static int _abrindo, _tocando;
+    private static CancellationTokenSource? _pararDeTocar;
 
     private static void Log(string texto) => InicioDoWindowsNoCaixa.Anotar("[spotify] " + texto);
 
@@ -203,10 +206,11 @@ public static class SpotifyNoCaixa
             Log(rede is { } s ? $"rede pronta em {s:0} s" : "sem rede depois de 90 s; abro assim mesmo");
             if (Abrir("início")) await ConfirmarProcessoAsync(sessao, TimeSpan.FromSeconds(30));
         }
+        _primeiraAberturaFeita = true;
         _viuRodando = Rodando;
         Log("saída de som padrão: " + SaidaDeSomPadrao());
+        if (tocarSozinho) _ = Task.Run(TocarSozinhoAsync);
         await EsconderQuandoAparecerAsync();
-        if (tocarSozinho) await TocarSozinhoAsync();
     }
 
     /// <summary>Até <paramref name="max"/> pela rede (interface de pé e o nome da API do Spotify resolvendo). null = não veio.</summary>
@@ -249,6 +253,7 @@ public static class SpotifyNoCaixa
     {
         _vigia?.Stop();
         _vigia = null;
+        try { _pararDeTocar?.Cancel(); } catch { }
         lock (_escondidas)
         {
             foreach (var h in _escondidas) { try { ShowWindow(h, SW_SHOWMINNOACTIVE); } catch { } }
@@ -257,8 +262,11 @@ public static class SpotifyNoCaixa
         Log("desligado na Configuração: vigia parada, janelas devolvidas");
     }
 
-    /// <summary>Abre o Spotify escolhido, se nada dele está de pé nesta sessão e a folga de 2 min passou. true = mandou abrir.</summary>
-    private static bool Abrir(string motivo)
+    /// <summary>
+    /// Abre o Spotify escolhido, se nada dele está de pé nesta sessão e a folga de 2 min passou.
+    /// <paramref name="aVista"/>: sem "--minimized" (o "Mostrar o Spotify"). true = mandou abrir.
+    /// </summary>
+    private static bool Abrir(string motivo, bool aVista = false)
     {
         lock (_trava)
         {
@@ -272,8 +280,9 @@ public static class SpotifyNoCaixa
                 if (esc.Exe is null) { Log($"não abri ({motivo}): não instalado"); return false; }
                 _ultimaAbertura = DateTime.Now;
                 // a clássica vai com "--minimized" (sobe na bandeja); a da Loja passa pelo Migrator, que não conhece argumento
-                using var p = Process.Start(new ProcessStartInfo(esc.Exe, esc.Argumentos) { UseShellExecute = true });
-                Log($"abri ({motivo}): {MusicaNoInicio.Descrever(esc)}{(esc.Argumentos.Length > 0 ? " " + esc.Argumentos : "")}");
+                var args = aVista ? "" : esc.Argumentos;
+                using var p = Process.Start(new ProcessStartInfo(esc.Exe, args) { UseShellExecute = true });
+                Log($"abri ({motivo}): {MusicaNoInicio.Descrever(esc)}{(args.Length > 0 ? " " + args : "")}");
                 return true;
             }
             catch (Exception ex) { Log($"não abri ({motivo}): {ex.GetType().Name} {ex.Message}"); return false; }
@@ -350,7 +359,7 @@ public static class SpotifyNoCaixa
             if (pids.Count == 0)
             {
                 lock (_trava) _ultimaAbertura = DateTime.MinValue;
-                var abriu = Abrir("mostrar");
+                var abriu = Abrir("mostrar", aVista: true);
                 Log("mostrar: estava fechado; " + (abriu ? "abri" : "não abriu"));
                 return abriu ? "Abrindo o Spotify. Ele fica à vista por 3 minutos." : "Não consegui abrir o Spotify neste PC.";
             }
@@ -386,6 +395,7 @@ public static class SpotifyNoCaixa
         {
             if (!Rodando)
             {
+                if (!_primeiraAberturaFeita) return;   // a primeira abertura espera a rede, em segundo plano
                 if (_viuRodando) { _viuRodando = false; Log("o Spotify fechou ou caiu; reabro (no máximo a cada 2 min)"); }
                 if (Abrir("vigia")) _ = EsconderQuandoAparecerAsync();
                 return;
@@ -408,9 +418,11 @@ public static class SpotifyNoCaixa
     private static async Task TocarSozinhoAsync()
     {
         if (Interlocked.Exchange(ref _tocando, 1) == 1) return;
+        using var parar = new CancellationTokenSource();
+        _pararDeTocar = parar;
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(10));   // o app ainda está entrando na conta e se anunciando no Connect
+            await Task.Delay(TimeSpan.FromSeconds(10), parar.Token);   // o app ainda está entrando na conta e se anunciando no Connect
             var maquina = Environment.MachineName;
             string? nomePainel;
             using (var cx = Banco.Abrir()) nomePainel = Vendas.Config(cx, ConfigLojaPainel.ChaveDeviceNome);
@@ -431,10 +443,12 @@ public static class SpotifyNoCaixa
                 },
                 (ts, ct) => Task.Delay(ts, ct),
                 Log);
-            if (await MusicaNoInicio.TocarAteConfirmarAsync(amb, maquina)) Log("saída de som padrão: " + SaidaDeSomPadrao());
+            if (await MusicaNoInicio.TocarAteConfirmarAsync(amb, maquina, parar.Token)) Log("saída de som padrão: " + SaidaDeSomPadrao());
+            else if (parar.IsCancellationRequested) Log("tocar sozinho: parado (opção desligada na Configuração)");
         }
+        catch (OperationCanceledException) { Log("tocar sozinho: parado (opção desligada na Configuração)"); }
         catch (Exception ex) { Log("tocar sozinho: " + ex.GetType().Name); }
-        finally { Volatile.Write(ref _tocando, 0); }
+        finally { _pararDeTocar = null; Volatile.Write(ref _tocando, 0); }
     }
 
     // ── a saída de som padrão (para o "tocando no ERP e sem som na loja") ─────────

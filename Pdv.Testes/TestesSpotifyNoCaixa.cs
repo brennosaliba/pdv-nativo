@@ -71,6 +71,9 @@ public static class TestesSpotifyNoCaixa
         checar(sp.Contains("await EsperarRedeAsync(TimeSpan.FromSeconds(90))") && sp.Contains("await ConfirmarProcessoAsync(sessao, TimeSpan.FromSeconds(30))")
                && sp.Contains("Dns.GetHostAddressesAsync(\"api.spotify.com\"") && sp.Contains("Process.GetProcessesByName(\"sihost\")"),
             "SP-14 abre depois da rede (até 90 s), confere o Spotify.exe nesta sessão (até 30 s), e mede o logon pelo sihost (inicialização rápida não zera o relógio)");
+        checar(sp.Contains("if (!_primeiraAberturaFeita) return;") && sp.Contains("try { _pararDeTocar?.Cancel(); } catch { }")
+               && sp.Contains("Abrir(\"mostrar\", aVista: true)") && sp.Contains("var args = aVista ? \"\" : esc.Argumentos;"),
+            "SP-14b a vigia não fura a espera da rede; desligar a opção para o toque sozinho; o Mostrar abre sem --minimized");
         checar(sp.Contains("InicioDoWindowsNoCaixa.Anotar(\"[spotify] \" + texto)") && iw.Contains("internal static void Anotar(string texto)")
                && iw.Contains("lock (_travaLog)") && iw.Contains("\"inicio-windows.txt\""),
             "SP-15 o log do Spotify vai para ProgramData/PdvNativo/inicio-windows.txt com [spotify], com trava (escreve de outra thread)");
