@@ -160,7 +160,11 @@ Agora:
    sair. Saiu, o `cmd` abre o Pdv.exe novo (com `--quiosque` no quiosque) e fecha. A linha
    é montada só de constantes, do número do processo do instalador e do caminho do Pdv.exe
    (`Pdv.Nucleo/ReabrirOCaixa.cs`). Se o instalador falhar, depois do OK da mensagem dele o
-   caixa volta na versão anterior.
+   caixa volta na versão anterior. Antes de copiar, o instalador espera o caixa anterior
+   fechar (até 30 s) e os navegadores do chat e do WhatsApp dele (até 10 s), e encerra os que
+   ficam no perfil (hotfix 1.0.35, `Instalacao.EsperarOCaixaAnteriorSair`, anotado em
+   `atualizacao.txt`). O `cmd` não é navegador e não é tocado; ele só abre o caixa novo depois
+   que o instalador sai, ou seja, depois dessa espera e da cópia.
 2. Se o caixa não consegue deixar essa espera de pé, ele **não fecha**: "A versão nova está
    sendo instalada. Daqui a alguns minutos, feche e abra o caixa."
 3. O instalador, elevado, **nunca** abre o Pdv.exe direto. Chamado por um caixa antigo (sem
