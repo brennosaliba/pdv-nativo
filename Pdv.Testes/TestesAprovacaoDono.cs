@@ -312,7 +312,7 @@ public static class TestesAprovacaoDono
             "AF-13 o script procura pelas fábricas (req.m), guarda o achado e desce em shadowRoot; não depende mais de req.c");
 
         var csproj = Ler("Pdv.csproj");
-        checar(csproj.Contains("<Version>1.0.35</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.35 (chat e WhatsApp abrem com o perfil preso pelo caixa anterior)");
+        checar(csproj.Contains("<Version>1.0.36</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.36 (o motivo da recusa do SDK, o plano B do envio, o Resgatar aqui na falha, os que saíram do KDS e a trava do Ctrl+Alt+Del)");
         var testes = new[] { Ler("Pdv.Testes", "TestesAprovacaoDono.cs"), Ler("Pdv.Testes", "TestesScriptSendbird.cs") };
         var novos = new[] { servico, js }.Concat(testes).ToArray();
         checar(testes.All(t => t.Length > 0) && novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),
