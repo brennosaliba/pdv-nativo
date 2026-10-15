@@ -797,20 +797,30 @@ public sealed class Nuvem
     /// vazia: os tickets ficam como estao ate o proximo ciclo.</summary>
     public async Task<List<(string OrderId, string Status, string? PreparoAte)>> StatusPedidosAsync(
         IReadOnlyList<string> orderIds)
+        => orderIds.Count == 0 ? new() : await StatusPedidosOuNuloAsync(orderIds).ConfigureAwait(false) ?? new();
+
+    /// <summary>
+    /// O mesmo, mas SEM engolir a falha (14/10/2026): null = a nuvem não respondeu (sem
+    /// sessão, rede, HTTP de erro, JSON ilegível). É o que deixa a lista dos que já saíram
+    /// dizer "Sem internet" em vez de fingir que a nuvem não sabia de nada.
+    /// </summary>
+    public async Task<List<(string OrderId, string Status, string? PreparoAte)>?> StatusPedidosOuNuloAsync(
+        IReadOnlyList<string> orderIds)
     {
         try
         {
-            if (orderIds.Count == 0 || !await SessaoOkAsync().ConfigureAwait(false)) return new();
+            if (orderIds.Count == 0) return new();
+            if (!await SessaoOkAsync().ConfigureAwait(false)) return null;
             using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_status");
             req.Content = new StringContent(
                 JsonSerializer.Serialize(new { _order_ids = orderIds }),
                 Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return new();
+            if (!resp.IsSuccessStatusCode) return null;
 
             var r = new List<(string, string, string?)>();
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return new();
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
             foreach (var e in doc.RootElement.EnumerateArray())
             {
                 var id = e.TryGetProperty("order_id", out var i) ? i.GetString() : null;
@@ -822,7 +832,7 @@ public sealed class Nuvem
             }
             return r;
         }
-        catch { return new(); }
+        catch { return null; }
     }
 
     /// <summary>
@@ -849,6 +859,73 @@ public sealed class Nuvem
             using var resp = await _http.SendAsync(req).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) return null;
             return LerEntrega(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>A RPC pdv_kds_cancelados já respondeu 404 (servidor sem o SQL): não pergunta de novo.</summary>
+    private volatile bool _semRpcCancelados;
+
+    /// <summary>
+    /// QUAIS DESTES PEDIDOS O iFOOD CANCELOU (14/10/2026, revisão da lista dos que já saíram).
+    /// O feed e a pdv_kds_status devolvem o estado da ENTREGA antes do status do pedido: um
+    /// pedido despachado e depois cancelado continua "despachado" para o caixa. Aqui:
+    ///
+    ///  1. a RPC pdv_kds_cancelados (desenho entregue ao ERP; ainda não existe em produção),
+    ///     que lê o status do pedido de verdade, sem janela de horas;
+    ///  2. enquanto ela não existe (404), o último evento de entrega (pdv_kds_entrega, que já
+    ///     existe): código CANCELLED. Cobre as últimas 12 h da loja que recebe os eventos.
+    ///
+    /// Devolve (order_id, hora do cancelamento ou null) só dos cancelados; lista vazia =
+    /// nenhum; NULL = a nuvem não respondeu (quem chama mantém o que sabia).
+    /// </summary>
+    public async Task<List<(string OrderId, DateTime? Em)>?> CanceladosAsync(IReadOnlyList<string> orderIds)
+    {
+        if (orderIds.Count == 0) return new();
+        if (!_semRpcCancelados)
+        {
+            try
+            {
+                if (!await SessaoOkAsync().ConfigureAwait(false)) return null;
+                using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_cancelados");
+                req.Content = new StringContent(
+                    JsonSerializer.Serialize(new { _order_ids = orderIds }),
+                    Encoding.UTF8, "application/json");
+                using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode)
+                    return LerCancelados(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+                if (resp.StatusCode != System.Net.HttpStatusCode.NotFound) return null;
+                _semRpcCancelados = true;
+            }
+            catch { return null; }
+        }
+        var eventos = await EntregaPedidosAsync(orderIds).ConfigureAwait(false);
+        return eventos?.Where(e => e.Code.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase))
+                       .Select(e => (e.OrderId, Kds.ChegadaLocal(e.Em)))
+                       .ToList();
+    }
+
+    /// <summary>
+    /// A resposta da pdv_kds_cancelados: [{"order_id": "...", "cancelado_em": "..." ou null}].
+    /// Linha sem order_id é pulada; JSON que não é lista é falha (null). Separado do HTTP
+    /// para a suíte provar o contrato sem rede.
+    /// </summary>
+    public static List<(string OrderId, DateTime? Em)>? LerCancelados(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            var r = new List<(string, DateTime?)>();
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (e.ValueKind != JsonValueKind.Object) continue;
+                var id = e.TryGetProperty("order_id", out var i) && i.ValueKind == JsonValueKind.String ? i.GetString()?.Trim() : null;
+                if (string.IsNullOrEmpty(id)) continue;
+                var em = e.TryGetProperty("cancelado_em", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+                r.Add((id, Kds.ChegadaLocal(em)));
+            }
+            return r;
         }
         catch { return null; }
     }

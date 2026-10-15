@@ -15,6 +15,7 @@ namespace Pdv.Testes;
 ///   etiqueta-pedido-grande.png pedido comprido: o miolo encolhe, QR e número não
 ///   etiqueta-agendado.png      pedido agendado de retirada
 ///   etiqueta-giro-90.png       a primeira, como vai para o driver com o rolo deitado
+///   etiqueta-segunda-via.png   14/10/2026: a primeira tirada de novo pela lista dos que saíram, com a marca
 /// </summary>
 public static class FotoEtiqueta
 {
@@ -73,20 +74,21 @@ public static class FotoEtiqueta
             ItensJson = System.Text.Json.JsonSerializer.Serialize(Kds.ItensDeJson(TestesEtiquetaKds.Itens6066)),
         };
 
-        var fotos = new (string Nome, Ticket T, int Giro)[]
+        var fotos = new (string Nome, Ticket T, int Giro, string? Marca)[]
         {
-            ("etiqueta-6066.png", real6066, 0),
-            ("etiqueta-combo.png", combo, 0),
-            ("etiqueta-nome-longo.png", nomeLongo, 0),
-            ("etiqueta-pedido-grande.png", grande, 0),
-            ("etiqueta-agendado.png", agendado, 0),
-            ("etiqueta-giro-90.png", combo, 90),
+            ("etiqueta-6066.png", real6066, 0, null),
+            ("etiqueta-combo.png", combo, 0, null),
+            ("etiqueta-nome-longo.png", nomeLongo, 0, null),
+            ("etiqueta-pedido-grande.png", grande, 0, null),
+            ("etiqueta-agendado.png", agendado, 0, null),
+            ("etiqueta-giro-90.png", combo, 90, null),
+            ("etiqueta-segunda-via.png", combo, 0, "2a VIA (SAIU 17:52)"),
         };
         var codigo = 0;
-        foreach (var (nome, t, giro) in fotos)
+        foreach (var (nome, t, giro, marca) in fotos)
         {
             var saida = Path.Combine(dir, nome);
-            var erro = Impressao.PreVisualizarEtiquetaAsync(t, saida, giro, 3.0, hoje).GetAwaiter().GetResult();
+            var erro = Impressao.PreVisualizarEtiquetaAsync(t, saida, giro, 3.0, hoje, marca).GetAwaiter().GetResult();
             if (erro is null) Console.WriteLine($"foto-etiqueta: {saida}");
             else { Console.Error.WriteLine($"foto-etiqueta: {nome}: {erro}"); codigo = 1; }
         }

@@ -182,6 +182,22 @@ public static class Banco
             "ALTER TABLE raspadinha_bonus ADD COLUMN assinatura TEXT",
             "ALTER TABLE raspadinha_bonus ADD COLUMN comanda_onde TEXT",
             "ALTER TABLE raspadinha_bonus ADD COLUMN cabecalho TEXT",
+            // 14/10/2026: PEDIDOS QUE JÁ SAÍRAM DO QUADRO (pedido do dono: "opção de procurar
+            // pedidos finalizados no KDS do PDV"). Quando e POR QUE cada pedido saiu: o status
+            // 'cancelado' junta quatro histórias diferentes (o iFood cancelou, o Gestor
+            // despachou antes de o card andar aqui, expirou, venda cancelada), e só o motivo
+            // separa. Gravados uma vez (coalesce), nunca reescritos. NULL = saiu antes desta
+            // versão: a tela diz "SAIU DO QUADRO", que é o que se sabe. Ver FinalizadosKds.
+            "ALTER TABLE kds_ticket ADD COLUMN encerrado_em TEXT",
+            "ALTER TABLE kds_ticket ADD COLUMN encerrado_motivo TEXT",
+            // O CANCELAMENTO DE VERDADE, à parte da saída (revisão de 14/10/2026): o iFood cancela
+            // pedido já despachado (#1404 da Savassi: despachado 13:41, cancelado 14:20), e o feed
+            // continua dizendo "despachado". A saída fica como foi; o cancelamento ganha no rótulo.
+            "ALTER TABLE kds_ticket ADD COLUMN cancelado_certo INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE kds_ticket ADD COLUMN cancelado_em TEXT",
+            // De que LOJA é o pedido (o nome do terminal quando ele entrou): caixa reconfigurado
+            // para outra loja não mostra, na lista dos que saíram, os pedidos da loja de antes.
+            "ALTER TABLE kds_ticket ADD COLUMN loja TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }
@@ -199,6 +215,37 @@ public static class Banco
             c.ExecuteNonQuery();
         }
         catch { /* índice já existe */ }
+
+        // A lista dos que JÁ SAÍRAM (14/10/2026) procura por dia de chegada, e o único índice
+        // do quadro (ix_kds_aberto) só cobre os abertos. Uns 60 mil pedidos por ano neste
+        // caixa: sem índice, a contagem "Saíram hoje" do cabeçalho leria a tabela inteira a
+        // cada 10 s.
+        try
+        {
+            using var c = cx.CreateCommand();
+            c.CommandText = "CREATE INDEX IF NOT EXISTS ix_kds_criado ON kds_ticket(criado_em)";
+            c.ExecuteNonQuery();
+        }
+        catch { /* índice já existe */ }
+
+        // A LOJA DE CADA PEDIDO (revisão de 14/10/2026). Gatilho, e não mudança em cada caminho
+        // que cria ticket (delivery, balcão, encomenda): todo INSERT sem loja ganha o nome do
+        // terminal naquele instante. Os de antes ganham o nome de agora, uma vez (depois disso
+        // não sobra NULL; trocar a loja na Configuração não rebatiza o passado).
+        try
+        {
+            using var c = cx.CreateCommand();
+            c.CommandText = """
+                CREATE TRIGGER IF NOT EXISTS tg_kds_ticket_loja AFTER INSERT ON kds_ticket
+                WHEN NEW.loja IS NULL
+                BEGIN
+                  UPDATE kds_ticket SET loja = (SELECT loja_nome FROM terminal WHERE id = 1) WHERE id = NEW.id;
+                END;
+                UPDATE kds_ticket SET loja = (SELECT loja_nome FROM terminal WHERE id = 1) WHERE loja IS NULL;
+                """;
+            c.ExecuteNonQuery();
+        }
+        catch { /* sem a coluna (ALTER falhou): a lista mostra tudo, como antes */ }
     }
 
     private const string Esquema = """

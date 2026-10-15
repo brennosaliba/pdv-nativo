@@ -95,7 +95,14 @@ public sealed class BipeKds
                     : new ResultadoBipe(DesfechoBipe.JaPronto, t.Id, t.Numero, $"{t.Numero} já estava pronto");
             case Kds.Pronto:
                 return new ResultadoBipe(DesfechoBipe.JaPronto, t.Id, t.Numero, $"{t.Numero} já estava pronto");
-            case Kds.Cancelado:
+            // 'cancelado' local quase nunca é cancelamento (14/10/2026): o Gestor despachar
+            // antes de o card andar aqui também vira 'cancelado'. Com o motivo anotado, só o
+            // cancelamento de verdade diz "foi cancelado"; o resto já saiu do quadro. Sem
+            // motivo (pedido de antes desta versão), fica a frase de sempre. E o pedido que saiu
+            // e DEPOIS o iFood cancelou (entregue, com o cancelamento anotado) também foi cancelado.
+            case Kds.Cancelado or Kds.Entregue
+                when (t.Status == Kds.Cancelado && t.EncerradoMotivo is null)
+                     || FinalizadosKds.Estado(t) == EstadoFinalizado.Cancelado:
                 return new ResultadoBipe(DesfechoBipe.Cancelado, t.Id, t.Numero, $"{t.Numero} foi cancelado");
             default:
                 return new ResultadoBipe(DesfechoBipe.JaSaiu, t.Id, t.Numero, $"{t.Numero} já saiu do quadro");

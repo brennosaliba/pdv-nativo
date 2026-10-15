@@ -56,7 +56,12 @@ public sealed record LinhaEtiqueta(TipoLinhaEtiqueta Tipo, string Qtd, string Te
 /// <param name="Qr">Conteúdo EXATO do QR (prefixo + id).</param>
 public sealed record Etiqueta(string Numero, string Origem, string? Cliente,
                               string? Agendado, string Chegou, bool Retirada,
-                              IReadOnlyList<LinhaEtiqueta> Linhas, string Qr);
+                              IReadOnlyList<LinhaEtiqueta> Linhas, string Qr)
+{
+    /// <summary>14/10/2026: a marca da etiqueta tirada de novo ("2a VIA (SAIU 14:32)"), em negrito
+    /// abaixo do cabeçalho; null na etiqueta de sempre.</summary>
+    public string? Marca { get; init; }
+}
 
 /// <summary>Como o nome do cliente cabe na área dele: as linhas, o tamanho da fonte e o aperto horizontal.</summary>
 /// <param name="EscalaX">1 = letra natural; menor = apertada na horizontal (nunca abaixo do mínimo pedido).</param>
@@ -243,7 +248,9 @@ public static class EtiquetaKds
     /// <summary>Monta a etiqueta inteira de um ticket.</summary>
     /// <param name="hoje">O "hoje" de quem imprime (decide se a hora marcada sai com data). Só os testes cravam.</param>
     /// <param name="embalagem">Palavras de embalagem (<see cref="PalavrasEmbalagem"/>); null = padrão.</param>
-    public static Etiqueta Montar(Ticket t, DateTime? hoje = null, IReadOnlyList<string>? embalagem = null)
+    /// <param name="marca">A marca da segunda via (<see cref="FinalizadosKds.MarcaSegundaVia"/>); null = etiqueta de sempre.</param>
+    public static Etiqueta Montar(Ticket t, DateTime? hoje = null, IReadOnlyList<string>? embalagem = null,
+                                  string? marca = null)
     {
         var linhas = Linhas(t, embalagem);
 
@@ -252,7 +259,10 @@ public static class EtiquetaKds
             : null;
 
         return new Etiqueta(t.Numero, Origem(t), NomeParaEtiqueta(t.Cliente),
-                            agendado, $"Chegou {t.CriadoEm:HH:mm}", t.Retirada, linhas, ConteudoQr(t));
+                            agendado, $"Chegou {t.CriadoEm:HH:mm}", t.Retirada, linhas, ConteudoQr(t))
+        {
+            Marca = string.IsNullOrWhiteSpace(marca) ? null : marca.Trim(),
+        };
     }
 
     /// <summary>

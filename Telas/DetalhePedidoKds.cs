@@ -36,7 +36,10 @@ public sealed class DetalhePedidoKds : Border
 
     /// <param name="faleComIfood">Só em pedido do iFood: abre o atendimento do iFood para este pedido (null = sem botão).</param>
     /// <param name="resgatar">154 (08/10): só em pedido do iFood com a tela de resgate ligada na loja: abre o resgate da raspadinha já neste pedido (null = sem botão).</param>
-    public DetalhePedidoKds(DetalhePedido d, Action fechar, Action? faleComIfood = null, Action? resgatar = null)
+    /// <param name="comandaDeNovo">14/10/2026: só em pedido que JÁ SAIU do quadro, aberto pela lista dos que
+    /// saíram: imprime a comanda de novo (null = sem botão). Devolve null quando saiu, ou a mensagem do erro.</param>
+    public DetalhePedidoKds(DetalhePedido d, Action fechar, Action? faleComIfood = null, Action? resgatar = null,
+                            Func<Task<string?>>? comandaDeNovo = null)
     {
         Detalhe = d;
 
@@ -79,10 +82,14 @@ public sealed class DetalhePedidoKds : Border
 
         // A coluna de onde o card veio, com a cor dela: o detalhe abre de qualquer
         // coluna, e quem olha tem que saber em qual está sem fechar o painel.
+        // Quem já saiu (14/10/2026) tem a cor do rótulo da lista: saiu/retirado verde,
+        // cancelado vermelho, "saiu do quadro" cinza (é o "não sei" honesto).
         var (corEtapa, fundoEtapa, bordaEtapa) = d.Etapa switch
         {
             "FAZENDO" => ("Amarelo", "ChipAlertaFundo", "ChipAlertaBorda"),
-            "PRONTO" => ("Ok", "ChipOkFundo", "ChipOkBorda"),
+            "PRONTO" or "SAIU" or "RETIRADO" => ("Ok", "ChipOkFundo", "ChipOkBorda"),
+            "CANCELADO" => ("Erro", "ChipErroFundo", "ChipErroBorda"),
+            "SAIU DO QUADRO" => ("TextoEspera", "EsperaFundo", "Borda"),
             _ => ("Ciano", "ChipInfoFundo", "ChipInfoBorda"),
         };
         var etapa = Chip(d.Etapa, corEtapa, fundoEtapa, bordaEtapa);
@@ -146,7 +153,7 @@ public sealed class DetalhePedidoKds : Border
             MinHeight = 60, FontSize = 20, Margin = new Thickness(26, 12, 26, 20),
         };
         _fechar.Click += (_, _) => fechar();
-        if (faleComIfood is null && resgatar is null)
+        if (faleComIfood is null && resgatar is null && comandaDeNovo is null)
         {
             Grid.SetRow(_fechar, 2);
             raiz.Children.Add(_fechar);
@@ -159,6 +166,34 @@ public sealed class DetalhePedidoKds : Border
             // tela ligada na loja. Os botões dividem a linha por igual; o Fechar fica por último.
             var rodape = new Grid { Margin = new Thickness(26, 12, 26, 20) };
             var botoes = new List<Button>();
+            if (comandaDeNovo is not null)
+            {
+                // COMANDA DE NOVO (14/10/2026): refazer um pedido que já saiu é tirar a comanda
+                // de novo. A resposta aparece NO PRÓPRIO BOTÃO por 3 s: a linha de aviso do
+                // cabeçalho do quadro fica atrás do véu e, a 1024, nem aparece.
+                var texto = "🖨 " + FinalizadosKds.BotaoComandaDeNovo;
+                var c = new Button
+                {
+                    Name = "BtnComandaDeNovo",
+                    Content = texto,
+                    Style = (Style)Application.Current.Resources["BotaoBase"],
+                    MinHeight = 60, FontSize = 18,
+                    ToolTip = "Tira a comanda deste pedido no papel de novo",
+                };
+                c.Click += async (_, _) =>
+                {
+                    c.IsEnabled = false;
+                    string? erro;
+                    try { erro = await comandaDeNovo(); }
+                    catch (Exception ex) { erro = ex.Message; }
+                    c.Content = erro is null ? FinalizadosKds.TextoComandaSaiu : FinalizadosKds.TextoComandaNaoSaiu;
+                    if (erro is not null) c.ToolTip = erro;
+                    var volta = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                    volta.Tick += (_, _) => { volta.Stop(); c.Content = texto; c.IsEnabled = true; };
+                    volta.Start();
+                };
+                botoes.Add(c);
+            }
             if (resgatar is not null)
             {
                 var r = new Button
@@ -175,6 +210,7 @@ public sealed class DetalhePedidoKds : Border
             {
                 var ajuda = new Button
                 {
+                    Name = "BtnFaleComIfood",
                     Content = "🛟 " + AjudaIfood.TextoBotao,
                     Style = (Style)Application.Current.Resources["BotaoBase"],
                     MinHeight = 60, FontSize = 18,
@@ -219,15 +255,9 @@ public sealed class DetalhePedidoKds : Border
     {
         var d = Detalhe;
 
-        // A linha de metadados é UMA frase separada por pontos: hora, entrega ou
-        // retirada, prazo, começo, pronto, localizador. Só o que existe entra.
-        var partes = new List<string> { d.FeitoAs };
-        if (d.Modalidade is not null) partes.Add(d.Modalidade);
-        if (d.Prazo is not null) partes.Add(d.Prazo);
-        if (d.Comecou is not null) partes.Add(d.Comecou);
-        if (d.ProntoAs is not null) partes.Add(d.ProntoAs);
-        if (d.Localizador is not null) partes.Add("Localizador " + d.Localizador);
-        _meta.Text = string.Join(" · ", partes);
+        // A linha de metadados é UMA frase separada por pontos; a régua mora no núcleo
+        // (DetalhePedido.Meta), com o localizador que não quebra no meio.
+        _meta.Text = d.Meta;
 
         _secoesCab.Children.Clear();
         if (d.CodigoColeta is not null)

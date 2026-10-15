@@ -818,6 +818,22 @@ if (args.Length >= 1 && args[0] == "--so-conta")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (14/10/2026): so as suites do KDS, mais a dos pedidos que ja sairam do quadro.
+// NAO e o gate.
+//   Pdv.Testes.exe --so-kds
+if (args.Length >= 1 && args[0] == "--so-kds")
+{
+    TestesKds.Rodar((cond, nome) => Check("kds: " + nome, cond));
+    TestesCardKds.Rodar((cond, nome) => Check("kds-card: " + nome, cond));
+    TestesDetalhePedido.Rodar((cond, nome) => Check("kds-detalhe: " + nome, cond));
+    TestesEtiquetaKds.Rodar((cond, nome) => Check("kds-etiqueta: " + nome, cond));
+    TestesBuscaKds.Rodar((cond, nome) => Check("busca-kds: " + nome, cond));
+    TestesFinalizadosKds.Rodar((cond, nome) => Check("kds-finalizados: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so kds) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 var arquivo = Path.Combine(Path.GetTempPath(), $"pdv-teste-{Guid.NewGuid():N}.db");
 Banco.Migrar(arquivo);
 
@@ -1486,6 +1502,10 @@ TestesSessaoWhatsApp.Rodar((cond, nome) => Check("whatsapp-sessao: " + nome, con
 TestesRespostasProntas.Rodar((cond, nome) => Check("respostas: " + nome, cond));
 TestesFechamentoVoltar.Rodar((cond, nome) => Check("fechamento-voltar: " + nome, cond));
 TestesBuscaKds.Rodar((cond, nome) => Check("busca-kds: " + nome, cond));
+// -- 14/10/2026: OS PEDIDOS QUE JA SAIRAM DO QUADRO (pedido do dono: "procurar pedidos finalizados no KDS")
+// Periodo, busca por numero e nome, o rotulo que nao chama de cancelado quem so saiu, teto de 300,
+// a saida anotada sem sobrescrever, o reforco da nuvem, o bipe e o detalhe aberto da lista.
+TestesFinalizadosKds.Rodar((cond, nome) => Check("kds-finalizados: " + nome, cond));
 TestesRetomada.Rodar((cond, nome) => Check("retomada: " + nome, cond));
 TestesAjudaIfood.Rodar((cond, nome) => Check("ajuda-ifood: " + nome, cond));
 TestesChatSempreVivo.Rodar((cond, nome) => Check("chat-vivo: " + nome, cond));
