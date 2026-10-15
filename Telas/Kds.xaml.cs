@@ -538,6 +538,8 @@ public partial class Kds : UserControl
         Quadro.Visibility = Visibility.Collapsed;
         PainelFinalizados.Visibility = Visibility.Visible;
         TxtBusca.Tag = FinalizadosKds.DicaBuscaLista;
+        // A contagem da busca no QUADRO ("Nenhum pedido com 4719 no quadro") não vale para a lista.
+        if (_busca.Length > 0) TxtStatus.Text = "";
         PintarFaixaBusca(0);
         TxtFonteLista.Text = FinalizadosKds.TextoGuardado;
         PintarFinalizados();

@@ -277,7 +277,10 @@ public static class FotoKds
                     j = System.Text.Json.JsonSerializer.Serialize(itens), s = status,
                     t = chegou.ToString("o"),
                     pe = chegou.AddMinutes(2).ToString("o"),
-                    pr = status == Kds.Entregue ? chegou.AddMinutes(14).ToString("o") : null,
+                    // pronto antes da saída, sempre (o balcão levou 7 min: pronto aos 5)
+                    pr = status == Kds.Entregue
+                        ? (saiu is { } fim && fim < chegou.AddMinutes(16) ? fim.AddMinutes(-2) : chegou.AddMinutes(14)).ToString("o")
+                        : null,
                     en = status == Kds.Entregue ? saiu?.ToString("o") : null,
                     // soEntregue: pedido de antes desta versão, só com a hora antiga
                     ee = soEntregue ? null : saiu?.ToString("o"),
