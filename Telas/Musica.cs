@@ -123,11 +123,11 @@ public sealed class Musica : Window
             b.Click += (_, _) => acao();
             return b;
         }
-        _tocar = B("▶ Playlist", true, () => Comando(() => _sp.TocarPlaylistAsync(_deviceId, _playlistUri ?? "")));
+        _tocar = B("▶ Playlist", true, () => Comando(async () => await _sp.TocarPlaylistAsync(await IdAtualAsync(), _playlistUri ?? "")));
         _tocar.IsEnabled = _playlistUri is { Length: > 0 };
         _tocar.ToolTip = "Toca a playlist da loja no aparelho escolhido";
         var ant = B("⏮", false, () => Comando(() => _sp.AnteriorAsync()));
-        _pausar = B("⏸", false, () => Comando(() => _pausando ? _sp.PausarAsync() : _sp.RetomarAsync(_deviceId)));
+        _pausar = B("⏸", false, () => Comando(async () => _pausando ? await _sp.PausarAsync() : await _sp.RetomarAsync(await IdAtualAsync())));
         var prox = B("⏭", false, () => Comando(() => _sp.ProximaAsync()));
         linha.Children.Add(_tocar); linha.Children.Add(ant); linha.Children.Add(_pausar); linha.Children.Add(prox);
         pilha.Children.Add(linha);
@@ -222,5 +222,15 @@ public sealed class Musica : Window
     }
     private void FolgaVolumeTick(object? s, EventArgs e) { _folgaVolume!.Stop(); AplicarVolume(); }
 
-    private void AplicarVolume() => Comando(() => _sp.VolumeAsync((int)_volume.Value, _deviceId));
+    private void AplicarVolume() => Comando(async () => await _sp.VolumeAsync((int)_volume.Value, await IdAtualAsync()));
+
+    /// <summary>
+    /// 1.0.37 (15/10/2026): o id do aparelho muda (o Spotify não garante que ele persista). O nome
+    /// escolhido no painel acha o id de agora na lista; o id guardado fica só de reserva.
+    /// </summary>
+    private async Task<string?> IdAtualAsync()
+    {
+        var (aps, _) = await _sp.AparelhosAsync();
+        return Spotify.IdAtual(aps, _deviceNome, _deviceId);
+    }
 }

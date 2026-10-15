@@ -42,10 +42,13 @@ public static class TestesMusica
         var nuvem = Fonte(Path.Combine("Pdv.Nucleo", "Nuvem.cs")) ?? "";
         checar(venda.Contains("Click=\"AbrirMusica\"") && vendaCs.Contains("Musica.Abrir(Window.GetWindow(this)!)"),
             "a barra da venda tem o botão ♫ que abre a janela da música");
-        checar(janela.Contains("ConfigLojaPainel.ChavePlaylistUri") && janela.Contains("_sp.TocarPlaylistAsync(_deviceId, _playlistUri") && !janela.Contains("/me/playlists"),
+        checar(janela.Contains("ConfigLojaPainel.ChavePlaylistUri") && janela.Contains("_sp.TocarPlaylistAsync(await IdAtualAsync(), _playlistUri") && !janela.Contains("/me/playlists"),
             "a janela toca a playlist do painel e não deixa escolher outra (\"eu escolho daqui o que vai tocar lá\")");
         checar(nuvem.Contains("\"/functions/v1/\" + nome") && nuvem.Contains("Spotify.LerToken(st, corpo)") && !nuvem.Contains("refresh_token\":"),
             "o caixa pede o access_token à função de borda; o refresh_token nunca chega aqui");
+        checar(janela.Contains("return Spotify.IdAtual(aps, _deviceNome, _deviceId);") && !janela.Contains("Async(_deviceId")
+               && !janela.Contains(", _deviceId))"),
+            "1.0.37: tocar, retomar e volume vão para o id de AGORA do aparelho do painel (achado pelo nome); o guardado é reserva");
     }
 
     private static string? Fonte(string relativo)
