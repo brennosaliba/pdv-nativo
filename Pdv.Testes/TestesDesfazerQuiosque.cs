@@ -291,7 +291,9 @@ public static class TestesDesfazerQuiosque
                && inst.Contains("public static string? Desinstalar() => Desinstalar(out _);", StringComparison.Ordinal),
             "DQ-8 o Desinstalar desfaz o quiosque PRIMEIRO e, com o Shell nosso preso, para antes de apagar qualquer coisa (chave, atalho, Pdv.exe)");
         var desfazer = Trecho(inst, "public static DesfazerQuiosque.Resumo DesfazerQuiosqueDoCaixa()", "\n    }");
-        checar(desfazer.Contains("QuiosqueDoCaixa.Resumir(QuiosqueDoCaixa.DesfazerNosPerfis(Registry.Users, ExesDoCaixa(), File.Exists))", StringComparison.Ordinal)
+        checar(desfazer.Contains("var exes = ExesDoCaixa();", StringComparison.Ordinal)
+               && desfazer.Contains("QuiosqueDoCaixa.DesfazerNosPerfis(Registry.Users, exes, File.Exists)", StringComparison.Ordinal)
+               && desfazer.Contains("return QuiosqueDoCaixa.Resumir(feitos);", StringComparison.Ordinal)
                && desfazer.Contains("catch { return DesfazerQuiosque.Resumo.Nenhum; }", StringComparison.Ordinal),
             "DQ-8b na loja a raiz é HKEY_USERS, os exes são os que o desinstalador remove, e um erro ao percorrer não segura a desinstalação");
         checar(qdc.Length > 0 && !qdc.Contains("Registry.LocalMachine", StringComparison.Ordinal) && !qdc.Contains("Registry.CurrentUser", StringComparison.Ordinal)

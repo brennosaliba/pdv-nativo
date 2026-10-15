@@ -1,5 +1,7 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 using Pdv.Nucleo;
 
 namespace Pdv.Instalador;
@@ -14,9 +16,14 @@ namespace Pdv.Instalador;
 ///
 /// O instalador não sabe quem é o usuário do caixa (ele grava a máquina, e o Adicionar/Remover
 /// Programas pode abri-lo com a conta de outro administrador). Então percorre os perfis CARREGADOS
-/// em HKEY_USERS: quem desinstala pela área de trabalho do caixa tem o perfil dele carregado. Perfil
-/// não carregado (o caixa não está logado) fica como está: carregar o NTUSER.DAT de outra pessoa
-/// não é trabalho de desinstalador.
+/// em HKEY_USERS: quem desinstala pela área de trabalho do caixa tem o perfil dele carregado.
+///
+/// PERFIL NÃO CARREGADO (fechamento da 1.0.36): o suporte entra com outra conta de administrador e o
+/// usuário do caixa não está logado. Antes ficava como estava, e o próximo login automático do caixa
+/// era a tela preta com a trava. Agora o NTUSER.DAT dele é aberto como hive PARTICULAR deste processo
+/// (RegLoadAppKey: não aparece em HKEY_USERS, ninguém mais vê, sai quando o handle fecha) e passa
+/// pela MESMA regra. Arquivo que não existe nunca é criado (o RegLoadAppKey criaria um hive vazio, e
+/// aquele usuário entraria com um perfil em branco).
 ///
 /// A ORDEM (revisão do desinstalador): o Shell sai PRIMEIRO (é ele que evita a tela preta), depois
 /// cada política com o seu próprio try, e a marca da trava por último, só se todas saíram. O que não
@@ -62,6 +69,71 @@ public static class QuiosqueDoCaixa
             catch { /* perfil que nem abre para leitura: não dá para saber se há algo nosso, segue */ }
         }
         return feitos;
+    }
+
+    /// <summary>
+    /// Os perfis do Windows que NÃO estão em HKEY_USERS (<paramref name="carregados"/>), pelo NTUSER.DAT de
+    /// cada um, aberto como hive particular (<see cref="AbrirHive"/>). Só perfil de pessoa; arquivo que não
+    /// existe ou que não abre (em uso, sem permissão) fica de fora. Um perfil com problema não segura os outros.
+    /// </summary>
+    public static IReadOnlyList<Desfeito> DesfazerNosPerfisFora(IEnumerable<(string Sid, string Hive)> perfis, IEnumerable<string> carregados,
+        IReadOnlyList<string> exesRemovidos, Func<string, bool> existe)
+    {
+        var feitos = new List<Desfeito>();
+        var ja = new HashSet<string>(carregados, StringComparer.OrdinalIgnoreCase);
+        foreach (var (sid, hive) in perfis)
+        {
+            if (!DesfazerQuiosque.PerfilDePessoa(sid) || ja.Contains(sid)) continue;
+            try
+            {
+                using var raiz = AbrirHive(hive);
+                if (raiz is null) continue;
+                if (DesfazerNoPerfil(sid, raiz, exesRemovidos, existe) is { } feito) feitos.Add(feito);
+            }
+            catch { /* perfil que nem abre: não dá para saber se há algo nosso, segue */ }
+        }
+        return feitos;
+    }
+
+    /// <summary>
+    /// Abre um NTUSER.DAT como hive particular deste processo (RegLoadAppKey). Null quando o arquivo não
+    /// existe (NUNCA cria um) ou não abre. O hive sai da memória quando a chave devolvida é fechada.
+    /// </summary>
+    public static RegistryKey? AbrirHive(string? arquivo)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(arquivo) || !Path.IsPathFullyQualified(arquivo) || !File.Exists(arquivo)) return null;
+            if (RegLoadAppKey(arquivo, out var h, LeituraDeChave, 0, 0) != 0 || h == IntPtr.Zero) return null;
+            return RegistryKey.FromHandle(new SafeRegistryHandle(h, ownsHandle: true));
+        }
+        catch { return null; }
+    }
+
+    private const int LeituraDeChave = 0x20019;   // KEY_READ: cada subchave é aberta para escrita por si
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern int RegLoadAppKey(string arquivo, out IntPtr chave, int acesso, int opcoes, int reservado);
+
+    /// <summary>
+    /// Os exes para onde apontam os Shells de quiosque dos perfis de pessoa carregados em
+    /// <paramref name="usuarios"/> (só o formato do PDV). A migração da instalação antiga não apaga a
+    /// pasta de nenhum deles. Perfil ilegível fica de fora.
+    /// </summary>
+    public static IReadOnlyList<string> ExesNosShells(RegistryKey usuarios)
+    {
+        var exes = new List<string>();
+        foreach (var sid in usuarios.GetSubKeyNames())
+        {
+            if (!DesfazerQuiosque.PerfilDePessoa(sid)) continue;
+            try
+            {
+                using var perfil = usuarios.OpenSubKey(sid);
+                if (perfil is not null && DesfazerQuiosque.ExeDoShell(LerShell(perfil)) is { } exe) exes.Add(exe);
+            }
+            catch { }
+        }
+        return exes;
     }
 
     /// <summary>O resumo para a desinstalação: quantos desfeitos e em quantos algo nosso ficou.</summary>

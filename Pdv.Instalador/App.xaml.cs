@@ -6,6 +6,15 @@ namespace Pdv.Instalador;
 public partial class App : Application
 {
     /// <summary>
+    /// O PRÓPRIO EXE, PRESO ENQUANTO O INSTALADOR VIVE (fechamento da 1.0.36, revisão de segurança). Na
+    /// atualização este exe mora no TEMP do usuário, e o pacote é lido dele DEPOIS de esperar o caixa
+    /// (até 30 s). O Windows deixa renomear um exe em execução: sem este handle, um programa do usuário
+    /// trocava o arquivo nesse meio e o pacote dele ia para Program Files. Só leitura e FileShare.Read:
+    /// ninguém grava, apaga nem renomeia, e as leituras do próprio pacote continuam passando.
+    /// </summary>
+    private static FileStream? _euMesmo;
+
+    /// <summary>
     /// Um modo de linha de comando: <c>--desinstalar</c>, que remove o programa
     /// PRESERVANDO os dados da loja. Ele não abre a janela de instalação.
     ///
@@ -18,22 +27,28 @@ public partial class App : Application
     /// </summary>
     protected override void OnStartup(StartupEventArgs e)
     {
+        try { if (Environment.ProcessPath is { } eu) _euMesmo = new FileStream(eu, FileMode.Open, FileAccess.Read, FileShare.Read); }
+        catch { /* sem a trava o instalador ainda funciona */ }
+
         // 03/09: o caixa chama o instalador com --atualizar. Sem tela: troca o
         // programa na pasta de sempre e reabre o caixa. O dono viu o assistente
         // completo abrir numa atualizacao e, com razao, quis so a troca.
         if (e.Args.Length > 0 && e.Args[0] == Pdv.Nucleo.ReabrirOCaixa.ArgumentoAtualizar)
         {
-            var falha = AtualizarSilencioso(out var pastaDoCaixa);
+            var falha = AtualizarSilencioso(out var pastaDoCaixa, out var mexeu);
             if (falha is not null)
-                MessageBox.Show("Não consegui atualizar: " + falha + "\nO caixa continua na versão anterior.",
+                MessageBox.Show(Instalacao.FraseDaFalha(falha, mexeu),
                     "Atualizar o caixa", MessageBoxButton.OK, MessageBoxImage.Error);
             // 1.0.36: o caixa novo deixa um cmd comum esperando este instalador sair e se reabre
             // sozinho, sem administrador (--sem-abrir). Caixa antigo: reabre aqui, ONDE o caixa está
             // (a Savassi mora em "PDV MMTech") e sem herdar o administrador deste instalador; sem a
-            // área de trabalho para isso (quiosque), pede para reiniciar.
-            else if (Pdv.Nucleo.ReabrirOCaixa.InstaladorAbre(e.Args)
-                     && !Instalacao.AbrirCaixa(Path.Combine(pastaDoCaixa ?? Instalacao.PastaDestinoPadrao, "Pdv.exe")))
-                MessageBox.Show(Instalacao.ReinicieParaAbrir, "Atualizar o caixa", MessageBoxButton.OK, MessageBoxImage.Information);
+            // área de trabalho para isso (quiosque), pergunta se reinicia o computador.
+            // Fechamento da 1.0.36: reabre também depois de uma falha (antes, no quiosque, ficava a tela
+            // preta só com o erro), e o Sim reinicia (antes era só um OK e a tela preta).
+            var exe = pastaDoCaixa is null ? null : Path.Combine(pastaDoCaixa, "Pdv.exe");
+            if (Pdv.Nucleo.ReabrirOCaixa.InstaladorAbre(e.Args) && exe is not null && File.Exists(exe)
+                && !Instalacao.AbrirCaixa(exe))
+                PedirParaReiniciar(falha is null ? Instalacao.ReinicieParaAbrir : Instalacao.ReinicieDepoisDaFalha);
             Shutdown(falha is null ? 0 : 1);
             return;
         }
@@ -74,8 +89,9 @@ public partial class App : Application
     /// PayGo já está na máquina, prepara a pasta de troca. Não mexe no PayGo em
     /// atualização: o assistente dele é uma janela, e aqui não pode haver janela.
     /// </summary>
-    private static string? AtualizarSilencioso(out string? pasta)
+    private static string? AtualizarSilencioso(out string? pasta, out bool mexeu)
     {
+        mexeu = false;
         // ATUALIZA ONDE O CAIXA ESTÁ, não onde ele nasceria hoje. A loja instalada como
         // "PDV MMTech" tem o programa em Program Files\PDV MMTech; procurar só a pasta do
         // nome novo (MMFood) faria a atualização morrer com "não está instalado".
@@ -88,6 +104,8 @@ public partial class App : Application
         // 1.0.35 (Savassi, 14/10/2026): e os navegadores do chat e do WhatsApp dele também (até 10 s;
         // os que ficarem são encerrados). Um navegador do caixa anterior vivo no perfil faz o WebView2
         // recusar o caixa novo quando as opções mudaram. Tudo anotado em atualizacao.txt.
+        // Fechamento da 1.0.36: com o caixa AINDA aberto passados os 30 s, nenhum navegador é encerrado
+        // (são do caixa que segue vendendo); só fica anotado.
         foreach (var linha in Instalacao.EsperarOCaixaAnteriorSair(Instalacao.CaixaAberto, TimeSpan.FromSeconds(30),
                      Instalacao.PastaDados, TimeSpan.FromSeconds(10)))
             Instalacao.AnotarTroca(linha);
@@ -97,7 +115,10 @@ public partial class App : Application
             var origem = Instalacao.AcharOrigemAoLado();
             if (Pacote.TemPayload())
             {
-                temporaria = Path.Combine(Path.GetTempPath(), "pdv-atualizar-" + Guid.NewGuid().ToString("N")[..8]);
+                // Fechamento da 1.0.36: extrai dentro da pasta do caixa (só administrador grava), e não no
+                // TEMP do usuário (ver Instalacao.PastaDeExtracao).
+                Instalacao.LimparExtracoesAntigas(pastaAtual);
+                temporaria = Instalacao.PastaDeExtracao(pastaAtual);
                 var falha = Pacote.Extrair(temporaria, _ => { });
                 if (falha is not null) return falha;
                 origem = Path.Combine(temporaria, "pdv");
@@ -106,7 +127,7 @@ public partial class App : Application
                 OrigemPasta: origem ?? "",
                 PastaDestino: pastaAtual,
                 IniciarComWindows: true,
-                AtalhoAreaTrabalho: true), null);
+                AtalhoAreaTrabalho: true), null, out mexeu);
             if (erro is not null) return erro;
             try { if (PayGo.Detectar().Instalado) PayGo.PrepararPastaTroca(); } catch { /* TEF fica como está */ }
             // O COMPONENTE DA MICROSOFT DO CHAT E DO WHATSAPP (15/09/2026, Castelo). O caixa se
@@ -124,6 +145,18 @@ public partial class App : Application
             if (temporaria is not null)
                 try { Directory.Delete(temporaria, true); } catch { /* temporário */ }
         }
+    }
+
+    /// <summary>
+    /// O caixa não abriu sem administrador (quiosque com um caixa antigo chamando): pergunta se reinicia o
+    /// computador agora, com o Sim como resposta padrão. Sim reinicia; Não, ou o reinício que não sai,
+    /// diz como reiniciar sem a área de trabalho (fechamento da 1.0.36).
+    /// </summary>
+    private static void PedirParaReiniciar(string pergunta)
+    {
+        var sim = MessageBox.Show(pergunta, "Atualizar o caixa", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+        if (sim == MessageBoxResult.Yes && Instalacao.Reiniciar()) return;
+        MessageBox.Show(Instalacao.ComoReiniciar, "Atualizar o caixa", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     /// <summary>

@@ -456,7 +456,7 @@ public static class AtualizarCaixa
             return false;
 
         // 6. ENTREGA.
-        var erro = EntregarAoInstalador(baixa.Caminho!, out var fechar);
+        var erro = EntregarAoInstalador(baixa.Caminho!, v.Manifesto!, out var fechar);
         if (erro is not null)
         {
             Auditar("atualizacao_entrega_falhou", erro);
@@ -498,13 +498,22 @@ public static class AtualizarCaixa
     /// cmd COMUM (filho deste processo, mesma conta, sem elevação) esperando o instalador sair para
     /// abrir o Pdv.exe novo. <paramref name="fechar"/> diz se o caixa pode fechar agora: false quando o
     /// instalador subiu mas essa espera não (aí o caixa fica aberto na versão de agora).
+    ///
+    /// Fechamento da 1.0.36: antes de mandar --sem-abrir o caixa PROVA a espera nele mesmo (o tasklist tem
+    /// que achar este processo; sem WMI, ou com o cmd barrado pelo Windows, não acha, e o instalador
+    /// reabre como num caixa antigo). A espera aguarda também ESTE processo sair, para o caixa novo não
+    /// morrer na trava de instância única. E o instalador baixado fica preso (só leitura, ninguém troca)
+    /// e conferido de novo até o Windows abri-lo (<see cref="Atualizacao.TravarConferido"/>).
     /// </summary>
-    public static string? EntregarAoInstalador(string exe, out bool fechar)
+    public static string? EntregarAoInstalador(string exe, Atualizacao.Manifesto m, out bool fechar)
     {
         fechar = false;
         var sistema = Environment.SystemDirectory;
         var caixa = Environment.ProcessPath;
-        var naoReabre = ReabrirOCaixa.MotivoParaNaoReabrir(caixa, sistema, System.IO.File.Exists);
+        var naoReabre = ReabrirOCaixa.MotivoParaNaoReabrir(caixa, sistema, System.IO.File.Exists,
+            () => ReabrirOCaixa.EsperaAcha(sistema, Environment.ProcessId, caixa!));
+        using var conferido = Atualizacao.TravarConferido(exe, m, out var naoConfere);
+        if (conferido is null) return naoConfere ?? "O instalador baixado não confere.";
         Process? p;
         try
         {
@@ -537,7 +546,7 @@ public static class AtualizarCaixa
             try
             {
                 using var espera = Process.Start(new ProcessStartInfo(TravaDoCtrlAltDel.CaminhoDoCmd(sistema),
-                    ReabrirOCaixa.MontarComando(p.Id, caixa!, Quiosque.Ligado, sistema))
+                    ReabrirOCaixa.MontarComando(p.Id, Environment.ProcessId, System.IO.Path.GetFileName(caixa!), caixa!, Quiosque.Ligado, sistema))
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -827,7 +836,7 @@ public static class AtualizarCaixa
             }
 
             // ── A TROCA.
-            var erro = EntregarAoInstalador(pronto!, out var fechar);
+            var erro = EntregarAoInstalador(pronto!, m, out var fechar);
             if (erro is not null)
             {
                 // ⚠️ O CASO DAS 5 DA MANHÃ SEM NINGUÉM NA MÁQUINA CAI AQUI. O PDV não

@@ -1092,6 +1092,29 @@ public static class Atualizacao
         return null;
     }
 
+    /// <summary>
+    /// O INSTALADOR BAIXADO, PRESO ATÉ ABRIR (fechamento da 1.0.36, revisão de segurança). O arquivo mora
+    /// no TEMP do usuário, que qualquer programa do usuário grava, e é ele que roda como administrador
+    /// depois do Sim do Windows. Conferido antes e aberto depois, dava para trocá-lo no meio. Aqui ele é
+    /// aberto só para leitura com FileShare.Read (ninguém grava, apaga nem renomeia enquanto o handle
+    /// vive), conferido DE NOVO com esse handle aberto, e quem chamou segura o handle até o Windows
+    /// abrir o instalador. Null + o motivo quando não confere ou não abre. O mesmo cuidado do
+    /// componente do chat no instalador (WebView2Runtime).
+    /// </summary>
+    public static FileStream? TravarConferido(string caminho, Manifesto m, out string? motivo)
+    {
+        FileStream? trava = null;
+        try
+        {
+            trava = new FileStream(caminho, FileMode.Open, FileAccess.Read, FileShare.Read);
+            motivo = Conferir(caminho, m, null);
+            if (motivo is null) return trava;
+        }
+        catch (Exception ex) { motivo = "Não consegui abrir o instalador baixado: " + ex.Message; }
+        trava?.Dispose();
+        return null;
+    }
+
     public static string Sha256Do(string caminho)
     {
         using var fs = new FileStream(caminho, FileMode.Open, FileAccess.Read, FileShare.Read, 81920);

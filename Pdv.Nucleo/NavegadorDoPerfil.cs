@@ -255,6 +255,23 @@ public static class NavegadorDoPerfil
         catch (Exception ex) { return "navegadores do caixa anterior: a conferência falhou: " + ex.GetType().Name; }
     }
 
+    /// <summary>
+    /// A TROCA DE VERSÃO COM O CAIXA AINDA ABERTO (fechamento da 1.0.36): só diz quais navegadores com a
+    /// pasta de dados em <paramref name="raiz"/>, abertos por <paramref name="exe"/>, ficam. Não encerra
+    /// nenhum: são do caixa que segue vendendo. Uma linha para o diagnóstico. Nunca lança.
+    /// </summary>
+    public static string DescreverSobras(string raiz, string? exe)
+    {
+        try
+        {
+            var vivos = ListarDentroDe(raiz, exe);
+            return vivos.Count == 0
+                ? "navegadores do caixa anterior: nenhum"
+                : $"navegadores do caixa anterior: {vivos.Count} ficam com o caixa aberto: " + Descrever(vivos);
+        }
+        catch (Exception ex) { return "navegadores do caixa anterior: a conferência falhou: " + ex.GetType().Name; }
+    }
+
     // ── P/Invoke (só leitura do processo, e o encerramento acima) ───────────
 
     private const uint ConsultaLimitada = 0x1000;   // PROCESS_QUERY_LIMITED_INFORMATION

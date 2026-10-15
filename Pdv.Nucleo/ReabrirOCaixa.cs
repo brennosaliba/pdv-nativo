@@ -24,9 +24,18 @@ namespace Pdv.Nucleo;
 /// programas (tasklist, find, ping) vão pelo caminho absoluto de System32, para nenhum homônimo do
 /// PATH (o find.exe do Git, por exemplo) mudar a conta. Roda com /d (sem AutoRun) e /v:off.
 ///
-/// A espera: a cada ~1 s o tasklist procura o processo do instalador; sumiu, abre o caixa e sai. O
-/// instalador que falha mostra a mensagem dele e, depois do OK, o caixa volta na versão anterior. Um
-/// instalador preso mais de ~1 h: o cmd desiste sem abrir (abrir no meio da cópia seria pior).
+/// A espera: a cada volta o tasklist procura o instalador e o PRÓPRIO caixa (pelo número e pelo nome
+/// da imagem, para um número reaproveitado por outro programa não segurar a espera); os dois fora,
+/// abre o caixa e sai. Esperar o caixa também é o que impede o caixa novo de morrer na trava de
+/// instância única quando o anterior demora a sair (fechamento da 1.0.36). O instalador que falha
+/// mostra a mensagem dele e, depois do OK, o caixa abre de novo. Cada volta leva de 1 a 2 s (o tasklist
+/// mais 1 s de ping; medido 1,66 s): <see cref="Voltas"/> cobre uma noite com a mensagem do instalador
+/// esperando alguém. Passado isso o cmd desiste sem abrir (abrir no meio da cópia seria pior).
+///
+/// O tasklist lê os processos pelo WMI. Num PC com o WMI quebrado ele não acha nada, e a espera
+/// abriria o caixa na hora, com o instalador ainda copiando. Por isso, antes de mandar
+/// <see cref="ArgumentoSemAbrir"/>, o caixa prova a espera nele mesmo (<see cref="EsperaAcha"/>): o
+/// tasklist tem que achar o próprio caixa. Não achou, o instalador reabre, como num caixa antigo.
 /// </summary>
 public static class ReabrirOCaixa
 {
@@ -35,8 +44,12 @@ public static class ReabrirOCaixa
     /// <summary>O caixa avisa o instalador: "quem reabre sou eu, não abra nada".</summary>
     public const string ArgumentoSemAbrir = "--sem-abrir";
 
-    /// <summary>Quantas voltas de ~1 s o cmd espera o instalador (perto de uma hora).</summary>
-    public const int Voltas = 3600;
+    /// <summary>
+    /// Quantas voltas o cmd espera o instalador e o caixa sair. Cada volta leva de 1 a 2 s (medido 1,66 s
+    /// neste PC): 25 000 voltas dão de 7 a 14 h, uma noite inteira com a mensagem de erro do instalador
+    /// esperando o OK. Eram 3 600 (o comentário dizia ~1 h; na prática ~99 min).
+    /// </summary>
+    public const int Voltas = 25000;
 
     /// <summary>Os programas de System32 que a espera usa (o cmd e os três da linha).</summary>
     public static readonly string[] ProgramasDaEspera = { "cmd.exe", "tasklist.exe", "find.exe", "ping.exe" };
@@ -64,11 +77,22 @@ public static class ReabrirOCaixa
     }
 
     /// <summary>
-    /// Por que o caixa NÃO pode se reabrir sozinho (null = pode): caminho do caixa fora do formato, pasta
-    /// do sistema fora do formato, ou faltando o caixa ou um dos programas da espera. Aí o caixa chama o
-    /// instalador sem <see cref="ArgumentoSemAbrir"/>, como antes.
+    /// O nome da imagem de um processo pode entrar no filtro do tasklist? Só um nome de arquivo .exe
+    /// simples (letras, números, espaço, ponto, hífen, sublinhado), sem pasta e sem nada que o cmd interprete.
     /// </summary>
-    public static string? MotivoParaNaoReabrir(string? alvo, string? pastaDoSistema, Func<string, bool> existe)
+    public static bool ImagemAceita(string? imagem)
+        => imagem is { Length: > 4 and <= 100 }
+           && imagem.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+           && imagem.All(c => char.IsAsciiLetterOrDigit(c) || c is ' ' or '.' or '-' or '_')
+           && imagem[0] != ' ' && imagem[^1] != ' ';
+
+    /// <summary>
+    /// Por que o caixa NÃO pode se reabrir sozinho (null = pode): caminho do caixa fora do formato, pasta
+    /// do sistema fora do formato, faltando o caixa ou um dos programas da espera, ou a espera que não
+    /// acha o próprio caixa (<paramref name="esperaAcha"/>: o tasklist sem WMI, ou o Windows que não deixa
+    /// o cmd abrir). Aí o caixa chama o instalador sem <see cref="ArgumentoSemAbrir"/>, como antes.
+    /// </summary>
+    public static string? MotivoParaNaoReabrir(string? alvo, string? pastaDoSistema, Func<string, bool> existe, Func<bool>? esperaAcha = null)
     {
         if (!CaminhoAceito(alvo)) return "caminho do caixa fora do formato (" + (alvo ?? "nenhum") + ")";
         if (!TravaDoCtrlAltDel.PastaDoSistema(pastaDoSistema)) return "pasta do sistema fora do esperado (" + (pastaDoSistema ?? "nenhuma") + ")";
@@ -79,24 +103,86 @@ public static class ReabrirOCaixa
                 if (!existe(pastaDoSistema + @"\" + p)) return p + " não está em " + pastaDoSistema;
         }
         catch (Exception ex) { return "não deu para conferir os arquivos: " + ex.GetType().Name; }
+        if (esperaAcha is not null)
+        {
+            try { if (!esperaAcha()) return "a espera não achou o próprio caixa (tasklist sem resposta)"; }
+            catch (Exception ex) { return "a espera não abriu: " + ex.GetType().Name; }
+        }
         return null;
     }
 
     /// <summary>
-    /// A linha do cmd que espera o instalador e reabre o caixa:
-    /// <c>/d /v:off /s /c "for /l %i in (1,1,3600) do @(("...\tasklist.exe" /fi "PID eq N" /nh | "...\find.exe" "N" &gt;nul) || (start "" /b "C:\...\Pdv.exe" --quiosque &amp; exit) &amp; "...\ping.exe" -n 2 127.0.0.1 &gt;nul)"</c>.
-    /// Número, caminho ou pasta fora do formato: lança, e nada é montado.
+    /// A PROVA DA ESPERA, no próprio caixa: roda num cmd comum a MESMA procura que a espera faz (tasklist
+    /// pelo número e pelo nome, find pelo número) para o processo <paramref name="pid"/> do exe
+    /// <paramref name="exe"/>, e diz se achou. O caixa está vivo, então tem que achar: não achar é o
+    /// tasklist sem WMI, e aí a espera abriria o caixa no meio da cópia. Até 15 s. Nunca lança.
     /// </summary>
-    public static string MontarComando(int pidDoInstalador, string alvo, bool quiosque, string pastaDoSistema)
+    public static bool EsperaAcha(string pastaDoSistema, int pid, string? exe)
     {
-        if (pidDoInstalador <= 0) throw new ArgumentOutOfRangeException(nameof(pidDoInstalador), "número de processo inválido");
+        try
+        {
+            if (pid <= 0 || !TravaDoCtrlAltDel.PastaDoSistema(pastaDoSistema)) return false;
+            var imagem = Path.GetFileName(exe ?? "");
+            if (!ImagemAceita(imagem)) return false;
+            var linha = TravaDoCtrlAltDel.ChavesDoCmd + " \"" + Procura(pid, imagem, pastaDoSistema) + "\"";
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(TravaDoCtrlAltDel.CaminhoDoCmd(pastaDoSistema), linha)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+                WorkingDirectory = pastaDoSistema,
+            });
+            if (p is null) return false;
+            if (!p.WaitForExit(15_000))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+                return false;
+            }
+            return p.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>A procura de um processo: tasklist pelo número (e pelo nome, quando dado) e find pelo número. Sai 0 quando acha.</summary>
+    private static string Procura(int pid, string? imagem, string pastaDoSistema)
+    {
+        var n = pid.ToString(CultureInfo.InvariantCulture);
+        return DoSistema(pastaDoSistema, "tasklist.exe") + " /fi \"PID eq " + n + "\""
+            + (imagem is null ? "" : " /fi \"IMAGENAME eq " + imagem + "\"")
+            + " /nh | " + DoSistema(pastaDoSistema, "find.exe") + " \"" + n + "\" >nul";
+    }
+
+    /// <summary>Um programa de System32 entre aspas, pelo caminho absoluto.</summary>
+    private static string DoSistema(string pastaDoSistema, string programa) => "\"" + pastaDoSistema + @"\" + programa + "\"";
+
+    /// <summary>
+    /// A linha do cmd que espera o instalador E o próprio caixa saírem e reabre o caixa:
+    /// <c>/d /v:off /s /c "for /l %i in (1,1,25000) do @(("...\tasklist.exe" /fi "PID eq I" /nh | "...\find.exe" "I" &gt;nul) || ("...\tasklist.exe" /fi "PID eq C" /fi "IMAGENAME eq Pdv.exe" /nh | "...\find.exe" "C" &gt;nul) || (start "" /b "C:\...\Pdv.exe" --quiosque &amp; exit) &amp; "...\ping.exe" -n 2 127.0.0.1 &gt;nul)"</c>.
+    /// Número, nome, caminho ou pasta fora do formato: lança, e nada é montado.
+    /// </summary>
+    public static string MontarComando(int pidDoInstalador, int pidDoCaixa, string imagemDoCaixa, string alvo, bool quiosque, string pastaDoSistema)
+        => Montar(new[] { (pidDoInstalador, (string?)null), (pidDoCaixa, imagemDoCaixa) }, alvo, quiosque, pastaDoSistema);
+
+    /// <summary>
+    /// O "Reiniciar o PDV" do quiosque (fechamento da 1.0.36): a mesma espera, só pelo próprio caixa. Antes
+    /// eram 2 s fixos, e um caixa que demorava mais para sair (o encerramento do TEF) fazia o novo morrer
+    /// na trava de instância única: tela preta.
+    /// </summary>
+    public static string MontarReinicio(int pidDoCaixa, string imagemDoCaixa, string alvo, bool quiosque, string pastaDoSistema)
+        => Montar(new[] { (pidDoCaixa, (string?)imagemDoCaixa) }, alvo, quiosque, pastaDoSistema);
+
+    private static string Montar(IReadOnlyList<(int Pid, string? Imagem)> esperar, string alvo, bool quiosque, string pastaDoSistema)
+    {
+        foreach (var (pid, imagem) in esperar)
+        {
+            if (pid <= 0) throw new ArgumentOutOfRangeException(nameof(esperar), "número de processo inválido");
+            if (imagem is not null && !ImagemAceita(imagem)) throw new ArgumentException("nome do processo fora do formato", nameof(esperar));
+        }
         if (!CaminhoAceito(alvo)) throw new ArgumentException("caminho do caixa fora do formato", nameof(alvo));
         if (!TravaDoCtrlAltDel.PastaDoSistema(pastaDoSistema)) throw new ArgumentException("pasta do sistema fora do formato", nameof(pastaDoSistema));
-        var pid = pidDoInstalador.ToString(CultureInfo.InvariantCulture);
-        string DoSistema(string programa) => "\"" + pastaDoSistema + @"\" + programa + "\"";
         var abrir = "start \"\" /b \"" + alvo + "\"" + (quiosque ? " " + DesfazerQuiosque.MarcaDoQuiosque : "");
-        return TravaDoCtrlAltDel.ChavesDoCmd + " \"for /l %i in (1,1," + Voltas.ToString(CultureInfo.InvariantCulture) + ") do @(("
-            + DoSistema("tasklist.exe") + " /fi \"PID eq " + pid + "\" /nh | " + DoSistema("find.exe") + " \"" + pid + "\" >nul) || ("
-            + abrir + " & exit) & " + DoSistema("ping.exe") + " -n 2 127.0.0.1 >nul)\"";
+        var procuras = string.Concat(esperar.Select(e => "(" + Procura(e.Pid, e.Imagem, pastaDoSistema) + ") || "));
+        return TravaDoCtrlAltDel.ChavesDoCmd + " \"for /l %i in (1,1," + Voltas.ToString(CultureInfo.InvariantCulture) + ") do @("
+            + procuras + "(" + abrir + " & exit) & " + DoSistema(pastaDoSistema, "ping.exe") + " -n 2 127.0.0.1 >nul)\"";
     }
 }

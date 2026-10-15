@@ -251,18 +251,33 @@ public static class Quiosque
     }
 
     /// <summary>
-    /// Reabre o PDV depois que este processo sair. Espera 2 s (a trava de instância única
-    /// e o PW_End da PGWebLib precisam do processo velho fora) e chama o exe de novo.
+    /// Reabre o PDV depois que este processo sair. A trava de instância única e o PW_End da PGWebLib
+    /// precisam do processo velho fora. Fechamento da 1.0.36: um cmd comum espera ESTE processo sair de
+    /// verdade (a mesma espera da atualização, Nucleo/ReabrirOCaixa) e só então abre o exe. Antes eram
+    /// 2 s fixos: um caixa que demorava mais para sair fazia o novo morrer na trava, e no quiosque ficava
+    /// a tela preta. Sem como provar a espera, volta aos 2 s de antes.
     /// </summary>
     public static void ReiniciarPdv()
     {
         try
         {
-            Process.Start(new ProcessStartInfo("cmd.exe",
-                "/c ping -n 3 127.0.0.1 >nul & start \"\" \"" + ExeAtual + "\" " + Argumento)
+            var sistema = Environment.SystemDirectory;
+            var exe = ExeAtual;
+            if (ReabrirOCaixa.MotivoParaNaoReabrir(exe, sistema, File.Exists,
+                    () => ReabrirOCaixa.EsperaAcha(sistema, Environment.ProcessId, exe)) is null)
+            {
+                Process.Start(new ProcessStartInfo(TravaDoCtrlAltDel.CaminhoDoCmd(sistema),
+                    ReabrirOCaixa.MontarReinicio(Environment.ProcessId, Path.GetFileName(exe), exe, quiosque: true, sistema))
+                {
+                    CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = sistema,
+                })?.Dispose();
+                return;
+            }
+            Process.Start(new ProcessStartInfo(TravaDoCtrlAltDel.CaminhoDoCmd(sistema),
+                "/c ping -n 3 127.0.0.1 >nul & start \"\" \"" + exe + "\" " + Argumento)
             {
                 CreateNoWindow = true, UseShellExecute = false, WindowStyle = ProcessWindowStyle.Hidden,
-            });
+            })?.Dispose();
         }
         catch { }
     }

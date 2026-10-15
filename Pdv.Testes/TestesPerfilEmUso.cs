@@ -528,6 +528,30 @@ public static class TestesPerfilEmUso
                 checar(vazio.Count == 2 && vazio[0] == "o caixa anterior não fechou em 1 s; a troca segue com ele aberto"
                        && vazio[1] == "navegadores do caixa anterior: nenhum",
                     $"RP-10 a troca diz quando o caixa anterior não fechou (antes seguia calada) e quando não havia navegador ({string.Join(" / ", vazio)})");
+
+                // RP-10b (fechamento da 1.0.36) o caixa NÃO fechou: ele segue vendendo (a trava deixa o caixa aberto
+                // quando a espera que o reabre não sobe, e um caixa lento para sair também conta). O chat e o
+                // WhatsApp dele são dele: a troca não encerra navegador nenhum, só anota. Antes, passados os 10 s,
+                // o instalador encerrava o navegador do caixa VIVO no meio do turno. Com a conferência do caixa
+                // que lança, a dúvida também deixa os navegadores em paz.
+                var vivo = await Sonda(Path.Combine(pdvNativo, "webview-whatsapp"), null, "RP-10b");
+                if (vivo is not null)
+                {
+                    var exeDaSonda = Path.GetFileName(Environment.ProcessPath ?? "Pdv.Testes.exe");
+                    var aberto = await Task.Run(() => Instalacao.EsperarOCaixaAnteriorSair(() => true, TimeSpan.FromSeconds(1), pdvNativo, TimeSpan.FromSeconds(1), exeDaSonda));
+                    var vivoDepoisDoAberto = SondaPerfilWebView2.Vivo(vivo.Navegador);
+                    var duvida = await Task.Run(() => Instalacao.EsperarOCaixaAnteriorSair(() => throw new InvalidOperationException("sem lista de processos"), TimeSpan.FromSeconds(1), pdvNativo, TimeSpan.FromSeconds(1), exeDaSonda));
+                    var vivoDepoisDaDuvida = SondaPerfilWebView2.Vivo(vivo.Navegador);
+                    checar(aberto.Count == 2 && aberto[0] == "o caixa anterior não fechou em 1 s; a troca segue com ele aberto"
+                           && aberto[1].StartsWith("navegadores do caixa anterior: 1 ficam com o caixa aberto", StringComparison.Ordinal)
+                           && aberto[1].Contains("navegador pid=" + vivo.Navegador, StringComparison.Ordinal)
+                           && !aberto[1].Contains("encerrado", StringComparison.Ordinal) && vivoDepoisDoAberto,
+                        $"RP-10b com o caixa ainda aberto a troca NÃO encerra o chat nem o WhatsApp dele, só anota ({string.Join(" / ", aberto)}; vivo={vivoDepoisDoAberto})");
+                    checar(duvida.Count == 2 && duvida[0].StartsWith("a espera pelo caixa anterior falhou", StringComparison.Ordinal)
+                           && duvida[1].StartsWith("navegadores do caixa anterior: 1 ficam", StringComparison.Ordinal) && vivoDepoisDaDuvida,
+                        $"RP-10c sem saber se o caixa fechou, a troca também não encerra navegador ({string.Join(" / ", duvida)}; vivo={vivoDepoisDaDuvida})");
+                    await vivo.FecharAsync();
+                }
             }
         }
         finally

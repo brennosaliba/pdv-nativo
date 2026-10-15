@@ -23,6 +23,11 @@ public partial class JanelaInstalador : Window
     private string? _paygoExe;
     private string? _pastaAgente;
     private bool _atualizacao;
+    /// <summary>
+    /// Onde instalar: onde o caixa já está (a Savassi mora em "PDV MMTech"), e só sem caixa nesta máquina
+    /// na pasta do nome de hoje (fechamento da 1.0.36, ver Instalacao.PastaParaInstalar).
+    /// </summary>
+    private readonly string _destino;
     /// <summary>Onde os dados antigos foram guardados, quando o dono escolheu começar do zero.</summary>
     private string? _dadosGuardadosEm;
     /// <summary>A frase do fim quando o componente do chat e do WhatsApp não entrou (null = entrou ou já estava).</summary>
@@ -32,7 +37,8 @@ public partial class JanelaInstalador : Window
     {
         InitializeComponent();
 
-        _atualizacao = File.Exists(Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe"));
+        _destino = Instalacao.PastaParaInstalar();
+        _atualizacao = File.Exists(Path.Combine(_destino, "Pdv.exe"));
         var noPacote = Pacote.TemPayload();
         var aoLado = Instalacao.AcharOrigemAoLado();
 
@@ -135,8 +141,10 @@ public partial class JanelaInstalador : Window
             var origem = Instalacao.AcharOrigemAoLado();
             if (Pacote.TemPayload())
             {
-                _pastaTemporaria = Path.Combine(Path.GetTempPath(),
-                    "pdv-instalador-" + Guid.NewGuid().ToString("N")[..8]);
+                // Fechamento da 1.0.36: extrai dentro da pasta do caixa (só administrador grava), e não no
+                // TEMP do usuário (ver Instalacao.PastaDeExtracao).
+                Instalacao.LimparExtracoesAntigas(_destino);
+                _pastaTemporaria = Instalacao.PastaDeExtracao(_destino);
                 var falha = Pacote.Extrair(_pastaTemporaria, Progresso);
                 if (falha is not null) return falha;
                 origem = Path.Combine(_pastaTemporaria, "pdv");
@@ -148,7 +156,7 @@ public partial class JanelaInstalador : Window
 
             var falhaPdv = Instalacao.Instalar(new Instalacao.Opcoes(
                 OrigemPasta: origem ?? "",
-                PastaDestino: Instalacao.PastaDestinoPadrao,
+                PastaDestino: _destino,
                 IniciarComWindows: iniciar,
                 AtalhoAreaTrabalho: atalho), Progresso);
             if (falhaPdv is not null) return falhaPdv;
@@ -159,7 +167,7 @@ public partial class JanelaInstalador : Window
             // mesmo motivo: o rodape ja avisa quando nao ha contingencia local.
             if (_pastaAgente is not null)
             {
-                var falhaAg = Instalacao.InstalarAgente(_pastaAgente, Instalacao.PastaDestinoPadrao, Progresso);
+                var falhaAg = Instalacao.InstalarAgente(_pastaAgente, _destino, Progresso);
                 if (falhaAg is not null) Progresso("Agente fiscal nao instalado: " + falhaAg);
             }
             return null;
@@ -286,13 +294,13 @@ public partial class JanelaInstalador : Window
     {
         // Como o usuário da área de trabalho, e não como administrador: ver Instalacao.AbrirCaixa.
         // 1.0.36: sem a área de trabalho para abrir sem administrador, não abre; diz como abrir.
-        if (!Instalacao.AbrirCaixa(Path.Combine(Instalacao.PastaDestinoPadrao, "Pdv.exe")))
+        if (!Instalacao.AbrirCaixa(Path.Combine(_destino, "Pdv.exe")))
             MessageBox.Show(this, Instalacao.AbraPeloAtalho, "Caixa instalado", MessageBoxButton.OK, MessageBoxImage.Information);
         Close();
     }
 
-    /// <summary>O payload extraído são ~265 MB no TEMP. Deixar para trás enche o disco
-    /// de um PC de loja, que costuma ser pequeno.</summary>
+    /// <summary>O payload extraído são ~265 MB (dentro da pasta do caixa). Deixar para trás enche o
+    /// disco de um PC de loja, que costuma ser pequeno.</summary>
     private void LimparTemporaria()
     {
         if (_pastaTemporaria is null) return;

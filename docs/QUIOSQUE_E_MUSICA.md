@@ -137,9 +137,13 @@ a desinstalação segue e a mensagem final avisa "A trava do Ctrl+Alt+Del não s
 usuário do Windows: chame o suporte." (a marca fica, para a próxima tentativa reconhecer).
 Quando houve, a mensagem final diz "O modo quiosque foi desfeito".
 
-O instalador não sabe quem é o usuário do caixa, por isso olha os perfis **carregados**:
-desinstale com o usuário do caixa logado (pelo botão "Sair para o Windows" da Configuração).
-Perfil não carregado (o caixa deslogado) não é tocado.
+O instalador não sabe quem é o usuário do caixa, por isso olha todos os perfis de pessoa:
+os **carregados** (em `HKEY_USERS`) e, desde o fechamento da 1.0.36, também os que **não
+estão logados**. Esses vão pelo `NTUSER.DAT` do perfil, aberto como hive particular do
+desinstalador (`RegLoadAppKey`: não aparece em `HKEY_USERS` e sai quando ele fecha). É o
+caso do suporte que desinstala com outra conta de administrador. Um `NTUSER.DAT` que não
+existe nunca é criado, e um que está em uso fica de fora. O jeito mais simples continua
+sendo desinstalar com o usuário do caixa logado (botão "Sair para o Windows" da Configuração).
 
 Por dentro: regra pura em `Pdv.Nucleo/DesfazerQuiosque.cs` (o mesmo formato de Shell que o
 `Quiosque.cs` grava), registro em `Pdv.Instalador/QuiosqueDoCaixa.cs`, chamada no começo de
@@ -157,21 +161,41 @@ Agora:
 
 1. O caixa chama o instalador com `--atualizar --sem-abrir` e, assim que ele sobe, deixa um
    `cmd` **comum** (filho do caixa, mesma conta, sem administrador) esperando o instalador
-   sair. Saiu, o `cmd` abre o Pdv.exe novo (com `--quiosque` no quiosque) e fecha. A linha
-   é montada só de constantes, do número do processo do instalador e do caminho do Pdv.exe
+   **e o próprio caixa** saírem (pelo número do processo; o caixa também pelo nome,
+   `Pdv.exe`, para um número reaproveitado não segurar a espera). Os dois fora, o `cmd` abre
+   o Pdv.exe novo (com `--quiosque` no quiosque) e fecha. Esperar o caixa também é o que
+   impede o caixa novo de morrer na trava de instância única quando o anterior demora a sair.
+   A linha é montada só de constantes, dos dois números e do caminho do Pdv.exe
    (`Pdv.Nucleo/ReabrirOCaixa.cs`). Se o instalador falhar, depois do OK da mensagem dele o
-   caixa volta na versão anterior. Antes de copiar, o instalador espera o caixa anterior
-   fechar (até 30 s) e os navegadores do chat e do WhatsApp dele (até 10 s), e encerra os que
-   ficam no perfil (hotfix 1.0.35, `Instalacao.EsperarOCaixaAnteriorSair`, anotado em
-   `atualizacao.txt`). O `cmd` não é navegador e não é tocado; ele só abre o caixa novo depois
-   que o instalador sai, ou seja, depois dessa espera e da cópia.
+   `cmd` abre o caixa do mesmo jeito. A espera aguenta uma noite (25 000 voltas de 1 a 2 s)
+   com a mensagem do instalador esperando alguém.
+   Antes de mandar `--sem-abrir`, o caixa **prova a espera nele mesmo**: o `tasklist` tem que
+   achar o próprio caixa. Sem o WMI (o `tasklist` não acha nada e a espera abriria o caixa no
+   meio da cópia), ou com o `cmd` barrado pelo Windows, a prova falha e o caixa chama o
+   instalador sem `--sem-abrir`, como um caixa antigo (item 3).
+   Antes de copiar, o instalador espera o caixa anterior fechar (até 30 s). **Fechado**,
+   espera os navegadores do chat e do WhatsApp dele (até 10 s) e encerra os que ficam no
+   perfil (hotfix 1.0.35, `Instalacao.EsperarOCaixaAnteriorSair`). **Ainda aberto** (caixa
+   lento para sair, ou o caso do item 2), não encerra navegador nenhum: são do caixa que
+   segue vendendo, e o caixa novo resolve o perfil quando abrir. Tudo anotado em
+   `atualizacao.txt`. O `cmd` não é navegador e não é tocado.
 2. Se o caixa não consegue deixar essa espera de pé, ele **não fecha**: "A versão nova está
-   sendo instalada. Daqui a alguns minutos, feche e abra o caixa."
+   sendo instalada. Daqui a alguns minutos, feche e abra o caixa." O chat e o WhatsApp dele
+   continuam abertos (item 1).
 3. O instalador, elevado, **nunca** abre o Pdv.exe direto. Chamado por um caixa antigo (sem
-   `--sem-abrir`): com a área de trabalho aberta, abre pelo Explorer da sessão (como o
-   usuário comum); sem ela (quiosque), diz "O caixa foi atualizado. Reinicie o computador
-   para abrir o caixa." É o que acontece **uma vez**, na atualização de um caixa 1.0.35 (ou
-   anterior) para a 1.0.36 no quiosque: reinicie o PC.
+   `--sem-abrir`), também depois de uma troca que falhou: com a área de trabalho aberta, abre
+   pelo Explorer da sessão (como o usuário comum); sem ela (quiosque), pergunta "O caixa foi
+   atualizado. Reiniciar o computador agora para abrir o caixa?" O **Sim** reinicia
+   (`shutdown /r /t 0` de System32). O Não diz como: "Ctrl+Alt+Del, botão de energia,
+   Reiniciar". É o que acontece **uma vez**, na atualização de um caixa 1.0.35 (ou anterior)
+   para a 1.0.36 no quiosque.
+4. A mensagem de falha só diz "O caixa continua na versão anterior" quando a falha veio antes
+   da cópia. Depois dela a frase da falha já diz o que houve ("O caixa foi copiado, mas...").
+5. O assistente (dois cliques no `InstalarPdv-x.exe`) instala **onde o caixa já está**: a
+   Savassi mora em `Program Files\PDV MMTech`. Antes ele instalava em `MMFood` e a migração
+   apagava `PDV MMTech`, com o Shell do quiosque apontando para lá: tela preta no boot
+   seguinte. A migração também não apaga mais uma pasta antiga para onde aponta o Shell de
+   quiosque de algum perfil carregado.
 
 O instalador também deixou de chamar programas do Windows pelo nome (`icacls`, `wscript`,
 `explorer.exe`): pelo nome, o Windows procura antes na pasta do instalador (na atualização,
@@ -181,12 +205,19 @@ programa, com nome único, e não mais no TEMP do usuário. A conferência `Pdv.
 (que roda elevada com o instalador) extrai as bibliotecas nativas ao lado do exe, em
 `Program Files\...\.conferencia` (`DOTNET_BUNDLE_EXTRACT_BASE_DIR`), apagada no fim.
 
+Fechamento da 1.0.36: o pacote (o caixa, o agente e o PayGo) é desempacotado **dentro da
+pasta do caixa**, em `Program Files\...\.extracao-xxxxxxxx` (só administrador grava ou
+renomeia), e não mais no TEMP do usuário; a pasta sai no fim, e sobras de uma troca
+interrompida saem na próxima. O instalador prende o próprio exe (só leitura) enquanto vive:
+o Windows deixa renomear um exe em execução, e o pacote é lido dele depois da espera de 30 s.
+O caixa prende o instalador baixado e o confere de novo (sha256) até o Windows abri-lo. O
+instalador do componente da Microsoft já ficava preso e conferido (assinatura) até rodar.
+
 **Pendente (antes já era assim, fica para depois da 1.0.36):** o próprio `InstalarPdv.exe`
-é de arquivo único e extrai as bibliotecas dele em `%TEMP%\.net` do usuário que eleva. Na
-atualização ele roda do TEMP, desempacota ali o pacote e baixa ali o instalador do componente
-da Microsoft; na janela, o PayGo também sai no TEMP. Tudo isso é usado como administrador.
-Fechar pede mudar o empacotamento e a entrega (pasta só de administrador para o instalador e
-para o que ele desempacota), com teste numa máquina de loja.
+é de arquivo único e extrai as bibliotecas nativas dele em `%TEMP%\.net` do usuário que eleva,
+e as carrega como administrador. Fechar pede mudar o empacotamento do instalador (sem
+bibliotecas nativas para extrair, ou com a extração numa pasta só de administrador), com
+teste numa máquina de loja.
 
 ## 2. Música da loja (Spotify)
 

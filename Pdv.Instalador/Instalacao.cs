@@ -85,6 +85,19 @@ public static class Instalacao
         return null;
     }
 
+    /// <summary>
+    /// ONDE O ASSISTENTE INSTALA (fechamento da 1.0.36): onde o caixa já está, e só sem caixa nesta
+    /// máquina na pasta do nome de hoje. A Savassi mora em "PDV MMTech", com o Shell do quiosque apontando
+    /// para lá. As frases de falha mandam "instale de novo", e o assistente instalava em MMFood e a
+    /// migração apagava "PDV MMTech": o Shell ficava apontando para um Pdv.exe que não existe (tela preta
+    /// no boot seguinte, com a trava do Ctrl+Alt+Del). A atualização silenciosa já fazia assim.
+    /// </summary>
+    public static string PastaParaInstalar() => EscolherDestino(PastaInstalada(), PastaDestinoPadrao);
+
+    /// <summary>A regra de <see cref="PastaParaInstalar"/>, pura: a pasta instalada, e só sem ela a padrão.</summary>
+    public static string EscolherDestino(string? instalada, string padrao)
+        => string.IsNullOrWhiteSpace(instalada) ? padrao : instalada;
+
     private const string ChaveRun = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
     private const string ChaveUninstall = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PdvMMTech";
     private const string ChaveUninstallAntiga = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PdvAmericanDay";
@@ -294,20 +307,28 @@ public static class Instalacao
     /// opções do navegador, o WebView2 recusou o chat e o WhatsApp até o PC reiniciar. Antes a troca
     /// esperava só o Pdv.exe, e em silêncio: passados 30 s seguia sem dizer nada. Agora:
     ///  · espera o caixa até <paramref name="prazoDoCaixa"/> e diz se ele fechou ou não;
-    ///  · espera os navegadores do WebView2 que o caixa abriu (<paramref name="exeDoCaixa"/>) com a pasta
-    ///    de dados em <paramref name="pastaDados"/> (webview e webview-whatsapp) até
-    ///    <paramref name="prazoDoNavegador"/> e encerra os que ficarem. Nenhum outro navegador da máquina
-    ///    é tocado (ver <see cref="NavegadorDoPerfil.EncerrarSobras"/>).
+    ///  · com o caixa FECHADO, espera os navegadores do WebView2 que o caixa abriu
+    ///    (<paramref name="exeDoCaixa"/>) com a pasta de dados em <paramref name="pastaDados"/> (webview e
+    ///    webview-whatsapp) até <paramref name="prazoDoNavegador"/> e encerra os que ficarem. Nenhum outro
+    ///    navegador da máquina é tocado (ver <see cref="NavegadorDoPerfil.EncerrarSobras"/>);
+    ///  · com o caixa ainda ABERTO (ou sem saber), não encerra navegador nenhum, só anota quais ficam
+    ///    (fechamento da 1.0.36). O caixa aberto segue vendendo: é o caso da espera que reabre o caixa que
+    ///    não subiu (Telas/AtualizarCaixa, fechar = false) e do caixa lento para sair. Encerrar ali derrubava
+    ///    o chat e o WhatsApp de um caixa vivo no meio do turno. O caixa novo cuida do perfil quando abrir
+    ///    (Telas/HospedeWebView2: órfão encerrado, dono vivo ele entra junto).
     /// Devolve as linhas para <see cref="AnotarTroca"/>. Nunca lança.
     /// </summary>
     public static IReadOnlyList<string> EsperarOCaixaAnteriorSair(Func<bool> caixaAberto, TimeSpan prazoDoCaixa,
         string pastaDados, TimeSpan prazoDoNavegador, string exeDoCaixa = "Pdv.exe")
     {
         var linhas = new List<string>();
+        // Na dúvida, aberto: encerrar o navegador de um caixa vivo é pior do que deixar um navegador
+        // velho para o caixa novo resolver.
+        var aberto = true;
         try
         {
             var relogio = Stopwatch.StartNew();
-            var aberto = caixaAberto();
+            aberto = caixaAberto();
             while (aberto && relogio.Elapsed < prazoDoCaixa)
             {
                 Thread.Sleep(500);
@@ -317,8 +338,10 @@ public static class Instalacao
                 ? $"o caixa anterior não fechou em {prazoDoCaixa.TotalSeconds:0} s; a troca segue com ele aberto"
                 : $"o caixa anterior fechou (esperei {relogio.Elapsed.TotalSeconds:0.0} s)");
         }
-        catch (Exception ex) { linhas.Add("a espera pelo caixa anterior falhou: " + ex.GetType().Name); }
-        linhas.Add(NavegadorDoPerfil.EncerrarSobras(pastaDados, prazoDoNavegador, exeDoCaixa));
+        catch (Exception ex) { aberto = true; linhas.Add("a espera pelo caixa anterior falhou: " + ex.GetType().Name); }
+        linhas.Add(aberto
+            ? NavegadorDoPerfil.DescreverSobras(pastaDados, exeDoCaixa)
+            : NavegadorDoPerfil.EncerrarSobras(pastaDados, prazoDoNavegador, exeDoCaixa));
         return linhas;
     }
 
@@ -354,8 +377,76 @@ public static class Instalacao
     public static string CaminhoDoExplorer() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
 
-    /// <summary>A frase da atualização sem a área de trabalho para reabrir o caixa (quiosque com um PDV antigo chamando).</summary>
-    public const string ReinicieParaAbrir = "O caixa foi atualizado. Reinicie o computador para abrir o caixa.";
+    /// <summary>
+    /// A pergunta da atualização sem a área de trabalho para reabrir o caixa (quiosque com um PDV antigo
+    /// chamando). Fechamento da 1.0.36: era só "Reinicie o computador", e depois do OK a tela ficava preta,
+    /// sem menu Iniciar e sem dizer como reiniciar. Agora o Sim reinicia (<see cref="Reiniciar"/>).
+    /// </summary>
+    public const string ReinicieParaAbrir = "O caixa foi atualizado. Reiniciar o computador agora para abrir o caixa?";
+
+    /// <summary>A mesma pergunta depois de uma atualização que não terminou (o erro já foi dito antes).</summary>
+    public const string ReinicieDepoisDaFalha = "Reiniciar o computador agora para abrir o caixa?";
+
+    /// <summary>Quando a pessoa diz Não, ou o reinício não sai: como reiniciar sem a área de trabalho.</summary>
+    public const string ComoReiniciar = "Para abrir o caixa, reinicie o computador: Ctrl+Alt+Del, botão de energia, Reiniciar.";
+
+    /// <summary>O reinício do Windows: shutdown.exe de System32 (nunca pelo nome), reiniciar já.</summary>
+    public static ProcessStartInfo PsiDoReinicio()
+    {
+        var psi = new ProcessStartInfo(ProgramaDoSistema("shutdown.exe")) { UseShellExecute = false, CreateNoWindow = true };
+        psi.ArgumentList.Add("/r");
+        psi.ArgumentList.Add("/t");
+        psi.ArgumentList.Add("0");
+        return psi;
+    }
+
+    /// <summary>Pede ao Windows para reiniciar agora. True quando o pedido foi aceito. Nunca lança.</summary>
+    public static bool Reiniciar()
+    {
+        try
+        {
+            using var p = Process.Start(PsiDoReinicio());
+            if (p is null || !p.WaitForExit(15_000)) return false;
+            return p.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// A frase da atualização que não terminou (fechamento da 1.0.36). "O caixa continua na versão
+    /// anterior" só é verdade antes da cópia: depois de mexer no programa, a falha já diz o que houve
+    /// ("O caixa foi copiado, mas...").
+    /// </summary>
+    public static string FraseDaFalha(string falha, bool mexeuNoPrograma)
+        => "Não consegui atualizar: " + falha + (mexeuNoPrograma ? "" : "\nO caixa continua na versão anterior.");
+
+    // ── A EXTRAÇÃO NUMA PASTA SÓ DE ADMINISTRADOR (fechamento da 1.0.36, revisão de segurança) ─────
+    //
+    // O instalador roda elevado. Ele extraía os 265 MB do pacote no TEMP do usuário, pasta que qualquer
+    // programa do usuário grava, e depois copiava dali para Program Files e rodava a conferência como
+    // administrador: entre a extração e a cópia, um Pdv.exe ou uma DLL trocados ali iam parar em
+    // Program Files e rodavam elevados. Agora a extração vai para dentro da pasta do caixa (Program
+    // Files: só administrador grava, e só ele renomeia o que está lá dentro), com nome único, e sai
+    // no fim. A mesma classe do %TEMP%\.net da conferência e do VBScript do atalho.
+
+    /// <summary>O começo do nome das pastas de extração dentro da pasta do caixa.</summary>
+    public const string PrefixoDaExtracao = ".extracao-";
+
+    /// <summary>Onde extrair o pacote: dentro da pasta do caixa, com nome único.</summary>
+    public static string PastaDeExtracao(string pastaDoCaixa)
+        => Path.Combine(Path.GetFullPath(pastaDoCaixa), PrefixoDaExtracao + Guid.NewGuid().ToString("N")[..8]);
+
+    /// <summary>Apaga extrações que sobraram de uma troca interrompida. Só as pastas com o prefixo. Nunca lança.</summary>
+    public static void LimparExtracoesAntigas(string pastaDoCaixa)
+    {
+        try
+        {
+            if (!Directory.Exists(pastaDoCaixa)) return;
+            foreach (var d in Directory.GetDirectories(pastaDoCaixa, PrefixoDaExtracao + "*"))
+                try { Directory.Delete(d, recursive: true); } catch { /* em uso: na próxima */ }
+        }
+        catch { }
+    }
 
     /// <summary>A frase do fim da instalação quando o caixa não abriu sem administrador.</summary>
     public const string AbraPeloAtalho = "O caixa foi instalado. Abra pelo atalho MMFood na área de trabalho ou reinicie o computador.";
@@ -506,8 +597,15 @@ public static class Instalacao
 
     /// <summary>Instala (ou ATUALIZA por cima — preservando os dados). Devolve
     /// null no sucesso, mensagem de erro no fracasso.</summary>
-    public static string? Instalar(Opcoes o, Action<string>? progresso = null)
+    public static string? Instalar(Opcoes o, Action<string>? progresso = null) => Instalar(o, progresso, out _);
+
+    /// <summary>
+    /// Instala e diz se chegou a mexer no programa (<paramref name="mexeuNoPrograma"/>: a cópia começou).
+    /// Com a falha antes disso o caixa continua na versão anterior; depois, não dá para dizer isso.
+    /// </summary>
+    public static string? Instalar(Opcoes o, Action<string>? progresso, out bool mexeuNoPrograma)
     {
+        mexeuNoPrograma = false;
         if (ConferirOrigem(o.OrigemPasta) is { } incompleta) return incompleta;
 
         try
@@ -522,6 +620,7 @@ public static class Instalacao
             var arquivos = ArquivosParaCopiar(o.OrigemPasta);
             var total = Math.Max(arquivos.Count, 1);
             var feitos = 0;
+            mexeuNoPrograma = arquivos.Count > 0;
             foreach (var rel in arquivos)
             {
                 // O Pdv.exe sozinho tem 156 MB e é 95% do tempo: o número que anda
@@ -774,6 +873,12 @@ public static class Instalacao
     /// </summary>
     public static void MigrarInstalacaoAntiga(string pastaNova)
     {
+        // Fechamento da 1.0.36: um Shell de quiosque que aponta para dentro de uma pasta antiga segura a
+        // pasta (apagar seria a tela preta no próximo boot). Sem conseguir ler os perfis, nenhuma sai.
+        IReadOnlyList<string>? shells;
+        try { shells = QuiosqueDoCaixa.ExesNosShells(Registry.Users); }
+        catch { shells = null; }
+
         try
         {
             using (var run = Registry.LocalMachine.CreateSubKey(ChaveRun))
@@ -796,9 +901,28 @@ public static class Instalacao
         {
             var antiga = EmProgramFiles(nome);
             if (Directory.Exists(antiga) &&
-                !antiga.Equals(pastaNova, StringComparison.OrdinalIgnoreCase))
+                !antiga.Equals(pastaNova, StringComparison.OrdinalIgnoreCase) &&
+                PastaAntigaPodeSair(antiga, shells))
                 try { Directory.Delete(antiga, recursive: true); } catch { /* em uso: fica o esqueleto */ }
         }
+    }
+
+    /// <summary>
+    /// A pasta antiga pode sair? Não, quando o Shell de quiosque de algum perfil aponta para um exe dentro
+    /// dela, ou quando não deu para ler os perfis (<paramref name="exesNosShells"/> null). Pura.
+    /// </summary>
+    public static bool PastaAntigaPodeSair(string pasta, IReadOnlyList<string>? exesNosShells)
+    {
+        if (exesNosShells is null) return false;
+        string raiz;
+        try { raiz = Path.TrimEndingDirectorySeparator(Path.GetFullPath(pasta)) + Path.DirectorySeparatorChar; }
+        catch { return false; }
+        foreach (var exe in exesNosShells)
+        {
+            try { if (Path.GetFullPath(exe).StartsWith(raiz, StringComparison.OrdinalIgnoreCase)) return false; }
+            catch { return false; }
+        }
+        return true;
     }
 
     private static string AreaDeTrabalho =>
@@ -869,8 +993,45 @@ public static class Instalacao
     /// </summary>
     public static DesfazerQuiosque.Resumo DesfazerQuiosqueDoCaixa()
     {
-        try { return QuiosqueDoCaixa.Resumir(QuiosqueDoCaixa.DesfazerNosPerfis(Registry.Users, ExesDoCaixa(), File.Exists)); }
+        try
+        {
+            var exes = ExesDoCaixa();
+            var feitos = QuiosqueDoCaixa.DesfazerNosPerfis(Registry.Users, exes, File.Exists).ToList();
+            // Fechamento da 1.0.36: o usuário do caixa que não está logado (o suporte desinstala com outra
+            // conta de administrador) também tem o quiosque desfeito, pelo NTUSER.DAT dele.
+            try { feitos.AddRange(QuiosqueDoCaixa.DesfazerNosPerfisFora(PerfisDoWindows(), Registry.Users.GetSubKeyNames(), exes, File.Exists)); }
+            catch { /* sem a lista de perfis: ficam os carregados */ }
+            return QuiosqueDoCaixa.Resumir(feitos);
+        }
         catch { return DesfazerQuiosque.Resumo.Nenhum; }
+    }
+
+    private const string ChaveDosPerfis = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
+
+    /// <summary>
+    /// Os perfis do Windows desta máquina (ProfileList, só leitura): o SID e o NTUSER.DAT de cada um.
+    /// Nunca lança.
+    /// </summary>
+    public static IReadOnlyList<(string Sid, string Hive)> PerfisDoWindows()
+    {
+        var perfis = new List<(string, string)>();
+        try
+        {
+            using var lista = Registry.LocalMachine.OpenSubKey(ChaveDosPerfis);
+            if (lista is null) return perfis;
+            foreach (var sid in lista.GetSubKeyNames())
+            {
+                try
+                {
+                    using var k = lista.OpenSubKey(sid);
+                    if (k?.GetValue("ProfileImagePath") as string is { Length: > 0 } pasta)
+                        perfis.Add((sid, Path.Combine(pasta, "NTUSER.DAT")));
+                }
+                catch { /* um perfil ilegível não segura os outros */ }
+            }
+        }
+        catch { }
+        return perfis;
     }
 
     // ── APAGAR TAMBÉM OS DADOS DESTE CAIXA (14/09/2026, loja Castelo) ─────────────

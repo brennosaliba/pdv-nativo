@@ -161,7 +161,7 @@ public static class TestesInstaladorCastelo
         checar(!app.Contains("Path.Combine(Instalacao.PastaDestinoPadrao, \"Pdv.exe\")", StringComparison.Ordinal),
             "a atualização reabre o caixa onde ele ESTÁ instalado, e não na pasta do nome novo");
         checar(app.Contains("Pdv.Nucleo.ReabrirOCaixa.InstaladorAbre(e.Args)", StringComparison.Ordinal)
-               && app.Contains("MessageBox.Show(Instalacao.ReinicieParaAbrir", StringComparison.Ordinal)
+               && app.Contains("PedirParaReiniciar(falha is null ? Instalacao.ReinicieParaAbrir : Instalacao.ReinicieDepoisDaFalha);", StringComparison.Ordinal)
                && janela.Contains("if (!Instalacao.AbrirCaixa(", StringComparison.Ordinal) && janela.Contains("Instalacao.AbraPeloAtalho", StringComparison.Ordinal),
             "com --sem-abrir o instalador não abre nada (o caixa se reabre); sem ele e sem como abrir sem administrador, a frase diz para reiniciar ou usar o atalho");
         checar(Instalacao.ReinicieParaAbrir.Length <= 80 && Instalacao.AbraPeloAtalho.Length <= 100

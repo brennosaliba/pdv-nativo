@@ -834,6 +834,24 @@ if (args.Length >= 1 && args[0] == "--so-kds")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (15/10/2026, fechamento da 1.0.36): so as suites da troca de versao (quem
+// reabre o caixa, o instalador, o quiosque e a trava, e os navegadores do caixa anterior). NAO e o gate.
+//   Pdv.Testes.exe --so-troca
+if (args.Length >= 1 && args[0] == "--so-troca")
+{
+    TestesReabrirOCaixa.Rodar((cond, nome) => Check("reabrir-o-caixa: " + nome, cond));
+    TestesTrocaDeVersao.Rodar((cond, nome) => Check("troca-de-versao: " + nome, cond));
+    TestesQuiosque.Rodar((cond, nome) => Check("quiosque: " + nome, cond));
+    TestesTravaCtrlAltDel.Rodar((cond, nome) => Check("trava-ctrl-alt-del: " + nome, cond));
+    TestesDesfazerQuiosque.Rodar((cond, nome) => Check("desfazer-quiosque: " + nome, cond));
+    TestesInstalador.Rodar((cond, nome) => Check("instalador: " + nome, cond));
+    TestesInstaladorCastelo.Rodar((cond, nome) => Check("instalador-castelo: " + nome, cond));
+    await TestesPerfilEmUso.RodarAsync((cond, nome) => Check("perfil-em-uso: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so troca) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 var arquivo = Path.Combine(Path.GetTempPath(), $"pdv-teste-{Guid.NewGuid():N}.db");
 Banco.Migrar(arquivo);
 
@@ -1520,6 +1538,7 @@ TestesQuiosque.Rodar((cond, nome) => Check("quiosque: " + nome, cond));
 TestesTravaCtrlAltDel.Rodar((cond, nome) => Check("trava-ctrl-alt-del: " + nome, cond));
 TestesDesfazerQuiosque.Rodar((cond, nome) => Check("desfazer-quiosque: " + nome, cond));
 TestesReabrirOCaixa.Rodar((cond, nome) => Check("reabrir-o-caixa: " + nome, cond));
+TestesTrocaDeVersao.Rodar((cond, nome) => Check("troca-de-versao: " + nome, cond));
 TestesConfigLojaPainel.Rodar((cond, nome) => Check("config-painel: " + nome, cond));
 TestesMusica.Rodar((cond, nome) => Check("musica: " + nome, cond));
 
