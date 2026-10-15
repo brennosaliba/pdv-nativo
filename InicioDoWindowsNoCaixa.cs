@@ -36,6 +36,11 @@ public static class InicioDoWindowsNoCaixa
                 var any = Path.Combine(pasta, "AnyDesk", "AnyDesk.exe");
                 if (File.Exists(any) && !lista.Any(p => InicioDoWindows.Processo(p.Exe) == "anydesk"))
                     lista.Add(new ProgramaDoInicio("AnyDesk", any, "--tray", "instalado"));   // sem janela por cima do caixa
+                // 1.0.37: o TeamViewer com serviço se abre sozinho na sessão; sem serviço, entra desmarcado
+                var tv = Path.Combine(pasta, "TeamViewer", "TeamViewer.exe");
+                if (File.Exists(tv) && !lista.Any(p => InicioDoWindows.Processo(p.Exe) == "teamviewer")
+                    && InicioDoWindows.TeamViewer(tv, InicioDoServico("TeamViewer") is not null) is { } prog)
+                    lista.Add(prog);
             }
         }
         catch (Exception ex) { Anotar("ler: " + ex.GetType().Name); }
@@ -81,11 +86,14 @@ public static class InicioDoWindowsNoCaixa
     /// No quiosque, abre os marcados que ainda não estão abertos, um a cada 2 s, depois de
     /// <paramref name="espera"/> (o Spotify escondido abre primeiro). Fora do quiosque não faz nada.
     /// </summary>
-    public static void AbrirNoQuiosque(string? ligado, string? marcados, TimeSpan espera)
+    public static void AbrirNoQuiosque(string? ligado, string? marcados, bool spotifyComDono, TimeSpan espera)
     {
         try
         {
             if (!Quiosque.Ligado) return;
+            // os programas de suporte que vêm por serviço: o estado, para saber por que não abriram
+            Anotar($"suporte: AnyDesk {InicioDoWindows.Servico(InicioDoServico("AnyDesk"), RodandoNaSessao("AnyDesk", 0))}; "
+                   + $"TeamViewer {InicioDoWindows.Servico(InicioDoServico("TeamViewer"), RodandoNaSessao("TeamViewer_Service", 0))}");
             if (!InicioDoWindows.Ligado(ligado)) { Anotar("desligado na Configuração"); return; }
             _ = Task.Run(async () =>
             {
@@ -97,8 +105,9 @@ public static class InicioDoWindowsNoCaixa
                     var rodando = new HashSet<string>(Process.GetProcesses()
                         .Where(p => { try { return p.SessionId == sessao; } catch { return false; } })
                         .Select(p => { try { return p.ProcessName.ToLowerInvariant(); } catch { return ""; } }));
-                    var abrir = InicioDoWindows.AAbrir(Ler(), marcados, rodando, Quiosque.ExeAtual);
-                    Anotar($"abrir: {(abrir.Count == 0 ? "nada" : string.Join(", ", abrir.Select(p => p.Nome)))}");
+                    var abrir = InicioDoWindows.AAbrir(Ler(), marcados, rodando, Quiosque.ExeAtual, pularSpotify: spotifyComDono);
+                    Anotar($"abrir: {(abrir.Count == 0 ? "nada" : string.Join(", ", abrir.Select(p => p.Nome)))}"
+                           + (spotifyComDono ? " (o Spotify fica com o Spotify escondido)" : ""));
                     foreach (var p in abrir)
                     {
                         try
@@ -106,6 +115,7 @@ public static class InicioDoWindowsNoCaixa
                             var psi = new ProcessStartInfo(p.Exe, p.Argumentos) { UseShellExecute = true };
                             var dir = Path.GetDirectoryName(p.Exe);
                             if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) psi.WorkingDirectory = dir;
+                            if (InicioDoWindows.AbreMinimizado(p)) psi.WindowStyle = ProcessWindowStyle.Minimized;
                             Process.Start(psi);
                         }
                         catch (Exception ex) { Anotar($"{p.Nome}: {ex.GetType().Name}"); }
@@ -116,6 +126,32 @@ public static class InicioDoWindowsNoCaixa
             });
         }
         catch (Exception ex) { Anotar("abrir: " + ex.GetType().Name); }
+    }
+
+    /// <summary>O Start do serviço no registro (2 automático, 3 manual, 4 desativado), ou null sem serviço. Só lê.</summary>
+    private static int? InicioDoServico(string nome)
+    {
+        try
+        {
+            using var k = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + nome);
+            return k is null ? null : k.GetValue("Start") is int i ? i : -1;
+        }
+        catch { return null; }
+    }
+
+    private static bool RodandoNaSessao(string processo, int sessao)
+    {
+        try
+        {
+            var achou = false;
+            foreach (var p in Process.GetProcessesByName(processo))
+            {
+                try { achou |= p.SessionId == sessao; } catch { }
+                finally { p.Dispose(); }
+            }
+            return achou;
+        }
+        catch { return false; }
     }
 
     private static readonly object _travaLog = new();

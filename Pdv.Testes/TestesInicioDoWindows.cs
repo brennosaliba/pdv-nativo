@@ -95,6 +95,26 @@ public static class TestesInicioDoWindows
             "IW-13 caixa que não abre no quiosque abre a área de trabalho antes de sair; trava sem quiosque é desfeita (só direto, sem aviso do Windows); desmarcar destrava até a trava pela metade");
         checar(no.Contains("p.SessionId == sessao"),
             "IW-14 o AnyDesk de serviço (outra sessão) não conta como aberto: a janelinha dele abre");
+        // IW-15 (1.0.37) com o Spotify escondido ligado, a lista não abre o Spotify: um dono só, sem duplicata
+        var comSp = InicioDoWindows.AAbrir(todos, null, new HashSet<string>(), pdv, pularSpotify: true);
+        var lojaSp = new ProgramaDoInicio("SpotifyStartupTask", "C:\\L\\WindowsApps\\SpotifyStartupTask.exe", "--autostart", "run");
+        checar(comSp.Select(p => p.Nome).SequenceEqual(new[] { "AnyDesk" })
+               && InicioDoWindows.AAbrir(new[] { lojaSp }, "SpotifyStartupTask", new HashSet<string>(), pdv, pularSpotify: true).Count == 0
+               && InicioDoWindows.AAbrir(todos, null, new HashSet<string>(), pdv).Any(p => p.Nome == "Spotify")
+               && app.Contains("Vendas.Config(cx, SpotifyNoCaixa.Chave) == \"1\", TimeSpan.FromSeconds(8));")
+               && no.Contains("pularSpotify: spotifyComDono"),
+            "IW-15 com o Spotify escondido ligado a lista pula qualquer Spotify (quem abre é o PDV); desligado, abre como antes");
+        // IW-16 TeamViewer: com serviço fica de fora (o serviço já abre na sessão); sem serviço entra desmarcado e abre minimizado
+        var tv = InicioDoWindows.TeamViewer("C:\\P\\TeamViewer\\TeamViewer.exe", temServico: false);
+        checar(InicioDoWindows.TeamViewer("C:\\P\\TeamViewer\\TeamViewer.exe", temServico: true) is null && InicioDoWindows.TeamViewer(null, false) is null
+               && tv is { Nome: "TeamViewer", Origem: "instalado" } && !InicioDoWindows.Marcado(tv, null)
+               && InicioDoWindows.AbreMinimizado(tv) && !InicioDoWindows.AbreMinimizado(todos[1])
+               && no.Contains("if (InicioDoWindows.AbreMinimizado(p)) psi.WindowStyle = ProcessWindowStyle.Minimized;"),
+            "IW-16 TeamViewer com serviço não abre janela; sem serviço entra desmarcado e abre minimizado; o AnyDesk segue com --tray");
+        // IW-17 o estado dos serviços de suporte no log
+        checar(InicioDoWindows.Servico(null, false) == "sem serviço" && InicioDoWindows.Servico(2, true) == "serviço automático, rodando"
+               && InicioDoWindows.Servico(4, false) == "serviço desativado, parado" && no.Contains("Anotar($\"suporte: AnyDesk "),
+            "IW-17 o log diz se o AnyDesk e o TeamViewer têm serviço e se ele está rodando");
         // só informação: o que este PC tem na inicialização (não é teste)
         try { Console.WriteLine("  (info) inicialização deste PC: " + string.Join(", ", InicioDoWindowsNoCaixa.Ler().Select(p => $"{p.Nome} [{p.Origem}]"))); }
         catch { }

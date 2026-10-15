@@ -222,7 +222,7 @@ public partial class App : Application
                 Caixa.Auditar(cx, null, "ctrl_alt_del_ficou", null, null,
                     "trava sem o quiosque e sem permissão para tirar ao abrir: " + TravaDoCtrlAltDel.Tecnico(naoTirou));
             InicioDoWindowsNoCaixa.AbrirNoQuiosque(Vendas.Config(cx, InicioDoWindows.ChaveLigado),
-                Vendas.Config(cx, InicioDoWindows.ChaveMarcados), TimeSpan.FromSeconds(8));
+                Vendas.Config(cx, InicioDoWindows.ChaveMarcados), Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1", TimeSpan.FromSeconds(8));
         }
         catch { /* banco indisponível aqui vira erro de verdade logo adiante, com mensagem melhor */ }
 

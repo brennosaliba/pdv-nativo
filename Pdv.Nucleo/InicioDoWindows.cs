@@ -112,8 +112,9 @@ public static class InicioDoWindows
     /// <see cref="Marcado"/>), sem o que é do caixa e sem o que já está aberto
     /// (<paramref name="rodando"/>: nomes de processo em minúsculas).
     /// </summary>
+    /// <param name="pularSpotify">1.0.37: com o Spotify escondido ligado, quem abre o Spotify é ele (um dono só, sem duplicata).</param>
     public static IReadOnlyList<ProgramaDoInicio> AAbrir(IEnumerable<ProgramaDoInicio> todos, string? marcados,
-        IReadOnlySet<string> rodando, string exeDoPdv)
+        IReadOnlySet<string> rodando, string exeDoPdv, bool pularSpotify = false)
     {
         var vistos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var saida = new List<ProgramaDoInicio>();
@@ -121,6 +122,7 @@ public static class InicioDoWindows
         {
             if (DoCaixa(p.Exe, exeDoPdv)) continue;
             if (!Marcado(p, marcados)) continue;
+            if (pularSpotify && EhSpotify(p)) continue;
             var proc = Processo(p.Exe);
             if (!vistos.Add(proc)) continue;
             // atalho .lnk da pasta Inicializar: o processo não tem o nome do atalho, então só o nome conta
@@ -129,6 +131,25 @@ public static class InicioDoWindows
         }
         return saida;
     }
+
+    /// <summary>É o Spotify (qualquer versão ou ajudante dele)?</summary>
+    public static bool EhSpotify(ProgramaDoInicio p)
+        => Processo(p.Exe).StartsWith("spotify", StringComparison.Ordinal) || p.Nome.Contains("spotify", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 1.0.37 (15/10/2026): o TeamViewer com serviço já é aberto na sessão do usuário pelo próprio
+    /// serviço (visto no PC do escritório sem o Explorer): fica de fora. Sem serviço, entra na lista
+    /// desmarcado (não é o que o dono pediu por padrão) e abre minimizado.
+    /// </summary>
+    public static ProgramaDoInicio? TeamViewer(string? exe, bool temServico)
+        => string.IsNullOrWhiteSpace(exe) || temServico ? null : new ProgramaDoInicio("TeamViewer", exe, "", "instalado");
+
+    /// <summary>Abre minimizado, sem janela por cima do caixa (o AnyDesk já vai com --tray).</summary>
+    public static bool AbreMinimizado(ProgramaDoInicio p) => Processo(p.Exe) == "teamviewer";
+
+    /// <summary>O estado de um serviço de suporte, para o log (Start do registro: 2 automático, 3 manual, 4 desativado).</summary>
+    public static string Servico(int? inicio, bool rodando) => inicio is null ? "sem serviço"
+        : "serviço " + (inicio switch { 2 => "automático", 3 => "manual", 4 => "desativado", _ => "início " + inicio }) + (rodando ? ", rodando" : ", parado");
 
     /// <summary>Um por nome, na ordem em que apareceram (a lista da Configuração).</summary>
     public static IReadOnlyList<ProgramaDoInicio> Unicos(IEnumerable<ProgramaDoInicio> todos, string exeDoPdv)
