@@ -9,6 +9,12 @@ public enum ModoDoExe
     CupomTeste,
     /// <summary><c>--imprimir-teste ["Impressora"]</c>: manda o cupom de exemplo para o papel e sai.</summary>
     ImprimirTeste,
+    /// <summary>
+    /// <c>--travas on|off --sid SID</c>: o próprio PDV chamado como administrador pela Configuração
+    /// para ligar ou desligar a trava do Ctrl+Alt+Del (TravaDoCtrlAltDel). Grava e sai, antes de
+    /// tudo: sem trava de instância (o caixa que pediu está aberto), sem banco e sem janela.
+    /// </summary>
+    Travas,
 }
 
 /// <summary>
@@ -33,6 +39,7 @@ public static class LinhaDeComando
         {
             "--cupom-teste" => ModoDoExe.CupomTeste,
             "--imprimir-teste" => ModoDoExe.ImprimirTeste,
+            TravaDoCtrlAltDel.Argumento => ModoDoExe.Travas,
             _ => ModoDoExe.Caixa,
         };
     }
@@ -42,4 +49,10 @@ public static class LinhaDeComando
 
     /// <summary>Este modo abre a frente de caixa (MainWindow)? Só o caixa.</summary>
     public static bool AbreOCaixa(ModoDoExe modo) => modo == ModoDoExe.Caixa;
+
+    /// <summary>
+    /// O pedido do ajudante da trava: exatamente <c>--travas on|off --sid SID</c>, com o SID no
+    /// formato de conta de pessoa. Qualquer outra coisa é null (o ajudante sai sem mexer em nada).
+    /// </summary>
+    public static (bool Travar, string Sid)? LerTravas(IReadOnlyList<string>? args) => TravaDoCtrlAltDel.LerArgumentos(args);
 }
