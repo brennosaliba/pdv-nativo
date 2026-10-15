@@ -107,6 +107,14 @@ public sealed class FakePostgrest : IDisposable
     /// <summary>Chamado com a client_key quando a entrega chega, antes de processar (a suíte olha o SQLite nessa hora).</summary>
     public Action<string>? AoReceberEntregar;
 
+    // ── os cancelados depois da saída (14/10/2026, lista dos que já saíram do KDS) ──
+    /// <summary>Resposta da pdv_kds_entrega (o JSON inteiro). Null = rota desconhecida (404), como sempre foi.</summary>
+    public volatile string? KdsEntrega;
+    /// <summary>Resposta da pdv_kds_cancelados (o JSON inteiro). Null = servidor sem o SQL (404 PGRST202).</summary>
+    public volatile string? KdsCancelados;
+    /// <summary>O último corpo que cada uma recebeu (a suíte confere os ids pedidos).</summary>
+    public ConcurrentDictionary<string, string> CorpoPorRpc { get; } = new();
+
     // ── injeção de falhas ───────────────────────────────────────────────────
     /// <summary>% de respostas 503 nas rotas de DADOS (auth nunca falha).</summary>
     public volatile int PctErro503;
@@ -302,6 +310,21 @@ public sealed class FakePostgrest : IDisposable
                     var resposta = RespostaKdsPronto.TryGetValue(oid!, out var r) ? r : "true";
                     if (resposta == "true") ProntosRecebidos.AddOrUpdate(oid!, 1, (_, n) => n + 1);
                     Responder(ctx, 200, resposta);
+                    return;
+                }
+                case "/rest/v1/rpc/pdv_kds_entrega":
+                case "/rest/v1/rpc/pdv_kds_cancelados":
+                {
+                    var rpc = caminho[(caminho.LastIndexOf('/') + 1)..];
+                    ChamadasPorRpc.AddOrUpdate(rpc, 1, (_, n) => n + 1);
+                    CorpoPorRpc[rpc] = corpo;
+                    var resposta = rpc == "pdv_kds_entrega" ? KdsEntrega : KdsCancelados;
+                    if (resposta is null)
+                        Responder(ctx, 404, rpc == "pdv_kds_entrega"
+                            ? """{"message":"rota desconhecida no fake"}"""
+                            : """{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.pdv_kds_cancelados(_order_ids) in the schema cache"}""");
+                    else
+                        Responder(ctx, 200, resposta);
                     return;
                 }
                 case "/rest/v1/pdv_caixa_fechamentos":

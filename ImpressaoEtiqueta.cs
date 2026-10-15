@@ -29,12 +29,13 @@ public static partial class Impressao
     /// <param name="impressora">Vazio/null = impressora padrão do Windows.</param>
     /// <param name="giro">0, 90, 180 ou 270 (ver <see cref="EtiquetaKds.Folha"/>).</param>
     /// <param name="embalagem">Palavras de embalagem da loja (<see cref="EtiquetaKds.PalavrasEmbalagem"/>); null = padrão.</param>
+    /// <param name="marca">14/10/2026: a marca da segunda via, para pedido que já saiu; null = etiqueta de sempre.</param>
     public static Task<string?> ImprimirEtiquetaKdsAsync(Ticket ticket, string? impressora, int giro,
         string descricao, PrioridadeImpressao prioridade = PrioridadeImpressao.Alta,
-        IReadOnlyList<string>? embalagem = null)
+        IReadOnlyList<string>? embalagem = null, string? marca = null)
     {
         Etiqueta e;
-        try { e = EtiquetaKds.Montar(ticket, embalagem: embalagem); }
+        try { e = EtiquetaKds.Montar(ticket, embalagem: embalagem, marca: marca); }
         catch (Exception ex) { return Task.FromResult<string?>($"Pedido inconsistente, não imprimi a etiqueta: {ex.Message}"); }
         var folha = EtiquetaKds.Folha(giro);
         // Nome único por tentativa: a vigia casa o trabalho pelo nome (ver Imprimir).
@@ -49,10 +50,10 @@ public static partial class Impressao
     /// texto legível na tela.
     /// </summary>
     public static Task<string?> PreVisualizarEtiquetaAsync(Ticket ticket, string caminhoPng, int giro = 0,
-        double escala = 3.0, DateTime? hoje = null)
+        double escala = 3.0, DateTime? hoje = null, string? marca = null)
         => EmThreadStaAsync(() =>
         {
-            var e = EtiquetaKds.Montar(ticket, hoje);
+            var e = EtiquetaKds.Montar(ticket, hoje, marca: marca);
             var folha = EtiquetaKds.Folha(giro);
             var visual = new Border
             {
@@ -225,6 +226,9 @@ public static partial class Impressao
         topo.Children.Add(cab);
         if (e.Agendado is { } ag)
             topo.Children.Add(TextoEtq(ag, 15, negrito: true, quebra: true));
+        // A segunda via (14/10/2026): a cozinha sabe que o pedido já saiu antes de ler os itens.
+        if (e.Marca is { } marca)
+            topo.Children.Add(TextoEtq(marca, 15, negrito: true, quebra: true));
         Grid.SetRow(topo, 0);
         miolo.Children.Add(topo);
 

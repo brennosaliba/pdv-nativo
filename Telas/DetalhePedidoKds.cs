@@ -174,6 +174,7 @@ public sealed class DetalhePedidoKds : Border
                 var texto = "🖨 " + FinalizadosKds.BotaoComandaDeNovo;
                 var c = new Button
                 {
+                    Name = "BtnComandaDeNovo",
                     Content = texto,
                     Style = (Style)Application.Current.Resources["BotaoBase"],
                     MinHeight = 60, FontSize = 18,
@@ -209,6 +210,7 @@ public sealed class DetalhePedidoKds : Border
             {
                 var ajuda = new Button
                 {
+                    Name = "BtnFaleComIfood",
                     Content = "🛟 " + AjudaIfood.TextoBotao,
                     Style = (Style)Application.Current.Resources["BotaoBase"],
                     MinHeight = 60, FontSize = 18,
@@ -253,16 +255,9 @@ public sealed class DetalhePedidoKds : Border
     {
         var d = Detalhe;
 
-        // A linha de metadados é UMA frase separada por pontos: hora, entrega ou
-        // retirada, prazo, começo, pronto, localizador. Só o que existe entra.
-        var partes = new List<string> { d.FeitoAs };
-        if (d.Modalidade is not null) partes.Add(d.Modalidade);
-        if (d.Prazo is not null) partes.Add(d.Prazo);
-        if (d.Comecou is not null) partes.Add(d.Comecou);
-        if (d.ProntoAs is not null) partes.Add(d.ProntoAs);
-        if (d.SaiuAs is not null) partes.Add(d.SaiuAs);
-        if (d.Localizador is not null) partes.Add("Localizador " + d.Localizador);
-        _meta.Text = string.Join(" · ", partes);
+        // A linha de metadados é UMA frase separada por pontos; a régua mora no núcleo
+        // (DetalhePedido.Meta), com o localizador que não quebra no meio.
+        _meta.Text = d.Meta;
 
         _secoesCab.Children.Clear();
         if (d.CodigoColeta is not null)

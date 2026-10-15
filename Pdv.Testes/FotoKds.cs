@@ -20,6 +20,7 @@ namespace Pdv.Testes;
 ///
 /// Uso: Pdv.Testes.exe --foto-kds saida.png largura altura [claro|escuro] [--detalhe N] [--nuvem]
 ///                     [--finalizados hoje|ontem|7dias] [--busca X] [--sem-finalizados]
+///                     [--novos N] [--comanda-falhou]
 ///
 ///   --detalhe N  abre o DETALHE do pedido #N por cima do quadro antes da foto
 ///                (04/09: é a prova visual do painel a 1024x768 sem cortar item).
@@ -33,6 +34,13 @@ namespace Pdv.Testes;
 ///   --busca X    digita X na busca do cabeçalho: no quadro, aparece a faixa da busca; na
 ///                lista, ela filtra por número ou nome.
 ///   --sem-finalizados  não semeia pedido nenhum que já saiu (a lista vazia).
+///   --novos N    (revisão de 14/10) com a lista aberta, chegaram N pedidos novos: a faixa de volta ao quadro.
+///   --comanda-falhou  com --detalhe de quem saiu: o botão "Comanda de novo" no estado de falha
+///                (o texto que a tela põe nele por 3 s quando o papel não sai). Nada é impresso.
+///
+/// Com --nuvem, a consulta dos CANCELADOS (Nuvem.CanceladosAsync) também responde, fabricada: o
+/// #4711, despachado pelo Gestor, foi cancelado pelo iFood depois. Sem --nuvem ele segue SAIU
+/// (o caixa sem internet não tem como saber), que é a outra metade da prova.
 ///
 /// Segurança: NÃO usa o banco do caixa. Monta um SQLite temporário do zero com um
 /// quadro fabricado (os mesmos cards da foto que o dono mandou) e a nuvem apontada
@@ -51,6 +59,8 @@ public static class FotoKds
         PeriodoFinalizados? finalizados = null;
         string? busca = null;
         var semFinalizados = false;
+        var novos = 0;
+        var comandaFalhou = false;
         for (var i = 4; i < args.Length; i++)
         {
             if (args[i] == "--detalhe" && i + 1 < args.Length) detalhe = args[++i];
@@ -64,6 +74,8 @@ public static class FotoKds
                 };
             else if (args[i] == "--busca" && i + 1 < args.Length) busca = args[++i];
             else if (args[i] == "--sem-finalizados") semFinalizados = true;
+            else if (args[i] == "--novos" && i + 1 < args.Length) novos = int.Parse(args[++i]);
+            else if (args[i] == "--comanda-falhou") comandaFalhou = true;
             else if (args[i] is "claro" or "escuro") tema = args[i];
         }
 
@@ -84,7 +96,7 @@ public static class FotoKds
         var codigo = 1;
         var t = new Thread(() =>
         {
-            try { codigo = Fotografar(saida, w, h, tema, detalhe, complemento, finalizados, busca, comNuvem); }
+            try { codigo = Fotografar(saida, w, h, tema, detalhe, complemento, finalizados, busca, comNuvem, novos, comandaFalhou); }
             catch (Exception ex) { Console.Error.WriteLine("foto-kds: " + ex); codigo = 1; }
         });
         t.SetApartmentState(ApartmentState.STA);
@@ -265,12 +277,13 @@ public static class FotoKds
         static object Item(string nome, int qtd, string? obs = null, string[]? escolhas = null)
             => new { Descricao = nome, Qtd = qtd * 1000, Observacao = obs, Escolhas = escolhas };
         void Saiu(string numero, string origem, string status, DateTime chegou, DateTime? saiu, string? motivo,
-                  string? cliente, object[] itens, bool retirada = false, bool soEntregue = false)
+                  string? cliente, object[] itens, bool retirada = false, bool soEntregue = false,
+                  DateTime? cancelado = null)
             => cx.Execute(
                 @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em,
                                           preparo_em, pronto_em, entregue_em, encerrado_em, encerrado_motivo,
-                                          retirada, impresso_em)
-                  VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pe, @pr, @en, @ee, @m, @ret, @t)",
+                                          retirada, impresso_em, cancelado_certo, cancelado_em)
+                  VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pe, @pr, @en, @ee, @m, @ret, @t, @cc, @ce)",
                 new
                 {
                     id = Guid.NewGuid().ToString(), o = origem, r = "ref-" + numero, n = numero, c = cliente,
@@ -285,6 +298,7 @@ public static class FotoKds
                     // soEntregue: pedido de antes desta versão, só com a hora antiga
                     ee = soEntregue ? null : saiu?.ToString("o"),
                     m = motivo, ret = retirada ? 1 : 0,
+                    cc = cancelado is null ? 0 : 1, ce = cancelado?.ToString("o"),
                 });
 
         // ── hoje: uma linha de cada história ──
@@ -305,8 +319,9 @@ public static class FotoKds
              "Lucas Martins", new[] { Item("Tortinha de Frango com Catupiry", 1), Item("Donut Banoffee", 2) });
         Saiu("CD-2246", "ifood", Kds.Entregue, agora.AddMinutes(-66), agora.AddMinutes(-38), FinalizadosKds.MotivoGestor,
              "Asani Vasconcelos", new[] { Item("Cookie Duplo", 3, "sem castanha") });
+        // o iFood cancelou com o card no quadro: CancelarDelivery anota a saída E o cancelamento
         Saiu("4690", "ifood", Kds.Cancelado, agora.AddMinutes(-71), agora.AddMinutes(-66), FinalizadosKds.MotivoIfoodCancelou,
-             "Roberto Dias", new[] { Item("Donut Doce de Leite", 4) });
+             "Roberto Dias", new[] { Item("Donut Doce de Leite", 4) }, cancelado: agora.AddMinutes(-66));
         Saiu("4655", "ifood", Kds.Cancelado, agora.AddMinutes(-290), agora.AddMinutes(-50), FinalizadosKds.MotivoExpirou,
              "Juliana Ferreira", new[] { Item("Pão de Queijo Recheado", 2) });
         // antes desta versão: 'cancelado' sem motivo e sem hora (a nuvem esclarece com --nuvem)
@@ -320,8 +335,10 @@ public static class FotoKds
             Saiu((4600 + i * 3).ToString(), "ifood", Kds.Entregue, agora.AddMinutes(-130 - i * 12), agora.AddMinutes(-100 - i * 12),
                  FinalizadosKds.MotivoGestor, nomes[i], new[] { Item("Donut Homer", 1 + i % 3), Item("Cookie Red Velvet", 1) });
 
-        // ── ontem ──
-        var ontem = agora.Date.AddDays(-1).AddHours(19);
+        // ── ontem (o dia de OPERAÇÃO de antes, que vira às 05:00: a foto tirada depois da meia-noite
+        // não pode jogar o "ontem" para hoje) ──
+        var inicioHoje = FinalizadosKds.InicioDoDia(agora);
+        var ontem = inicioHoje.AddDays(-1).AddHours(14);   // 19:00
         for (var i = 0; i < 8; i++)
             Saiu((4400 + i * 7).ToString(), "ifood", Kds.Entregue, ontem.AddMinutes(i * 17), ontem.AddMinutes(i * 17 + 26),
                  FinalizadosKds.MotivoGestor, nomes[i % nomes.Length], new[] { Item("Donut Ovomaltine", 2), Item("Café Coado 300ml", 1) });
@@ -329,7 +346,7 @@ public static class FotoKds
         // ── 7 dias: 320 linhas, para a lista bater no teto de 300 ──
         for (var i = 0; i < 320; i++)
         {
-            var dia = agora.Date.AddDays(-2 - i % 5).AddHours(10).AddMinutes(i * 2 % 700);
+            var dia = inicioHoje.AddDays(-2 - i % 5).AddHours(5).AddMinutes(i * 2 % 700);
             Saiu((3000 + i).ToString(), "ifood", Kds.Entregue, dia, dia.AddMinutes(25), FinalizadosKds.MotivoGestor,
                  nomes[i % nomes.Length], new[] { Item("Donut Homer", 2) });
         }
@@ -337,7 +354,8 @@ public static class FotoKds
 
     private static int Fotografar(string saida, int w, int h, string tema,
                                   string? detalhe, DetalheNuvem? complemento,
-                                  PeriodoFinalizados? finalizados = null, string? busca = null, bool comNuvem = false)
+                                  PeriodoFinalizados? finalizados = null, string? busca = null, bool comNuvem = false,
+                                  int novos = 0, bool comandaFalhou = false)
     {
         // mesmos dicionários do Pdv.exe, na mesma ordem (contrato: [0] paleta, [1] estilos)
         static ResourceDictionary Dic(string caminho) => new()
@@ -358,8 +376,13 @@ public static class FotoKds
         // prova nada, ficam como estão). Sem --nuvem, a de verdade, que bate no endereço
         // morto e devolve null: a lista diz "Sem internet".
         if (comNuvem)
+        {
             tela.ConsultaNuvem = ids => Task.FromResult<List<(string OrderId, string Status, string? PreparoAte)>?>(
                 ids.Select(id => (id, id == "ref-4640" ? "concluido" : "pronto", (string?)null)).ToList());
+            // O #4711 saiu com o entregador e o iFood cancelou 13 min depois (o caso do #1404 da Savassi).
+            tela.ConsultaCancelados = ids => Task.FromResult<List<(string OrderId, DateTime? Em)>?>(
+                ids.Where(id => id == "ref-4711").Select(id => (id, (DateTime?)DateTime.Now.AddMinutes(-6))).ToList());
+        }
         var janela = new Window
         {
             Title = "foto-kds", Width = w, Height = h,
@@ -387,6 +410,7 @@ public static class FotoKds
                 abriuLista = true;
                 if (busca is not null) tela.Buscar(busca);
                 if (finalizados is { } p) tela.AbrirFinalizados(p);
+                if (novos > 0) tela.AvisarNovosNaLista(novos);
                 return;
             }
             // Batidas a mais para a consulta da nuvem da lista responder. A de verdade bate no
@@ -400,6 +424,14 @@ public static class FotoKds
                 abriuDetalhe = true;
                 if (!tela.AbrirDetalhe(detalhe, complemento))
                     erros.Add($"o pedido #{detalhe} não está no quadro fabricado nem entre os que saíram");
+                else if (comandaFalhou)
+                {
+                    // O estado de falha, sem imprimir: o mesmo texto que o clique põe no botão.
+                    tela.UpdateLayout();
+                    var botao = Achar<System.Windows.Controls.Button>(tela, "BtnComandaDeNovo");
+                    if (botao is null) erros.Add("o detalhe não tem o botão Comanda de novo");
+                    else botao.Content = FinalizadosKds.TextoComandaNaoSaiu;
+                }
                 return;
             }
             relogio.Stop();
@@ -429,5 +461,17 @@ public static class FotoKds
         janela.Show();
         app.Run();
         return codigo;
+    }
+
+    /// <summary>O primeiro elemento com este Name na árvore visual (o painel do detalhe é montado em código).</summary>
+    internal static T? Achar<T>(DependencyObject raiz, string nome) where T : FrameworkElement
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(raiz); i++)
+        {
+            var filho = VisualTreeHelper.GetChild(raiz, i);
+            if (filho is T t && t.Name == nome) return t;
+            if (Achar<T>(filho, nome) is { } achado) return achado;
+        }
+        return null;
     }
 }

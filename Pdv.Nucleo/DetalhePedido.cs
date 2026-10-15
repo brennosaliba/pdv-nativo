@@ -47,8 +47,10 @@ public sealed record ItemDetalhe(string Qtd, string Nome, IReadOnlyList<LinhaCar
 /// <param name="Observacoes">Da nuvem: observação do pedido inteiro. Null = some.</param>
 /// <param name="AgrupadoCom">Da nuvem: os OUTROS pedidos do grupo, já como "#3788". Vazio = some.</param>
 /// <param name="Itens">Os itens, na ordem do pedido. Nunca vazio para um ticket de verdade.</param>
-/// <param name="SaiuAs">"Saiu às 14:32" (ou "Cancelado às", ou com a data quando não é hoje),
-/// só em pedido que já saiu e com a hora anotada; null no resto.</param>
+/// <param name="SaiuAs">"Saiu às 14:32" (com a data quando não é hoje), só em pedido que SAIU DE
+/// VERDADE e com a hora conhecida (FinalizadosKds.HoraDaSaida); null no resto.</param>
+/// <param name="CanceladoAs">"Cancelado às 14:20", em pedido cancelado com a hora conhecida. Junto do
+/// "Saiu às" quando o iFood cancelou depois do despacho; null no resto.</param>
 public sealed record DetalhePedido(
     string Numero, string Etapa, string Canal, string? Cliente,
     string FeitoAs, string? Agendado, string? Modalidade, string? Prazo,
@@ -56,7 +58,8 @@ public sealed record DetalhePedido(
     string? Localizador, string? CodigoColeta, string? Observacoes,
     IReadOnlyList<string> AgrupadoCom,
     IReadOnlyList<ItemDetalhe> Itens,
-    string? SaiuAs = null)
+    string? SaiuAs = null,
+    string? CanceladoAs = null)
 {
     /// <summary>O pedido já saiu do quadro: o detalhe é de consulta (sem raspadinha, sem voltar etapa).</summary>
     public bool JaSaiu { get; init; }
@@ -64,6 +67,32 @@ public sealed record DetalhePedido(
     /// <summary>"Agrupado com #3788 #9002", ou null quando o pedido vai sozinho.</summary>
     public string? AgrupadoTexto =>
         AgrupadoCom.Count == 0 ? null : "Agrupado com " + string.Join(" ", AgrupadoCom);
+
+    /// <summary>O espaço que não quebra linha (U+00A0).</summary>
+    private const char Inseparavel = (char)0xA0;
+
+    /// <summary>
+    /// A linha de metadados do painel: UMA frase separada por pontos (hora, entrega ou
+    /// retirada, prazo, começo, pronto, saída, cancelamento, localizador). Só o que existe entra.
+    /// Dentro de cada parte os espaços são INSEPARÁVEIS (U+00A0): a linha só quebra nos pontos.
+    /// Com o "Saiu às" a linha alongou e a quebra caía no meio do localizador ("3121" numa linha,
+    /// "4455" na outra; quem lê passa metade do número para o iFood) e entre "Cancelado às" e a hora.
+    /// </summary>
+    public string Meta
+    {
+        get
+        {
+            var partes = new List<string> { FeitoAs };
+            if (Modalidade is not null) partes.Add(Modalidade);
+            if (Prazo is not null) partes.Add(Prazo);
+            if (Comecou is not null) partes.Add(Comecou);
+            if (ProntoAs is not null) partes.Add(ProntoAs);
+            if (SaiuAs is not null) partes.Add(SaiuAs);
+            if (CanceladoAs is not null) partes.Add(CanceladoAs);
+            if (Localizador is not null) partes.Add("Localizador " + Localizador);
+            return string.Join(" · ", partes.Select(p => p.Replace(' ', Inseparavel)));
+        }
+    }
 
     /// <summary>A nuvem já respondeu com alguma coisa que vale seção?</summary>
     public bool TemComplemento =>
@@ -88,12 +117,13 @@ public sealed record DetalhePedido(
             Kds.Pronto => "PRONTO",
             _ => "NA FILA",
         };
-        string? saiuAs = null;
-        if (saiu && FinalizadosKds.HoraDaSaida(t) is { } h)
-        {
-            var verbo = estado == EstadoFinalizado.Cancelado ? "Cancelado" : "Saiu";
-            saiuAs = h.Date == agora.Date ? $"{verbo} às {h:HH:mm}" : $"{verbo} {h:dd/MM} às {h:HH:mm}";
-        }
+        // "Saiu às" só da saída de verdade (expirou não é saída); "Cancelado às" do cancelamento,
+        // que pode vir DEPOIS da saída (o iFood cancela pedido despachado): os dois aparecem.
+        string? Quando(string verbo, DateTime h)
+            => h.Date == agora.Date ? $"{verbo} às {h:HH:mm}" : $"{verbo} {h:dd/MM} às {h:HH:mm}";
+        var saiuAs = saiu && FinalizadosKds.HoraDaSaida(t) is { } hs ? Quando("Saiu", hs) : null;
+        var canceladoAs = saiu && estado == EstadoFinalizado.Cancelado && t.CanceladoEm is { } hc
+            ? Quando("Cancelado", hc) : null;
         // A hora de CHEGADA, a mesma que a comanda chama de "Chegou": é o relógio
         // que a cozinha usa para saber quem está esperando há mais tempo.
         var feito = t.CriadoEm.Date == agora.Date
@@ -125,7 +155,7 @@ public sealed record DetalhePedido(
             t.ProntoEm is { } pronto ? $"Pronto às {pronto:HH:mm}" : null,
             Limpo(nuvem?.Localizador), Limpo(nuvem?.CodigoColeta), Limpo(nuvem?.Observacoes),
             Agrupados(nuvem?.AgrupadoCom, t.Numero),
-            itens, saiuAs) { JaSaiu = saiu };
+            itens, saiuAs, canceladoAs) { JaSaiu = saiu };
     }
 
     /// <summary>O mesmo detalhe, agora com o complemento que a nuvem acabou de mandar.</summary>

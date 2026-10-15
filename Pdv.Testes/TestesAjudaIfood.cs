@@ -40,7 +40,11 @@ public static class TestesAjudaIfood
             "do KDS: busca o pedido no Gestor (campo, card, link) e, se não achar, deixa o Gestor inteiro com a dica");
         checar(chat.Contains("public async Task<bool> FaleComIfoodAsync(string numero)") && chat.Contains("AjudaIfood.PodePedirAjuda(\"ifood\", numero)"),
             "a ponte do KDS para o chat recusa número inválido antes de mexer na página");
-        checar(kds.Contains("PediuAjudaIfood") && kds.Contains("AjudaIfood.PodePedirAjuda(t.Origem, t.Numero)"),
+        // 14/10/2026: a regra passou por FinalizadosKds.PodeFalarComIfood, que é a mesma regra pura
+        // mais "pedido que já saiu, só se chegou hoje" (o Gestor procura pelo número do dia).
+        var finalizados = Fonte(Path.Combine("Pdv.Nucleo", "FinalizadosKds.cs")) ?? "";
+        checar(kds.Contains("PediuAjudaIfood") && kds.Contains("FinalizadosKds.PodeFalarComIfood(t, agora)")
+               && finalizados.Contains("AjudaIfood.PodePedirAjuda(t.Origem, t.Numero)"),
             "o KDS só oferece o botão para pedido do iFood (regra pura)");
         checar(det.Contains("Action? faleComIfood = null") && det.Contains("AjudaIfood.TextoBotao") && det.Contains("Resources[\"BotaoBase\"]"),
             "o detalhe do pedido mostra Fale com o iFood ao lado do Fechar (estilo de app, não da Venda)");

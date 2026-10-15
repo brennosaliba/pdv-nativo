@@ -155,18 +155,23 @@ public partial class Kds : UserControl
         // raspadinha (o pedido já foi embora) e com "Comanda de novo", na mesma regra do 🖨
         // do card: só iFood, e só se a loja não desligou a comanda. Refazer um pedido que
         // saiu é imprimir a comanda de novo; reabrir no quadro não existe nesta versão.
+        // Revisão de 14/10: pedido CANCELADO não oferece comanda (a cozinha produziria o que
+        // ninguém vai buscar), a comanda tirada de novo sai marcada "2a VIA", e o "Fale com o
+        // iFood" de quem saiu só vale para pedido de hoje (o Gestor procura pelo número do dia).
+        var agora = DateTime.Now;
         var saiu = FinalizadosKds.Saiu(t.Status);
-        Action? ajuda = AjudaIfood.PodePedirAjuda(t.Origem, t.Numero)
+        Action? ajuda = FinalizadosKds.PodeFalarComIfood(t, agora)
             ? () => { FecharDetalhe(); PediuAjudaIfood?.Invoke(t.Numero); }
             : null;
         // 154: só em pedido do iFood, só com a tela ligada na loja e só com alguém ouvindo (o modo foto não tem)
         Action? resgatar = !saiu && t.Origem == "ifood" && PediuResgate is not null && ResgateLigadoNaLoja()
             ? () => { FecharDetalhe(); PediuResgate?.Invoke(t.RefId, t.Numero); }
             : null;
-        Func<Task<string?>>? comanda = saiu && t.Origem == "ifood" && Impressoes.MostraBotaoComanda(_politicaComanda)
-            ? () => Servicos.ImprimirComandaAsync(t, $"Comanda cozinha #{t.Numero} (de novo)")
+        Func<Task<string?>>? comanda = FinalizadosKds.PodeComandaDeNovo(t) && Impressoes.MostraBotaoComanda(_politicaComanda)
+            ? () => Servicos.ImprimirComandaAsync(t, $"Comanda cozinha #{t.Numero} (de novo)",
+                                                  FinalizadosKds.MarcaSegundaVia(t, DateTime.Now))
             : null;
-        var painel = new DetalhePedidoKds(DetalhePedido.De(t, DateTime.Now, complemento), FecharDetalhe, ajuda, resgatar, comanda);
+        var painel = new DetalhePedidoKds(DetalhePedido.De(t, agora, complemento), FecharDetalhe, ajuda, resgatar, comanda);
         PainelDetalhe.Content = painel;
         Veu.Visibility = Visibility.Visible;
         _detalheDe = t.Id;
@@ -332,6 +337,9 @@ public partial class Kds : UserControl
             };
             TxtStatus.Text = $"Conectado · {DateTime.Now:HH:mm:ss}{chegaram}";
             if (novos > 0) Alerta.PedidoNovo();
+            // Com a lista dos que saíram aberta, as três colunas estão escondidas: a faixa
+            // dentro da lista diz que chegou pedido e leva de volta ao quadro.
+            if (novos > 0 && _finalizados) AvisarNovosNaLista(novos);
         }
         catch
         {
@@ -393,13 +401,12 @@ public partial class Kds : UserControl
         _porLinha = CabemPorLinha();
 
         var todos = Nucleo.Kds.Abertos();
-        // A busca por número filtra as três colunas de uma vez; o rodapé diz quantos ficaram de fora.
+        // A busca por número filtra as três colunas de uma vez. Quantos ficaram, no quadro e
+        // entre os que já saíram, quem diz é a FAIXA da busca (PintarFaixaBusca), que aparece
+        // a 1024. A linha de status do cabeçalho não repete mais a contagem (14/10/2026): a
+        // 1024 sobrava meia letra dela ao lado de "PEDIDOS", e com nome ela dizia "9 de 9
+        // pedidos" logo acima de "o quadro só procura por número".
         var abertos = Nucleo.Kds.FiltrarPorNumero(todos, _busca).ToList();
-        // Com a lista dos que saíram aberta, a busca é dela: a contagem do quadro calaria a da lista.
-        if (!_finalizados && (abertos.Count != todos.Count || (_busca.Length > 0 && todos.Count > 0)))
-            TxtStatus.Text = abertos.Count == 0
-                ? $"Nenhum pedido com \"{_busca}\" no quadro"
-                : $"Busca \"{_busca}\": {abertos.Count} de {todos.Count} pedidos";
 
         // A PREPARAR: agendados no topo (por hora marcada), depois a fila de chegada.
         var fila = Nucleo.Kds.OrdenarFila(abertos.Where(t => t.Status == Nucleo.Kds.Recebido));
@@ -425,10 +432,14 @@ public partial class Kds : UserControl
             _busca = "";
             BtnLimparBusca.Visibility = Visibility.Visible;
             IconeBusca.Visibility = Visibility.Collapsed;
+            AjustarCampoBusca();
             TxtStatus.Text = FinalizadosKds.TextoEtiquetaNaBusca;
             // A linha de aviso do cabeçalho não aparece a 1024: o aviso vai também na faixa.
             _etiquetaNaBusca = true;
             PintarFaixaBusca(0);
+            // A lista tinha filtrado por "A", "AD", "ADK", "ADKD" (nome) antes de a etiqueta ser
+            // reconhecida: repinta com a busca zerada, senão ficava "Nada com ADKD" embaixo da faixa.
+            if (_finalizados) PintarFinalizados();
             return;
         }
         _etiquetaNaBusca = false;
@@ -436,6 +447,7 @@ public partial class Kds : UserControl
         BtnLimparBusca.Visibility = _busca.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         // O ✕ entra no lugar da lupa: com os dois, a 1024 o campo crescia e cobria o "PEDIDOS".
         IconeBusca.Visibility = _busca.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
+        AjustarCampoBusca();
         if (_busca.Length == 0) TxtStatus.Text = "";
         Pintar();
         if (_finalizados) PintarFinalizados();
@@ -446,12 +458,21 @@ public partial class Kds : UserControl
         // Etiqueta caída na busca: o foco SAI do campo, senão o próximo bipe cai nele de novo.
         var eraEtiqueta = EtiquetaKds.PareceEtiqueta(TxtBusca.Text);
         TxtBusca.Text = "";
-        if (!eraEtiqueta) { TxtBusca.Focus(); return; }
+        // Na lista dos que saíram, limpar é "voltar a ver todos": o foco vai para o quadro, senão
+        // o teclado do Windows reabre por cima da lista a 1024x768 (BuscaFocou).
+        if (!eraEtiqueta && !_finalizados) { TxtBusca.Focus(); return; }
         TxtStatus.Text = "";
         _etiquetaNaBusca = false;
         PintarFaixaBusca(0);
         Focus();
     }
+
+    /// <summary>
+    /// A caixa da busca não muda de largura ao digitar: sem texto, lupa + campo de 126 (cabe a
+    /// dica "nº do pedido"); com texto, o ✕ de 40 px entra no lugar da lupa e o campo cede 18.
+    /// </summary>
+    private void AjustarCampoBusca()
+        => TxtBusca.Width = BtnLimparBusca.Visibility == Visibility.Visible ? 108 : 126;
 
     /// <summary>Caixa touch: o toque no campo abre o teclado do Windows, como na justificativa.</summary>
     private void BuscaFocou(object sender, RoutedEventArgs e) => PedirTexto.AbrirTecladoVirtualSeTouch();
@@ -475,6 +496,26 @@ public partial class Kds : UserControl
     /// </summary>
     public Func<IReadOnlyList<string>, Task<List<(string OrderId, string Status, string? PreparoAte)>?>> ConsultaNuvem { get; set; }
         = ids => Servicos.Nuvem().StatusPedidosOuNuloAsync(ids);
+
+    /// <summary>
+    /// Quem diz quais dos que saíram o iFood CANCELOU (Nuvem.CanceladosAsync): o feed esconde o
+    /// cancelamento depois do despacho. null na resposta = a nuvem não respondeu. O modo
+    /// --foto-kds troca por uma resposta fabricada.
+    /// </summary>
+    public Func<IReadOnlyList<string>, Task<List<(string OrderId, DateTime? Em)>?>> ConsultaCancelados { get; set; }
+        = ids => Servicos.Nuvem().CanceladosAsync(ids);
+
+    /// <summary>Pedidos novos que chegaram desde que a lista abriu (a faixa de volta ao quadro).</summary>
+    private int _novosNaLista;
+
+    /// <summary>Chegou pedido com a lista aberta: a faixa no alto da lista, que leva de volta ao quadro.</summary>
+    public void AvisarNovosNaLista(int novos)
+    {
+        if (!_finalizados || novos <= 0) return;
+        _novosNaLista += novos;
+        TxtNovosNaLista.Text = FinalizadosKds.TextoPedidosNovos(_novosNaLista);
+        BtnNovosNaLista.Visibility = Visibility.Visible;
+    }
 
     /// <summary>"Saíram hoje: 143": o número é relido a cada pintura (10 s) pelo índice de criado_em.</summary>
     private void PintarSairamHoje()
@@ -549,6 +590,8 @@ public partial class Kds : UserControl
     private void FecharFinalizados()
     {
         _finalizados = false;
+        _novosNaLista = 0;
+        BtnNovosNaLista.Visibility = Visibility.Collapsed;
         PainelFinalizados.Visibility = Visibility.Collapsed;
         Quadro.Visibility = Visibility.Visible;
         TxtBusca.Tag = FinalizadosKds.DicaBuscaQuadro;
@@ -599,7 +642,8 @@ public partial class Kds : UserControl
         {
             var vazio = new TextBlock
             {
-                Text = FinalizadosKds.TextoVazio(_periodo, _busca), FontSize = 18, FontWeight = FontWeights.SemiBold,
+                Text = FinalizadosKds.TextoVazio(_periodo, _busca, FinalizadosKds.Contar(sete, PeriodoFinalizados.SeteDias, _busca, agora)),
+                FontSize = 18, FontWeight = FontWeights.SemiBold,
                 HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(16, 48, 16, 16),
                 TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
             };
@@ -615,9 +659,14 @@ public partial class Kds : UserControl
     }
 
     /// <summary>
-    /// O reforço da nuvem, quando há internet: pergunta à pdv_kds_status o estado real dos
-    /// que saíram sem motivo certo (SAIU DO QUADRO) e grava SÓ onde o caixa não sabia. Sem
-    /// resposta em 5 s, a lista fica com o que o caixa sabe e a barra diz "Sem internet".
+    /// O reforço da nuvem, quando há internet, nas duas perguntas que o caixa sozinho não
+    /// responde:
+    ///  1. os que saíram sem motivo certo (SAIU DO QUADRO): a pdv_kds_status diz se saíram;
+    ///  2. os que saíram e podem ter sido CANCELADOS DEPOIS (revisão de 14/10/2026: o iFood
+    ///     cancela pedido despachado e o feed continua dizendo "despachado"): a lista inteira
+    ///     que está na tela (até 300, em lotes de 100) vai para Nuvem.CanceladosAsync.
+    /// Grava SÓ o que o caixa não sabia. Sem resposta em 5 s, a lista fica com o que o caixa
+    /// sabe e a barra diz "Sem internet".
     /// </summary>
     private async Task ConfirmarNaNuvemAsync()
     {
@@ -625,29 +674,41 @@ public partial class Kds : UserControl
         _confirmando = true;
         try
         {
-            IReadOnlyList<string> ids;
-            try { ids = FinalizadosKds.ParaConfirmarNaNuvem(FinalizadosKds.Ler(_periodo, DateTime.Now)); }
-            catch { return; }
-            if (ids.Count == 0) { TxtFonteLista.Text = FinalizadosKds.TextoGuardado; return; }
-
-            List<(string OrderId, string Status, string? PreparoAte)>? resposta;
+            IReadOnlyList<string> semMotivo, paraCancelamento;
             try
             {
-                var consulta = ConsultaNuvem(ids);
-                resposta = await Task.WhenAny(consulta, Task.Delay(TimeSpan.FromSeconds(5))) == consulta
-                    ? await consulta : null;
+                var agora = DateTime.Now;
+                var doPeriodo = FinalizadosKds.Ler(_periodo, agora);
+                semMotivo = FinalizadosKds.ParaConfirmarNaNuvem(doPeriodo);
+                // os da TELA (a mesma régua da lista: busca, ordem e teto), não o período inteiro
+                paraCancelamento = FinalizadosKds.ParaConferirCancelamento(
+                    FinalizadosKds.Montar(doPeriodo, _periodo, _busca, agora).Linhas.Select(l => l.Ticket));
             }
-            catch { resposta = null; }
+            catch { return; }
+            if (semMotivo.Count == 0 && paraCancelamento.Count == 0) { TxtFonteLista.Text = FinalizadosKds.TextoGuardado; return; }
 
-            if (resposta is null)
+            // As duas perguntas saem juntas, com o mesmo prazo de 5 s.
+            var prazo = Task.Delay(TimeSpan.FromSeconds(5));
+            Task<List<(string OrderId, string Status, string? PreparoAte)>?> pStatus;
+            Task<int?> pCancelados;
+            try { pStatus = semMotivo.Count == 0 ? Task.FromResult<List<(string, string, string?)>?>(new()) : ConsultaNuvem(semMotivo); }
+            catch { pStatus = Task.FromResult<List<(string, string, string?)>?>(null); }
+            try { pCancelados = paraCancelamento.Count == 0 ? Task.FromResult<int?>(0) : FinalizadosKds.ConferirCancelamentosAsync(ConsultaCancelados, paraCancelamento); }
+            catch { pCancelados = Task.FromResult<int?>(null); }
+            await Task.WhenAny(Task.WhenAll(pStatus, pCancelados), prazo);
+            List<(string OrderId, string Status, string? PreparoAte)>? status = null;
+            int? cancelados = null;
+            try { if (pStatus.IsCompletedSuccessfully) status = pStatus.Result; } catch { }
+            try { if (pCancelados.IsCompletedSuccessfully) cancelados = pCancelados.Result; } catch { }
+
+            var mudou = 0;
+            if (status is not null)
             {
-                TxtFonteLista.Text = FinalizadosKds.TextoSemInternet;
-                return;
+                try { mudou += FinalizadosKds.AplicarNuvem(status); }
+                catch { /* banco ocupado: fica para o próximo Atualizar */ }
             }
-            TxtFonteLista.Text = FinalizadosKds.TextoGuardado;
-            int mudou;
-            try { mudou = FinalizadosKds.AplicarNuvem(resposta); }
-            catch { mudou = 0; }
+            mudou += cancelados ?? 0;
+            TxtFonteLista.Text = status is null || cancelados is null ? FinalizadosKds.TextoSemInternet : FinalizadosKds.TextoGuardado;
             if (mudou > 0 && _finalizados) PintarFinalizados(manterRolagem: true);
         }
         finally { _confirmando = false; }

@@ -837,7 +837,9 @@ public static class Servicos
     /// (automática, 🖨 do card, reimpressão): o formato não pode depender de quem pediu.
     /// Mesmo contrato da impressão: null = saiu; string = mensagem; nunca lança.
     /// </summary>
-    public static async Task<string?> ImprimirComandaAsync(Pdv.Nucleo.Ticket t, string descricao)
+    /// <param name="marca">14/10/2026: a marca da segunda via no papel (pedido que já saiu, tirado de novo
+    /// pela lista dos que saíram); null = comanda de sempre.</param>
+    public static async Task<string?> ImprimirComandaAsync(Pdv.Nucleo.Ticket t, string descricao, string? marca = null)
     {
         FormatoComanda formato; Impressao.Destino destino; string? impEtiqueta; int giro;
         IReadOnlyList<string> embalagem;
@@ -855,9 +857,9 @@ public static class Servicos
         if (formato == FormatoComanda.Etiqueta)
             return await Impressao.ImprimirEtiquetaKdsAsync(t,
                 string.IsNullOrWhiteSpace(impEtiqueta) ? null : impEtiqueta, giro, descricao,
-                embalagem: embalagem).ConfigureAwait(false);
+                embalagem: embalagem, marca: marca).ConfigureAwait(false);
         return await Impressao.ImprimirTextoAsync(descricao,
-            new[] { Pdv.Nucleo.Kds.ComandaLinhas(t, Pdv.Nucleo.Kds.ColunasComanda(destino.Papel.Colunas), embalagem: embalagem) },
+            new[] { Pdv.Nucleo.Kds.ComandaLinhas(t, Pdv.Nucleo.Kds.ColunasComanda(destino.Papel.Colunas), embalagem: embalagem, marca: marca) },
             destino).ConfigureAwait(false);
     }
 
