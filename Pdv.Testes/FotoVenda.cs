@@ -311,7 +311,8 @@ public static class FotoVenda
                         tipo.GetField("_resgatePdv", P)!.SetValue(tela, true);
                         const string longo = "#80391: não mandei a pergunta. Maria Eduarda Lima ganhou 1 Cookie Clássico Duplo. Pergunte o sabor no chat que eu anoto.";
                         tipo.GetMethod("AvisoDaConversa", P)!.Invoke(tela, new object?[] { new AvisoDoChat("falha_envio", longo,
-                            "Oi, Maria! Qual sabor você quer? 1) New York, 2) Tradicional ou 3) Triplo.", "3f2a8c1e-1111-4a2b-9c3d-0123456789ab", "80391") });
+                            "Oi, Maria! Qual sabor você quer? 1) New York, 2) Tradicional ou 3) Triplo.", "3f2a8c1e-1111-4a2b-9c3d-0123456789ab", "80391")
+                            { Resgatavel = true } });
                     }
                     if (combo is { } cb)
                     {

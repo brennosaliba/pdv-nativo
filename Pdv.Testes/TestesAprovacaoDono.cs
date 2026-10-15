@@ -289,9 +289,10 @@ public static class TestesAprovacaoDono
         // aprovacao=dono o ERP não manda aviso nem 'operador'; quando manda, é porque a aprovação foi
         // desligada depois do último sinal, ou porque o WhatsApp do dono está fora). Os avisos do
         // sinal continuam pela trava: o próprio sinal diz dono_fora.
-        checar(Regex.IsMatch(servico, @"Emitir\(new AvisoDoChat\(a\.Tipo, a\.Texto, null, a\.IfoodOrderId, a\.PedidoNumero\), doErp: true\);")
+        // 1.0.35 (revisao): o aviso leva se a falha do envio e resgatavel (Resgatavel), e nada mais muda
+        checar(Regex.IsMatch(servico, @"Emitir\(new AvisoDoChat\(a\.Tipo, a\.Texto, null, a\.IfoodOrderId, a\.PedidoNumero\) \{ Resgatavel = a\.Resgatavel \}, doErp: true\);")
                && Regex.IsMatch(tratar, @"case DestinoDaSaida\.Colar:\s*Emitir\(new AvisoDoChat\(""mandar"",[^;]*s\.IfoodOrderId, s\.PedidoNumero\), doErp: true\);")
-               && servico.Contains("foreach (var a in s.Avisos) Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero));", StringComparison.Ordinal)
+               && servico.Contains("foreach (var a in s.Avisos) Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero) { Resgatavel = a.Resgatavel });", StringComparison.Ordinal)
                && Regex.Matches(servico, @"doErp: true").Count == 2,
             "AF-16 o aviso e o 'operador' que vêm na resposta do ERP aparecem mesmo com o sinal antigo dizendo dono; os do sinal seguem a trava");
 

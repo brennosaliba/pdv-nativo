@@ -775,6 +775,20 @@ if (args.Length >= 1 && args[0] == "--so-aprovacao")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (14/10/2026): so as suites do envio do chat (portao, plano B, detalhe do erro,
+// aprovacao do dono e o aviso com o Resgatar aqui). NAO e o gate.
+//   Pdv.Testes.exe --so-envio
+if (args.Length >= 1 && args[0] == "--so-envio")
+{
+    await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, cond));
+    await TestesPlanoBDoEnvio.RodarAsync((cond, nome) => Check("plano-b: " + nome, cond));
+    TestesAprovacaoDono.Rodar((cond, nome) => Check("aprovacao: " + nome, cond));
+    await TestesResgateManual.RodarAsync((cond, nome) => Check("resgate-manual: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so envio) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 // MODO DE DESENVOLVIMENTO (13/10/2026): so a suite da comanda aberta (conta_aberta/conta_lote), mais a do
 // pedido para a cozinha, que ela nao pode quebrar. NAO e o gate.
 //   Pdv.Testes.exe --so-conta

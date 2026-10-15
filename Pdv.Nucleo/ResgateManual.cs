@@ -84,6 +84,14 @@ public static class ResgateManual
         "humano", "expirou", "nao_raspou", "validador", "premio_sem_catalogo", "palavra_pedido_saiu", "falha_envio",
     };
 
+    /// <summary>
+    /// 1.0.35 (revisao adversarial): o aviso leva o "Resgatar aqui"? O falha_envio so quando e resgatavel (a
+    /// pergunta do sabor que nao saiu: o codigo ainda nao foi usado). Na confirmacao o premio ja esta no
+    /// pedido, e na recusa do codigo nao ha o que resgatar; quando ninguem diz, nao. Os outros, como antes.
+    /// </summary>
+    public static bool LevaResgatar(string tipo, bool? resgatavel)
+        => tipo == "falha_envio" ? resgatavel == true : TiposDeAvisoComResgate.Contains(tipo);
+
     // ── textos (uma linha, sem travessao) ───────────────────────────────────
     public const string TextoSemRede = "Sem resposta do servidor. Toque em Resgatar de novo: não resgata duas vezes.";
     public const string TextoSemCodigo = "Digite o código do cliente.";

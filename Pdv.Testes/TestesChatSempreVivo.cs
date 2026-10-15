@@ -63,12 +63,16 @@ public static class TestesChatSempreVivo
         // TestesPlanoBDoEnvio); EnviarUmaAsync so liga as portas de verdade
         var iEnviar = servico.IndexOf("public static async Task EnviarComTentativasAsync(", StringComparison.Ordinal);
         var enviar = iEnviar < 0 ? "" : servico.Substring(iEnviar, Math.Min(12000, servico.Length - iEnviar));
-        checar(enviar.Contains("for (var tentativa = 1; tentativa <= TentativasDeEnvio; tentativa++)")
+        // 1.0.35 (revisao): o limite comeca em TentativasDeEnvio e so ganha +1 com a recarga do plano B; no fim,
+        // o erro do relato passa por ErroDoRelato (o SDK frio depois da recarga nao vira canal_errado)
+        checar(enviar.Contains("var limite = TentativasDeEnvio;")
+               && enviar.Contains("for (var tentativa = 1; tentativa <= limite; tentativa++)")
+               && enviar.Contains("limite = TentativasDeEnvio + 1;")
                && enviar.Contains("l.Portao.Decidir(s, sinal, sinalEm, recebida, l.Agora())")
                && enviar.Contains("l.Portao.Repetir(primeira, recebida, l.Agora())")
-               && enviar.Contains("if (erro is \"congelada\" or \"sem_cliente\" || tentativa == TentativasDeEnvio) break;")
+               && enviar.Contains("if (erro is \"congelada\" or \"sem_cliente\" || tentativa >= limite) break;")
                && enviar.Contains("await AquecerAsync(ponte, s.PedidoNumero, s.IfoodOrderId)")
-               && enviar.Contains("await l.Relatar(s.Id, \"falhou\", erro ?? \"erro_envio\", s, rastro.Detalhe())")
+               && enviar.Contains("await l.Relatar(s.Id, \"falhou\", ErroDoRelato(erro, depoisDaRecarga is not null), s, rastro.Detalhe())")
                && servico.Contains("=> EnviarComTentativasAsync(s, recebida, new LacoDeEnvio"),
             "CV-11 a 1a tentativa passa pelo portao; as seguintes pelo Repetir (token novo, sem o eco) depois de aquecer; congelada e sem_cliente nao tentam de novo; so no fim relata falhou (com o detalhe, 1.0.35)");
         // 1.0.25: o SDK frio e reconhecido pelo diagnostico, e o caixa aquece sozinho

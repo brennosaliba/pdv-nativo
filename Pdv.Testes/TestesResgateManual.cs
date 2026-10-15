@@ -355,6 +355,12 @@ public static class TestesResgateManual
         checar(ResgateManual.TiposDeAvisoComResgate.SetEquals(new[] { "humano", "expirou", "nao_raspou", "validador", "premio_sem_catalogo", "palavra_pedido_saiu", "falha_envio" })
                && !ResgateManual.TiposDeAvisoComResgate.Contains("resgatou") && !ResgateManual.TiposDeAvisoComResgate.Contains("pausado"),
             "TX-12 os avisos que ganham o 'Resgatar aqui' sao os da secao 3.1 e, desde a 1.0.35, a falha do envio (nunca o resgatou nem o pausado)");
+        // revisao da 1.0.35 (achado 7): a falha do envio so quando e resgatavel (a pergunta do sabor que nao saiu)
+        checar(ResgateManual.LevaResgatar("falha_envio", true) && !ResgateManual.LevaResgatar("falha_envio", false)
+               && !ResgateManual.LevaResgatar("falha_envio", null)
+               && ResgateManual.LevaResgatar("humano", null) && ResgateManual.LevaResgatar("expirou", false)
+               && !ResgateManual.LevaResgatar("resgatou", true) && !ResgateManual.LevaResgatar("pausado", true),
+            "TX-13 a falha do envio so leva o 'Resgatar aqui' quando e resgatavel (pergunta do sabor); confirmacao, recusa e ERP que nao diz, nao; os outros avisos como antes");
     }
 
     // ── A CONFIG DO PAINEL (a coluna nova desce) ─────────────────────────────
@@ -797,7 +803,8 @@ public static class TestesResgateManual
         host.UpdateLayout();
         var umaLinha = txt.ActualHeight;
         var longo = "#80391: não mandei a pergunta. Maria Eduarda Lima ganhou 1 Cookie Clássico Duplo. Pergunte o sabor no chat que eu anoto.";
-        await Aviso(venda2, new AvisoDoChat("falha_envio", longo, "Oi, Maria! Qual sabor você quer? 1) New York, 2) Tradicional ou 3) Triplo.", OID, "80391"));
+        await Aviso(venda2, new AvisoDoChat("falha_envio", longo, "Oi, Maria! Qual sabor você quer? 1) New York, 2) Tradicional ou 3) Triplo.", OID, "80391")
+            { Resgatavel = true });
         host.UpdateLayout();
         var linhas = umaLinha > 0 ? (int)Math.Round(txt.ActualHeight / umaLinha) : 99;
         checar(longo.Length == 120 && ConversaRaspadinha.TextoLimpo(longo, 160) && linhas <= 4 && txt.Text == longo,
@@ -812,9 +819,19 @@ public static class TestesResgateManual
             $"PT-6d os dois botoes cabem no aviso ({botoesToast.ActualWidth:0} de {toast.ActualWidth:0} px)");
         // o toast com o Abrir e colar nao e coberto por aviso que so informa (FN-15b): fecha antes
         Campo<Border>(venda2, "ToastConversa").Visibility = Visibility.Collapsed;
-        await Aviso(venda2, new AvisoDoChat("falha_envio", "#8039: não consegui mandar a resposta. Mande pelo chat.", null, OID, "8039"));
+        await Aviso(venda2, new AvisoDoChat("falha_envio", "#8039: não mandei a pergunta. Prêmio: 1 Cookie Clássico. Pergunte o sabor no chat.", null, OID, "8039")
+            { Resgatavel = true });
         checar(btn.Visibility == Visibility.Visible && Campo<Button>(venda2, "BtnConversaColar").Visibility == Visibility.Collapsed,
-            "PT-6e a falha que chega pelo sinal (de outro caixa, sem o texto para colar) mostra so o 'Resgatar aqui'");
+            "PT-6e a falha da pergunta do sabor que chega pelo sinal (de outro caixa, sem o texto para colar) mostra so o 'Resgatar aqui'");
+        // revisao da 1.0.35 (achado 7): na confirmacao o premio ja esta no pedido; o botao levaria a uma recusa
+        Campo<Border>(venda2, "ToastConversa").Visibility = Visibility.Collapsed;
+        await Aviso(venda2, new AvisoDoChat("falha_envio", "#8039: não mandei a confirmação. O prêmio de Heitor já está no pedido. Avise no chat.",
+            "Anotado! Seu Cookie Triplo vai junto com o pedido.", OID, "8039") { Resgatavel = false });
+        var confSemBotao = btn.Visibility == Visibility.Collapsed && Campo<Button>(venda2, "BtnConversaColar").Visibility == Visibility.Visible;
+        Campo<Border>(venda2, "ToastConversa").Visibility = Visibility.Collapsed;
+        await Aviso(venda2, new AvisoDoChat("falha_envio", "#8039: não consegui mandar a resposta. Mande pelo chat.", null, OID, "8039"));
+        checar(confSemBotao && btn.Visibility == Visibility.Collapsed,
+            "PT-6f a falha da confirmacao (premio ja no pedido) leva so o 'Abrir e colar', sem 'Resgatar aqui'; e a falha que o ERP nao diz que e resgatavel tambem nao");
         host.Content = null;
 
         // 3. o detalhe do pedido no KDS: o botao so com o callback (o quadro so passa com a chave)

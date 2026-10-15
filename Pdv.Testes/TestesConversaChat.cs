@@ -426,8 +426,10 @@ public static class TestesConversaChat
 
         checar(PortaoDeEnvio.Relato(MotivoPortao.Sombra) is null && PortaoDeEnvio.Relato(MotivoPortao.Operador) is null,
             "PT-18 sombra e operador não têm o que relatar ao ERP");
-        checar(PortaoDeEnvio.Relato(MotivoPortao.Eco) is ("incerta", _) && PortaoDeEnvio.Relato(MotivoPortao.ReservaVencida) is ("incerta", _),
-            "PT-19 eco e reserva vencida viram 'incerta' (nunca reenvio)");
+        // 1.0.35 (revisão): a reserva vencida no portão é recusada ANTES do SDK, então nada saiu; vira "falhou" e
+        // vai para a pessoa (antes era "incerta" e a resposta sumia sem aviso). O eco continua "incerta".
+        checar(PortaoDeEnvio.Relato(MotivoPortao.Eco) is ("incerta", "eco") && PortaoDeEnvio.Relato(MotivoPortao.ReservaVencida) is ("falhou", "reserva_vencida"),
+            "PT-19 eco vira 'incerta' (nunca reenvio); reserva vencida no portão vira 'falhou' (nada saiu, vai para a pessoa)");
         checar(PortaoDeEnvio.Relato(MotivoPortao.SinalVelho) is ("falhou", "portao_sinalvelho"),
             "PT-20 o resto vira 'falhou' e o ERP passa a resposta para a pessoa");
         checar(typeof(PermissaoDeEnvio).GetConstructors().Length == 0,
@@ -447,7 +449,7 @@ public static class TestesConversaChat
             "PT-23 o Repetir dá a mesma saída de novo, com token novo de uso único, sem passar pelo eco");
         checar(pr.Repetir(perm1, Agora.AddSeconds(-1), Agora.AddSeconds(50)) is null
                && pr.Repetir(perm1, Agora.AddSeconds(-1), Agora.AddSeconds(49)) is not null,
-            "PT-24 o Repetir respeita o prazo da reserva (50 s): depois dele, nada (vira incerta/reserva_vencida)");
+            "PT-24 o Repetir respeita o prazo da reserva (50 s): depois dele, nada (e o laço relata falhou, nunca incerta)");
     }
 
     // ── CONFIRMAÇÃO ──────────────────────────────────────────────────────────
@@ -605,6 +607,63 @@ public static class TestesConversaChat
         checar(servicoEd.Contains("ConversaRaspadinha.TextoDoAvisoDeFalha(rr, res.PedidoNumero ?? s?.PedidoNumero), res.Texto,", StringComparison.Ordinal)
                && servicoEd.Contains("Emitir(new AvisoDoChat(\"falha_envio\", ConversaRaspadinha.TextoFalhaEnvio(s.PedidoNumero), s.Texto,", StringComparison.Ordinal),
             "ED-15 RelatarAsync usa o texto do ERP na reserva; sem rede, o texto do caixa (como antes)");
+
+        // revisão da 1.0.35 (achado 6): a segunda passada do C# contra segredos tem de valer para a resposta de
+        // tamanho real. A pergunta do #8039 tem uns 155 caracteres; o corte em 120 vinha antes da troca do texto
+        // inteiro, e o começo da resposta, com o nome do cliente, ficava na mensagem (log e ERP).
+        const string pergunta = "Oi, Heitor! Recebemos o código da sua raspadinha. Seu prêmio é 1 Cookie Clássico. Qual sabor você quer? 1) New York, 2) Tradicional ou 3) Triplo Chocolate.";
+        var paginaLonga = J(System.Text.Json.JsonSerializer.Serialize(new { etapa = "falhou_sdk", codigo = 900100, msg = "Falhou: " + pergunta }));
+        var depoisDaPagina = ConversaRaspadinha.DetalheSemSegredos(ConversaRaspadinha.DetalheDoErro(paginaLonga), pergunta, Canal, Pedido,
+            "0123456789abcdef0123456789abcdef", "loja-1");
+        var msgLonga = (string?)depoisDaPagina?["msg"] ?? "";
+        checar(pergunta.Length > ConversaRaspadinha.TetoMsgDoErro && !msgLonga.Contains("Heitor", StringComparison.Ordinal)
+               && !msgLonga.Contains("Recebemos", StringComparison.Ordinal) && msgLonga.StartsWith("Falhou:", StringComparison.Ordinal)
+               && !ConversaRaspadinha.LinhaDoDetalhe(depoisDaPagina).Contains("Heitor", StringComparison.Ordinal),
+            $"ED-16 resposta de {pergunta.Length} caracteres na mensagem do erro: a segunda passada do C# tira mesmo depois do corte em 120 (msg '{msgLonga}')");
+        var pedaco = ConversaRaspadinha.DetalheSemSegredos(J("""{"etapa":"falhou_sdk","msg":"cannot send: Seu prêmio é 1 Cookie Clássico (Not a member)"}""") is var y
+            ? ConversaRaspadinha.DetalheDoErro(y) : null, pergunta, Canal, Pedido, "tk", "loja-1");
+        var curto = ConversaRaspadinha.DetalheSemSegredos(J("""{"etapa":"falhou_sdk","msg":"Not a member of the channel. Qual sabor"}""") is var z
+            ? ConversaRaspadinha.DetalheDoErro(z) : null, pergunta, Canal, Pedido, "tk", "loja-1");
+        checar((string?)pedaco?["msg"] == "cannot send: # (Not a member)" && (string?)curto?["msg"] == "Not a member of the channel. Qual sabor",
+            $"ED-17 trecho da resposta com 20 ou mais caracteres sai da mensagem; palavra solta (menos de 20) fica ('{pedaco?["msg"]}' | '{curto?["msg"]}')");
+
+        // achado 6, o caminho da tela: os segredos do envio vão junto para a lista branca e saem da mensagem CRUA,
+        // antes do corte em 120 (a segunda passada, ED-16 e ED-17, continua valendo depois)
+        var comSegredos = ConversaRaspadinha.DetalheDoErro(paginaLonga, new[] { pergunta, Canal, Pedido, "0123456789abcdef0123456789abcdef", "loja-1" });
+        var semEles = ConversaRaspadinha.DetalheDoErro(paginaLonga);
+        checar((string?)comSegredos?["msg"] == "Falhou: #" && ((string?)semEles?["msg"] ?? "").Contains("Heitor", StringComparison.Ordinal),
+            $"ED-18 com os segredos do envio a lista branca tira a resposta inteira da mensagem crua ('{comSegredos?["msg"]}'); sem eles o corte vinha primeiro");
+        var telaEd = raizEd is null ? "" : File.ReadAllText(Path.Combine(raizEd, "Telas", "ChatIfood.xaml.cs"));
+        checar(telaEd.Contains("ConversaRaspadinha.DetalheDoErro(de, env.Segredos)", StringComparison.Ordinal)
+               && telaEd.Contains("var segredos = new[] { permissao.Texto, permissao.Canal, permissao.OrderUuid, token, _ultimoWsUser };", StringComparison.Ordinal)
+               && telaEd.Contains("_envios[id] = (tcs, segredos);", StringComparison.Ordinal)
+               && telaEd.Contains("ConversaRaspadinha.DetalheSemSegredos(tcs.Task.Result.Detalhe, segredos)", StringComparison.Ordinal),
+            "ED-19 a tela guarda os segredos de cada envio e os passa na lista branca (mensagem crua) e na segunda passada");
+
+        // revisão da 1.0.35 (achado 7): "Resgatar aqui" só no falha_envio da pergunta do sabor. Na confirmação o
+        // prêmio já está no pedido, e na recusa do código não há o que resgatar: a tela de resgate só recusaria.
+        var rSabor = ConversaRaspadinha.LerSaidaResultado(200, """{"ok":true,"estado":"operador","reserva":{"como":"operador","texto":"Qual sabor?","pedido_numero":"8039","resgatavel":true}}""");
+        var rConf = ConversaRaspadinha.LerSaidaResultado(200, """{"ok":true,"estado":"operador","reserva":{"como":"operador","texto":"Anotado!","pedido_numero":"8039","resgatavel":false}}""");
+        var rLixo = ConversaRaspadinha.LerSaidaResultado(200, """{"ok":true,"estado":"operador","reserva":{"como":"operador","texto":"Anotado!","pedido_numero":"8039","resgatavel":"sim"}}""");
+        var sinalAv = ConversaRaspadinha.LerSinal(SinalJson("automatico", avisos:
+            """[{"tipo":"falha_envio","texto":"#8039: não mandei a pergunta.","ifood_order_id":"x","pedido_numero":"8039","resgatavel":true},"""
+            + """{"tipo":"falha_envio","texto":"#8040: não mandei a confirmação.","ifood_order_id":"y","pedido_numero":"8040"}]"""));
+        checar(rSabor.Resgatavel == true && rConf.Resgatavel == false && rLixo.Resgatavel is null && rVelho.Resgatavel is null
+               && sinalAv.Avisos.Count == 2 && sinalAv.Avisos[0].Resgatavel == true && sinalAv.Avisos[1].Resgatavel is null,
+            "ED-20 'resgatavel' (booleano) é lido da reserva do chat_saida e dos avisos do sinal; ausente ou fora do tipo, null");
+        checar(ConversaRaspadinha.FalhaResgatavel("pergunta_sabor", null) && ConversaRaspadinha.FalhaResgatavel("pergunta_sabor_curta", null)
+               && ConversaRaspadinha.FalhaResgatavel("nao_entendi_sabor", null) && ConversaRaspadinha.FalhaResgatavel("falta_segundo", null)
+               && ConversaRaspadinha.FalhaResgatavel("dois_iguais_sabor", null)
+               && !ConversaRaspadinha.FalhaResgatavel("confirmado", null) && !ConversaRaspadinha.FalhaResgatavel("confirmado_sabor", null)
+               && !ConversaRaspadinha.FalhaResgatavel("codigo_invalido", null) && !ConversaRaspadinha.FalhaResgatavel("msg_pedido_pronto", null)
+               && !ConversaRaspadinha.FalhaResgatavel(null, null)
+               && ConversaRaspadinha.FalhaResgatavel("confirmado", true) && !ConversaRaspadinha.FalhaResgatavel("pergunta_sabor", false)
+               && ConversaRaspadinha.EtapasDaPerguntaDoSabor.SetEquals(new[] { "pergunta_sabor", "pergunta_sabor_curta", "dois_iguais_sabor", "falta_segundo", "nao_entendi_sabor" }),
+            "ED-21 a falha desta saída é resgatável só nas etapas da pergunta do sabor (as mesmas do SQL 176); quando o ERP diz, vale o ERP");
+        checar(servicoEd.Contains("{ Resgatavel = ConversaRaspadinha.FalhaResgatavel(s?.Etapa, rr.Resgatavel) }", StringComparison.Ordinal)
+               && servicoEd.Contains("{ Resgatavel = ConversaRaspadinha.FalhaResgatavel(s.Etapa, null) }", StringComparison.Ordinal)
+               && servicoEd.Contains("foreach (var a in s.Avisos) Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero) { Resgatavel = a.Resgatavel });", StringComparison.Ordinal),
+            "ED-22 o falha_envio deste caixa diz se é resgatável pela etapa da saída (ou pelo ERP); o dos outros caixas, pelo sinal");
     }
 
     // ── O PAPEL ──────────────────────────────────────────────────────────────

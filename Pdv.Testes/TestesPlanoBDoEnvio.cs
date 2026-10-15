@@ -19,7 +19,10 @@ namespace Pdv.Testes;
 ///  · reserva vencida durante a recarga vira "falhou" com sem_tempo (nunca incerta, nunca envio);
 ///  · o quadro que passa durante a recarga (o SDK reenviando sozinho) impede a mensagem dobrada;
 ///  · canal_errado, congelada e quadro visto saindo nunca recarregam;
-///  · o teto da recarga (1 a cada 10 min, 3 por hora) e a decisão da tela.
+///  · o teto da recarga (1 a cada 10 min, 3 por hora) e a decisão da tela;
+///  · (revisão) o SDK frio depois da recarga aquece e tenta de novo, e nunca vira canal_errado;
+///  · (revisão) a reserva vencida no meio do laço, ou sem tempo para outra tentativa, vira "falhou", e a
+///    saída que esperava na fila e perdeu a reserva também (nunca "incerta": nada saiu).
 /// </summary>
 public static class TestesPlanoBDoEnvio
 {
@@ -39,6 +42,7 @@ public static class TestesPlanoBDoEnvio
         await ReservaVencidaNaRecarga(checar);
         await OQuadroDuranteARecarga(checar);
         await OQueNuncaRecarrega(checar);
+        await AReservaNoLaco(checar);
         OSinal(checar);
         PeloFonte(checar);
     }
@@ -75,6 +79,11 @@ public static class TestesPlanoBDoEnvio
         /// <summary>O que a tela responde ao plano B.</summary>
         public Func<Cena, string> Recarga = c => PlanoBDoEnvio.Recarregou;
         public TimeSpan TempoDaRecarga = TimeSpan.FromSeconds(18);
+        /// <summary>A tela nunca responde ao plano B (o laço desiste pelo próprio prazo).</summary>
+        public bool RecargaNuncaVolta;
+        public TimeSpan PrazoDaRecarga = PlanoBDoEnvio.PrazoDaRecarga;
+        /// <summary>Quanto o aquecimento do SDK leva (abrir a conversa no Gestor escondido).</summary>
+        public TimeSpan TempoDoAquecimento = TimeSpan.Zero;
 
         public SaidaConversa Saida = new(84, "pergunta_sabor", 1, Texto, "sdk", "reservada", Canal, Pedido, "8039");
 
@@ -95,12 +104,13 @@ public static class TestesPlanoBDoEnvio
                 AbrirEColar = (_, _, _) => Task.FromResult(false),
                 DiagSdk = (_, _) => Task.FromResult<JsonObject?>(null),
                 Gestor = () => "logado",
-                AquecerConversa = (_, _) => { Aquecimentos++; return Task.FromResult(true); },
+                AquecerConversa = (_, _) => { Aquecimentos++; Agora += TempoDoAquecimento; return Task.FromResult(true); },
                 RecarregarParaEnvio = comPlanoB ? (_, _) =>
                 {
                     Recargas++;
                     var r = Recarga(this);
                     Agora += TempoDaRecarga;
+                    if (RecargaNuncaVolta) return new TaskCompletionSource<string>().Task;
                     if (r == PlanoBDoEnvio.Recarregou) Recarregou = true;
                     return Task.FromResult(r);
                 } : null,
@@ -117,10 +127,12 @@ public static class TestesPlanoBDoEnvio
                 Diag = Diags.Add,
                 Versao = "1.0.35",
                 Recarregou = () => RecargasContadas++,
+                PrazoDaRecarga = PrazoDaRecarga,
             };
         }
 
         public Task Rodar(bool comPlanoB = true) => ServicoConversaChat.EnviarComTentativasAsync(Saida, T0, Laco(comPlanoB));
+        public Task Rodar(SaidaConversa s, DateTime recebida) => ServicoConversaChat.EnviarComTentativasAsync(s, recebida, Laco());
     }
 
     private static ResultadoDoScript Recusa(string etapa = "falhou_sdk", int codigo = 900100, string erro = "erro_envio")
@@ -307,6 +319,85 @@ public static class TestesPlanoBDoEnvio
         checar(semPorta.Enviados.Count == 3 && semPorta.Relatos.Count == 1 && semPorta.Relatos[0] is ("falhou", "erro_envio", _)
                && !semPorta.Relatos[0].Detalhe!.ContainsKey("plano_b"),
             "PB-26 sem a porta da recarga (ponte antiga), o laco e o de hoje e o detalhe nao fala de plano B");
+    }
+
+    // ── revisão adversarial da 1.0.35: a reserva de 50 s dentro do laço (achados 2 a 5) ──
+    // A mensagem que com certeza não saiu (recusa sem quadro) nunca vira "incerta" nem some: vai para
+    // a pessoa como "falhou". O SDK frio que a própria recarga causa não vira canal_errado (que pausa o
+    // robô da loja): o laço aquece e tenta de novo, como sempre fez. E nenhuma saída gasta a reserva
+    // de quem espera na fila esperando um laço que não tem mais tempo de tentar.
+    private static async Task AReservaNoLaco(Action<bool, string> checar)
+    {
+        var ok = new ResultadoDoScript(true, null, "991");
+        static string Rel(Cena x) => string.Join(",", x.Relatos.Select(r => r.Resultado + "/" + r.Erro));
+
+        // achado 3: depois da recarga o SDK chega frio (conversa nenhuma aberta) e a tentativa seguinte é canal_errado
+        var a = new Cena();
+        var depois = 0;
+        a.Script = (_, recarregou) => !recarregou ? Recusa() : ++depois == 1 ? Frio() : ok;
+        await a.Rodar();
+        checar(a.Relatos.Count == 0 && a.Enviados.Count == 3 && a.Recargas == 1 && a.Aquecimentos == 1,
+            $"PB-35 recusa, recarga e SDK frio na tentativa seguinte: o laco aquece e tenta de novo, e sai sem relato de falha "
+            + $"({a.Enviados.Count} envios, {a.Aquecimentos} aquecimentos, relatos {Rel(a)})");
+
+        var b = new Cena();
+        b.Script = (_, recarregou) => recarregou ? Frio() : Recusa();
+        await b.Rodar();
+        var detB = b.Relatos.LastOrDefault().Detalhe;
+        checar(b.Relatos.Count == 1 && b.Relatos[0] is ("falhou", "erro_envio", _) && !b.Relatos.Any(r => r.Erro == "canal_errado")
+               && b.Enviados.Count == 4 && Str(detB, "plano_b") == "recarregou" && Str(detB, "etapa") == "canal_errado" && Int(detB, "tentativas") == 4,
+            $"PB-36 recarga e o SDK frio ate o fim: falhou/erro_envio (a recusa que comecou tudo), nunca canal_errado, que pausaria o robo da loja "
+            + $"({b.Enviados.Count} envios, relatos {Rel(b)}, {detB?.ToJsonString()})");
+
+        // achados 2 e 4: o plano B não recarregou, mas demorou
+        var c = new Cena { TempoDaRecarga = TimeSpan.FromSeconds(36) };
+        c.Script = (_, _) => Recusa();
+        c.Recarga = _ => PlanoBDoEnvio.SemSdk;
+        await c.Rodar();
+        var detC = c.Relatos.LastOrDefault().Detalhe;
+        checar(c.Relatos.Count == 1 && c.Relatos[0] is ("falhou", "erro_envio", _) && Str(detC, "plano_b") == "sem_sdk" && c.Enviados.Count == 2
+               && c.Agora - T0 <= PortaoDeEnvio.PrazoDaReserva,
+            $"PB-37 plano B sem recarga em 36 s: mais uma tentativa e falhou/erro_envio com plano_b sem_sdk dentro da reserva, nunca incerta "
+            + $"({c.Enviados.Count} envios, relatos {Rel(c)}, fim em {(c.Agora - T0).TotalSeconds:0} s)");
+
+        var d = new Cena { TempoDaRecarga = TimeSpan.FromSeconds(45) };
+        d.Script = (_, _) => Recusa();
+        d.Recarga = _ => PlanoBDoEnvio.SemSdk;
+        await d.Rodar();
+        checar(d.Relatos.Count == 1 && d.Relatos[0] is ("falhou", "erro_envio", _) && d.Enviados.Count == 1 && d.Aquecimentos == 0
+               && d.Agora == T0.AddSeconds(1 + 2 + 45) && d.Diags.Any(x => x.Contains("sem tempo", StringComparison.Ordinal)),
+            $"PB-38 plano B sem recarga em 45 s: nao sobra tempo para outra tentativa, falhou na hora (sem aquecer nem esperar o respiro) "
+            + $"({d.Enviados.Count} envios, {d.Aquecimentos} aquecimentos, relatos {Rel(d)}, fim em {(d.Agora - T0).TotalSeconds:0} s)");
+
+        var e = new Cena { TempoDaRecarga = TimeSpan.FromSeconds(40), RecargaNuncaVolta = true, PrazoDaRecarga = TimeSpan.FromMilliseconds(200) };
+        e.Script = (_, _) => Recusa();
+        await e.Rodar();
+        var detE = e.Relatos.LastOrDefault().Detalhe;
+        checar(e.Relatos.Count == 1 && e.Relatos[0] is ("falhou", "erro_envio", _) && Str(detE, "plano_b") == "sem_sdk",
+            $"PB-39 a tela nao respondeu o plano B no prazo: falhou/erro_envio com plano_b sem_sdk, nunca incerta (relatos {Rel(e)})");
+
+        // achado 4: a reserva vence entre tentativas (o aquecimento demorou) depois de uma falha certa
+        var f = new Cena { TempoDoAquecimento = TimeSpan.FromSeconds(45) };
+        f.Script = (_, _) => Frio();
+        await f.Rodar();
+        checar(f.Relatos.Count == 1 && f.Relatos[0] is ("falhou", "erro_envio", _) && f.Enviados.Count == 1,
+            $"PB-40 a reserva venceu depois de uma tentativa que com certeza nao saiu: falhou/erro_envio (para a pessoa), nunca incerta nem canal_errado "
+            + $"(relatos {Rel(f)})");
+
+        // achado 5: a saída que esperava na fila (um envio por vez, 3 s entre elas) e nunca foi tentada
+        var g = new Cena { TempoDaRecarga = TimeSpan.FromSeconds(36) };
+        var da85 = 0;
+        g.Script = (_, _) => Recusa();
+        g.Recarga = _ => PlanoBDoEnvio.SemSdk;
+        await g.Rodar();
+        var fim84 = g.Agora;
+        g.Agora += TimeSpan.FromSeconds(3);
+        g.Script = (_, _) => { da85++; return ok; };
+        var s85 = g.Saida with { Id = 85, Texto = "Oi, Ana! Seu prêmio é 1 Brownie. Ele vai junto com o pedido." };
+        await g.Rodar(s85, T0.AddSeconds(-2));
+        checar(fim84 - T0 <= PortaoDeEnvio.PrazoDaReserva && da85 == 0 && g.Relatos.Count == 2 && g.Relatos[1] is ("falhou", "reserva_vencida", _),
+            $"PB-41 a saida da fila que perdeu a reserva sem ser tentada vai para a pessoa (falhou/reserva_vencida), nunca incerta; e a da frente "
+            + $"termina dentro da reserva ({(fim84 - T0).TotalSeconds:0} s; relatos {Rel(g)})");
     }
 
     // ── pelo fonte ───────────────────────────────────────────────────────────

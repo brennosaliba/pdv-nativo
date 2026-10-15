@@ -57,7 +57,7 @@ public enum DestinoDaSaida
 }
 
 /// <summary>Um aviso de uma linha para o operador (seção 2.2), já escrito pelo ERP.</summary>
-public sealed record AvisoConversa(string Tipo, string Texto, string? IfoodOrderId, string? PedidoNumero);
+public sealed record AvisoConversa(string Tipo, string Texto, string? IfoodOrderId, string? PedidoNumero, bool? Resgatavel = null);
 
 public sealed record ResultadoFala(string Chave, string Acao, string? Motivo, bool Repetida);
 
@@ -117,7 +117,7 @@ public sealed record SinalConversa(
 /// 1.0.35 (SQL 176): no ramo "falhou", o ERP devolve em <c>reserva.aviso_texto</c> o mesmo texto que gravou
 /// no aviso <c>falha_envio</c> (com o prêmio e o que fazer). Ausente no ERP antigo: o caixa usa o dele.
 /// </param>
-public sealed record ResultadoSaida(bool Ok, string? Estado, SaidaConversa? Reserva, string? AvisoTexto = null);
+public sealed record ResultadoSaida(bool Ok, string? Estado, SaidaConversa? Reserva, string? AvisoTexto = null, bool? Resgatavel = null);
 
 public enum DesfechoReserva { Ok, Recusada, SemResposta }
 
@@ -463,8 +463,11 @@ public static class ConversaRaspadinha
     /// <see cref="MsgDoErroLimpa"/>), nome ([A-Za-z0-9_], até 40), conexao (enum), instancia e
     /// instancias (0 a 20), uid_igual_ws (booleano) e ms (0 a 60000). Chave desconhecida cai; valor
     /// fora do tipo cai. Sem nada que preste, null.
+    /// 1.0.35 (revisão): com os <paramref name="segredos"/> do envio (o texto da resposta, o canal, o uuid
+    /// do pedido, o token, o usuário da loja), eles saem da mensagem CRUA, antes da limpeza e do corte em
+    /// 120. Depois do corte, a resposta inteira (155 caracteres no #8039) já não casava mais.
     /// </summary>
-    public static JsonObject? DetalheDoErro(JsonElement d)
+    public static JsonObject? DetalheDoErro(JsonElement d, IReadOnlyList<string?>? segredos = null)
     {
         if (d.ValueKind != JsonValueKind.Object) return null;
         var o = new JsonObject();
@@ -481,7 +484,7 @@ public static class ConversaRaspadinha
                     if (Inteiro32(v) is int c) o[p.Name] = c;
                     break;
                 case "msg":
-                    if (v.ValueKind == JsonValueKind.String && MsgDoErroLimpa(v.GetString()) is { } m) o["msg"] = m;
+                    if (v.ValueKind == JsonValueKind.String && MsgDoErroLimpa(SemSegredos(v.GetString(), segredos)) is { } m) o["msg"] = m;
                     break;
                 case "nome":
                     if (v.ValueKind == JsonValueKind.String && NomeDoErro(v.GetString()) is { } n) o["nome"] = n;
@@ -508,17 +511,89 @@ public static class ConversaRaspadinha
     /// O detalhe sem o que o caixa SABE que é segredo deste envio (o texto da resposta, o canal, o uuid
     /// do pedido, o token, o usuário da loja no WebSocket): se a mensagem do erro do SDK trouxer um deles,
     /// ele vira "#". A página já faz isso; aqui é a segunda passada, porque a página não é confiável.
+    /// 1.0.35 (revisão): também sai qualquer TRECHO de segredo com 20 ou mais caracteres. A mensagem que
+    /// chega aqui já foi cortada em 120, e a resposta de tamanho real (155 no #8039) só aparece pela metade:
+    /// o começo dela, com o nome do cliente, ficava no log e no ERP.
     /// </summary>
     public static JsonObject? DetalheSemSegredos(JsonObject? d, params string?[] segredos)
     {
         if (d is null || d["msg"] is not JsonValue mv || !mv.TryGetValue<string>(out var msg)) return d;
-        var t = msg;
-        foreach (var s in segredos)
-            if (s?.Trim() is { Length: >= 3 } x) t = t.Replace(x, "#", StringComparison.OrdinalIgnoreCase);
-        var limpa = MsgDoErroLimpa(t);
+        var limpa = MsgDoErroLimpa(SemSegredos(msg, segredos));
         var o = (JsonObject)d.DeepClone();
         if (limpa is null) o.Remove("msg"); else o["msg"] = limpa;
         return o;
+    }
+
+    /// <summary>Um trecho de segredo deste tamanho ou maior sai da mensagem do erro, mesmo sem o segredo inteiro.</summary>
+    public const int TrechoMinimoDoSegredo = 20;
+
+    /// <summary>
+    /// A mensagem sem os segredos: cada um (3 ou mais caracteres) inteiro vira "#", e qualquer trecho dele
+    /// com <see cref="TrechoMinimoDoSegredo"/> ou mais caracteres também (sem diferença de maiúscula, com os
+    /// espaços juntados como na limpeza). Mensagem muito longa é cortada antes (a limpeza corta em 120 depois).
+    /// </summary>
+    public static string? SemSegredos(string? msg, IReadOnlyList<string?>? segredos)
+    {
+        if (msg is null || segredos is null || segredos.Count == 0) return msg;
+        var t = Regex.Replace(msg.Length > 4000 ? msg[..4000] : msg, @"\s+", " ");
+        foreach (var s in segredos)
+        {
+            var x = s is null ? "" : Regex.Replace(s, @"\s+", " ").Trim();
+            if (x.Length < 3) continue;
+            t = t.Replace(x, "#", StringComparison.OrdinalIgnoreCase);
+            if (x.Length >= TrechoMinimoDoSegredo) t = SemTrechos(t, x.Length > 2000 ? x[..2000] : x);
+        }
+        return t;
+    }
+
+    /// <summary>
+    /// Tira de <paramref name="t"/> todo trecho que também está em <paramref name="segredo"/> com
+    /// <see cref="TrechoMinimoDoSegredo"/> ou mais caracteres (a maior substring comum, linha a linha).
+    /// O espaço das pontas do trecho fica, e cada trecho vira um "#".
+    /// </summary>
+    private static string SemTrechos(string t, string segredo)
+    {
+        if (t.Length < TrechoMinimoDoSegredo) return t;
+        var a = t.ToLowerInvariant();
+        var b = segredo.ToLowerInvariant();
+        if (a.Length != t.Length) return t;
+        var marca = new bool[t.Length];
+        var antes = new int[b.Length + 1];
+        var agora = new int[b.Length + 1];
+        var achou = false;
+        for (var i = 1; i <= a.Length; i++)
+        {
+            var melhor = 0;
+            for (var j = 1; j <= b.Length; j++)
+            {
+                agora[j] = a[i - 1] == b[j - 1] ? antes[j - 1] + 1 : 0;
+                if (agora[j] > melhor) melhor = agora[j];
+            }
+            if (melhor >= TrechoMinimoDoSegredo)
+            {
+                for (var k = i - melhor; k < i; k++) marca[k] = true;
+                achou = true;
+            }
+            (antes, agora) = (agora, antes);
+        }
+        if (!achou) return t;
+        var sb = new StringBuilder(t.Length);
+        var i0 = 0;
+        while (i0 < t.Length)
+        {
+            if (!marca[i0]) { sb.Append(t[i0++]); continue; }
+            var i1 = i0;
+            while (i1 < t.Length && marca[i1]) i1++;
+            // o espaço das pontas não é do segredo: fica
+            var ini = i0; var fim = i1;
+            while (ini < fim && char.IsWhiteSpace(t[ini])) sb.Append(t[ini++]);
+            var cauda = new StringBuilder();
+            while (fim > ini && char.IsWhiteSpace(t[fim - 1])) cauda.Insert(0, t[--fim]);
+            if (fim > ini) sb.Append('#');
+            sb.Append(cauda);
+            i0 = i1;
+        }
+        return sb.ToString();
     }
 
     /// <summary>O nome do erro (SendbirdError, TypeError): só letras, dígitos e _, até 40.</summary>
@@ -761,6 +836,7 @@ public static class ConversaRaspadinha
             if (r.ValueKind != JsonValueKind.Object) return new ResultadoSaida(false, null, null);
             SaidaConversa? reserva = null;
             string? avisoTexto = null;
+            bool? resgatavel = null;
             if (r.TryGetProperty("reserva", out var rv) && rv.ValueKind == JsonValueKind.Object
                 && Texto(rv, "texto") is { } t)
             {
@@ -768,8 +844,9 @@ public static class ConversaRaspadinha
                     Texto(rv, "canal"), Texto(rv, "ifood_order_id"), TextoOuNumero(rv, "pedido_numero"));
                 // 1.0.35 (SQL 176): o texto do aviso que o ERP gravou, só se for limpo (uma linha, sem travessão)
                 if (Texto(rv, "aviso_texto") is { } av && TextoLimpo(av.Trim(), 160)) avisoTexto = av.Trim();
+                resgatavel = BoolOuNulo(rv, "resgatavel");
             }
-            return new ResultadoSaida(Bool(r, "ok"), Texto(r, "estado"), reserva, avisoTexto);
+            return new ResultadoSaida(Bool(r, "ok"), Texto(r, "estado"), reserva, avisoTexto, resgatavel);
         }
         catch { return new ResultadoSaida(false, null, null); }
     }
@@ -863,7 +940,7 @@ public static class ConversaRaspadinha
         var texto = Texto(a, "texto");
         if (texto is null) return null;
         return new AvisoConversa(Texto(a, "tipo") ?? "aviso", texto, Texto(a, "ifood_order_id"),
-            TextoOuNumero(a, "pedido_numero"));
+            TextoOuNumero(a, "pedido_numero"), BoolOuNulo(a, "resgatavel"));
     }
 
     private static string Modo(string? m) => (m ?? "").Trim().ToLowerInvariant() switch
@@ -932,6 +1009,24 @@ public static class ConversaRaspadinha
     /// </summary>
     public static string TextoMandar(string? numero)
         => $"{Numero(numero)}: mande esta resposta no chat.";
+
+    /// <summary>
+    /// 1.0.35 (revisão): as etapas da PERGUNTA DO SABOR, as mesmas que o SQL 176 usa para o texto
+    /// "não mandei a pergunta" (falha_envio_sabor). Quando a resposta que falhou é uma delas, o código do
+    /// cliente ainda não foi usado, e o "Resgatar aqui" resgata ligado ao pedido.
+    /// </summary>
+    public static readonly IReadOnlySet<string> EtapasDaPerguntaDoSabor = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "pergunta_sabor", "pergunta_sabor_curta", "dois_iguais_sabor", "falta_segundo", "nao_entendi_sabor",
+    };
+
+    /// <summary>
+    /// 1.0.35 (revisão): o falha_envio desta saída leva o "Resgatar aqui"? Quando o ERP diz
+    /// (<c>resgatavel</c>), vale o ERP; senão, só nas etapas da pergunta do sabor. Na confirmação o prêmio
+    /// já está no pedido, e na recusa do código não há o que resgatar: a tela de resgate só recusaria.
+    /// </summary>
+    public static bool FalhaResgatavel(string? etapa, bool? doErp)
+        => doErp ?? (etapa is not null && EtapasDaPerguntaDoSabor.Contains(etapa));
 
     /// <summary>A linha de quando o envio automático não deu (seção 2.2, <c>falha_envio</c>).</summary>
     public static string TextoFalhaEnvio(string? numero)
@@ -1322,6 +1417,10 @@ public static class ConversaRaspadinha
         return null;
     }
 
+    /// <summary>1.0.35 (revisão): o booleano do ERP, ou null quando ele não diz (ausente ou fora do tipo).</summary>
+    private static bool? BoolOuNulo(JsonElement e, string k)
+        => e.TryGetProperty(k, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False ? v.ValueKind == JsonValueKind.True : null;
+
     private static bool Bool(JsonElement e, string k)
         => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.True;
 
@@ -1639,15 +1738,18 @@ public sealed class PortaoDeEnvio
     }
 
     /// <summary>
-    /// O que dizer ao ERP sobre uma saída "sdk" reservada que o portão segurou. Eco e reserva vencida
-    /// viram "incerta" (não manda de novo); o resto vira "falhou", e o ERP passa a saída para a pessoa.
-    /// Sombra e operador não têm o que dizer.
+    /// O que dizer ao ERP sobre uma saída "sdk" reservada que o portão segurou. Eco vira "incerta" (não
+    /// manda de novo); o resto vira "falhou", e o ERP passa a saída para a pessoa. Sombra e operador não
+    /// têm o que dizer.
+    /// 1.0.35 (revisão adversarial): a reserva vencida também vira "falhou". O portão a recusa ANTES do
+    /// SDK, então com certeza nada saiu; como "incerta" a resposta sumia sem aviso nenhum (a saída que
+    /// esperou na fila atrás de um plano B). O ERP já tratava assim as mensagens do pedido.
     /// </summary>
     public static (string Resultado, string Erro)? Relato(MotivoPortao m) => m switch
     {
         MotivoPortao.Liberado or MotivoPortao.Sombra or MotivoPortao.Operador or MotivoPortao.NaoReservada => null,
         MotivoPortao.Eco => ("incerta", "eco"),
-        MotivoPortao.ReservaVencida => ("incerta", "reserva_vencida"),
+        MotivoPortao.ReservaVencida => ("falhou", "reserva_vencida"),
         _ => ("falhou", "portao_" + m.ToString().ToLowerInvariant()),
     };
 }

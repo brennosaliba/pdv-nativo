@@ -97,8 +97,12 @@ public partial class ChatIfood : UserControl
     /// </summary>
     private readonly ConcurrentDictionary<string, string?> _wsUserPorConexao = new(StringComparer.Ordinal);
 
-    /// <summary>Os envios, diagnósticos e colagens esperando a resposta da página, por id.</summary>
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<ResultadoDoScript>> _envios = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Os envios, diagnósticos e colagens esperando a resposta da página, por id. 1.0.35 (revisão): o envio
+    /// guarda os segredos dele (texto, canal, pedido, token, usuário da loja), que saem da mensagem do erro
+    /// ainda crua, antes do corte em 120.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (TaskCompletionSource<ResultadoDoScript> Tcs, string?[] Segredos)> _envios = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject?>> _diagsSdk = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _colagens = new(StringComparer.Ordinal);
     /// <summary>A última leitura da página: a tela de login do Gestor está aberta?</summary>
@@ -556,15 +560,16 @@ public partial class ChatIfood : UserControl
                 // o script do SDK contou como foi um envio (ver EnviarPeloSdkAsync)
                 var r = doc.RootElement;
                 var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
-                if (id is not null && _envios.TryRemove(id, out var tcs))
+                if (id is not null && _envios.TryRemove(id, out var env))
                 {
                     var res = new ResultadoDoScript(
                         r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True,
                         r.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String ? er.GetString() : null,
                         r.TryGetProperty("msgId", out var mi) && mi.ValueKind == JsonValueKind.String ? mi.GetString() : null,
-                        // 1.0.35: o motivo da recusa, pela lista branca do núcleo (a página é dado não confiável)
-                        r.TryGetProperty("detalhe", out var de) ? ConversaRaspadinha.DetalheDoErro(de) : null);
-                    tcs.TrySetResult(res);
+                        // 1.0.35: o motivo da recusa, pela lista branca do núcleo (a página é dado não confiável),
+                        // sem os segredos deste envio já na mensagem crua
+                        r.TryGetProperty("detalhe", out var de) ? ConversaRaspadinha.DetalheDoErro(de, env.Segredos) : null);
+                    env.Tcs.TrySetResult(res);
                 }
             }
             else if (tipo == "pdvsbdiag")
@@ -960,7 +965,8 @@ public partial class ChatIfood : UserControl
         if (core is null) return new ResultadoDoScript(false, "sdk_ausente", null);
         var id = Guid.NewGuid().ToString("N");
         var tcs = new TaskCompletionSource<ResultadoDoScript>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _envios[id] = tcs;
+        var segredos = new[] { permissao.Texto, permissao.Canal, permissao.OrderUuid, token, _ultimoWsUser };
+        _envios[id] = (tcs, segredos);
         try
         {
             var args = JsonSerializer.Serialize(new
@@ -976,8 +982,7 @@ public partial class ChatIfood : UserControl
             // 1.0.35: o detalhe passa de novo sem o que este envio sabe que é segredo, e deixa rastro
             var res = tcs.Task.Result with
             {
-                Detalhe = ConversaRaspadinha.DetalheSemSegredos(tcs.Task.Result.Detalhe,
-                    permissao.Texto, permissao.Canal, permissao.OrderUuid, token, _ultimoWsUser),
+                Detalhe = ConversaRaspadinha.DetalheSemSegredos(tcs.Task.Result.Detalhe, segredos),
             };
             if (!res.Ok) DiagRaspadinha($"envio pelo sdk: nao deu erro={res.Erro ?? "-"}{ConversaRaspadinha.LinhaDoDetalhe(res.Detalhe)}");
             return res;
@@ -1185,9 +1190,12 @@ public partial class ChatIfood : UserControl
             }
             // a conversa do pedido abre no Gestor escondido; se o operador trouxe o chat para a frente no
             // meio da recarga, so a lista (o aquecimento sem pedido nao mexe com ele na tela)
-            try { await AquecerConversaAsync(IsHitTestVisible ? null : numero, orderUuid).WaitAsync(PlanoBDoEnvio.Aquecimento); }
+            // 1.0.35 (revisão): o resultado do aquecimento fica no rastro. Sem ele, a próxima tentativa pode dar
+            // canal_errado (SDK frio): o laço do serviço aquece de novo e tenta, e nunca pausa a loja por isso
+            var aqueceu = false;
+            try { aqueceu = await AquecerConversaAsync(IsHitTestVisible ? null : numero, orderUuid).WaitAsync(PlanoBDoEnvio.Aquecimento); }
             catch (Exception ex) { DiagRaspadinha("plano b, aquecer: " + ex.GetType().Name); }
-            DiagRaspadinha($"plano b: recarregou, SDK aberto em {(DateTime.Now - inicio).TotalSeconds:0} s");
+            DiagRaspadinha($"plano b: recarregou, SDK aberto em {(DateTime.Now - inicio).TotalSeconds:0} s, aqueceu={aqueceu}");
             return PlanoBDoEnvio.Recarregou;
         }
         catch (Exception ex)
