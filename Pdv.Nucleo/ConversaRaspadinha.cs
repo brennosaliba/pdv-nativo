@@ -402,6 +402,8 @@ public static class ConversaRaspadinha
     public static readonly IReadOnlySet<string> EtapasDoErro = new HashSet<string>(StringComparer.Ordinal)
     {
         "falhou_sdk", "promessa", "excecao", "geral", "token", "limite", "sdk_ausente", "canal_errado", "congelada", "sem_cliente",
+        // 1.0.39 (camada C, pelo socket): nenhum socket aberto, socket ambíguo (nada sai), EROR do servidor, sem eco (incerta)
+        "sem_socket", "socket_ambiguo", "falhou_socket", "sem_eco",
     };
 
     /// <summary>O estado da conexão da instância do SDK que tentou mandar.</summary>
@@ -448,6 +450,8 @@ public static class ConversaRaspadinha
     private static readonly Regex ReUuid = new(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", RegexOptions.CultureInvariant);
     private static readonly Regex ReHexLongo = new(@"[0-9a-fA-F]{16,}", RegexOptions.CultureInvariant);
     private static readonly Regex ReNumeroLongo = new(@"(?:[0-9][ .()/-]?){5,}[0-9]", RegexOptions.CultureInvariant);
+    private static readonly Regex ReJwtNaMsg = new(@"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*)?", RegexOptions.CultureInvariant);
+    private static readonly Regex ReOpacoNaMsg = new(@"[A-Za-z0-9%+/_=-]{24,}", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// A mensagem do erro do SDK como ela pode viajar: uma linha, até 120 caracteres, endereço vira
@@ -461,10 +465,13 @@ public static class ConversaRaspadinha
         if (s is null) return null;
         var t = Regex.Replace(s, @"[\r\n\t]+", " ");
         t = t.Replace((char)0x2014, '-').Replace((char)0x2013, '-');
+        // 1.0.39: o que tem CARA de segredo sai pelo formato (JWT; sequência opaca longa com letra e dígito)
+        t = ReJwtNaMsg.Replace(t, "#");
         t = ReEndereco.Replace(t, "url");
         t = ReArroba.Replace(t, "email");
         t = ReCanalSendbird.Replace(t, "canal");
         t = ReUuid.Replace(t, "uuid");
+        t = ReOpacoNaMsg.Replace(t, m => m.Value.Any(char.IsDigit) && m.Value.Any(char.IsLetter) ? "#" : m.Value);
         t = ReHexLongo.Replace(t, "#");
         t = ReNumeroLongo.Replace(t, "#");
         t = Regex.Replace(t, @"\s+", " ").Trim();
@@ -516,6 +523,16 @@ public static class ConversaRaspadinha
                     break;
                 case "ms":
                     if (Inteiro32(v) is int ms) o["ms"] = Math.Clamp(ms, 0, 60_000);
+                    break;
+                // 1.0.39 (camada C): por onde foi (só "socket"), qual socket foi escolhido e quantos estavam abertos
+                case "via":
+                    if (v.ValueKind == JsonValueKind.String && v.GetString() == EnvioPeloSocket.Via) o["via"] = EnvioPeloSocket.Via;
+                    break;
+                case "escolha":
+                    if (v.ValueKind == JsonValueKind.String && v.GetString() is { } es && EnvioPeloSocket.Escolhas.Contains(es)) o["escolha"] = es;
+                    break;
+                case "abertos":
+                    if (Inteiro32(v) is int ab) o["abertos"] = Math.Clamp(ab, 0, 20);
                     break;
             }
         }
@@ -691,6 +708,9 @@ public static class ConversaRaspadinha
         sb.Append(" ms=").Append(Val("ms"));
         if (d.ContainsKey("nome")) sb.Append(" nome=").Append(Val("nome"));
         if (d.ContainsKey("plano_b")) sb.Append(" plano_b=").Append(Val("plano_b"));
+        // 1.0.39: a camada C (pelo socket), a escolha do socket e quantos estavam abertos
+        if (d.ContainsKey("via")) sb.Append(" via=").Append(Val("via"));
+        if (d.ContainsKey("escolha")) sb.Append(" escolha=").Append(Val("escolha")).Append(" abertos=").Append(Val("abertos"));
         if (d["msg"] is JsonValue mv && mv.TryGetValue<string>(out var msg) && MsgDoErroLimpa(msg, 60) is { } curta)
             sb.Append(" msg=").Append(curta);
         return sb.ToString();
@@ -1087,7 +1107,8 @@ public static class ConversaRaspadinha
             // na loja dizer por que o sdk.achou deu falso sem ninguém abrir o caixa.
             // 1.0.38: via_heap (a camada A, pela heap do CDP), via_berco (a camada B, o init embrulhado)
             // e mf (federação de módulos) entram na lista de booleanos
-            foreach (var k in new[] { "achou", "user_id_igual_ws", "tem_order_uuid", "via_webpack", "via_react", "via_heap", "via_berco", "mf" })
+            // 1.0.39: via_socket (a camada C mandou pelo socket do Sendbird)
+            foreach (var k in new[] { "achou", "user_id_igual_ws", "tem_order_uuid", "via_webpack", "via_react", "via_heap", "via_berco", "mf", "via_socket" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<bool>(out var b))
                     sdk[k] = b;
             // 1.0.38: as contagens novas do diagnóstico (heap, fábricas, DOM, iframes, esm). Revisão: os sockets do
@@ -1095,7 +1116,7 @@ public static class ConversaRaspadinha
             // heap_protos e heap_objetos são as contagens brutas da última varredura
             foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes",
                 "heap_inst", "heap_validas", "heap_abertas", "heap_protos", "heap_objetos", "ws_sb_cdp", "ws_sb_cdp_vivos",
-                "fabricas", "fab_sendbird", "dom_sendbird", "dom_fibras", "iframes", "iframes_outros", "esm" })
+                "fabricas", "fab_sendbird", "dom_sendbird", "dom_fibras", "iframes", "iframes_outros", "esm", "sockets_sb_abertos" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<int>(out var n))
                     sdk[k] = Math.Clamp(n, 0, 100_000);
             // 1.0.35: o estado da conexão do SDK, só como enum (OPEN, CONNECTING, CLOSED, OUTRO)
@@ -1114,6 +1135,17 @@ public static class ConversaRaspadinha
             if (sdkDaPagina.TryGetPropertyValue("versao_sdk", out var vv) && vv is JsonValue vjv && vjv.TryGetValue<string>(out var vsdk)
                 && Regex.IsMatch(vsdk, @"^[0-9][0-9.]{0,15}$"))
                 sdk["versao_sdk"] = vsdk;
+            // 1.0.39 (camada C): a escolha do socket (só o enum) e os NOMES dos campos do MESG que o Gestor mandou
+            if (sdkDaPagina.TryGetPropertyValue("socket_escolha", out var sev) && sev is JsonValue ejv && ejv.TryGetValue<string>(out var esc)
+                && EnvioPeloSocket.Escolhas.Contains(esc))
+                sdk["socket_escolha"] = esc;
+            if (sdkDaPagina.TryGetPropertyValue("mesg_campos_gestor", out var mc) && mc is JsonArray mca)
+            {
+                var nomes = new JsonArray();
+                foreach (var n in mca.Take(30))
+                    if (n is JsonValue nv && nv.TryGetValue<string>(out var nome) && Regex.IsMatch(nome, "^[a-z][a-z0-9_]{0,39}$")) nomes.Add(nome);
+                sdk["mesg_campos_gestor"] = nomes;
+            }
             foreach (var k in new[] { "bundle", "globais_wp", "ws_sb_iniciador" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var tv) && tv is JsonValue tjv && tjv.TryGetValue<string>(out var ts)
                     && NomeSeguroDoDiag(ts) is { } limpo)
@@ -1675,7 +1707,7 @@ public sealed class ConfirmacaoDeEnvio
 {
     public static readonly TimeSpan Prazo = TimeSpan.FromSeconds(15);
     private readonly object _trava = new();
-    private readonly Dictionary<long, (string Canal, string Hash, DateTime Ate, bool VistoSaindo)> _esperando = new();
+    private readonly Dictionary<long, (string Canal, string Hash, DateTime Ate, bool VistoSaindo, bool Socket)> _esperando = new();
 
     /// <param name="prazo">
     /// 1.0.35: a GUARDA do plano B usa um prazo maior (a recarga do Gestor leva até 40 s): um quadro
@@ -1684,10 +1716,25 @@ public sealed class ConfirmacaoDeEnvio
     /// </param>
     public void Aguardar(long saidaId, string canal, string texto, DateTime agora, TimeSpan? prazo = null)
     {
-        lock (_trava) _esperando[saidaId] = (canal, ConversaRaspadinha.HashTexto(texto), agora + (prazo ?? Prazo), false);
+        lock (_trava) _esperando[saidaId] = (canal, ConversaRaspadinha.HashTexto(texto), agora + (prazo ?? Prazo), false, false);
     }
 
     public bool Pendente(long saidaId) { lock (_trava) return _esperando.ContainsKey(saidaId); }
+
+    /// <summary>
+    /// 1.0.39 (camada C): a saída vai pelo SOCKET, logo antes do send. Pelo socket o quadro visto SAINDO não
+    /// prova nada (o eco do servidor é a única prova): sem o eco ela vence como "incerta", nunca como
+    /// "enviada". A espera ganha o prazo inteiro a partir de agora (o eco tem 12 s depois do send). Saída
+    /// que não espera não ganha espera.
+    /// </summary>
+    public void PeloSocket(long saidaId, DateTime agora)
+    {
+        lock (_trava)
+        {
+            if (!_esperando.TryGetValue(saidaId, out var e)) return;
+            _esperando[saidaId] = e with { Socket = true, Ate = e.Ate > agora + Prazo ? e.Ate : agora + Prazo };
+        }
+    }
 
     /// <summary>
     /// 1.0.35: como está a espera de uma saída, sem mexer nela. null = não espera mais (o quadro de
@@ -1734,12 +1781,15 @@ public sealed class ConfirmacaoDeEnvio
         return null;
     }
 
-    /// <summary>As que passaram do prazo: vistas saindo viram "enviada" sem id; as outras, "incerta".</summary>
+    /// <summary>
+    /// As que passaram do prazo: vistas saindo viram "enviada" sem id; as outras, "incerta". 1.0.39: a que foi
+    /// pelo socket nunca vira "enviada" sem o eco.
+    /// </summary>
     public IReadOnlyList<(long SaidaId, bool VistoSaindo)> Vencidas(DateTime agora)
     {
         lock (_trava)
         {
-            var v = _esperando.Where(x => x.Value.Ate <= agora).Select(x => (x.Key, x.Value.VistoSaindo)).ToList();
+            var v = _esperando.Where(x => x.Value.Ate <= agora).Select(x => (x.Key, x.Value.VistoSaindo && !x.Value.Socket)).ToList();
             foreach (var (id, _) in v) _esperando.Remove(id);
             return v;
         }

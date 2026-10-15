@@ -115,6 +115,27 @@ public partial class ChatIfood : UserControl
     /// </summary>
     private readonly ConcurrentDictionary<string, string?> _wsUserPorConexao = new(StringComparer.Ordinal);
 
+    // ── 1.0.39: A CAMADA C (o envio pelo socket do Sendbird, sem o SDK) ──────
+    /// <summary>
+    /// A URL de cada WebSocket do Sendbird, pelo requestId do CDP. Leva o user_id e a chave da sessão na
+    /// query: SÓ em memória, para comparar com o ws.url do socket achado pela heap. Nunca gravada, logada
+    /// nem enviada.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _wsUrlPorConexao = new(StringComparer.Ordinal);
+    /// <summary>O requestId da conexão que recebeu o último quadro de cada canal (a pista "canal" da escolha).</summary>
+    private readonly ConcurrentDictionary<string, string> _conexaoPorCanal = new(StringComparer.Ordinal);
+    /// <summary>As esperas pelo eco do servidor, por req_id (o quadro recebido resolve).</summary>
+    private readonly EcosDoSocket _ecosSocket = new();
+    /// <summary>A tentativa pelo socket de cada saída (o req_id muda a cada uma).</summary>
+    private readonly ConcurrentDictionary<long, int> _tentativasSocket = new();
+    /// <summary>Os NOMES dos campos do último MESG que o próprio Gestor mandou (nunca valores), para o diagnóstico.</summary>
+    private volatile IReadOnlyList<string>? _mesgCamposGestor;
+    /// <summary>O último envio pela camada C deu (o eco voltou)? null: nenhum envio pelo socket nesta página.</summary>
+    private bool? _viaSocketDeu;
+    /// <summary>A última contagem dos sockets abertos do Sendbird e a escolha que ela daria (para o sinal).</summary>
+    private (int Abertos, string Escolha)? _sockets;
+    private DateTime _proximaContagemSockets = DateTime.MinValue;
+
     /// <summary>
     /// Os envios, diagnósticos e colagens esperando a resposta da página, por id. 1.0.35 (revisão): o envio
     /// guarda os segredos dele (texto, canal, pedido, token, usuário da loja), que saem da mensagem do erro
@@ -269,6 +290,9 @@ public partial class ChatIfood : UserControl
                 // precisa varrer logo depois da recarga (antes ficava travado pelo teto de 2 min da anterior)
                 _proximaVarreduraHeap = DateTime.MinValue;
                 _ultimaVarredura = null;
+                // 1.0.39: a contagem dos sockets da página velha também não vale aqui
+                _proximaContagemSockets = DateTime.MinValue;
+                _sockets = null;
                 Diag(e.IsSuccess ? "navegou: ok" : $"navegou: falhou {e.WebErrorStatus}");
                 TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: tentando de novo sozinho";
                 // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
@@ -877,6 +901,9 @@ public partial class ChatIfood : UserControl
                         {
                             if (_wsSbVivos.Count > 200) _wsSbVivos.Clear();
                             _wsSbVivos[req] = 1;
+                            // 1.0.39 (camada C): a URL desta conexão, só em memória (escolha do socket pelo canal)
+                            if (_wsUrlPorConexao.Count > 200) _wsUrlPorConexao.Clear();
+                            _wsUrlPorConexao[req] = u.GetString()!;
                             Interlocked.Increment(ref _wsSbCriados);
                             _wsSbIniciador = QuadroSendbird.IniciadorDoSocket(e.ParameterObjectAsJson);
                         }
@@ -897,6 +924,14 @@ public partial class ChatIfood : UserControl
             {
                 var (p, conexao) = PayloadEConexao(e.ParameterObjectAsJson);
                 if (p is null) return;
+                // 1.0.39 (camada C): o eco (MESG ou EROR com o req_id do caixa) resolve a espera do envio pelo
+                // socket; e a conexão que recebeu o quadro daquele canal é a pista "canal" da escolha
+                _ecosSocket.Ver(p);
+                if (conexao is not null && _wsUrlPorConexao.ContainsKey(conexao) && EnvioPeloSocket.CanalDoQuadro(p) is { } canalDoQuadro)
+                {
+                    if (_conexaoPorCanal.Count > 500) _conexaoPorCanal.Clear();
+                    _conexaoPorCanal[canalDoQuadro] = conexao;
+                }
                 _captura.RegistrarFrame(p, enviado: false, conexao);
                 // RESGATE PELO CHAT (07/10/2026): o quadro vai para o serviço novo, que só faz algo
                 // com a loja ligada no ERP. O id da loja é o user_id da URL DESTA conexão.
@@ -915,6 +950,10 @@ public partial class ChatIfood : UserControl
             {
                 var (p, conexao) = PayloadEConexao(e.ParameterObjectAsJson);
                 if (p is null) return;
+                // 1.0.39: o MESG que o PRÓPRIO Gestor mandou (não o do caixa) dá só os NOMES dos campos
+                if (p.StartsWith("MESG", StringComparison.Ordinal) && !p.Contains("\"req_id\":\"pdv", StringComparison.Ordinal)
+                    && EnvioPeloSocket.CamposDoMesg(p) is { Count: > 0 } campos)
+                    _mesgCamposGestor = campos;
                 _captura.RegistrarFrame(p, enviado: true, conexao);
                 AgendarDiagnostico();
                 // o que SAI da página só confirma o envio de uma resposta; nunca vira fala
@@ -1043,9 +1082,15 @@ public partial class ChatIfood : UserControl
             // 1.0.35: o detalhe passa de novo sem o que este envio sabe que é segredo, e deixa rastro
             var res = tcs.Task.Result with
             {
-                Detalhe = ConversaRaspadinha.DetalheSemSegredos(tcs.Task.Result.Detalhe, segredos),
+                // 1.0.39: a página não pode se passar pela camada C (via, escolha, etapas do socket saem)
+                Detalhe = EnvioPeloSocket.SemMarcaDaPagina(ConversaRaspadinha.DetalheSemSegredos(tcs.Task.Result.Detalhe, segredos)),
             };
             if (!res.Ok) DiagRaspadinha($"envio pelo sdk: nao deu erro={res.Erro ?? "-"}{ConversaRaspadinha.LinhaDoDetalhe(res.Detalhe)}");
+            // 1.0.39 (CAMADA C): só quando o script disse que a lista de instâncias do SDK está vazia (nada saiu).
+            // Com o SDK achado, nada muda. A permissão é a MESMA (o token já foi gasto no script, que não mandou).
+            var pelaC = await EnvioPeloSocket.SeCouberAsync(res.Erro, res.Detalhe, () => CamadaCAsync(core, permissao));
+            if (pelaC is not null)
+                return new ResultadoDoScript(pelaC.Ok, pelaC.Erro, pelaC.MsgId, ConversaRaspadinha.DetalheSemSegredos(pelaC.Detalhe, segredos));
             return res;
         }
         catch (Exception ex)
@@ -1054,6 +1099,139 @@ public partial class ChatIfood : UserControl
             return new ResultadoDoScript(false, "sem_resposta", null);
         }
         finally { _envios.TryRemove(id, out _); }
+    }
+
+    /// <summary>
+    /// 1.0.39 (15/10/2026, Savassi, pedido 5403): A CAMADA C. O SDK não foi achado, mas a conexão do Gestor
+    /// está viva: o caixa acha os WebSocket abertos do Sendbird pela heap (só API padrão do navegador),
+    /// escolhe UM sem chute (canal, usuário da loja, único; ambíguo não envia), manda UM quadro MESG e
+    /// confirma SÓ pelo eco do servidor (o mesmo req_id). Sem eco é incerta e nunca de novo. Logo antes do
+    /// send, a confirmação pelo quadro passa a exigir o eco (<see cref="ServicoConversaChat.PeloSocket"/>).
+    /// Nada de URL, chave ou texto no rastro: só a linha do núcleo (contagens, escolha, etapa, código).
+    /// </summary>
+    private async Task<ResultadoDoSocket> CamadaCAsync(CoreWebView2 core, PermissaoDeEnvio permissao)
+    {
+        var saidaId = permissao.Saida.Id;
+        if (_tentativasSocket.Count > 200) _tentativasSocket.Clear();
+        var tentativa = _tentativasSocket.AddOrUpdate(saidaId, 1, (_, n) => n + 1);
+        var reqId = EnvioPeloSocket.ReqId(saidaId, tentativa, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var urlDoCanal = _conexaoPorCanal.TryGetValue(permissao.Canal, out var cx) && _wsUrlPorConexao.TryGetValue(cx, out var u) ? u : null;
+        var pedido = new PedidoPeloSocket(permissao.Canal, permissao.OrderUuid, permissao.Texto, reqId, urlDoCanal, ServicoConversaChat.UsuarioDaLoja);
+        var r = await EnvioPeloSocket.EnviarAsync(new PortasDoSocketCdp(this, core), _ecosSocket, pedido,
+            antesDeEnviar: () => ServicoConversaChat.PeloSocket(saidaId));
+        // o quadro saiu (deu, EROR ou sem eco): o diagnóstico diz se o último envio pelo socket deu
+        if (r.Ok || r.Erro is "erro_envio" or "sem_eco") _viaSocketDeu = r.Ok;
+        // o eco pelo req_id é a prova: confirma a saída mesmo se o texto do eco não casar com o enviado
+        if (r.Ok) ServicoConversaChat.ConfirmadaPeloSocket(saidaId, r.MsgId);
+        _sockets = (r.Abertos, r.Escolha);
+        DiagRaspadinha($"saida={saidaId} tentativa={tentativa} {EnvioPeloSocket.Linha(r)}");
+        return r;
+    }
+
+    /// <summary>
+    /// 1.0.39: as portas da camada C pelo CDP, na thread da tela. Os sockets vêm de
+    /// <c>Runtime.queryObjects</c> sobre <c>WebSocket.prototype</c> (todas as instâncias, também as de
+    /// subclasse), filtrados por readyState === 1 e host .sendbird.com. Tudo num grupo de objetos próprio,
+    /// solto no fim (<c>Runtime.releaseObjectGroup</c>; o núcleo chama no finally, também com exceção).
+    /// </summary>
+    private sealed class PortasDoSocketCdp : IPortasDoSocket
+    {
+        private readonly ChatIfood _tela;
+        private readonly CoreWebView2 _core;
+        private readonly string _grupo = "pdvsb-sock-" + Guid.NewGuid().ToString("N")[..8];
+        private readonly List<string> _ids = new();
+
+        public PortasDoSocketCdp(ChatIfood tela, CoreWebView2 core) { _tela = tela; _core = core; }
+
+        private Task<string> Cdp(string metodo, object parametros)
+            => HospedeWebView2.NaTela(_tela.Dispatcher, () => _core.CallDevToolsProtocolMethodAsync(metodo, JsonSerializer.Serialize(parametros)));
+
+        public async Task<IReadOnlyList<string?>> AbertosAsync()
+        {
+            _ids.Clear();
+            await _tela.LigarRuntimeAsync(_core);
+            var proto = await Cdp("Runtime.evaluate", new { expression = "WebSocket.prototype", returnByValue = false, objectGroup = _grupo });
+            if (JsonNode.Parse(proto)?["result"]?["objectId"]?.GetValue<string>() is not { } protoId) return Array.Empty<string?>();
+            var qo = await Cdp("Runtime.queryObjects", new { prototypeObjectId = protoId, objectGroup = _grupo });
+            if (JsonNode.Parse(qo)?["objects"]?["objectId"]?.GetValue<string>() is not { } todosId) return Array.Empty<string?>();
+            var filtro = await Cdp("Runtime.callFunctionOn", new
+            {
+                objectId = todosId,
+                functionDeclaration = "function(){ var o = []; for (var i = 0; i < this.length && o.length < 20; i++) { try { var s = this[i]; if (s && s.readyState === 1 && String(s.url).indexOf('.sendbird.com') >= 0) o.push(s); } catch (e) {} } return o; }",
+                returnByValue = false,
+                objectGroup = _grupo,
+            });
+            if (JsonNode.Parse(filtro)?["result"]?["objectId"]?.GetValue<string>() is not { } abertosId) return Array.Empty<string?>();
+            var urls = await Cdp("Runtime.callFunctionOn", new
+            {
+                objectId = abertosId,
+                functionDeclaration = "function(){ return this.map(function (s) { try { return String(s.url); } catch (e) { return ''; } }); }",
+                returnByValue = true,
+                objectGroup = _grupo,
+            });
+            var lista = new List<string?>();
+            foreach (var x in JsonNode.Parse(urls)?["result"]?["value"]?.AsArray() ?? new JsonArray())
+                lista.Add(x is JsonValue xv && xv.TryGetValue<string>(out var s) ? s : null);
+            // o objectId de cada socket, pelo índice do array (a mesma ordem das URLs)
+            var props = await Cdp("Runtime.getProperties", new { objectId = abertosId, ownProperties = true });
+            var porIndice = new Dictionary<int, string>();
+            foreach (var p in JsonNode.Parse(props)?["result"]?.AsArray() ?? new JsonArray())
+                if (p?["name"]?.GetValue<string>() is { } nome && int.TryParse(nome, out var i) && p?["value"]?["objectId"]?.GetValue<string>() is { } oid)
+                    porIndice[i] = oid;
+            for (var i = 0; i < lista.Count; i++)
+            {
+                // sem o objectId não há como mandar por ele: a URL sai da escolha
+                if (!porIndice.TryGetValue(i, out var oid)) { lista[i] = null; _ids.Add(""); continue; }
+                _ids.Add(oid);
+            }
+            return lista;
+        }
+
+        public async Task<bool> EnviarAsync(int indice, string quadro)
+        {
+            if (indice < 0 || indice >= _ids.Count || _ids[indice].Length == 0) return false;
+            var r = await Cdp("Runtime.callFunctionOn", new
+            {
+                objectId = _ids[indice],
+                functionDeclaration = "function(q){ if (this.readyState !== 1) return false; this.send(q); return true; }",
+                arguments = new object[] { new { value = quadro } },
+                returnByValue = true,
+                objectGroup = _grupo,
+            });
+            var n = JsonNode.Parse(r);
+            if (n?["exceptionDetails"] is not null) return false;   // o send lançou na página: nada saiu
+            return n?["result"]?["value"] is JsonValue v && v.TryGetValue<bool>(out var ok) && ok;
+        }
+
+        public Task LiberarAsync() => Cdp("Runtime.releaseObjectGroup", new { objectGroup = _grupo });
+    }
+
+    /// <summary>1.0.39: liga o domínio Runtime do CDP uma vez por controle (a camada C usa).</summary>
+    private async Task LigarRuntimeAsync(CoreWebView2 core)
+    {
+        if (_runtimeLigado) return;
+        try { await HospedeWebView2.NaTela(Dispatcher, () => core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}")); _runtimeLigado = true; } catch { }
+    }
+
+    /// <summary>
+    /// 1.0.39: a contagem dos sockets abertos do Sendbird para o sinal, só sem o SDK, no máximo a cada 2 min
+    /// (é uma passada pela heap): quantos e a escolha que o envio faria agora (com o primeiro canal a
+    /// conferir). O grupo é solto sempre.
+    /// </summary>
+    private async Task ContarSocketsAsync(CoreWebView2 core, IReadOnlyList<string> canais)
+    {
+        _proximaContagemSockets = DateTime.Now + TimeSpan.FromMinutes(2);
+        var portas = new PortasDoSocketCdp(this, core);
+        try
+        {
+            var urls = await portas.AbertosAsync();
+            var canal = canais.FirstOrDefault();
+            var urlDoCanal = canal is not null && _conexaoPorCanal.TryGetValue(canal, out var cx) && _wsUrlPorConexao.TryGetValue(cx, out var u) ? u : null;
+            var (_, escolha) = EnvioPeloSocket.Escolher(urls, urlDoCanal, ServicoConversaChat.UsuarioDaLoja);
+            _sockets = (urls.Count(QuadroSendbird.EhSocketDoSendbird), escolha);
+        }
+        catch (Exception ex) { DiagRaspadinha("sockets: " + ex.GetType().Name); }
+        finally { try { await portas.LiberarAsync(); } catch { } }
     }
 
     /// <summary>
@@ -1089,6 +1267,17 @@ public partial class ChatIfood : UserControl
             r["ws_sb_cdp"] = Volatile.Read(ref _wsSbCriados);
             r["ws_sb_cdp_vivos"] = _wsSbVivos.Count;
             if (_wsSbIniciador is { } ini) r["ws_sb_iniciador"] = ini;
+            // 1.0.39 (camada C): sem o SDK, quantos sockets do Sendbird estão abertos e qual seria a escolha do
+            // envio (a contagem passa pela heap: no máximo a cada 2 min); se o último envio pelo socket deu; e os
+            // NOMES dos campos do MESG do Gestor. Nada de URL nem valor.
+            if (NaoAchouSdk(r) && DateTime.Now >= _proximaContagemSockets) await ContarSocketsAsync(core, canais).ConfigureAwait(true);
+            if (_sockets is { } sk)
+            {
+                r["sockets_sb_abertos"] = sk.Abertos;
+                r["socket_escolha"] = sk.Escolha;
+            }
+            if (_viaSocketDeu is { } vs) r["via_socket"] = vs;
+            if (_mesgCamposGestor is { Count: > 0 } mc) r["mesg_campos_gestor"] = new JsonArray(mc.Select(x => (JsonNode?)x).ToArray());
         }
         return r;
     }

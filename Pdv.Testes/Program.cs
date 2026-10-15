@@ -798,6 +798,7 @@ if (args.Length >= 1 && args[0] == "--so-envio")
 {
     await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, cond));
     await TestesPlanoBDoEnvio.RodarAsync((cond, nome) => Check("plano-b: " + nome, cond));
+    await TestesEnvioPeloSocket.RodarAsync((cond, nome) => Check("socket: " + nome, cond));
     TestesAprovacaoDono.Rodar((cond, nome) => Check("aprovacao: " + nome, cond));
     await TestesResgateManual.RodarAsync((cond, nome) => Check("resgate-manual: " + nome, cond));
     Console.WriteLine();
@@ -2130,6 +2131,14 @@ await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, c
 Console.WriteLine();
 Console.WriteLine("--- Plano B do envio: recarga do Gestor escondido, Gestor na frente, reserva vencida, mensagem dobrada ---");
 await TestesPlanoBDoEnvio.RodarAsync((cond, nome) => Check("plano-b: " + nome, cond));
+
+// -- 15/10/2026: A CAMADA C DO ENVIO, PELO SOCKET (caixa 1.0.39, Savassi, pedido 5403) -------------
+// O SDK nasce num chunk que o caixa nao alcanca, mas a conexao do Gestor esta viva. O caixa acha o
+// WebSocket aberto do Sendbird pela heap, escolhe UM sem chute, manda UM quadro MESG e confirma so pelo
+// eco do servidor (o mesmo req_id). Sem eco e incerta, nunca reenvio.
+Console.WriteLine();
+Console.WriteLine("--- Camada C: o quadro MESG, a escolha do socket, o eco, a incerta e o grupo liberado ---");
+await TestesEnvioPeloSocket.RodarAsync((cond, nome) => Check("socket: " + nome, cond));
 
 // -- 07/10/2026: APROVACAO PELO WHATSAPP DO DONO (caixa 1.0.20) --------------------------
 // O dono aprova pelo WhatsApp pessoal e a resposta sai sozinha no chat do iFood, pelo SDK que o

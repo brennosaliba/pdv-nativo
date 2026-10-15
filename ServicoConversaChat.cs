@@ -472,6 +472,31 @@ public static class ServicoConversaChat
     public static readonly TimeSpan IntervaloDoAquecimento = TimeSpan.FromMinutes(2);
     private static DateTime _ultimoAquecimento = DateTime.MinValue;
 
+    /// <summary>
+    /// 1.0.39 (camada C): o id da loja na conexão do chat de CLIENTES (aprendido pelo canal de pedido), só em
+    /// memória, para a tela escolher o socket do usuário da loja. Nunca logado nem enviado.
+    /// </summary>
+    public static string? UsuarioDaLoja => _wsUserId;
+
+    /// <summary>
+    /// 1.0.39 (camada C): a tela vai mandar esta saída pelo SOCKET. A confirmação pelo quadro passa a exigir o
+    /// eco: o quadro visto saindo sem eco vence como incerta, nunca como enviada.
+    /// </summary>
+    public static void PeloSocket(long saidaId)
+    {
+        try { Confirmacoes.PeloSocket(saidaId, DateTime.Now); } catch { }
+    }
+
+    /// <summary>
+    /// 1.0.39 (camada C): o eco do servidor com o req_id do caixa é a prova do envio pelo socket. Se a
+    /// confirmação pelo quadro ainda espera (o texto do eco não casou, por exemplo), ela sai aqui como
+    /// "enviada" com o msg_id. Quem tirar a saída da espera primeiro relata; nunca os dois.
+    /// </summary>
+    public static void ConfirmadaPeloSocket(long saidaId, string? msgId)
+    {
+        try { if (Confirmacoes.Cancelar(saidaId) is not null) _ = RelatarAsync(saidaId, "enviada", null, msgId, null); } catch { }
+    }
+
     private static Task EnviarUmaAsync(SaidaConversa s, DateTime recebida)
         => EnviarComTentativasAsync(s, recebida, new LacoDeEnvio
         {
@@ -651,11 +676,21 @@ public static class ServicoConversaChat
         // "incerta" (ConfirmacaoDeEnvio.Vencidas), e nunca de novo.
         if (res.Ok) return (DesfechoDaTentativa.Saiu, null, null);
         if (res.Erro is "sem_resposta") return (DesfechoDaTentativa.SemResposta, null, null);
+        // 1.0.39 (camada C): o quadro saiu pelo socket e o servidor não devolveu o eco no prazo. Pelo socket o
+        // quadro visto saindo não prova nada: é "incerta", agora, e NUNCA de novo (regra do 176/185).
+        if (res.Erro is "sem_eco")
+        {
+            if (l.Confirmacoes.Cancelar(s.Id) is null) return (DesfechoDaTentativa.JaConfirmada, null, null);
+            await l.Relatar(s.Id, "incerta", "sem_confirmacao", s, rastro.Detalhe()).ConfigureAwait(false);
+            return (DesfechoDaTentativa.Incerta, null, null);
+        }
         // O script disse que não mandou. Se o quadro já confirmou, vale o quadro; se o quadro foi
         // visto saindo, é dúvida e vira incerta. Só sem quadro nenhum é "falhou" (vai para a pessoa).
+        // 1.0.39: o EROR do servidor com o req_id do caixa (falhou_socket) é falha CERTA, mesmo com o quadro
+        // visto saindo: o servidor disse que não aceitou.
         var visto = l.Confirmacoes.Cancelar(s.Id);
         if (visto is null) return (DesfechoDaTentativa.JaConfirmada, null, null);
-        if (visto == true)
+        if (visto == true && !FalhaCertaDoSocket(res.Detalhe))
         {
             await l.Relatar(s.Id, "incerta", "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
             return (DesfechoDaTentativa.Incerta, null, null);
@@ -664,6 +699,10 @@ public static class ServicoConversaChat
             ? res.Erro : "erro_envio";
         return (DesfechoDaTentativa.Falhou, erro, res.Detalhe);
     }
+
+    /// <summary>1.0.39: a recusa veio do servidor pelo socket (EROR com o req_id do caixa): nada foi aceito.</summary>
+    private static bool FalhaCertaDoSocket(JsonObject? d)
+        => d?["etapa"] is JsonValue v && v.TryGetValue<string>(out var e) && e == "falhou_socket";
 
     /// <summary>Como terminou o plano B: a saída já tem desfecho, a tela recarregou o Gestor, ou não recarregou.</summary>
     private enum FimDoPlanoB { Encerrou, Recarregou, SemRecarga }
