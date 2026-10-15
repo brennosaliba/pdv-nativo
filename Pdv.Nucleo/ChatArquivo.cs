@@ -33,6 +33,25 @@ public enum StatusDoArquivo { Ok, Recusado, SemPermissao, NuvemSemRecurso, SemRe
 public sealed record RespostaDoArquivo(StatusDoArquivo Status, bool Captura, int Guardadas, int Repetidas,
     IReadOnlyList<(string Chave, string Motivo)> Recusadas, string? MotivoCru);
 
+/// <summary>1.0.35: um botao do cartao do iFood: o rotulo (mascarado, ate 40) e a acao no formato de enum, quando vem.</summary>
+public sealed record BotaoDoCartao(string Rotulo, string? Acao);
+
+/// <summary>
+/// 1.0.35 (14/10/2026, caso #8039): o cartao do iFood de uma SOLICITACAO do cliente ("Quero adicionar
+/// observacao ao pedido"), so a FORMA: o texto mascarado, os nomes das chaves do quadro, a forma do
+/// campo <c>data</c> (caminho e tipo; o valor so quando e booleano, numero curto, uuid ou parecido com
+/// enum), os botoes e os ids. Fase 1 de "ler, sombra, ligar": o caixa so le e registra, nunca clica.
+/// </summary>
+public sealed record CartaoDoIfood(string Canal, string OrderId, string? MsgId, string CustomType, long? CriadoEmMs, string Texto,
+    IReadOnlyList<string> ChavesRaiz, IReadOnlyDictionary<string, string> Dados, IReadOnlyList<BotaoDoCartao> Botoes,
+    IReadOnlyDictionary<string, string> Ids)
+{
+    /// <summary>A chave local: o msg_id do Sendbird, ou o hash do canal, do tipo, da hora e do texto.</summary>
+    public string Chave => MsgId is { Length: > 0 } id ? "sb:" + id
+        : "h:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('|', Canal, CustomType,
+            CriadoEmMs?.ToString(CultureInfo.InvariantCulture) ?? "", Texto)))).ToLowerInvariant();
+}
+
 /// <summary>Uma linha pendente do arquivo local, pronta para ir no lote.</summary>
 public sealed record LinhaArquivo(string Chave, string Canal, string IfoodOrderId, string MerchantId, string Lado, string? AutorTipo,
     string? AutorId, string TipoQuadro, string? CustomType, string? MsgId, string? Texto, bool Sussurro, bool TemMidia, string Quando);
@@ -522,6 +541,193 @@ public static class ChatArquivo
         };
     }
 
+    // ── 1.0.35: O CARTAO DA SOLICITACAO DO CLIENTE (so ler e registrar, nunca tocar) ──
+    // Caso #8039: o cliente pediu "adicionar observacao" e a equipe aceitou a mao no Gestor. O iFood nao
+    // manda HANDSHAKE_DISPUTE para esse tipo de pedido, entao a API nao aceita; o caminho seria o botao do
+    // cartao dentro do Gestor. Antes de pensar em tocar nele, o caixa precisa conhecer o cartao: o quadro
+    // traz o campo "data" e a lista de botoes, e ate a 1.0.34 o caixa so lia message e custom_type. Aqui so
+    // a forma e registrada (tabela local, chat-solicitacao.txt e contagens no sinal). Nada e tocado,
+    // nada vai ao iFood e nada novo vai ao ERP como texto.
+
+    /// <summary>Os cartoes do iFood que contam a solicitacao (o resumo, o item e a lista de botoes).</summary>
+    public static readonly IReadOnlySet<string> TiposDeCartao = new HashSet<string>(StringComparer.Ordinal) { "summary", "itemSummary", "buttonList" };
+
+    /// <summary>O <c>data</c> maior que isto nao e lido (vira forma vazia).</summary>
+    public const int TetoDadosBytes = 8 * 1024;
+    public const int TetoEntradas = 40;
+    public const int TetoBotoes = 6;
+    public const int TetoIds = 10;
+    /// <summary>A tabela local dos cartoes some depois disto.</summary>
+    public static readonly TimeSpan GuardaDosCartoes = TimeSpan.FromDays(7);
+
+    private static readonly Regex ReParecidoComEnum = new(@"^[A-Za-z0-9_.:-]{1,40}$", RegexOptions.CultureInvariant);
+    private static readonly Regex ReUuidCartao = new(@"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// O cartao do iFood de um quadro BRDM com custom_type summary, itemSummary ou buttonList, ou null.
+    /// So a forma: ver <see cref="CartaoDoIfood"/>. Nunca lanca.
+    /// </summary>
+    public static CartaoDoIfood? LerCartaoDoIfood(string? payload)
+    {
+        try
+        {
+            if (QuadroSendbird.Comando(payload) != "BRDM") return null;
+            using var doc = JsonDocument.Parse(payload!.AsMemory(4));
+            var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object) return null;
+            var tipo = TiposDeCartao.FirstOrDefault(t => string.Equals(t, Texto(r, "custom_type")?.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (tipo is null) return null;
+            var canal = Texto(r, "channel_url");
+            if (CanalIfood.Ler(canal) is not { } ids) return null;
+
+            var texto = Mascarar(ConversaRaspadinha.CortarTexto(Texto(r, "message")));
+            if (texto.Length > 120) texto = texto[..120];
+            var chaves = r.EnumerateObject().Select(p => NomeDeChave(p.Name)).Where(n => n.Length > 0).Distinct().Take(TetoEntradas).ToList();
+
+            var dados = new Dictionary<string, string>(StringComparer.Ordinal);
+            var botoes = new List<BotaoDoCartao>();
+            var idsDoCartao = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (r.TryGetProperty("data", out var d))
+            {
+                if (d.ValueKind == JsonValueKind.String && d.GetString() is { } s && Encoding.UTF8.GetByteCount(s) <= TetoDadosBytes
+                    && s.TrimStart() is { Length: > 0 } st && st[0] is '{' or '[')
+                {
+                    try
+                    {
+                        using var dd = JsonDocument.Parse(s, new JsonDocumentOptions { MaxDepth = 32 });
+                        Forma(dd.RootElement, "", 0, false, dados, botoes, idsDoCartao);
+                    }
+                    catch { /* data que nao e JSON: forma vazia */ }
+                }
+                else if (d.ValueKind is JsonValueKind.Object or JsonValueKind.Array && Encoding.UTF8.GetByteCount(d.GetRawText()) <= TetoDadosBytes)
+                    Forma(d, "", 0, false, dados, botoes, idsDoCartao);
+            }
+            var msgId = TextoOuNumero(r, "msg_id");
+            if (msgId is "0") msgId = null;
+            return new CartaoDoIfood(canal!, ids.OrderId, msgId, tipo, Numero(r, "created_at") ?? Numero(r, "ts"), texto,
+                chaves, dados, botoes, idsDoCartao);
+        }
+        catch { return null; }
+    }
+
+    private static string NomeDeChave(string? s)
+    {
+        var n = Regex.Replace(s ?? "", "[^A-Za-z0-9_-]", "");
+        return n.Length > 40 ? n[..40] : n;
+    }
+
+    /// <summary>
+    /// A forma do data: ate 40 entradas {caminho: valor ou tipo}, profundidade 3. Valor so de booleano,
+    /// numero curto, uuid ou texto parecido com enum (mascarado); texto livre vira "(texto N)". Objeto que
+    /// mora numa lista e tem label, text ou title vira botao; chave com uuid vira id.
+    /// </summary>
+    private static void Forma(JsonElement e, string caminho, int prof, bool naLista,
+        Dictionary<string, string> dados, List<BotaoDoCartao> botoes, Dictionary<string, string> ids)
+    {
+        switch (e.ValueKind)
+        {
+            case JsonValueKind.Object:
+                if (prof > 0 && dados.Count < TetoEntradas) dados[caminho] = "objeto";
+                if (naLista && botoes.Count < TetoBotoes && BotaoDe(e) is { } b) botoes.Add(b);
+                if (prof >= 3) return;
+                foreach (var p in e.EnumerateObject())
+                {
+                    var nome = NomeDeChave(p.Name);
+                    if (nome.Length == 0) continue;
+                    if (p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } u && ReUuidCartao.IsMatch(u.Trim())
+                        && ids.Count < TetoIds && !ids.ContainsKey(nome))
+                        ids[nome] = u.Trim().ToLowerInvariant();
+                    Forma(p.Value, caminho.Length == 0 ? nome : caminho + "." + nome, prof + 1, false, dados, botoes, ids);
+                }
+                return;
+            case JsonValueKind.Array:
+                if (prof > 0 && dados.Count < TetoEntradas) dados[caminho] = "lista(" + e.GetArrayLength().ToString(CultureInfo.InvariantCulture) + ")";
+                var i = 0;
+                foreach (var x in e.EnumerateArray())
+                {
+                    if (i >= TetoBotoes) break;
+                    if (prof < 3) Forma(x, (caminho.Length == 0 ? "" : caminho) + "[" + i.ToString(CultureInfo.InvariantCulture) + "]", prof + 1, true, dados, botoes, ids);
+                    else if (x.ValueKind == JsonValueKind.Object && botoes.Count < TetoBotoes && BotaoDe(x) is { } bb) botoes.Add(bb);
+                    i++;
+                }
+                return;
+            default:
+                if (prof > 0 && dados.Count < TetoEntradas) dados[caminho] = ValorDaForma(e);
+                return;
+        }
+    }
+
+    private static string ValorDaForma(JsonElement e)
+    {
+        switch (e.ValueKind)
+        {
+            case JsonValueKind.True: return "true";
+            case JsonValueKind.False: return "false";
+            case JsonValueKind.Null: return "null";
+            case JsonValueKind.Number:
+                var raw = e.GetRawText();
+                var digitos = raw.Count(char.IsDigit);
+                // numero longo pode ser telefone ou CPF: so o tamanho
+                return digitos >= 8 ? "(numero " + digitos.ToString(CultureInfo.InvariantCulture) + ")" : raw;
+            case JsonValueKind.String:
+                var s = (e.GetString() ?? "").Trim();
+                if (ReUuidCartao.IsMatch(s)) return s.ToLowerInvariant();
+                if (ReParecidoComEnum.IsMatch(s))
+                {
+                    var m = Mascarar(s);
+                    return m == s ? s : m;   // telefone, CPF e cartao viram rotulo
+                }
+                return "(texto " + s.Length.ToString(CultureInfo.InvariantCulture) + ")";
+            default:
+                return "?";
+        }
+    }
+
+    private static BotaoDoCartao? BotaoDe(JsonElement o)
+    {
+        string? rotulo = null;
+        foreach (var k in new[] { "label", "text", "title" })
+            if (Texto(o, k) is { } t && !string.IsNullOrWhiteSpace(t)) { rotulo = t; break; }
+        if (rotulo is null) return null;
+        rotulo = Mascarar(ConversaRaspadinha.CortarTexto(rotulo));
+        if (rotulo.Length > 40) rotulo = rotulo[..40];
+        string? acao = null;
+        foreach (var k in new[] { "action", "type", "value" })
+            if (Texto(o, k) is { } a && ReParecidoComEnum.IsMatch(a.Trim()) && Mascarar(a.Trim()) == a.Trim()) { acao = a.Trim(); break; }
+        return new BotaoDoCartao(rotulo, acao);
+    }
+
+    /// <summary>A linha do chat-solicitacao.txt: pedido, tipo, a forma do data, os botoes e os ids. Nunca texto livre.</summary>
+    public static string LinhaDoCartao(CartaoDoIfood c, string? numero)
+    {
+        var forma = JsonSerializer.Serialize(c.Dados, Json);
+        if (forma.Length > 1500) forma = forma[..1500] + "...";
+        var botoes = string.Join(", ", c.Botoes.Select(b => b.Rotulo + "/" + (b.Acao ?? "-")));
+        var ids = string.Join(", ", c.Ids.Select(x => x.Key + "=" + x.Value));
+        return $"pedido=#{(string.IsNullOrWhiteSpace(numero) ? "?" : numero.Trim())} ordem={Curto(c.OrderId)} tipo={c.CustomType} "
+             + $"chaves=[{string.Join(",", c.ChavesRaiz)}] data={forma} botoes=[{botoes}] ids=[{ids}] texto=(len {c.Texto.Length})";
+
+        static string Curto(string s) => s.Length <= 8 ? s : s[..8];
+    }
+
+    /// <summary>Grava o cartao na tabela local (uma linha por cartao). Devolve false quando ja existia.</summary>
+    public static bool RegistrarCartao(SqliteConnection cx, CartaoDoIfood c, string? numero, DateTime agora)
+        => cx.Execute("""
+            INSERT OR IGNORE INTO chat_cartao_solicitacao
+                   (chave, canal, ifood_order_id, numero, custom_type, quando, dados_json, botoes_json, ids_json, criado_em)
+            VALUES (@K, @C, @O, @N, @T, @Q, @D, @B, @I, @Em)
+            """, new
+        {
+            K = c.Chave, C = c.Canal, O = c.OrderId, N = numero, T = c.CustomType, Q = QuandoIso(c.CriadoEmMs),
+            D = JsonSerializer.Serialize(c.Dados, Json), B = JsonSerializer.Serialize(c.Botoes, Json),
+            I = JsonSerializer.Serialize(c.Ids, Json), Em = agora.ToString("o", CultureInfo.InvariantCulture),
+        }) == 1;
+
+    /// <summary>A faxina dos cartoes (7 dias), junto da faxina do arquivo.</summary>
+    public static int FaxinaDosCartoes(SqliteConnection cx, DateTime agora)
+        => cx.Execute("DELETE FROM chat_cartao_solicitacao WHERE criado_em < @L",
+            new { L = (agora - GuardaDosCartoes).ToString("o", CultureInfo.InvariantCulture) });
+
     // ── json ────────────────────────────────────────────────────────────────
 
     private static string? UserType(JsonElement o)
@@ -622,4 +828,55 @@ public sealed class AgrupadorDoArquivo
     }
 
     public int Esperando { get { lock (_trava) return _quantas; } }
+}
+
+/// <summary>
+/// 1.0.35: QUAIS cartoes do iFood o caixa registra. O resumo "Quero ..." (a solicitacao do cliente) marca a
+/// conversa; o resumo, o item e a lista de botoes que chegam na MESMA conversa ate 5 min depois da marca
+/// sao registrados. O item ("Cliente fez uma solicitacao:") chega ANTES do resumo (no #8039, meio segundo
+/// antes): ele espera ate 60 s pela marca. Uma lista de botoes sem resumo antes (por exemplo "Avalie o
+/// atendimento" de outra hora) nao e registrada. Puro: relogio de fora.
+/// </summary>
+public sealed class JanelaDaSolicitacao
+{
+    public static readonly TimeSpan Janela = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan EsperaDoItem = TimeSpan.FromSeconds(60);
+    private const int TetoDeConversas = 500;
+
+    private readonly object _trava = new();
+    private readonly Dictionary<string, DateTime> _marcas = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<(CartaoDoIfood Cartao, DateTime Em)>> _itensAntes = new(StringComparer.Ordinal);
+
+    /// <summary>Um cartao chegou. Devolve os cartoes a registrar agora (o proprio, e os itens que esperavam a marca).</summary>
+    public IReadOnlyList<CartaoDoIfood> Ver(CartaoDoIfood c, bool ehSolicitacao, DateTime agora)
+    {
+        lock (_trava)
+        {
+            Limpar(agora);
+            if (ehSolicitacao)
+            {
+                _marcas[c.Canal] = agora;
+                var saida = new List<CartaoDoIfood>();
+                if (_itensAntes.Remove(c.Canal, out var antes))
+                    saida.AddRange(antes.Where(x => agora - x.Em <= EsperaDoItem).Select(x => x.Cartao));
+                saida.Add(c);
+                return saida;
+            }
+            if (_marcas.TryGetValue(c.Canal, out var marca) && agora - marca <= Janela) return new[] { c };
+            if (c.CustomType == "itemSummary")
+            {
+                if (!_itensAntes.TryGetValue(c.Canal, out var l)) _itensAntes[c.Canal] = l = new List<(CartaoDoIfood, DateTime)>();
+                if (l.Count < 3) l.Add((c, agora));
+            }
+            return Array.Empty<CartaoDoIfood>();
+        }
+    }
+
+    private void Limpar(DateTime agora)
+    {
+        foreach (var k in _marcas.Where(x => agora - x.Value > Janela).Select(x => x.Key).ToList()) _marcas.Remove(k);
+        foreach (var k in _itensAntes.Where(x => x.Value.All(i => agora - i.Em > EsperaDoItem)).Select(x => x.Key).ToList()) _itensAntes.Remove(k);
+        if (_marcas.Count > TetoDeConversas) _marcas.Clear();
+        if (_itensAntes.Count > TetoDeConversas) _itensAntes.Clear();
+    }
 }

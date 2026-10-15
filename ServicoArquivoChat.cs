@@ -82,6 +82,9 @@ public static class ServicoArquivoChat
             // enxerga. Aqui ela vira aviso com som na tela de venda, com o botao Abrir o chat.
             if (ChatArquivo.EhSolicitacaoDoCliente(t.Mensagem!))
                 AvisarSolicitacao(t.Canal!, t.Mensagem!);
+            // 1.0.35 (caso #8039): os cartoes da solicitacao sao so LIDOS e registrados (o data e os botoes)
+            if (t.Mensagem!.Comando == "BRDM" && t.Mensagem.CustomType is { } ct && ChatArquivo.TiposDeCartao.Contains(ct))
+                CartaoDaSolicitacao(payload!, t.Mensagem, agora);
             Interlocked.Increment(ref _lidas);
             Interlocked.Increment(ref _naFila);
             if (!Gravacoes.Writer.TryWrite((t.Canal!, t.Mensagem!, agora))) Interlocked.Decrement(ref _naFila);
@@ -112,10 +115,59 @@ public static class ServicoArquivoChat
         Diag($"solicitacao do cliente pedido={numero ?? "?"} len={m.Texto.Length}");
     }
 
+    // ── 1.0.35: OS CARTOES DA SOLICITACAO DO CLIENTE (fase 1: so ler) ────────
+    // O resumo "Quero ..." marca a conversa; o resumo, o item e a lista de botoes da mesma conversa ate
+    // 5 min depois sao registrados: tabela local chat_cartao_solicitacao (7 dias), uma linha em
+    // chat-solicitacao.txt e so contagens no sinal. NADA e tocado no Gestor e nada vai ao iFood; o lote do
+    // arquivo continua igual (o ERP nao recebe campo novo).
+
+    private static readonly JanelaDaSolicitacao Janela = new();
+    private static int _cartoes, _cartoesComData, _botoesMax;
+
+    /// <summary>As contagens para o sinal do chat: cartoes registrados, quantos com data, o maior numero de botoes.</summary>
+    public static ConversaRaspadinha.ContagemDeCartoes Contagem()
+        => new(Volatile.Read(ref _cartoes), Volatile.Read(ref _cartoesComData), Volatile.Read(ref _botoesMax));
+
+    private static void CartaoDaSolicitacao(string payload, MensagemArquivo m, DateTime agora)
+    {
+        var cartao = ChatArquivo.LerCartaoDoIfood(payload);
+        if (cartao is null) return;
+        var registrar = Janela.Ver(cartao, ChatArquivo.EhSolicitacaoDoCliente(m), agora);
+        if (registrar.Count == 0) return;
+        // fora da tela: o banco e o arquivo de texto
+        _ = Task.Run(() =>
+        {
+            foreach (var c in registrar)
+            {
+                try
+                {
+                    string? numero = null;
+                    bool nova;
+                    using (var cx = Banco.Abrir())
+                    {
+                        numero = Dapper.SqlMapper.ExecuteScalar<string?>(cx,
+                            "SELECT numero FROM kds_ticket WHERE origem = 'ifood' AND ref_id = @r LIMIT 1", new { r = c.OrderId });
+                        nova = ChatArquivo.RegistrarCartao(cx, c, numero, DateTime.Now);
+                    }
+                    if (!nova) continue;
+                    Interlocked.Increment(ref _cartoes);
+                    if (c.Dados.Count > 0) Interlocked.Increment(ref _cartoesComData);
+                    int atual;
+                    while ((atual = Volatile.Read(ref _botoesMax)) < c.Botoes.Count
+                           && Interlocked.CompareExchange(ref _botoesMax, c.Botoes.Count, atual) != atual) { }
+                    Telas.HospedeWebView2.Anotar("chat-solicitacao.txt", ChatArquivo.LinhaDoCartao(c, numero), Relogio.Elapsed);
+                }
+                catch (Exception ex) { Diag("cartao da solicitacao: " + ex.GetType().Name); }
+            }
+        });
+    }
+
     /// <summary>Os relogios nascem no primeiro quadro, uma vez so.</summary>
     private static void Ligar()
     {
         if (Interlocked.Exchange(ref _iniciado, 1) == 1) return;
+        // 1.0.35: o sinal do chat leva as contagens dos cartoes da solicitacao
+        ServicoConversaChat.Cartoes = Contagem;
         _tique = new System.Threading.Timer(_ => Tique(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
         _ = Task.Run(LoopDeGravacaoAsync);
         Diag("ligado");
@@ -155,7 +207,7 @@ public static class ServicoArquivoChat
             if (agora >= _proximaFaxina)
             {
                 _proximaFaxina = agora.AddHours(1);
-                try { using var cx = Banco.Abrir(); ChatArquivo.Faxina(cx, agora); } catch { }
+                try { using var cx = Banco.Abrir(); ChatArquivo.Faxina(cx, agora); ChatArquivo.FaxinaDosCartoes(cx, agora); } catch { }
             }
         }
         catch { }

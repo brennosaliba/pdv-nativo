@@ -59,15 +59,22 @@ public static class TestesChatSempreVivo
         // ── 4. o envio tenta de novo antes de dizer falhou ──
         checar(ServicoConversaChat.TentativasDeEnvio == 3 && ServicoConversaChat.RespiroEntreTentativas == TimeSpan.FromSeconds(6),
             "CV-10 3 tentativas com 6 s entre elas (1.0.25: o aquecimento vem antes do respiro; com 15 s a terceira estourava a reserva)");
-        var iEnviar = servico.IndexOf("private static async Task EnviarUmaAsync(", StringComparison.Ordinal);
-        var enviar = iEnviar < 0 ? "" : servico.Substring(iEnviar, Math.Min(7000, servico.Length - iEnviar));
-        checar(enviar.Contains("for (var tentativa = 1; tentativa <= TentativasDeEnvio; tentativa++)")
-               && enviar.Contains("Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now)")
-               && enviar.Contains("Portao.Repetir(primeira, recebida, DateTime.Now)")
-               && enviar.Contains("if (erro is \"congelada\" or \"sem_cliente\" || tentativa == TentativasDeEnvio) break;")
+        // 1.0.35: o laco mora em EnviarComTentativasAsync (portas trocaveis, a bateria roda o mesmo laco em
+        // TestesPlanoBDoEnvio); EnviarUmaAsync so liga as portas de verdade
+        var iEnviar = servico.IndexOf("public static async Task EnviarComTentativasAsync(", StringComparison.Ordinal);
+        var enviar = iEnviar < 0 ? "" : servico.Substring(iEnviar, Math.Min(12000, servico.Length - iEnviar));
+        // 1.0.35 (revisao): o limite comeca em TentativasDeEnvio e so ganha +1 com a recarga do plano B; no fim,
+        // o erro do relato passa por ErroDoRelato (o SDK frio depois da recarga nao vira canal_errado)
+        checar(enviar.Contains("var limite = TentativasDeEnvio;")
+               && enviar.Contains("for (var tentativa = 1; tentativa <= limite; tentativa++)")
+               && enviar.Contains("limite = TentativasDeEnvio + 1;")
+               && enviar.Contains("l.Portao.Decidir(s, sinal, sinalEm, recebida, l.Agora())")
+               && enviar.Contains("l.Portao.Repetir(primeira, recebida, l.Agora())")
+               && enviar.Contains("if (erro is \"congelada\" or \"sem_cliente\" || tentativa >= limite) break;")
                && enviar.Contains("await AquecerAsync(ponte, s.PedidoNumero, s.IfoodOrderId)")
-               && enviar.Contains("await RelatarAsync(s.Id, \"falhou\", erro ?? \"erro_envio\", null, s)"),
-            "CV-11 a 1a tentativa passa pelo portao; as seguintes pelo Repetir (token novo, sem o eco) depois de aquecer; congelada e sem_cliente nao tentam de novo; so no fim relata falhou");
+               && enviar.Contains("await l.Relatar(s.Id, \"falhou\", ErroDoRelato(erro, depoisDaRecarga is not null), s, rastro.Detalhe())")
+               && servico.Contains("=> EnviarComTentativasAsync(s, recebida, new LacoDeEnvio"),
+            "CV-11 a 1a tentativa passa pelo portao; as seguintes pelo Repetir (token novo, sem o eco) depois de aquecer; congelada e sem_cliente nao tentam de novo; so no fim relata falhou (com o detalhe, 1.0.35)");
         // 1.0.25: o SDK frio e reconhecido pelo diagnostico, e o caixa aquece sozinho
         {
             var frio = System.Text.Json.Nodes.JsonNode.Parse("{\"achou\":true,\"conferidos\":0,\"canais_cm_por_merchant\":{}}")!.AsObject();
@@ -133,7 +140,8 @@ public static class TestesChatSempreVivo
                && Autorizacao.TipoGestorInteiro == "gestor_inteiro"
                && Autorizacao.ReferenciaGestorInteiro("CAIXA 1", new DateTime(2026, 10, 9, 14, 30, 0)) == "gestor:CAIXA1:20261009143000",
             "CV-35 abrir o Gestor inteiro pede o 2FA (nivel gerente: gerente geral ou dono); voltar para So o chat e livre");
-        checar(enviar.Contains("if (res.Ok || res.Erro is \"sem_resposta\") return;") && enviar.Contains("if (visto == true) { await RelatarAsync(s.Id, \"incerta\""),
+        checar(enviar.Contains("if (res.Ok) return (DesfechoDaTentativa.Saiu, null, null);") && enviar.Contains("if (res.Erro is \"sem_resposta\") return (DesfechoDaTentativa.SemResposta, null, null);")
+               && enviar.Contains("if (vez.Desfecho != DesfechoDaTentativa.Falhou) return;") && enviar.Contains("await l.Relatar(s.Id, \"incerta\", \"erro_envio\", s, rastro.Detalhe())"),
             "CV-12 a confirmacao pelo quadro e o 'incerta' continuam como antes dentro do laco");
 
         // ── 5. a solicitacao de alteracao do iFood vira aviso com som e botao ──

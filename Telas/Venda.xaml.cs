@@ -457,10 +457,13 @@ public partial class Venda : UserControl
         var colar = !string.IsNullOrWhiteSpace(a.TextoParaColar);
         var temPedido = !string.IsNullOrWhiteSpace(a.OrderUuid);
         BtnConversaColar.Visibility = colar && temPedido ? Visibility.Visible : Visibility.Collapsed;
-        // falha_envio leva só o Abrir e colar (seção 2.2); sem o pedido, o Copiar é a saída
+        // falha_envio leva o Abrir e colar (seção 2.2); sem o pedido, o Copiar é a saída
         BtnConversaCopiar.Visibility = colar && (a.Tipo != "falha_envio" || !temPedido) ? Visibility.Visible : Visibility.Collapsed;
-        // 154 (08/10): o chat não resolveu e a loja ligou a tela: "Resgatar aqui" abre já no pedido do aviso
-        var resgatar = _resgatePdv && temPedido && Nucleo.ResgateManual.TiposDeAvisoComResgate.Contains(a.Tipo);
+        // 154 (08/10): o chat não resolveu e a loja ligou a tela: "Resgatar aqui" abre já no pedido do aviso.
+        // 1.0.35 (caso #8039): falha_envio também, ao lado do Abrir e colar (o resgate sai ligado ao pedido,
+        // com comanda e KDS, e não pelo validador público). Revisão: só quando é resgatável (a pergunta do
+        // sabor); na confirmação o prêmio já está no pedido e o botão só levaria a uma recusa
+        var resgatar = _resgatePdv && temPedido && Nucleo.ResgateManual.LevaResgatar(a.Tipo, a.Resgatavel);
         BtnConversaResgatar.Visibility = resgatar ? Visibility.Visible : Visibility.Collapsed;
         // 1.0.24: a solicitacao de alteracao do iFood e a conversa que pede gente levam ao chat num toque
         var abrirChat = a.Tipo is "solicitacao" or "humano";

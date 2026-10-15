@@ -634,6 +634,23 @@ public static class Banco
         CREATE INDEX IF NOT EXISTS ix_ifood_chat_arquivo_pend
           ON ifood_chat_arquivo(estado, criado_em);
 
+        -- 1.0.35 (14/10/2026, caso #8039): os CARTOES do iFood da solicitacao do cliente ("Quero
+        -- adicionar observacao ao pedido"): o resumo, o item e a lista de botoes, so a FORMA (o campo
+        -- data em caminho/tipo, os botoes e os ids). Fase 1 de "ler, sombra, ligar": o caixa so le e
+        -- registra, nunca toca no cartao. Some em 7 dias (ChatArquivo.FaxinaDosCartoes).
+        CREATE TABLE IF NOT EXISTS chat_cartao_solicitacao (
+          chave          TEXT PRIMARY KEY,
+          canal          TEXT NOT NULL,
+          ifood_order_id TEXT NOT NULL,
+          numero         TEXT,
+          custom_type    TEXT NOT NULL,
+          quando         TEXT NOT NULL,
+          dados_json     TEXT NOT NULL,
+          botoes_json    TEXT NOT NULL,
+          ids_json       TEXT NOT NULL,
+          criado_em      TEXT NOT NULL
+        );
+
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────
         -- Chave/valor em vez de coluna nova em `terminal`: Migrar() só faz CREATE TABLE
         -- IF NOT EXISTS, não tem ALTER nem versionamento. Coluna nova só chegaria em

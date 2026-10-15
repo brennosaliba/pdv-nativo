@@ -106,8 +106,12 @@ public partial class ChatIfood : UserControl
     /// </summary>
     private readonly ConcurrentDictionary<string, string?> _wsUserPorConexao = new(StringComparer.Ordinal);
 
-    /// <summary>Os envios, diagnósticos e colagens esperando a resposta da página, por id.</summary>
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<ResultadoDoScript>> _envios = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Os envios, diagnósticos e colagens esperando a resposta da página, por id. 1.0.35 (revisão): o envio
+    /// guarda os segredos dele (texto, canal, pedido, token, usuário da loja), que saem da mensagem do erro
+    /// ainda crua, antes do corte em 120.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (TaskCompletionSource<ResultadoDoScript> Tcs, string?[] Segredos)> _envios = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject?>> _diagsSdk = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _colagens = new(StringComparer.Ordinal);
     /// <summary>A última leitura da página: a tela de login do Gestor está aberta?</summary>
@@ -251,6 +255,7 @@ public partial class ChatIfood : UserControl
                 // 1.0.33: a navegação deixa rastro, e a que falhou tenta de novo sozinha (30, 60 e
                 // 120 s). Antes ficava "toque em Recarregar" e o chat parado até alguém ver.
                 _navegacao = e.IsSuccess ? "ok" : "falhou";
+                Interlocked.Increment(ref _navegacoes);   // 1.0.35: o plano B espera a recarga terminar
                 Diag(e.IsSuccess ? "navegou: ok" : $"navegou: falhou {e.WebErrorStatus}");
                 TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: tentando de novo sozinho";
                 // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
@@ -313,6 +318,8 @@ public partial class ChatIfood : UserControl
                     : new ConversaRaspadinha.SaudeDoChat(false, _navegacao, "abrindo", 0),
                 // 1.0.25: aquece o SDK abrindo a conversa do pedido (com o numero) ou so a lista
                 AquecerConversa = AquecerConversaAsync,
+                // 1.0.35: o plano B do envio (recarrega o Gestor escondido; nunca com ele na frente)
+                RecarregarParaEnvio = RecarregarParaEnvioAsync,
             });
             // 1.0.25: e aquece uma vez sozinho, logo depois de o Gestor carregar, para o primeiro
             // pedido do dia nao cair em canal_errado
@@ -586,11 +593,17 @@ public partial class ChatIfood : UserControl
                 // o script do SDK contou como foi um envio (ver EnviarPeloSdkAsync)
                 var r = doc.RootElement;
                 var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
-                if (id is not null && _envios.TryRemove(id, out var tcs))
-                    tcs.TrySetResult(new ResultadoDoScript(
+                if (id is not null && _envios.TryRemove(id, out var env))
+                {
+                    var res = new ResultadoDoScript(
                         r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True,
                         r.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String ? er.GetString() : null,
-                        r.TryGetProperty("msgId", out var mi) && mi.ValueKind == JsonValueKind.String ? mi.GetString() : null));
+                        r.TryGetProperty("msgId", out var mi) && mi.ValueKind == JsonValueKind.String ? mi.GetString() : null,
+                        // 1.0.35: o motivo da recusa, pela lista branca do núcleo (a página é dado não confiável),
+                        // sem os segredos deste envio já na mensagem crua
+                        r.TryGetProperty("detalhe", out var de) ? ConversaRaspadinha.DetalheDoErro(de, env.Segredos) : null);
+                    env.Tcs.TrySetResult(res);
+                }
             }
             else if (tipo == "pdvsbdiag")
             {
@@ -985,7 +998,8 @@ public partial class ChatIfood : UserControl
         if (core is null) return new ResultadoDoScript(false, "sdk_ausente", null);
         var id = Guid.NewGuid().ToString("N");
         var tcs = new TaskCompletionSource<ResultadoDoScript>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _envios[id] = tcs;
+        var segredos = new[] { permissao.Texto, permissao.Canal, permissao.OrderUuid, token, _ultimoWsUser };
+        _envios[id] = (tcs, segredos);
         try
         {
             var args = JsonSerializer.Serialize(new
@@ -997,7 +1011,14 @@ public partial class ChatIfood : UserControl
                 $"window.__pdvEnvioToken = {JsonSerializer.Serialize(token)}; window.pdvSb ? window.pdvSb.enviar({args}) : 'sem_script'");
             if (r.Contains("sem_script", StringComparison.Ordinal)) return new ResultadoDoScript(false, "sdk_ausente", null);
             var fim = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(12)));
-            return fim == tcs.Task ? tcs.Task.Result : new ResultadoDoScript(false, "sem_resposta", null);
+            if (fim != tcs.Task) return new ResultadoDoScript(false, "sem_resposta", null);
+            // 1.0.35: o detalhe passa de novo sem o que este envio sabe que é segredo, e deixa rastro
+            var res = tcs.Task.Result with
+            {
+                Detalhe = ConversaRaspadinha.DetalheSemSegredos(tcs.Task.Result.Detalhe, segredos),
+            };
+            if (!res.Ok) DiagRaspadinha($"envio pelo sdk: nao deu erro={res.Erro ?? "-"}{ConversaRaspadinha.LinhaDoDetalhe(res.Detalhe)}");
+            return res;
         }
         catch (Exception ex)
         {
@@ -1141,6 +1162,80 @@ public partial class ChatIfood : UserControl
             return ok;
         }
         catch (Exception ex) { DiagRaspadinha("aquecer: " + ex.GetType().Name); return false; }
+    }
+
+    // ── 1.0.35: O PLANO B DO ENVIO (caso #8039) ──────────────────────────────
+
+    /// <summary>Quantas navegações do Gestor terminaram (o plano B só confia no diagnóstico depois da recarga).</summary>
+    private int _navegacoes;
+    /// <summary>O teto próprio da recarga do plano B: 1 a cada 10 min, 3 por hora (fora do teto de recriar).</summary>
+    private readonly TetoDaRecargaDoEnvio _tetoRecargaEnvio = new();
+
+    /// <summary>
+    /// 1.0.35 (14/10/2026, caso #8039): o SDK do Sendbird recusou o envio sem nenhum quadro sair. Na
+    /// Savassi isso durou 5 dias (41 de 42 respostas do robô). A conexão nova vem SÓ pela recarga da
+    /// página: o caixa nunca chama connect, disconnect nem reconnect do SDK. Recarrega o Gestor
+    /// ESCONDIDO, espera o SDK voltar aberto (OPEN) e abre a conversa do pedido. Nunca com a camada do
+    /// chat na frente do operador, nunca no meio de um "Abrir e colar", nunca com o Gestor pedindo login
+    /// e no máximo 1 a cada 10 min e 3 por hora. A recarga leva menos que o silêncio da vigia (2 min):
+    /// ela não recria o controle por causa disso. Devolve recarregou, na_frente, login, teto, sem_sdk ou
+    /// erro. Chamado de qualquer thread; roda na da tela.
+    /// </summary>
+    public async Task<string> RecarregarParaEnvioAsync(string? numero, string? orderUuid)
+    {
+        if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => RecarregarParaEnvioAsync(numero, orderUuid));
+        try
+        {
+            if (PlanoBDoEnvio.Impedimento(_pronto, IsHitTestVisible, !_colagens.IsEmpty, _gestorPedeLogin) is { } nao)
+            {
+                DiagRaspadinha($"plano b: {nao}, o Gestor nao e recarregado");
+                return nao;
+            }
+            if (!_tetoRecargaEnvio.Permitir(DateTime.UtcNow))
+            {
+                DiagRaspadinha("plano b: teto (1 a cada 10 min, 3 por hora)");
+                return PlanoBDoEnvio.Teto;
+            }
+            var core = Web.CoreWebView2;
+            if (core is null) return PlanoBDoEnvio.SemSdk;
+            var minha = _tentativa;
+            var antes = Volatile.Read(ref _navegacoes);
+            var inicio = DateTime.Now;
+            Diag("plano b: recarregando o Gestor escondido para o envio");
+            DiagRaspadinha("plano b: recarregando o Gestor escondido para o envio");
+            core.Reload();
+            var aberto = false;
+            while (DateTime.Now - inicio < PlanoBDoEnvio.EsperaDoSdk)
+            {
+                await Task.Delay(PlanoBDoEnvio.PassoDaEspera);
+                if (minha != _tentativa || !_pronto || Web.CoreWebView2 is null) return PlanoBDoEnvio.SemSdk;
+                // o diagnóstico só vale depois que a recarga terminou (antes ainda responde a página velha)
+                if (Volatile.Read(ref _navegacoes) == antes) continue;
+                if (_navegacao == "falhou") { DiagRaspadinha("plano b: a recarga nao navegou"); return PlanoBDoEnvio.SemSdk; }
+                var d = await DiagSdkAsync(Array.Empty<string>(), _ultimoWsUser);
+                if (PlanoBDoEnvio.PedeLogin(d)) { DiagRaspadinha("plano b: depois da recarga o Gestor pede login"); return PlanoBDoEnvio.Login; }
+                if (PlanoBDoEnvio.SdkAberto(d)) { aberto = true; break; }
+            }
+            if (!aberto)
+            {
+                DiagRaspadinha($"plano b: o SDK nao voltou aberto em {PlanoBDoEnvio.EsperaDoSdk.TotalSeconds:0} s");
+                return PlanoBDoEnvio.SemSdk;
+            }
+            // a conversa do pedido abre no Gestor escondido; se o operador trouxe o chat para a frente no
+            // meio da recarga, so a lista (o aquecimento sem pedido nao mexe com ele na tela)
+            // 1.0.35 (revisão): o resultado do aquecimento fica no rastro. Sem ele, a próxima tentativa pode dar
+            // canal_errado (SDK frio): o laço do serviço aquece de novo e tenta, e nunca pausa a loja por isso
+            var aqueceu = false;
+            try { aqueceu = await AquecerConversaAsync(IsHitTestVisible ? null : numero, orderUuid).WaitAsync(PlanoBDoEnvio.Aquecimento); }
+            catch (Exception ex) { DiagRaspadinha("plano b, aquecer: " + ex.GetType().Name); }
+            DiagRaspadinha($"plano b: recarregou, SDK aberto em {(DateTime.Now - inicio).TotalSeconds:0} s, aqueceu={aqueceu}");
+            return PlanoBDoEnvio.Recarregou;
+        }
+        catch (Exception ex)
+        {
+            DiagRaspadinha("plano b: " + ex.GetType().Name);
+            return PlanoBDoEnvio.Erro;
+        }
     }
 
     /// <summary>1.0.25: 25 s depois de o Gestor carregar, abre a lista de conversas uma vez (e mais uma, se a primeira nao deu).</summary>
@@ -2461,14 +2556,53 @@ public partial class ChatIfood : UserControl
         return '';
       }
 
+      // 1.0.35: devolve tambem QUAL instancia achou o canal (o detalhe do erro diz a conexao dela)
       async function acharCanal(lista, canal){
         for (var t = 0; t < 3; t++) {
           for (var i = 0; i < lista.length; i++) {
-            try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return ch; } catch (e) {}
+            try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return { ch: ch, i: i }; } catch (e) {}
           }
           await espera(1500);
         }
         return null;
+      }
+
+      // 1.0.35 (14/10/2026, caso #8039): o MOTIVO da recusa. Na Savassi 41 de 42 envios falharam
+      // em 5 dias e o caixa so sabia 'erro_envio': o erro do Sendbird era jogado fora. O detalhe
+      // leva SO o codigo, o nome, a mensagem do erro limpa, o estado da conexao e contagens; nunca
+      // o texto, o canal, o pedido, o usuario ou o token. O C# passa de novo por uma lista branca.
+      var UUID_SOLTO = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+      var NUMERO_LONGO = /(?:[0-9][ .()\/-]?){5,}[0-9]/g;
+      var TRAVESSOES = new RegExp('[' + String.fromCharCode(8211) + String.fromCharCode(8212) + ']', 'g');
+      function limpaMsg(s, segredos){
+        if (s === null || s === undefined) return null;
+        var t = '';
+        try { t = String(s); } catch (e) { return null; }
+        // o que a pagina SABE que e segredo (texto, canal, pedido, token, usuarios) sai antes de tudo
+        (segredos || []).forEach(function (x) { try { x = String(x || ''); if (x.length >= 3) t = t.split(x).join('#'); } catch (e) {} });
+        t = t.replace(/[\r\n\t]+/g, ' ').replace(TRAVESSOES, '-');
+        t = t.replace(/(?:https?|wss?):\/\/\S*/gi, 'url').replace(/\S*@\S*/g, 'email');
+        t = t.replace(/sendbird_[A-Za-z0-9_-]*/g, 'canal').replace(UUID_SOLTO, 'uuid');
+        t = t.replace(/[0-9a-f]{16,}/gi, '#').replace(NUMERO_LONGO, '#');
+        t = t.replace(/\s+/g, ' ').trim();
+        if (t.length > 120) t = t.slice(0, 120).trim();
+        return t.length ? t : null;
+      }
+      function inteiro(v){
+        var n = (typeof v === 'number') ? v : (typeof v === 'string' && /^-?[0-9]{1,10}$/.test(v) ? parseInt(v, 10) : NaN);
+        if (!isFinite(n) || Math.floor(n) !== n || n < -2147483648 || n > 2147483647) return null;
+        return n;
+      }
+      function conexaoDe(x){
+        var c = '';
+        try { c = String(x && x.connectionState).toUpperCase(); } catch (e) { c = ''; }
+        return (c === 'OPEN' || c === 'CONNECTING' || c === 'CLOSED') ? c : 'OUTRO';
+      }
+      function nomeDe(err){
+        var n = '';
+        try { n = String((err && (err.name || (err.constructor && err.constructor.name))) || ''); } catch (e) { n = ''; }
+        n = n.replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
+        return n.length ? n : null;
       }
 
       function diag(a){
@@ -2487,6 +2621,9 @@ public partial class ChatIfood : UserControl
             r.modulos = achados.length;
             r.runtimes = Object.keys(reqs).length;
             if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
+            // 1.0.35: o estado da conexao da primeira instancia (OPEN, CONNECTING, CLOSED ou OUTRO):
+            // o plano B espera ela voltar OPEN depois de recarregar o Gestor
+            if (lista.length) r.conexao = conexaoDe(lista[0]);
             // 1.0.33: sem instancia nao ha canal para conferir: responde na hora (antes esperava
             // 1,5 s por canal e estourava o prazo do caixa, e o achou=false nunca chegava)
             if (!lista.length) { r.conferidos = 0; envia(r); return; }
@@ -2519,41 +2656,72 @@ public partial class ChatIfood : UserControl
 
       function enviar(a){
         var id = a && a.id;
+        var t0 = Date.now(), lista = [], inst = -1;
         function fim(o){ o.tipo = 'pdvsb'; o.id = id; envia(o); }
+        // 1.0.35: todo ok:false leva o detalhe (etapa, codigo e mensagem do erro, conexao, contagens)
+        function detalhe(etapa, err, msg){
+          var d = { etapa: etapa, codigo: null, codigo_msg: null, msg: null, nome: null };
+          try {
+            if (err !== null && err !== undefined) {
+              var segredos = a ? [a.texto, a.canal, a.orderUuid, a.token, a.ws] : [];
+              lista.forEach(function (y) { try { if (y.currentUser) segredos.push(y.currentUser.userId); } catch (e) {} });
+              d.codigo = inteiro(err.code);
+              d.msg = limpaMsg(typeof err === 'string' ? err : err.message, segredos);
+              d.nome = nomeDe(err);
+            }
+          } catch (e) {}
+          try { if (msg) d.codigo_msg = inteiro(msg.errorCode); } catch (e) {}
+          d.instancias = Math.min(lista.length, 20);
+          var x = lista.length ? lista[inst >= 0 ? inst : 0] : null;
+          if (x) {
+            d.conexao = conexaoDe(x);
+            try { d.uid_igual_ws = !!(a && a.ws && x.currentUser && String(x.currentUser.userId) === String(a.ws)); } catch (e) { d.uid_igual_ws = false; }
+          }
+          if (inst >= 0) d.instancia = Math.min(inst, 20);
+          d.ms = Math.max(0, Math.min(60000, Date.now() - t0));
+          return d;
+        }
+        function falha(erro, etapa, err, msg){ fim({ ok: false, erro: erro, detalhe: detalhe(etapa, err, msg) }); }
         try {
           // o token de uso unico: sem ele igual ao que o C# acabou de por, nada sai
           var esperado = window.__pdvEnvioToken;
           window.__pdvEnvioToken = null;
-          if (!a || !a.token || !esperado || esperado !== a.token) { fim({ ok: false, erro: 'token' }); return 'token'; }
+          if (!a || !a.token || !esperado || esperado !== a.token) { falha('token', 'token'); return 'token'; }
           var agora = Date.now();
           enviados = enviados.filter(function (t) { return agora - t < 60000; });
-          if (enviados.length >= 20) { fim({ ok: false, erro: 'limite' }); return 'limite'; }
-          var lista = ordenar(instancias(), a.ws);
-          if (!lista.length) { fim({ ok: false, erro: 'sdk_ausente' }); return 'sdk_ausente'; }
+          if (enviados.length >= 20) { falha('limite', 'limite'); return 'limite'; }
+          lista = ordenar(instancias(), a.ws);
+          if (!lista.length) { falha('sdk_ausente', 'sdk_ausente'); return 'sdk_ausente'; }
           (async function () {
-            var ch = await acharCanal(lista, a.canal);
-            if (!ch) { fim({ ok: false, erro: 'canal_errado' }); return; }
+            var achado = await acharCanal(lista, a.canal);
+            var ch = achado ? achado.ch : null;
+            if (!ch) { falha('canal_errado', 'canal_errado'); return; }
+            inst = achado.i;
             var pedido = await pedidoDoCanal(ch);
-            if (!a.orderUuid || pedido.toLowerCase() !== String(a.orderUuid).toLowerCase()) { fim({ ok: false, erro: 'canal_errado' }); return; }
-            if (ch.isFrozen) { fim({ ok: false, erro: 'congelada' }); return; }
+            if (!a.orderUuid || pedido.toLowerCase() !== String(a.orderUuid).toLowerCase()) { falha('canal_errado', 'canal_errado'); return; }
+            if (ch.isFrozen) { falha('congelada', 'congelada'); return; }
             var cliente = (ch.members || []).some(function (m) { return !!(m && m.metaData && m.metaData.userType === 'CUSTOMER'); });
-            if (!cliente) { fim({ ok: false, erro: 'sem_cliente' }); return; }
+            if (!cliente) { falha('sem_cliente', 'sem_cliente'); return; }
             enviados.push(Date.now());
             var feito = false;
             function deu(msg){ if (feito) return; feito = true; fim({ ok: true, msgId: msg && msg.messageId ? String(msg.messageId) : null }); }
-            function naoDeu(){ if (feito) return; feito = true; fim({ ok: false, erro: 'erro_envio' }); }
+            // 1.0.35: o erro do SDK chega ate aqui (antes naoDeu nao recebia nada)
+            function naoDeu(err, msg, etapa){ if (feito) return; feito = true; falha('erro_envio', etapa, err, msg); }
             try {
               var params = { message: String(a.texto || '') };
               var r = ch.sendUserMessage.length >= 2
-                ? ch.sendUserMessage(params, function (msg, err) { if (err) naoDeu(); else deu(msg); })
+                ? ch.sendUserMessage(params, function (msg, err) { if (err) naoDeu(err, msg, 'falhou_sdk'); else deu(msg); })
                 : ch.sendUserMessage(params);
-              if (r && typeof r.onSucceeded === 'function') { r.onSucceeded(deu); if (typeof r.onFailed === 'function') r.onFailed(naoDeu); }
-              else if (r && typeof r.then === 'function') r.then(deu, naoDeu);
+              if (r && typeof r.onSucceeded === 'function') {
+                r.onSucceeded(deu);
+                if (typeof r.onFailed === 'function') r.onFailed(function (err, msg) { naoDeu(err, msg, 'falhou_sdk'); });
+              }
+              else if (r && typeof r.then === 'function') r.then(deu, function (err) { naoDeu(err, null, 'promessa'); });
               else if (ch.sendUserMessage.length < 2) deu(r);
-            } catch (e) { naoDeu(); }
-          })().catch(function () { fim({ ok: false, erro: 'erro_envio' }); });
+            } catch (e) { naoDeu(e, null, 'excecao'); }
+          })().catch(function (e) { falha('erro_envio', 'geral', e); });
           return 'iniciado';
-        } catch (e) { fim({ ok: false, erro: 'erro_envio' }); return 'erro'; }
+        } catch (e) { falha('erro_envio', 'geral', e); return 'erro'; }
       }
 
       window.pdvSb = { diag: diag, enviar: enviar };

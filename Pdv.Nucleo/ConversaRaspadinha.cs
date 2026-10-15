@@ -57,7 +57,7 @@ public enum DestinoDaSaida
 }
 
 /// <summary>Um aviso de uma linha para o operador (seção 2.2), já escrito pelo ERP.</summary>
-public sealed record AvisoConversa(string Tipo, string Texto, string? IfoodOrderId, string? PedidoNumero);
+public sealed record AvisoConversa(string Tipo, string Texto, string? IfoodOrderId, string? PedidoNumero, bool? Resgatavel = null);
 
 public sealed record ResultadoFala(string Chave, string Acao, string? Motivo, bool Repetida);
 
@@ -113,7 +113,11 @@ public sealed record SinalConversa(
 }
 
 /// <summary>A resposta de <c>raspadinha_chat_saida_resultado</c>.</summary>
-public sealed record ResultadoSaida(bool Ok, string? Estado, SaidaConversa? Reserva);
+/// <param name="AvisoTexto">
+/// 1.0.35 (SQL 176): no ramo "falhou", o ERP devolve em <c>reserva.aviso_texto</c> o mesmo texto que gravou
+/// no aviso <c>falha_envio</c> (com o prêmio e o que fazer). Ausente no ERP antigo: o caixa usa o dele.
+/// </param>
+public sealed record ResultadoSaida(bool Ok, string? Estado, SaidaConversa? Reserva, string? AvisoTexto = null, bool? Resgatavel = null);
 
 public enum DesfechoReserva { Ok, Recusada, SemResposta }
 
@@ -362,8 +366,14 @@ public static class ConversaRaspadinha
         return o.ToJsonString(Json);
     }
 
-    /// <summary>O corpo do <c>chat_saida</c>: o que aconteceu com uma resposta reservada a este terminal.</summary>
-    public static string CorpoSaida(string? terminal, long saidaId, string resultado, string? erro, string? sendbirdMsgId)
+    /// <summary>
+    /// O corpo do <c>chat_saida</c>: o que aconteceu com uma resposta reservada a este terminal.
+    /// 1.0.35: com <paramref name="detalhe"/> (ver <see cref="MontarDetalhe"/>), o corpo leva
+    /// <c>erro_detalhe</c>, e só quando o resultado é "falhou" ou "incerta". O campo <c>erro</c> continua
+    /// com os códigos de sempre (erro_envio, canal_errado...): o ERP antigo lê o mesmo de hoje.
+    /// </summary>
+    public static string CorpoSaida(string? terminal, long saidaId, string resultado, string? erro, string? sendbirdMsgId,
+        JsonObject? detalhe = null)
     {
         var r = resultado is "enviada" or "falhou" or "incerta" ? resultado : "incerta";
         var o = new Dictionary<string, object?>
@@ -375,7 +385,300 @@ public static class ConversaRaspadinha
         };
         if (!string.IsNullOrWhiteSpace(erro)) o["erro"] = erro.Trim();
         if (!string.IsNullOrWhiteSpace(sendbirdMsgId)) o["sendbird_msg_id"] = sendbirdMsgId.Trim();
+        if (detalhe is { Count: > 0 } && r is "falhou" or "incerta") o["erro_detalhe"] = detalhe.DeepClone();
         return JsonSerializer.Serialize(o, Json);
+    }
+
+    // ── O DETALHE DO ERRO DO ENVIO (1.0.35, caso #8039) ─────────────────────
+    // Na Savassi, de 10/10 a 14/10, 41 de 42 saídas do robô falharam com "erro_envio" e ninguém soube
+    // o porquê: o script da página jogava fora o erro do Sendbird e o caixa trocava o resto por
+    // erro_envio. Agora a página devolve um "detalhe" (só código, nome, a mensagem do erro limpa, o
+    // estado da conexão e contagens), o caixa passa por esta lista branca e manda ao ERP junto do
+    // resultado. NUNCA entra: o texto da resposta ou do cliente, o canal, o uuid ou o número do pedido,
+    // o usuário do SDK ou do WebSocket, o token de envio, endereço, e-mail, telefone, CPF, pilha de
+    // chamadas nem objeto cru do SDK.
+
+    /// <summary>De onde veio a recusa, na página (o contrato do <c>detalhe.etapa</c>).</summary>
+    public static readonly IReadOnlySet<string> EtapasDoErro = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "falhou_sdk", "promessa", "excecao", "geral", "token", "limite", "sdk_ausente", "canal_errado", "congelada", "sem_cliente",
+    };
+
+    /// <summary>O estado da conexão da instância do SDK que tentou mandar.</summary>
+    public static readonly IReadOnlySet<string> ConexoesDoSdk = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "OPEN", "CONNECTING", "CLOSED", "OUTRO",
+    };
+
+    /// <summary>O que o plano B fez (1.0.35): o resultado da recarga do Gestor escondido.</summary>
+    public static readonly IReadOnlySet<string> PlanosB = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "recarregou", "na_frente", "login", "teto", "sem_sdk", "sem_tempo",
+    };
+
+    /// <summary>O erro cru do script quando o caixa o trocou por erro_envio.</summary>
+    public static readonly IReadOnlySet<string> ErrosDoScript = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "token", "limite", "sem_resposta",
+    };
+
+    /// <summary>O detalhe montado tem no máximo isto (em bytes, UTF-8); o ERP aceita até 1000 caracteres.</summary>
+    public const int TetoDetalheBytes = 600;
+    /// <summary>A mensagem do erro do SDK, limpa, tem no máximo isto.</summary>
+    public const int TetoMsgDoErro = 120;
+
+    private static readonly Regex ReEndereco = new(@"(?:https?|wss?)://\S*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex ReArroba = new(@"\S*@\S*", RegexOptions.CultureInvariant);
+    private static readonly Regex ReCanalSendbird = new(@"sendbird_[A-Za-z0-9_-]*", RegexOptions.CultureInvariant);
+    private static readonly Regex ReUuid = new(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", RegexOptions.CultureInvariant);
+    private static readonly Regex ReHexLongo = new(@"[0-9a-fA-F]{16,}", RegexOptions.CultureInvariant);
+    private static readonly Regex ReNumeroLongo = new(@"(?:[0-9][ .()/-]?){5,}[0-9]", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A mensagem do erro do SDK como ela pode viajar: uma linha, até 120 caracteres, endereço vira
+    /// "url", qualquer coisa com @ vira "email", o canal do Sendbird vira "canal", uuid vira "uuid",
+    /// hexadecimal longo (token) e sequência de 6 ou mais dígitos (telefone, CPF, pedido) viram "#".
+    /// A mesma regra roda na página (ScriptSendbird.limpaMsg); aqui ela roda de novo porque a página
+    /// é dado não confiável. Vazia vira null.
+    /// </summary>
+    public static string? MsgDoErroLimpa(string? s, int teto = TetoMsgDoErro)
+    {
+        if (s is null) return null;
+        var t = Regex.Replace(s, @"[\r\n\t]+", " ");
+        t = t.Replace((char)0x2014, '-').Replace((char)0x2013, '-');
+        t = ReEndereco.Replace(t, "url");
+        t = ReArroba.Replace(t, "email");
+        t = ReCanalSendbird.Replace(t, "canal");
+        t = ReUuid.Replace(t, "uuid");
+        t = ReHexLongo.Replace(t, "#");
+        t = ReNumeroLongo.Replace(t, "#");
+        t = Regex.Replace(t, @"\s+", " ").Trim();
+        if (t.Length > teto) t = t[..teto].TrimEnd();
+        return t.Length == 0 ? null : t;
+    }
+
+    /// <summary>
+    /// O <c>detalhe</c> que a página mandou com um envio que não deu, pela lista branca do contrato:
+    /// etapa (enum), codigo e codigo_msg (inteiros de 32 bits ou nada), msg (limpa por
+    /// <see cref="MsgDoErroLimpa"/>), nome ([A-Za-z0-9_], até 40), conexao (enum), instancia e
+    /// instancias (0 a 20), uid_igual_ws (booleano) e ms (0 a 60000). Chave desconhecida cai; valor
+    /// fora do tipo cai. Sem nada que preste, null.
+    /// 1.0.35 (revisão): com os <paramref name="segredos"/> do envio (o texto da resposta, o canal, o uuid
+    /// do pedido, o token, o usuário da loja), eles saem da mensagem CRUA, antes da limpeza e do corte em
+    /// 120. Depois do corte, a resposta inteira (155 caracteres no #8039) já não casava mais.
+    /// </summary>
+    public static JsonObject? DetalheDoErro(JsonElement d, IReadOnlyList<string?>? segredos = null)
+    {
+        if (d.ValueKind != JsonValueKind.Object) return null;
+        var o = new JsonObject();
+        foreach (var p in d.EnumerateObject())
+        {
+            var v = p.Value;
+            switch (p.Name)
+            {
+                case "etapa":
+                    if (v.ValueKind == JsonValueKind.String && v.GetString() is { } e && EtapasDoErro.Contains(e)) o["etapa"] = e;
+                    break;
+                case "codigo":
+                case "codigo_msg":
+                    if (Inteiro32(v) is int c) o[p.Name] = c;
+                    break;
+                case "msg":
+                    if (v.ValueKind == JsonValueKind.String && MsgDoErroLimpa(SemSegredos(v.GetString(), segredos)) is { } m) o["msg"] = m;
+                    break;
+                case "nome":
+                    if (v.ValueKind == JsonValueKind.String && NomeDoErro(v.GetString()) is { } n) o["nome"] = n;
+                    break;
+                case "conexao":
+                    if (v.ValueKind == JsonValueKind.String && v.GetString() is { } cx && ConexoesDoSdk.Contains(cx)) o["conexao"] = cx;
+                    break;
+                case "instancia":
+                case "instancias":
+                    if (Inteiro32(v) is int i) o[p.Name] = Math.Clamp(i, 0, 20);
+                    break;
+                case "uid_igual_ws":
+                    if (v.ValueKind is JsonValueKind.True or JsonValueKind.False) o["uid_igual_ws"] = v.ValueKind == JsonValueKind.True;
+                    break;
+                case "ms":
+                    if (Inteiro32(v) is int ms) o["ms"] = Math.Clamp(ms, 0, 60_000);
+                    break;
+            }
+        }
+        return o.Count == 0 ? null : o;
+    }
+
+    /// <summary>
+    /// O detalhe sem o que o caixa SABE que é segredo deste envio (o texto da resposta, o canal, o uuid
+    /// do pedido, o token, o usuário da loja no WebSocket): se a mensagem do erro do SDK trouxer um deles,
+    /// ele vira "#". A página já faz isso; aqui é a segunda passada, porque a página não é confiável.
+    /// 1.0.35 (revisão): também sai qualquer TRECHO de segredo com 20 ou mais caracteres. A mensagem que
+    /// chega aqui já foi cortada em 120, e a resposta de tamanho real (155 no #8039) só aparece pela metade:
+    /// o começo dela, com o nome do cliente, ficava no log e no ERP.
+    /// </summary>
+    public static JsonObject? DetalheSemSegredos(JsonObject? d, params string?[] segredos)
+    {
+        if (d is null || d["msg"] is not JsonValue mv || !mv.TryGetValue<string>(out var msg)) return d;
+        var limpa = MsgDoErroLimpa(SemSegredos(msg, segredos));
+        var o = (JsonObject)d.DeepClone();
+        if (limpa is null) o.Remove("msg"); else o["msg"] = limpa;
+        return o;
+    }
+
+    /// <summary>Um trecho de segredo deste tamanho ou maior sai da mensagem do erro, mesmo sem o segredo inteiro.</summary>
+    public const int TrechoMinimoDoSegredo = 20;
+
+    /// <summary>
+    /// A mensagem sem os segredos: cada um (3 ou mais caracteres) inteiro vira "#", e qualquer trecho dele
+    /// com <see cref="TrechoMinimoDoSegredo"/> ou mais caracteres também (sem diferença de maiúscula, com os
+    /// espaços juntados como na limpeza). Mensagem muito longa é cortada antes (a limpeza corta em 120 depois).
+    /// </summary>
+    public static string? SemSegredos(string? msg, IReadOnlyList<string?>? segredos)
+    {
+        if (msg is null || segredos is null || segredos.Count == 0) return msg;
+        var t = Regex.Replace(msg.Length > 4000 ? msg[..4000] : msg, @"\s+", " ");
+        foreach (var s in segredos)
+        {
+            var x = s is null ? "" : Regex.Replace(s, @"\s+", " ").Trim();
+            if (x.Length < 3) continue;
+            t = t.Replace(x, "#", StringComparison.OrdinalIgnoreCase);
+            if (x.Length >= TrechoMinimoDoSegredo) t = SemTrechos(t, x.Length > 2000 ? x[..2000] : x);
+        }
+        return t;
+    }
+
+    /// <summary>
+    /// Tira de <paramref name="t"/> todo trecho que também está em <paramref name="segredo"/> com
+    /// <see cref="TrechoMinimoDoSegredo"/> ou mais caracteres (a maior substring comum, linha a linha).
+    /// O espaço das pontas do trecho fica, e cada trecho vira um "#".
+    /// </summary>
+    private static string SemTrechos(string t, string segredo)
+    {
+        if (t.Length < TrechoMinimoDoSegredo) return t;
+        var a = t.ToLowerInvariant();
+        var b = segredo.ToLowerInvariant();
+        if (a.Length != t.Length) return t;
+        var marca = new bool[t.Length];
+        var antes = new int[b.Length + 1];
+        var agora = new int[b.Length + 1];
+        var achou = false;
+        for (var i = 1; i <= a.Length; i++)
+        {
+            var melhor = 0;
+            for (var j = 1; j <= b.Length; j++)
+            {
+                agora[j] = a[i - 1] == b[j - 1] ? antes[j - 1] + 1 : 0;
+                if (agora[j] > melhor) melhor = agora[j];
+            }
+            if (melhor >= TrechoMinimoDoSegredo)
+            {
+                for (var k = i - melhor; k < i; k++) marca[k] = true;
+                achou = true;
+            }
+            (antes, agora) = (agora, antes);
+        }
+        if (!achou) return t;
+        var sb = new StringBuilder(t.Length);
+        var i0 = 0;
+        while (i0 < t.Length)
+        {
+            if (!marca[i0]) { sb.Append(t[i0++]); continue; }
+            var i1 = i0;
+            while (i1 < t.Length && marca[i1]) i1++;
+            // o espaço das pontas não é do segredo: fica
+            var ini = i0; var fim = i1;
+            while (ini < fim && char.IsWhiteSpace(t[ini])) sb.Append(t[ini++]);
+            var cauda = new StringBuilder();
+            while (fim > ini && char.IsWhiteSpace(t[fim - 1])) cauda.Insert(0, t[--fim]);
+            if (fim > ini) sb.Append('#');
+            sb.Append(cauda);
+            i0 = i1;
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>O nome do erro (SendbirdError, TypeError): só letras, dígitos e _, até 40.</summary>
+    public static string? NomeDoErro(string? s)
+    {
+        var n = Regex.Replace(s ?? "", "[^A-Za-z0-9_]", "");
+        if (n.Length > 40) n = n[..40];
+        return n.Length == 0 ? null : n;
+    }
+
+    private static int? Inteiro32(JsonElement v)
+    {
+        if (v.ValueKind != JsonValueKind.Number) return null;
+        if (v.TryGetInt32(out var i)) return i;
+        if (v.TryGetDouble(out var d) && d == Math.Floor(d) && d >= int.MinValue && d <= int.MaxValue) return (int)d;
+        return null;
+    }
+
+    /// <summary>
+    /// O detalhe que vai ao ERP com o resultado da saída (1.0.35, SALTO 2): o da ÚLTIMA tentativa (já
+    /// pela lista branca) mais tentativa e tentativas (1 a 5), os códigos do SDK de cada tentativa (até 5),
+    /// se o caixa aqueceu o SDK, o que o plano B fez, o erro cru do script quando foi trocado por
+    /// erro_envio e a versão do caixa. No máximo 600 bytes: corta a mensagem primeiro, depois os
+    /// códigos. Sem tentativa nenhuma, null.
+    /// </summary>
+    public static JsonObject? MontarDetalhe(JsonObject? ultimo, int tentativa, int tentativas, IReadOnlyList<int?>? codigos,
+        bool aqueceu, string? planoB, string? erroScript, string? versao)
+    {
+        if (tentativas <= 0) return null;
+        var o = new JsonObject();
+        if (ultimo is not null)
+            foreach (var (k, v) in ultimo)
+                o[k] = v?.DeepClone();
+        o["tentativa"] = Math.Clamp(tentativa, 1, 5);
+        o["tentativas"] = Math.Clamp(tentativas, 1, 5);
+        if (codigos is { Count: > 0 })
+        {
+            var a = new JsonArray();
+            foreach (var c in codigos.Take(5)) a.Add(c is int n ? JsonValue.Create(n) : null);
+            o["codigos"] = a;
+        }
+        o["aqueceu"] = aqueceu;
+        if (planoB is not null && PlanosB.Contains(planoB)) o["plano_b"] = planoB;
+        if (erroScript is not null && ErrosDoScript.Contains(erroScript)) o["erro_script"] = erroScript;
+        if (versao is not null && Regex.IsMatch(versao, @"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$")) o["versao"] = versao;
+
+        // o teto: a mensagem encolhe e sai; depois os códigos encolhem e saem; por fim o nome
+        while (Bytes(o) > TetoDetalheBytes && o["msg"] is JsonValue mv && mv.TryGetValue<string>(out var m))
+        {
+            if (m.Length > 20) o["msg"] = m[..(m.Length - 20)].TrimEnd();
+            else o.Remove("msg");
+        }
+        while (Bytes(o) > TetoDetalheBytes && o["codigos"] is JsonArray ca)
+        {
+            if (ca.Count > 1) ca.RemoveAt(0);
+            else o.Remove("codigos");
+        }
+        if (Bytes(o) > TetoDetalheBytes) o.Remove("nome");
+        return o;
+
+        static int Bytes(JsonObject x) => Encoding.UTF8.GetByteCount(x.ToJsonString(Json));
+    }
+
+    /// <summary>
+    /// O pedaço do detalhe que vai para o rastro local (chat-conversa.txt e chat-raspadinha.txt):
+    /// " etapa=falhou_sdk codigo=900100 conexao=OPEN inst=0/2 ms=410 msg=...", com a mensagem limpa
+    /// cortada em 60. Sem detalhe, vazio.
+    /// </summary>
+    public static string LinhaDoDetalhe(JsonObject? d)
+    {
+        if (d is null || d.Count == 0) return "";
+        string Val(string k) => d[k] is JsonValue v ? (v.TryGetValue<int>(out var i) ? i.ToString(CultureInfo.InvariantCulture)
+            : v.TryGetValue<bool>(out var b) ? (b ? "true" : "false") : v.TryGetValue<string>(out var s) ? s : "-") : "-";
+        var sb = new StringBuilder();
+        sb.Append(" etapa=").Append(Val("etapa"));
+        sb.Append(" codigo=").Append(Val("codigo"));
+        if (d.ContainsKey("codigo_msg")) sb.Append(" codigo_msg=").Append(Val("codigo_msg"));
+        sb.Append(" conexao=").Append(Val("conexao"));
+        sb.Append(" inst=").Append(Val("instancia")).Append('/').Append(Val("instancias"));
+        sb.Append(" ms=").Append(Val("ms"));
+        if (d.ContainsKey("nome")) sb.Append(" nome=").Append(Val("nome"));
+        if (d.ContainsKey("plano_b")) sb.Append(" plano_b=").Append(Val("plano_b"));
+        if (d["msg"] is JsonValue mv && mv.TryGetValue<string>(out var msg) && MsgDoErroLimpa(msg, 60) is { } curta)
+            sb.Append(" msg=").Append(curta);
+        return sb.ToString();
     }
 
     /// <summary>O corpo de <c>comanda_reservar</c> e <c>comanda_liberar</c>.</summary>
@@ -532,11 +835,18 @@ public static class ConversaRaspadinha
             var r = doc.RootElement;
             if (r.ValueKind != JsonValueKind.Object) return new ResultadoSaida(false, null, null);
             SaidaConversa? reserva = null;
+            string? avisoTexto = null;
+            bool? resgatavel = null;
             if (r.TryGetProperty("reserva", out var rv) && rv.ValueKind == JsonValueKind.Object
                 && Texto(rv, "texto") is { } t)
+            {
                 reserva = new SaidaConversa(0, "reserva", 1, t, Texto(rv, "como") ?? ComoOperador, ComoOperador,
                     Texto(rv, "canal"), Texto(rv, "ifood_order_id"), TextoOuNumero(rv, "pedido_numero"));
-            return new ResultadoSaida(Bool(r, "ok"), Texto(r, "estado"), reserva);
+                // 1.0.35 (SQL 176): o texto do aviso que o ERP gravou, só se for limpo (uma linha, sem travessão)
+                if (Texto(rv, "aviso_texto") is { } av && TextoLimpo(av.Trim(), 160)) avisoTexto = av.Trim();
+                resgatavel = BoolOuNulo(rv, "resgatavel");
+            }
+            return new ResultadoSaida(Bool(r, "ok"), Texto(r, "estado"), reserva, avisoTexto, resgatavel);
         }
         catch { return new ResultadoSaida(false, null, null); }
     }
@@ -630,7 +940,7 @@ public static class ConversaRaspadinha
         var texto = Texto(a, "texto");
         if (texto is null) return null;
         return new AvisoConversa(Texto(a, "tipo") ?? "aviso", texto, Texto(a, "ifood_order_id"),
-            TextoOuNumero(a, "pedido_numero"));
+            TextoOuNumero(a, "pedido_numero"), BoolOuNulo(a, "resgatavel"));
     }
 
     private static string Modo(string? m) => (m ?? "").Trim().ToLowerInvariant() switch
@@ -700,9 +1010,35 @@ public static class ConversaRaspadinha
     public static string TextoMandar(string? numero)
         => $"{Numero(numero)}: mande esta resposta no chat.";
 
+    /// <summary>
+    /// 1.0.35 (revisão): as etapas da PERGUNTA DO SABOR, as mesmas que o SQL 176 usa para o texto
+    /// "não mandei a pergunta" (falha_envio_sabor). Quando a resposta que falhou é uma delas, o código do
+    /// cliente ainda não foi usado, e o "Resgatar aqui" resgata ligado ao pedido.
+    /// </summary>
+    public static readonly IReadOnlySet<string> EtapasDaPerguntaDoSabor = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "pergunta_sabor", "pergunta_sabor_curta", "dois_iguais_sabor", "falta_segundo", "nao_entendi_sabor",
+    };
+
+    /// <summary>
+    /// 1.0.35 (revisão): o falha_envio desta saída leva o "Resgatar aqui"? Quando o ERP diz
+    /// (<c>resgatavel</c>), vale o ERP; senão, só nas etapas da pergunta do sabor. Na confirmação o prêmio
+    /// já está no pedido, e na recusa do código não há o que resgatar: a tela de resgate só recusaria.
+    /// </summary>
+    public static bool FalhaResgatavel(string? etapa, bool? doErp)
+        => doErp ?? (etapa is not null && EtapasDaPerguntaDoSabor.Contains(etapa));
+
     /// <summary>A linha de quando o envio automático não deu (seção 2.2, <c>falha_envio</c>).</summary>
     public static string TextoFalhaEnvio(string? numero)
         => $"{Numero(numero)}: não consegui mandar a resposta. Mande pelo chat.";
+
+    /// <summary>
+    /// 1.0.35: o texto do aviso <c>falha_envio</c> deste caixa. Com o SQL 176 o ERP devolve o mesmo texto
+    /// que gravou para os outros caixas (com o prêmio e o que fazer), e ele vale quando é limpo (uma linha
+    /// de até 160, sem travessão); sem ele (ERP antigo), o texto de sempre deste caixa.
+    /// </summary>
+    public static string TextoDoAvisoDeFalha(ResultadoSaida r, string? numero)
+        => r.AvisoTexto is { } t && TextoLimpo(t, 160) ? t : TextoFalhaEnvio(numero);
 
     /// <summary>A linha de quando a pessoa precisa abrir a conversa à mão.</summary>
     public static string TextoAbraECole(string? numero)
@@ -726,7 +1062,7 @@ public static class ConversaRaspadinha
     /// </summary>
     public static string EstadoDoSinal(string gestor, bool wsVivo, DateTime? ultimoQuadro, int fila,
         JsonObject? quadros, JsonObject? sdkDaPagina, IReadOnlyDictionary<string, int>? canaisPorMerchant,
-        SaudeDoChat? saude = null)
+        SaudeDoChat? saude = null, ContagemDoEnvio? envio = null, ContagemDeCartoes? solicitacao = null)
     {
         var sdk = new JsonObject();
         if (sdkDaPagina is not null)
@@ -740,6 +1076,10 @@ public static class ConversaRaspadinha
             foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<int>(out var n))
                     sdk[k] = Math.Clamp(n, 0, 100_000);
+            // 1.0.35: o estado da conexão do SDK, só como enum (OPEN, CONNECTING, CLOSED, OUTRO)
+            if (sdkDaPagina.TryGetPropertyValue("conexao", out var cv) && cv is JsonValue cjv && cjv.TryGetValue<string>(out var cs)
+                && ConexoesDoSdk.Contains(cs))
+                sdk["conexao"] = cs;
         }
         if (canaisPorMerchant is not null)
         {
@@ -772,12 +1112,33 @@ public static class ConversaRaspadinha
                 ["navegador"] = sd.OpcoesAnteriores ? "anterior" : "proprio",
             };
         }
+        // 1.0.35: o envio pelo SDK (falhas seguidas deste caixa e recargas do plano B na hora) e os
+        // cartões da solicitação do cliente que o caixa registrou. Só inteiros, nunca texto nem id.
+        if (envio is { } ev)
+            o["envio"] = new JsonObject
+            {
+                ["falhas_seguidas"] = Math.Clamp(ev.FalhasSeguidas, 0, 100_000),
+                ["recargas_hora"] = Math.Clamp(ev.RecargasNaHora, 0, 100),
+            };
+        if (solicitacao is { } so)
+            o["solicitacao"] = new JsonObject
+            {
+                ["cartoes"] = Math.Clamp(so.Cartoes, 0, 100_000),
+                ["com_data"] = Math.Clamp(so.ComData, 0, 100_000),
+                ["botoes_max"] = Math.Clamp(so.BotoesMax, 0, 100),
+            };
         return o.ToJsonString(Json);
     }
 
     /// <summary>1.0.33: a saude da pagina do chat para o sinal (ver <see cref="VigiaChatIfood"/>).</summary>
     /// <param name="OpcoesAnteriores">1.0.35: o navegador abriu com as opções de uma versão anterior (perfil em uso).</param>
     public readonly record struct SaudeDoChat(bool PaginaViva, string Navegacao, string Fase, int RecriacoesNaHora, bool OpcoesAnteriores = false);
+
+    /// <summary>1.0.35: o envio pelo SDK neste caixa, para o sinal: falhas seguidas e recargas do plano B na última hora.</summary>
+    public readonly record struct ContagemDoEnvio(int FalhasSeguidas, int RecargasNaHora);
+
+    /// <summary>1.0.35: os cartões da solicitação do cliente registrados nesta sessão (só contagens).</summary>
+    public readonly record struct ContagemDeCartoes(int Cartoes, int ComData, int BotoesMax);
 
     // ── O PAPEL (orquestração testável) ──────────────────────────────────────
 
@@ -1060,6 +1421,10 @@ public static class ConversaRaspadinha
         return null;
     }
 
+    /// <summary>1.0.35 (revisão): o booleano do ERP, ou null quando ele não diz (ausente ou fora do tipo).</summary>
+    private static bool? BoolOuNulo(JsonElement e, string k)
+        => e.TryGetProperty(k, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False ? v.ValueKind == JsonValueKind.True : null;
+
     private static bool Bool(JsonElement e, string k)
         => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.True;
 
@@ -1214,12 +1579,26 @@ public sealed class ConfirmacaoDeEnvio
     private readonly object _trava = new();
     private readonly Dictionary<long, (string Canal, string Hash, DateTime Ate, bool VistoSaindo)> _esperando = new();
 
-    public void Aguardar(long saidaId, string canal, string texto, DateTime agora)
+    /// <param name="prazo">
+    /// 1.0.35: a GUARDA do plano B usa um prazo maior (a recarga do Gestor leva até 40 s): um quadro
+    /// desta resposta que passar durante a recarga (o SDK reenviando sozinho) também conta, e a mesma
+    /// resposta não sai duas vezes. Sem prazo, os 15 s de sempre.
+    /// </param>
+    public void Aguardar(long saidaId, string canal, string texto, DateTime agora, TimeSpan? prazo = null)
     {
-        lock (_trava) _esperando[saidaId] = (canal, ConversaRaspadinha.HashTexto(texto), agora + Prazo, false);
+        lock (_trava) _esperando[saidaId] = (canal, ConversaRaspadinha.HashTexto(texto), agora + (prazo ?? Prazo), false);
     }
 
     public bool Pendente(long saidaId) { lock (_trava) return _esperando.ContainsKey(saidaId); }
+
+    /// <summary>
+    /// 1.0.35: como está a espera de uma saída, sem mexer nela. null = não espera mais (o quadro de
+    /// volta confirmou, ou venceu); true = o quadro dela foi visto SAINDO; false = nada passou ainda.
+    /// </summary>
+    public bool? Estado(long saidaId)
+    {
+        lock (_trava) return _esperando.TryGetValue(saidaId, out var e) ? e.VistoSaindo : null;
+    }
 
     /// <summary>
     /// Tira a saída da espera porque o script disse que NÃO mandou. Devolve null quando ela já não
@@ -1363,15 +1742,18 @@ public sealed class PortaoDeEnvio
     }
 
     /// <summary>
-    /// O que dizer ao ERP sobre uma saída "sdk" reservada que o portão segurou. Eco e reserva vencida
-    /// viram "incerta" (não manda de novo); o resto vira "falhou", e o ERP passa a saída para a pessoa.
-    /// Sombra e operador não têm o que dizer.
+    /// O que dizer ao ERP sobre uma saída "sdk" reservada que o portão segurou. Eco vira "incerta" (não
+    /// manda de novo); o resto vira "falhou", e o ERP passa a saída para a pessoa. Sombra e operador não
+    /// têm o que dizer.
+    /// 1.0.35 (revisão adversarial): a reserva vencida também vira "falhou". O portão a recusa ANTES do
+    /// SDK, então com certeza nada saiu; como "incerta" a resposta sumia sem aviso nenhum (a saída que
+    /// esperou na fila atrás de um plano B). O ERP já tratava assim as mensagens do pedido.
     /// </summary>
     public static (string Resultado, string Erro)? Relato(MotivoPortao m) => m switch
     {
         MotivoPortao.Liberado or MotivoPortao.Sombra or MotivoPortao.Operador or MotivoPortao.NaoReservada => null,
         MotivoPortao.Eco => ("incerta", "eco"),
-        MotivoPortao.ReservaVencida => ("incerta", "reserva_vencida"),
+        MotivoPortao.ReservaVencida => ("falhou", "reserva_vencida"),
         _ => ("falhou", "portao_" + m.ToString().ToLowerInvariant()),
     };
 }

@@ -57,6 +57,128 @@ public static class TestesChatArquivo
         await OBancoEAFila(checar);
         OTempo(checar);
         PeloFonte(checar);
+        OCartaoDaSolicitacao(checar);
+    }
+
+    // ── 1.0.35 (caso #8039): o cartao da solicitacao do cliente, so LIDO ─────
+    private static string Brdm(string custom, string texto, string? data, long? msgId = 9001, string canal = Canal, string extraData = "")
+        => "BRDM{" + (msgId is null ? "" : "\"msg_id\":" + msgId + ",") + "\"message\":" + JsonSerializer.Serialize(texto)
+           + ",\"channel_url\":\"" + canal + "\",\"created_at\":" + Ms(Agora.AddMinutes(-1)) + ",\"custom_type\":\"" + custom + "\""
+           + (data is null ? "" : ",\"data\":" + JsonSerializer.Serialize(data)) + extraData + "}";
+
+    private static void OCartaoDaSolicitacao(Action<bool, string> checar)
+    {
+        const string Disputa = "6c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+        var data = "{\"buttons\":[{\"label\":\"Aceitar\",\"action\":\"ACCEPT\"},{\"label\":\"Recusar\",\"action\":\"REJECT\"}],"
+                   + "\"disputeId\":\"" + Disputa + "\",\"note\":\"Boa noite, tudo bom ?\"}";
+        var c = ChatArquivo.LerCartaoDoIfood(Brdm("buttonList", "Analise a solicitação e selecione uma opção em até 5 min.", data));
+        checar(c is not null && c.CustomType == "buttonList" && c.OrderId == Pedido && c.Canal == Canal && c.MsgId == "9001" && c.Chave == "sb:9001",
+            "SC-1 o cartao buttonList do iFood e lido (tipo, pedido, msg_id)");
+        checar(c is not null && c.Botoes.Count == 2 && c.Botoes[0] == new BotaoDoCartao("Aceitar", "ACCEPT") && c.Botoes[1] == new BotaoDoCartao("Recusar", "REJECT"),
+            $"SC-2 os botoes saem do data: Aceitar/ACCEPT e Recusar/REJECT ({string.Join(", ", c?.Botoes ?? Array.Empty<BotaoDoCartao>())})");
+        checar(c is not null && c.Ids.TryGetValue("disputeId", out var di) && di == Disputa && c.Ids.Count == 1,
+            "SC-3 o id da disputa (uuid) e guardado pelo nome da chave");
+        checar(c is not null && c.Dados.TryGetValue("note", out var nota) && nota == "(texto 21)" && c.Dados["buttons"] == "lista(2)"
+               && c.Dados["buttons[0].label"] == "Aceitar" && c.Dados["buttons[1].action"] == "REJECT" && c.Dados["disputeId"] == Disputa
+               && !string.Join("|", c.Dados.Values).Contains("Boa noite"),
+            $"SC-4 a forma do data: o texto livre vira '(texto 21)', enum e uuid ficam ({(c is null ? "" : JsonSerializer.Serialize(c.Dados))})");
+        checar(c is not null && c.ChavesRaiz.Contains("data") && c.ChavesRaiz.Contains("custom_type") && c.ChavesRaiz.Contains("channel_url")
+               && c.Texto.StartsWith("Analise a solicitação", StringComparison.Ordinal),
+            "SC-5 os nomes das chaves do quadro e o texto do cartao (mascarado, ate 120)");
+
+        var comFone = ChatArquivo.LerCartaoDoIfood(Brdm("summary", "Quero adicionar observação ao pedido",
+            "{\"phone\":\"31994412725\",\"tel\":31994412725,\"note\":\"me liga 31 99441-2725\",\"options\":[{\"title\":\"Ligar 31994412725\",\"value\":\"31994412725\"}]}"));
+        var tudo = comFone is null ? "" : JsonSerializer.Serialize(comFone.Dados) + JsonSerializer.Serialize(comFone.Botoes);
+        checar(comFone is not null && !tudo.Contains("31994412725") && !tudo.Contains("99441") && comFone.Dados["phone"] == "[telefone]"
+               && comFone.Dados["tel"] == "(numero 11)" && comFone.Botoes.Count == 1 && comFone.Botoes[0].Rotulo == "Ligar [telefone]" && comFone.Botoes[0].Acao is null,
+            $"SC-6 telefone dentro do data e mascarado: no valor, no numero, no rotulo e na acao do botao ({tudo})");
+
+        var naoJson = ChatArquivo.LerCartaoDoIfood(Brdm("buttonList", "Avalie o atendimento", "isto nao e json {"));
+        var semData = ChatArquivo.LerCartaoDoIfood(Brdm("itemSummary", "Cliente fez uma solicitação:", null));
+        var gigante = ChatArquivo.LerCartaoDoIfood(Brdm("buttonList", "x", "{\"a\":\"" + new string('y', 9000) + "\"}"));
+        checar(naoJson is { Dados.Count: 0, Botoes.Count: 0 } && semData is { Dados.Count: 0 } && gigante is { Dados.Count: 0 },
+            "SC-7 data que nao e JSON, ausente ou maior que 8 KB vira forma vazia, sem excecao");
+        checar(ChatArquivo.LerCartaoDoIfood(Brdm("plain", "Ok, já enviamos sua solicitação", null)) is null
+               && ChatArquivo.LerCartaoDoIfood(Quadro("MESG", "Quero adicionar")) is null
+               && ChatArquivo.LerCartaoDoIfood(Brdm("summary", "Quero x", null, canal: "sendbird_group_channel_1")) is null
+               && ChatArquivo.LerCartaoDoIfood("BRDM{quebrado") is null && ChatArquivo.LerCartaoDoIfood(null) is null,
+            "SC-8 so BRDM summary/itemSummary/buttonList de canal de pedido; o resto (plain, MESG, quadro quebrado) nao e cartao");
+
+        // a janela: o resumo "Quero ..." marca a conversa; buttonList sem resumo antes nao e registrado
+        var j = new JanelaDaSolicitacao();
+        var t0 = Agora;
+        var item = ChatArquivo.LerCartaoDoIfood(Brdm("itemSummary", "Cliente fez uma solicitação:", null, 9100))!;
+        var resumo = ChatArquivo.LerCartaoDoIfood(Brdm("summary", "Quero adicionar observação ao pedido", null, 9101))!;
+        var botoes = ChatArquivo.LerCartaoDoIfood(Brdm("buttonList", "Analise a solicitação", data, 9102))!;
+        var avalie = ChatArquivo.LerCartaoDoIfood(Brdm("buttonList", "Avalie o atendimento", null, 9103))!;
+        var soltoAntes = j.Ver(avalie, false, t0.AddMinutes(-20));
+        var r1 = j.Ver(item, false, t0);
+        var r2 = j.Ver(resumo, true, t0.AddMilliseconds(500));
+        var r3 = j.Ver(botoes, false, t0.AddSeconds(1));
+        var r4 = j.Ver(avalie, false, t0.AddMinutes(6));
+        checar(soltoAntes.Count == 0, "SC-9 buttonList sem o resumo 'Quero ...' antes, na mesma conversa, nao e registrado");
+        checar(r1.Count == 0 && r2.Select(x => x.MsgId).SequenceEqual(new[] { "9100", "9101" }) && r3.Count == 1 && r3[0].MsgId == "9102",
+            "SC-10 o item que chega meio segundo ANTES do resumo espera a marca; o resumo e a lista de botoes da mesma conversa entram");
+        checar(r4.Count == 0, "SC-11 passados 5 min da marca, a lista de botoes ('Avalie o atendimento') nao entra");
+        var outraConversa = ChatArquivo.LerCartaoDoIfood(Brdm("buttonList", "Analise", data, 9104, "sendbird_gc_cm_" + Pedido + "_" + Castelo))!;
+        checar(j.Ver(outraConversa, false, t0.AddSeconds(2)).Count == 0, "SC-12 a marca vale so para a MESMA conversa");
+
+        // a tabela local e a linha do arquivo de texto
+        var db = Path.Combine(Path.GetTempPath(), "cartao-" + Guid.NewGuid().ToString("N")[..8] + ".db");
+        try
+        {
+            Banco.Migrar(db);
+            using (var cx = Banco.Abrir(db))
+            {
+                var c1 = c!;
+                checar(ChatArquivo.RegistrarCartao(cx, c1, "8039", Agora) && !ChatArquivo.RegistrarCartao(cx, c1, "8039", Agora),
+                    "SC-13 o cartao entra uma vez na tabela local (a mesma chave nao repete)");
+                var linha = cx.QueryFirst("SELECT numero, custom_type, dados_json, botoes_json, ids_json FROM chat_cartao_solicitacao WHERE chave = 'sb:9001'");
+                checar((string)linha.numero == "8039" && (string)linha.custom_type == "buttonList" && ((string)linha.botoes_json).Contains("ACCEPT")
+                       && ((string)linha.ids_json).Contains(Disputa) && !((string)linha.dados_json).Contains("Boa noite"),
+                    "SC-14 a tabela guarda a forma do data, os botoes e os ids, nunca o texto livre");
+                ChatArquivo.RegistrarCartao(cx, resumo, null, Agora.AddDays(-8));
+                checar(ChatArquivo.FaxinaDosCartoes(cx, Agora) == 1 && cx.ExecuteScalar<long>("SELECT COUNT(*) FROM chat_cartao_solicitacao") == 1,
+                    "SC-15 a faxina apaga o cartao de mais de 7 dias");
+            }
+            var l = ChatArquivo.LinhaDoCartao(c!, "8039");
+            checar(l.StartsWith("pedido=#8039 ", StringComparison.Ordinal) && l.Contains("tipo=buttonList") && l.Contains("Aceitar/ACCEPT")
+                   && l.Contains("disputeId=" + Disputa) && l.Contains("(texto 21)") && !l.Contains("Boa noite") && !l.Contains("Analise a"),
+                $"SC-16 a linha do chat-solicitacao.txt: pedido, tipo, forma do data, botoes e ids, nunca o texto ({l})");
+        }
+        finally
+        {
+            Thread.Sleep(100);
+            try { File.Delete(db); } catch { }
+        }
+
+        // pelo fonte: so ler, nunca tocar
+        var raiz = Raiz();
+        if (raiz is null) { checar(false, "SC-17 fonte nao achado"); return; }
+        string Ler(string rel) { var p = Path.Combine(raiz, rel); return File.Exists(p) ? File.ReadAllText(p) : ""; }
+        var nucleo = Ler(Path.Combine("Pdv.Nucleo", "ChatArquivo.cs"));
+        var servico = Ler("ServicoArquivoChat.cs");
+        var iN = nucleo.IndexOf("// ── 1.0.35: O CARTAO DA SOLICITACAO", StringComparison.Ordinal);
+        var fN = iN < 0 ? -1 : nucleo.IndexOf("// ── json", iN, StringComparison.Ordinal);
+        var iJ = nucleo.IndexOf("public sealed class JanelaDaSolicitacao", StringComparison.Ordinal);
+        var iS = servico.IndexOf("// ── 1.0.35: OS CARTOES DA SOLICITACAO", StringComparison.Ordinal);
+        var fS = iS < 0 ? -1 : servico.IndexOf("/// <summary>Os relogios nascem", iS, StringComparison.Ordinal);
+        var novo = (iN > 0 && fN > iN ? nucleo[iN..fN] : "") + (iJ > 0 ? nucleo[iJ..] : "") + (iS > 0 && fS > iS ? servico[iS..fS] : "");
+        checar(novo.Length > 2000 && !Regex.IsMatch(novo, "click|dispatchEvent|\\.focus\\(|/disputes", RegexOptions.IgnoreCase),
+            "SC-17 o codigo novo da solicitacao nao clica, nao dispara evento, nao foca e nao chama /disputes");
+        var tela = Ler(Path.Combine("Telas", "ChatIfood.xaml.cs"));
+        var scripts = (TestesScriptSendbird.ExtrairRaw(tela, "ScriptPainel") ?? "") + (TestesScriptSendbird.ExtrairRaw(tela, "ScriptSendbird") ?? "");
+        checar(scripts.Length > 5000 && !scripts.Contains("buttonList", StringComparison.OrdinalIgnoreCase),
+            "SC-18 os scripts da pagina (painel e SDK) nao citam buttonList: nada mexe no cartao");
+        checar(servico.Contains("ServicoConversaChat.Cartoes = Contagem;", StringComparison.Ordinal)
+               && servico.Contains("ChatArquivo.FaxinaDosCartoes(cx, agora)", StringComparison.Ordinal)
+               && servico.Contains("Telas.HospedeWebView2.Anotar(\"chat-solicitacao.txt\", ChatArquivo.LinhaDoCartao(c, numero)", StringComparison.Ordinal)
+               && Ler(Path.Combine("Pdv.Nucleo", "Banco.cs")).Contains("CREATE TABLE IF NOT EXISTS chat_cartao_solicitacao", StringComparison.Ordinal),
+            "SC-19 o servico registra na tabela local, no chat-solicitacao.txt e nas contagens do sinal; a faxina apaga em 7 dias");
+        var iLote = nucleo.IndexOf("public static (string Corpo, IReadOnlyList<string> Chaves) CorpoLote(", StringComparison.Ordinal);
+        var lote = iLote < 0 ? "" : nucleo.Substring(iLote, Math.Min(2500, nucleo.Length - iLote));
+        checar(lote.Length > 0 && !lote.Contains("dados", StringComparison.OrdinalIgnoreCase) && !lote.Contains("botoes", StringComparison.OrdinalIgnoreCase),
+            "SC-20 o lote do arquivo ao ERP continua igual: nada do cartao vai como campo novo");
     }
 
     // ── ChatArquivo.LerQuadro ────────────────────────────────────────────────

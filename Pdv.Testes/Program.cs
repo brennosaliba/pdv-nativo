@@ -791,6 +791,20 @@ if (args.Length >= 1 && args[0] == "--so-aprovacao")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (14/10/2026): so as suites do envio do chat (portao, plano B, detalhe do erro,
+// aprovacao do dono e o aviso com o Resgatar aqui). NAO e o gate.
+//   Pdv.Testes.exe --so-envio
+if (args.Length >= 1 && args[0] == "--so-envio")
+{
+    await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, cond));
+    await TestesPlanoBDoEnvio.RodarAsync((cond, nome) => Check("plano-b: " + nome, cond));
+    TestesAprovacaoDono.Rodar((cond, nome) => Check("aprovacao: " + nome, cond));
+    await TestesResgateManual.RodarAsync((cond, nome) => Check("resgate-manual: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so envio) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 // MODO DE DESENVOLVIMENTO (13/10/2026): so a suite da comanda aberta (conta_aberta/conta_lote), mais a do
 // pedido para a cozinha, que ela nao pode quebrar. NAO e o gate.
 //   Pdv.Testes.exe --so-conta
@@ -2043,6 +2057,13 @@ TestesQuadroSendbird.Rodar((cond, nome) => Check("quadro-sb: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Resgate pelo chat: a conversa, o portao de envio, o papel e a fila ---");
 await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, cond));
+
+// -- 14/10/2026: O PLANO B DO ENVIO PELO SDK (caixa 1.0.35, caso #8039) --------------------
+// Na Savassi o SDK recusou 41 de 42 respostas do robo em 5 dias. O caixa guarda o motivo e, na
+// primeira recusa, recarrega o Gestor escondido e tenta UMA vez mais, dentro da reserva.
+Console.WriteLine();
+Console.WriteLine("--- Plano B do envio: recarga do Gestor escondido, Gestor na frente, reserva vencida, mensagem dobrada ---");
+await TestesPlanoBDoEnvio.RodarAsync((cond, nome) => Check("plano-b: " + nome, cond));
 
 // -- 07/10/2026: APROVACAO PELO WHATSAPP DO DONO (caixa 1.0.20) --------------------------
 // O dono aprova pelo WhatsApp pessoal e a resposta sai sozinha no chat do iFood, pelo SDK que o
