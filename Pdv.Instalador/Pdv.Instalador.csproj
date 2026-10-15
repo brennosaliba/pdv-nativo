@@ -57,5 +57,12 @@
   <ItemGroup>
     <Compile Include="..\Pdv.Nucleo\HashDeSenha.cs" Link="Nucleo\HashDeSenha.cs" />
   </ItemGroup>
+  <!-- 1.0.36 (14/10/2026): desinstalar desfaz o quiosque do usuario do caixa (Shell e trava do
+       Ctrl+Alt+Del). A regra de quem e nosso e a lista das quatro politicas sao os MESMOS arquivos
+       do caixa: o formato do Shell e as politicas nao podem divergir entre quem grava e quem apaga. -->
+  <ItemGroup>
+    <Compile Include="..\Pdv.Nucleo\TravaDoCtrlAltDel.cs" Link="Nucleo\TravaDoCtrlAltDel.cs" />
+    <Compile Include="..\Pdv.Nucleo\DesfazerQuiosque.cs" Link="Nucleo\DesfazerQuiosque.cs" />
+  </ItemGroup>
 
 </Project>

@@ -42,16 +42,19 @@ public partial class App : Application
             var apagarDados = PerguntarApagarDados();
             if (apagarDados && Instalacao.PastaInstalada() is { } instalada)
                 Instalacao.PararAgente(Instalacao.PastaDoAgente(instalada));
-            var erro = Instalacao.Desinstalar();
+            // 1.0.36: Desinstalar desfaz antes o quiosque do usuário do caixa (Shell e trava do
+            // Ctrl+Alt+Del), senão a próxima entrada no Windows seria uma tela preta sem saída.
+            var erro = Instalacao.Desinstalar(out var quiosques);
+            var avisoQuiosque = Pdv.Nucleo.DesfazerQuiosque.Aviso(quiosques);
             string? destino = null, erroDados = null;
             if (erro is null && apagarDados)
                 erroDados = Instalacao.ApartarDados(Instalacao.PastaDados, DateTime.Now, out destino);
             MessageBox.Show(
-                erro is not null ? "Não consegui remover: " + erro
+                erro is not null ? "Não consegui remover: " + erro + avisoQuiosque
                 : !apagarDados ? "Caixa removido desta máquina. As vendas e a configuração da loja "
-                    + "foram PRESERVADAS em C:\\ProgramData\\PdvNativo."
-                : erroDados is not null ? "Caixa removido desta máquina, mas os dados continuam no lugar. " + erroDados
-                : $"Caixa removido desta máquina. Os dados foram guardados em {destino}. A próxima instalação começa do zero.",
+                    + "foram PRESERVADAS em C:\\ProgramData\\PdvNativo." + avisoQuiosque
+                : erroDados is not null ? "Caixa removido desta máquina, mas os dados continuam no lugar. " + erroDados + avisoQuiosque
+                : $"Caixa removido desta máquina. Os dados foram guardados em {destino}. A próxima instalação começa do zero." + avisoQuiosque,
                 "Remover o caixa", MessageBoxButton.OK,
                 erro is null && erroDados is null ? MessageBoxImage.Information : MessageBoxImage.Error);
             Shutdown(erro is null ? 0 : 1);

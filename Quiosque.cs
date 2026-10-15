@@ -28,14 +28,16 @@ namespace Pdv;
 /// </summary>
 public static class Quiosque
 {
-    private const string ChaveWinlogon = @"Software\Microsoft\Windows NT\CurrentVersion\Winlogon";
-    public const string Argumento = "--quiosque";
+    // 1.0.36: a chave, a marca e o formato do Shell moram no núcleo (DesfazerQuiosque), porque o
+    // desinstalador lê o mesmo valor para desfazer o quiosque. Um formato só, nos dois lados.
+    private const string ChaveWinlogon = DesfazerQuiosque.ChaveWinlogon;
+    public const string Argumento = DesfazerQuiosque.MarcaDoQuiosque;
 
     /// <summary>O executável de verdade (no publish em arquivo único é o host, que é o próprio Pdv.exe).</summary>
     public static string ExeAtual => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "Pdv.exe");
 
     /// <summary>O valor gravado em Shell: o exe entre aspas e a marca do modo.</summary>
-    public static string ValorShell(string exe) => "\"" + exe + "\" " + Argumento;
+    public static string ValorShell(string exe) => DesfazerQuiosque.ShellDoPdv(exe);
 
     /// <summary>Esse valor de Shell é o nosso PDV (este exe)? Explorer, vazio ou outro programa: não.</summary>
     public static bool EhNosso(string? valorShell, string exe)
