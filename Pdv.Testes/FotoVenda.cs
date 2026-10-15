@@ -69,6 +69,10 @@ public static class FotoVenda
         var chatLogin = args.Any(a => a.Equals("chat-login", StringComparison.OrdinalIgnoreCase));
         args = args.Where(a => !a.Equals("chat-desligado", StringComparison.OrdinalIgnoreCase)
                             && !a.Equals("chat-login", StringComparison.OrdinalIgnoreCase)).ToArray();
+        // 1.0.35 (caso #8039): "falha-envio" pinta o aviso de falha do envio com o texto mais longo do ERP
+        // (120 caracteres) e os dois botoes, "Abrir e colar" e "Resgatar aqui"
+        var falhaEnvio = args.Any(a => a.Equals("falha-envio", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("falha-envio", StringComparison.OrdinalIgnoreCase)).ToArray();
         // 21/09: "raspadinha" = a loja com a raspadinha ligada no caixa, para a foto
         // mostrar o cartao do validador no topo da aba Promocoes.
         var raspadinha = args.Any(a => a.Equals("raspadinha", StringComparison.OrdinalIgnoreCase));
@@ -161,7 +165,7 @@ public static class FotoVenda
             try
             {
                 codigo = Fotografar(saida, w, h, categoria, tema, itens, operador, sessao, pagar, menu, comTef, abrirPos,
-                                    combo, comboAberto, waCaido, chatParado ? "parado" : chatLogin ? "login" : null);
+                                    combo, comboAberto, waCaido, chatParado ? "parado" : chatLogin ? "login" : null, falhaEnvio);
             }
             catch (Exception ex)
             {
@@ -224,7 +228,7 @@ public static class FotoVenda
                                   string[] itens, Operador operador, Sessao sessao, decimal? pagar,
                                   string? menu = null, bool abrirPagamento = false, bool abrirPos = false,
                                   (string ComboId, List<Escolha> Escolhas)? combo = null, bool comboAberto = false,
-                                  bool waCaido = false, string? chatFora = null)
+                                  bool waCaido = false, string? chatFora = null, bool falhaEnvio = false)
     {
         // a tela de pagamento abre com "pagar:" (lança uma parte) ou com tef/tef+pos (só abre)
         abrirPagamento |= pagar is not null;
@@ -299,6 +303,15 @@ public static class FotoVenda
                     {
                         var motivo = chatFora == "login" ? Pdv.Nucleo.EstadoChatIfood.Login : Pdv.Nucleo.EstadoChatIfood.Parado;
                         tipo.GetMethod("PintarAvisoChat", P)!.Invoke(tela, new object?[] { motivo, DateTime.Today.AddHours(20).AddMinutes(41), null });
+                    }
+                    if (falhaEnvio)
+                    {
+                        // a loja com a tela de resgate ligada (o botao so aparece com ela) e o aviso como o caixa
+                        // que falhou o mostra: o texto do ERP (SQL 176) e a resposta para colar
+                        tipo.GetField("_resgatePdv", P)!.SetValue(tela, true);
+                        const string longo = "#80391: não mandei a pergunta. Maria Eduarda Lima ganhou 1 Cookie Clássico Duplo. Pergunte o sabor no chat que eu anoto.";
+                        tipo.GetMethod("AvisoDaConversa", P)!.Invoke(tela, new object?[] { new AvisoDoChat("falha_envio", longo,
+                            "Oi, Maria! Qual sabor você quer? 1) New York, 2) Tradicional ou 3) Triplo.", "3f2a8c1e-1111-4a2b-9c3d-0123456789ab", "80391") });
                     }
                     if (combo is { } cb)
                     {
@@ -421,6 +434,23 @@ public static class FotoVenda
                         .GetField("Cabecalho", BindingFlags.NonPublic | BindingFlags.Instance)?
                         .GetValue(tela) as FrameworkElement;
                     if (cab is not null) Console.WriteLine($"  topo: {cab.ActualHeight:0} px (barra de cima, Cabecalho)");
+                    if (falhaEnvio)
+                    {
+                        // 1.0.35: a regua do aviso: linhas do texto, largura dos botoes e se o aviso cabe na janela
+                        const BindingFlags P = BindingFlags.NonPublic | BindingFlags.Instance;
+                        var tipo = typeof(Pdv.Telas.Venda);
+                        var txt = (System.Windows.Controls.TextBlock)tipo.GetField("TxtToastConversa", P)!.GetValue(tela)!;
+                        var toast = (System.Windows.Controls.Border)tipo.GetField("ToastConversa", P)!.GetValue(tela)!;
+                        var botoes = (System.Windows.Controls.StackPanel)tipo.GetField("BotoesToastConversa", P)!.GetValue(tela)!;
+                        var linha = new System.Windows.Controls.TextBlock { Text = "X", FontSize = txt.FontSize, FontWeight = txt.FontWeight, FontFamily = txt.FontFamily };
+                        linha.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                        var linhas = linha.DesiredSize.Height > 0 ? (int)Math.Round(txt.ActualHeight / linha.DesiredSize.Height) : -1;
+                        var canto = toast.TranslatePoint(new Point(toast.ActualWidth, toast.ActualHeight), tela);
+                        var cabe = canto.X <= w + 0.5 && canto.Y <= h + 0.5 && botoes.ActualWidth <= toast.ActualWidth;
+                        Console.WriteLine($"  aviso falha_envio: {linhas} linha(s) de texto, aviso {toast.ActualWidth:0}x{toast.ActualHeight:0} px, "
+                                          + $"botoes {botoes.ActualWidth:0} px, {(cabe ? "cabe" : "CORTA")}");
+                        if (linhas > 4 || !cabe) erros.Add("o aviso da falha do envio passou de 4 linhas ou corta");
+                    }
                     foreach (var e in erros.Distinct()) Console.WriteLine("  aviso: " + e);
                     codigo = 0;
                     janela.Close();

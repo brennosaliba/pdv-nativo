@@ -937,6 +937,14 @@ public static class ConversaRaspadinha
     public static string TextoFalhaEnvio(string? numero)
         => $"{Numero(numero)}: não consegui mandar a resposta. Mande pelo chat.";
 
+    /// <summary>
+    /// 1.0.35: o texto do aviso <c>falha_envio</c> deste caixa. Com o SQL 176 o ERP devolve o mesmo texto
+    /// que gravou para os outros caixas (com o prêmio e o que fazer), e ele vale quando é limpo (uma linha
+    /// de até 160, sem travessão); sem ele (ERP antigo), o texto de sempre deste caixa.
+    /// </summary>
+    public static string TextoDoAvisoDeFalha(ResultadoSaida r, string? numero)
+        => r.AvisoTexto is { } t && TextoLimpo(t, 160) ? t : TextoFalhaEnvio(numero);
+
     /// <summary>A linha de quando a pessoa precisa abrir a conversa à mão.</summary>
     public static string TextoAbraECole(string? numero)
         => $"Abra a conversa do {Numero(numero)} e cole";

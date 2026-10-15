@@ -73,10 +73,15 @@ public static class ResgateManual
     public const int MaxCodigo = 20;
     public const int MaxOperador = 40;
 
-    /// <summary>Os avisos do chat que ganham o botao "Resgatar aqui" (so com o pedido no aviso).</summary>
+    /// <summary>
+    /// Os avisos do chat que ganham o botao "Resgatar aqui" (so com o pedido no aviso).
+    /// 1.0.35 (caso #8039): falha_envio entra. O robo nao conseguiu mandar a pergunta do sabor, a equipe
+    /// escreveu com as proprias palavras e queimou o codigo no validador publico: sem comanda, sem KDS.
+    /// Com o botao no proprio aviso, o resgate sai ligado ao pedido.
+    /// </summary>
     public static readonly IReadOnlySet<string> TiposDeAvisoComResgate = new HashSet<string>(StringComparer.Ordinal)
     {
-        "humano", "expirou", "nao_raspou", "validador", "premio_sem_catalogo", "palavra_pedido_saiu",
+        "humano", "expirou", "nao_raspou", "validador", "premio_sem_catalogo", "palavra_pedido_saiu", "falha_envio",
     };
 
     // ── textos (uma linha, sem travessao) ───────────────────────────────────

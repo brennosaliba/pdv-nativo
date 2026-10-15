@@ -710,9 +710,11 @@ public static class ServicoConversaChat
                     Diag($"saida={saidaId} resultado={resultado} erp={rr.Estado ?? "-"} dono={doDono}");
                     if (rr.Reserva is { } res)
                     {
+                        // 1.0.35: com o SQL 176 o texto vem do ERP (diz o prêmio e o que fazer: "não mandei a
+                        // pergunta. Heitor ganhou 1 Cookie Clássico. Pergunte o sabor no chat."); sem ele, o de hoje
                         if (ConversaRaspadinha.FalhaVaiParaPessoa(doDono, _ultimo.Sinal))
                             Emitir(new AvisoDoChat("falha_envio",
-                                ConversaRaspadinha.TextoFalhaEnvio(res.PedidoNumero ?? s?.PedidoNumero), res.Texto,
+                                ConversaRaspadinha.TextoDoAvisoDeFalha(rr, res.PedidoNumero ?? s?.PedidoNumero), res.Texto,
                                 res.IfoodOrderId ?? s?.IfoodOrderId, res.PedidoNumero ?? s?.PedidoNumero));
                         else Diag($"saida={saidaId} reserva do ERP sem texto na tela (saida do dono ou caixa mudo)");
                     }

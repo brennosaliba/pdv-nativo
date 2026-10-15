@@ -596,6 +596,15 @@ public static class TestesConversaChat
         checar(r176.AvisoTexto == "#8039: não mandei a pergunta. Heitor ganhou 1 Cookie Clássico. Pergunte o sabor no chat." && rVelho.AvisoTexto is null
                && rVelho.Reserva is { Texto: "Qual sabor?" } && rSujo.AvisoTexto is null,
             "ED-13 reserva.aviso_texto do SQL 176 é lido; o ERP antigo não manda e o caixa usa o texto dele; com travessão, cai");
+        checar(ConversaRaspadinha.TextoDoAvisoDeFalha(r176, "8039") == r176.AvisoTexto
+               && ConversaRaspadinha.TextoDoAvisoDeFalha(rVelho, "8039") == "#8039: não consegui mandar a resposta. Mande pelo chat."
+               && ConversaRaspadinha.TextoDoAvisoDeFalha(rVelho with { AvisoTexto = new string('x', 161) }, "8039") == ConversaRaspadinha.TextoFalhaEnvio("8039"),
+            "ED-14 o aviso de falha usa o texto do ERP quando é limpo (até 160); senão, o de sempre do caixa");
+        var raizEd = Raiz();
+        var servicoEd = raizEd is null ? "" : File.ReadAllText(Path.Combine(raizEd, "ServicoConversaChat.cs"));
+        checar(servicoEd.Contains("ConversaRaspadinha.TextoDoAvisoDeFalha(rr, res.PedidoNumero ?? s?.PedidoNumero), res.Texto,", StringComparison.Ordinal)
+               && servicoEd.Contains("Emitir(new AvisoDoChat(\"falha_envio\", ConversaRaspadinha.TextoFalhaEnvio(s.PedidoNumero), s.Texto,", StringComparison.Ordinal),
+            "ED-15 RelatarAsync usa o texto do ERP na reserva; sem rede, o texto do caixa (como antes)");
     }
 
     // ── O PAPEL ──────────────────────────────────────────────────────────────
