@@ -129,7 +129,11 @@ public static class Quiosque
         {
             using var k = raiz.OpenSubKey(chave);
             var v = k?.GetValue(valor);
-            if (v is not null) alguma = true;
+            // 1.0.36: trava é só um DWORD que ESCONDE a opção (diferente de 0). Um DWORD 0
+            // (o que as ferramentas de "reativar o Gerenciador de Tarefas" deixam) ou um valor
+            // de outro tipo não é a nossa trava: não conta como "alguma", senão todo Salvar
+            // num PC assim pediria permissão ao Windows à toa só para apagar o que não é nosso.
+            if (v is int iv && iv != 0) alguma = true;
             if (v is not int i || i != 1) todas = false;
         }
         return (todas, alguma);
@@ -189,7 +193,10 @@ public static class Quiosque
             : null;
         var (resultado, detalhe) = TravaDoCtrlAltDel.Mudar(
             () => TentarDireto(travar),
-            () => travar ? Travado : !AlgumaTrava,
+            // relê SEM o catch dos getters Travado/AlgumaTrava: uma leitura que lança tem que
+            // chegar ao Relido e virar "não ficou". Com o getter AlgumaTrava (catch => false),
+            // um destravar cuja releitura falha daria !false = Ok sem ter confirmado nada.
+            () => { var (todas, alguma) = LerTravas(Registry.CurrentUser); return travar ? todas : !alguma; },
             naoEleva,
             () => PedirAoWindows(exe, travar, sid!, janela));
         return (resultado, naoEleva is null ? detalhe + " [" + TravaDoCtrlAltDel.CaminhoNoHku(sid!, TravaDoCtrlAltDel.ChaveSistema) + "]" : detalhe);

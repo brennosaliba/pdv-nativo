@@ -133,9 +133,17 @@ public static class TravaDoCtrlAltDel
     /// <summary>O Não no aviso do Windows chega como Win32Exception 1223. Não é falha: é a resposta.</summary>
     public static bool Cancelado(Exception? ex) => ex is Win32Exception { NativeErrorCode: ErroCancelado };
 
+    /// <summary>O nome do exe que pode ser elevado: só o nosso, nunca o host que o carregou.</summary>
+    public const string ExeDoPdv = "Pdv.exe";
+
     /// <summary>
-    /// Só eleva um exe que mora numa pasta que só o administrador troca (Arquivos de Programas).
-    /// Fora de lá, elevar seria dar administrador a um arquivo que o próprio usuário pode trocar.
+    /// Só eleva o nosso <c>Pdv.exe</c> quando ele mora numa pasta que só o administrador troca
+    /// (Arquivos de Programas). O nome importa: rodando como <c>dotnet Pdv.dll</c> o processo é o
+    /// <c>dotnet.exe</c>, e sem conferir o nome o Windows pediria administrador para ELE; um
+    /// <c>atualizador.exe</c> de outro fornecedor na mesma pasta também passaria. Fora da pasta
+    /// protegida, elevar seria dar administrador a um arquivo que o próprio usuário pode trocar.
+    /// Isto garante o CAMINHO do exe; o que o processo carrega depois (o self-extract do publish em
+    /// arquivo único) é outra conversa, anotada como pendência própria.
     /// </summary>
     public static bool PodeElevar(string? exe, IEnumerable<string?> pastasProtegidas)
     {
@@ -145,6 +153,8 @@ public static class TravaDoCtrlAltDel
         catch { return false; }
         // caminho relativo ou com ".." não passa: o que se eleva é exatamente o que está escrito
         if (!string.Equals(cheio, exe, StringComparison.OrdinalIgnoreCase)) return false;
+        // só o nosso exe, não o host que o carregou (dotnet.exe) nem outro .exe da mesma pasta
+        if (!string.Equals(Path.GetFileName(cheio), ExeDoPdv, StringComparison.OrdinalIgnoreCase)) return false;
         foreach (var p in pastasProtegidas)
         {
             if (string.IsNullOrWhiteSpace(p)) continue;

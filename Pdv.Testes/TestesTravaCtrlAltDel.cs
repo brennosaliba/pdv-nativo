@@ -160,6 +160,24 @@ public static class TestesTravaCtrlAltDel
                     checar(semChave && metade == (false, true) && depois == (false, false) && ligada == (true, true) && QuatroDwords(r),
                         "TC-10 desligar sem nada gravado não cria chave; a trava pela metade aparece como 'alguma' e desligar tira; ligar grava as quatro");
                 }
+
+                // TC-10d um DWORD 0 (o que as ferramentas de "reativar o Gerenciador de Tarefas"
+                // deixam) ou um valor de outro tipo NÃO é a nossa trava: não é "alguma", senão todo
+                // Salvar num PC assim pediria permissão ao Windows à toa (PrecisaMudar(false,false,·)).
+                var zero = nome + @"\zero";
+                using (Registry.CurrentUser.CreateSubKey(zero)) { }
+                using (var r = Registry.CurrentUser.OpenSubKey(zero, writable: true)!)
+                {
+                    using (var k = r.CreateSubKey(TravaDoCtrlAltDel.ChaveSistema))
+                    {
+                        k.SetValue("DisableTaskMgr", 0, RegistryValueKind.DWord);
+                        k.SetValue("DisableLockWorkstation", "1", RegistryValueKind.String); // tipo errado: não é nossa
+                    }
+                    var lido = Quiosque.LerTravas(r);
+                    checar(lido == (false, false)
+                           && !TravaDoCtrlAltDel.PrecisaMudar(false, lido.Todas, lido.Alguma),
+                        "TC-10d DWORD 0 (ou valor de outro tipo) não conta como trava, e um Salvar comum não pede nada ao Windows");
+                }
             }
         }
         finally
@@ -257,8 +275,13 @@ public static class TestesTravaCtrlAltDel
                && !TravaDoCtrlAltDel.PodeElevar("Pdv.exe", pf)
                && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\Pdv.dll", pf)
                && !TravaDoCtrlAltDel.PodeElevar(null, pf)
-               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\Pdv.exe", new string?[] { null, "", @"C:\" }),
-            "TC-21 eleva só Pdv.exe dentro de Arquivos de Programas (nunca Downloads, '..', pasta parecida, caminho relativo ou a raiz do disco)");
+               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\Pdv.exe", new string?[] { null, "", @"C:\" })
+               // 1.0.36: o NOME também. `dotnet Pdv.dll` roda como dotnet.exe; outro fornecedor pode
+               // ter um .exe na pasta de programas. Nenhum dos dois é o nosso Pdv.exe.
+               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\dotnet\dotnet.exe", pf)
+               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\QualquerFornecedor\atualizador.exe", pf)
+               && !TravaDoCtrlAltDel.PodeElevar(@"C:\Program Files\MMFood\pdv.exe.exe", pf),
+            "TC-21 eleva só o Pdv.exe dentro de Arquivos de Programas (nunca Downloads, '..', pasta parecida, caminho relativo, a raiz do disco, o dotnet.exe nem outro exe da pasta)");
 
         // ── TC-22 quando a Configuração mexe ──
         checar(TravaDoCtrlAltDel.PrecisaMudar(true, false, false) && TravaDoCtrlAltDel.PrecisaMudar(true, false, true)
@@ -315,12 +338,41 @@ public static class TestesTravaCtrlAltDel
                && !cfg.Contains("\"Não consegui gravar no Windows: \" + erroQuiosque", StringComparison.Ordinal)
                && cfg.Contains("\"Não consegui mudar o modo quiosque no Windows. O resto foi salvo.\"", StringComparison.Ordinal),
             "TC-30 nenhum texto do Windows (em inglês, com caminho de registro) vai para a tela, nem da trava nem do quiosque");
-        checar(cfgXaml.Contains("Ao salvar, o Windows pede permissão de administrador: toque em Sim.", StringComparison.Ordinal),
-            "TC-31 o texto da opção avisa que o Windows vai pedir permissão");
+        checar(cfgXaml.Contains("Ao salvar, o Windows pode pedir uma permissão de administrador.", StringComparison.Ordinal)
+               // "pode" (nem sempre pede: UAC desligado ou PDV já elevado) e sem "toque em Sim"
+               // (o usuário comum digita a senha de um administrador, não um Sim)
+               && !cfgXaml.Contains("toque em Sim", StringComparison.Ordinal),
+            "TC-31 o texto da opção avisa que o Windows PODE pedir permissão, sem prometer um Sim que o usuário comum não vê");
 
         var novos = new[] { trava, Trecho(cfg, "var quiosqueQuer =", "var travarQuer ="), Trecho(cfgXaml, "x:Name=\"ChkTravarAtalhos\"", "x:Name=\"BtnSairWindows\""), nucleo };
         checar(novos.All(t => t.Length > 0 && !t.Contains('\u2014') && !t.Contains('\u2013')),
             "TC-32 sem travessão nos textos novos (tela, opção e o núcleo da trava)");
+
+        // ── TC-33 o reler do destravar não engole a leitura que lança ──
+        // MudarTrava relê com LerTravas direto (sem o catch dos getters Travado/AlgumaTrava): uma
+        // leitura que falha tem que virar "não ficou", senão um destravar daria Ok sem confirmar.
+        var mudar = Corpo(q, "public static (ResultadoDaTrava Resultado, string Detalhe) MudarTrava(");
+        checar(mudar.Contains("LerTravas(Registry.CurrentUser)", StringComparison.Ordinal)
+               && mudar.Contains("travar ? todas : !alguma", StringComparison.Ordinal)
+               && !mudar.Contains("!AlgumaTrava", StringComparison.Ordinal),
+            "TC-33 o reler do MudarTrava usa LerTravas direto (não o getter que engole a exceção), então um destravar com leitura que falha é Falhou, não Ok");
+
+        // ── TC-34 defesa em profundidade: --travas/--sid nunca abrem a frente de caixa ──
+        var iGuarda = app.IndexOf("a == TravaDoCtrlAltDel.Argumento || a == TravaDoCtrlAltDel.ArgumentoSid", StringComparison.Ordinal);
+        checar(iGuarda > 0 && app.Contains("Environment.Exit(TravaDoCtrlAltDel.SaidaArgumento)", StringComparison.Ordinal)
+               && iGuarda > app.IndexOf("ModoDoExe.Travas", StringComparison.Ordinal)
+               && iGuarda < app.IndexOf("InstanciaUnica.Tentar()", StringComparison.Ordinal)
+               && iGuarda < app.IndexOf("Banco.Migrar()", StringComparison.Ordinal),
+            "TC-34 um --travas/--sid que não virou o ajudante sai sem abrir o caixa (nem elevado), antes da trava de instância e do banco");
+
+        // ── TC-35 o quiosque e a trava vêm por último, depois de gravar segredos e o certificado ──
+        var iSegredos = cfg.IndexOf("GravarSegredos(seg)", StringComparison.Ordinal);
+        var iCert = cfg.IndexOf("File.Copy(_pfxEscolhido, ArqCert", StringComparison.Ordinal);
+        var iQuiosque = cfg.IndexOf("var quiosqueQuer =", StringComparison.Ordinal);
+        var iTrava = cfg.IndexOf("Quiosque.MudarTrava(travarQuer,", StringComparison.Ordinal);
+        var iConcluiu = iTrava < 0 ? -1 : cfg.IndexOf("Concluiu?.Invoke();", iTrava, StringComparison.Ordinal);
+        checar(iSegredos > 0 && iCert > 0 && iQuiosque > iSegredos && iQuiosque > iCert && iTrava > iQuiosque && iConcluiu > iTrava,
+            "TC-35 o quiosque e a trava do Ctrl+Alt+Del são o último passo do Salvar (depois de TEF, certificado e segredos), então 'O resto foi salvo' é verdade");
     }
 
     /// <summary>As quatro políticas embaixo da raiz são DWORD 1?</summary>

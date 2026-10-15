@@ -28,6 +28,13 @@ public partial class App : Application
         // Environment.Exit, como as ferramentas: o OnExit é do caixa.
         if (LinhaDeComando.Modo(e.Args) == ModoDoExe.Travas) { Environment.Exit(Quiosque.RodarAjudante(e.Args)); return; }
 
+        // Defesa em profundidade: --travas/--sid só valem como o ajudante acima (args[0] == --travas).
+        // Se um dia algo entregar esses argumentos fora de ordem, ou a elevação chegar a um exe que
+        // não os reconhece, a frente de caixa NÃO pode abrir no lugar (e menos ainda elevada). Sai
+        // sem abrir nada. O caixa de verdade nunca é chamado com estes argumentos.
+        if (e.Args.Any(a => a == TravaDoCtrlAltDel.Argumento || a == TravaDoCtrlAltDel.ArgumentoSid))
+        { Environment.Exit(TravaDoCtrlAltDel.SaidaArgumento); return; }
+
         // ── O CAIXA NÃO MORRE POR UMA EXCEÇÃO DE TELA ───────────────────────
         //
         // 09/09/2026: o dono tocou em "exportar logs" no menu do PayGo e o exe
