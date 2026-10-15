@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using Microsoft.Win32;
+using Pdv.Nucleo;
 
 namespace Pdv.Instalador;
 
@@ -250,6 +251,60 @@ public static class Instalacao
         var partes = v.Split('.');
         if (partes.Length == 4 && partes[3] == "0") v = string.Join('.', partes[..3]);
         return "versão " + v;
+    }
+
+    /// <summary>Há algum Pdv.exe aberto nesta máquina?</summary>
+    public static bool CaixaAberto()
+    {
+        var abertos = Process.GetProcessesByName("Pdv");
+        foreach (var p in abertos) p.Dispose();
+        return abertos.Length > 0;
+    }
+
+    /// <summary>
+    /// A TROCA ESPERA O CAIXA ANTERIOR SAIR DE VERDADE (1.0.35, Savassi, 14/10/2026 21:21). O caixa
+    /// 1.0.34 abriu com o navegador do chat da 1.0.32 ainda vivo no perfil e, como a 1.0.33 mudou as
+    /// opções do navegador, o WebView2 recusou o chat e o WhatsApp até o PC reiniciar. Antes a troca
+    /// esperava só o Pdv.exe, e em silêncio: passados 30 s seguia sem dizer nada. Agora:
+    ///  · espera o caixa até <paramref name="prazoDoCaixa"/> e diz se ele fechou ou não;
+    ///  · espera os navegadores do WebView2 que o caixa abriu (<paramref name="exeDoCaixa"/>) com a pasta
+    ///    de dados em <paramref name="pastaDados"/> (webview e webview-whatsapp) até
+    ///    <paramref name="prazoDoNavegador"/> e encerra os que ficarem. Nenhum outro navegador da máquina
+    ///    é tocado (ver <see cref="NavegadorDoPerfil.EncerrarSobras"/>).
+    /// Devolve as linhas para <see cref="AnotarTroca"/>. Nunca lança.
+    /// </summary>
+    public static IReadOnlyList<string> EsperarOCaixaAnteriorSair(Func<bool> caixaAberto, TimeSpan prazoDoCaixa,
+        string pastaDados, TimeSpan prazoDoNavegador, string exeDoCaixa = "Pdv.exe")
+    {
+        var linhas = new List<string>();
+        try
+        {
+            var relogio = Stopwatch.StartNew();
+            var aberto = caixaAberto();
+            while (aberto && relogio.Elapsed < prazoDoCaixa)
+            {
+                Thread.Sleep(500);
+                aberto = caixaAberto();
+            }
+            linhas.Add(aberto
+                ? $"o caixa anterior não fechou em {prazoDoCaixa.TotalSeconds:0} s; a troca segue com ele aberto"
+                : $"o caixa anterior fechou (esperei {relogio.Elapsed.TotalSeconds:0.0} s)");
+        }
+        catch (Exception ex) { linhas.Add("a espera pelo caixa anterior falhou: " + ex.GetType().Name); }
+        linhas.Add(NavegadorDoPerfil.EncerrarSobras(pastaDados, prazoDoNavegador, exeDoCaixa));
+        return linhas;
+    }
+
+    /// <summary>Uma linha datada em ProgramData\PdvNativo\atualizacao.txt (a troca de versão). Nunca atrapalha.</summary>
+    public static void AnotarTroca(string texto)
+    {
+        try
+        {
+            Directory.CreateDirectory(PastaDados);
+            File.AppendAllText(Path.Combine(PastaDados, "atualizacao.txt"),
+                $"{DateTime.Now:dd/MM/yyyy HH:mm:ss}  {texto}{Environment.NewLine}");
+        }
+        catch { /* diagnóstico nunca atrapalha */ }
     }
 
     /// <summary>Como o instalador abre o caixa no fim.</summary>

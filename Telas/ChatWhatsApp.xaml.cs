@@ -50,6 +50,18 @@ public partial class ChatWhatsApp : UserControl
     public const string ArgumentosDoNavegador =
         "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
 
+    /// <summary>
+    /// 1.0.35 (Savassi, 14/10/2026 21:21): as opções que este perfil teve antes. Da 1.0.0 à 1.0.32,
+    /// sem o da janela coberta. Com o navegador do caixa anterior ainda vivo no perfil, o WebView2
+    /// recusa as de agora (0x8007139F); o hospedeiro entra no navegador dele com estas e a próxima
+    /// abertura do caixa volta às de agora. Mudou <see cref="ArgumentosDoNavegador"/>? A de antes
+    /// entra aqui.
+    /// </summary>
+    public static readonly IReadOnlyList<string?> ArgumentosAnteriores = new string?[]
+    {
+        "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding",
+    };
+
     private bool _pronto, _iniciando;
     /// <summary>Cada inicialização ganha um número; a que foi passada para trás (controle recriado no meio) não mexe mais na tela.</summary>
     private int _tentativa;
@@ -79,7 +91,10 @@ public partial class ChatWhatsApp : UserControl
         // 15/09/2026 (Castelo): o ambiente, o Ensure e a troca do controle que falhou moram no
         // hospedeiro, igual para o chat do iFood. Ver Telas/HospedeWebView2.cs.
         Hospede = new HospedeWebView2("whatsapp", Dispatcher, () => Web, w => Web = w, _perfil, Diag,
-            () => new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = ArgumentosDoNavegador });
+            () => new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = ArgumentosDoNavegador })
+        {
+            ArgumentosAnteriores = ChatWhatsApp.ArgumentosAnteriores,
+        };
         Hospede.Quebrou += AoQuebrar;
         ServicoWhatsApp.SessaoMudou += PintarEstado;
         Dispatcher.ShutdownStarted += (_, _) => { try { _poll?.Stop(); } catch { } };
@@ -207,9 +222,29 @@ public partial class ChatWhatsApp : UserControl
             // O hospedeiro anota (thread, runtime) e troca o controle que chegou a receber o Ensure:
             // controle com init falho não se reaproveita (15/09/2026, Castelo).
             var tipo = Hospede.Falhou("iniciar", ex);
-            MostrarFalha(tipo, FalhaWebView2.Painel(tipo, "O WhatsApp"));
+            MostrarFalha(tipo, FalhaWebView2.Painel(tipo, "O WhatsApp", Hospede.EsperandoOPerfil(DateTime.Now)));
+            if (tipo == TipoFalhaWeb.PerfilEmUso) _ = EsperarOPerfilAsync(minha);
         }
         finally { if (minha == _tentativa) _iniciando = false; }
+    }
+
+    /// <summary>
+    /// 1.0.35: o perfil está preso pelo navegador do caixa anterior e nem as opções anteriores
+    /// entraram. Tenta de novo sozinho em 10, 20, 40 e 60 s, e daí a cada minuto, sem o teto da hora;
+    /// passados 5 min o painel manda reiniciar o computador. Outra tentativa (Tentar de novo,
+    /// Recarregar) passa esta para trás.
+    /// </summary>
+    private async Task EsperarOPerfilAsync(int minha)
+    {
+        try
+        {
+            var espera = FalhaWebView2.EsperaDoPerfil(Hospede.VezesPerfilEmUso);
+            Diag($"perfil em uso: tenta de novo sozinho em {espera.TotalSeconds:0} s");
+            await Task.Delay(espera);
+            if (minha != _tentativa || _pronto || _iniciando) return;
+            await IniciarAsync();
+        }
+        catch (Exception ex) { Diag("perfil em uso, nova tentativa: " + ex.GetType().Name); }
     }
 
     /// <summary>

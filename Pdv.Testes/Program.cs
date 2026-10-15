@@ -47,6 +47,10 @@ if (args.Length >= 2 && args[0] == "--sonda-presa")
     return Sondas.Presa(args[1]);
 if (args.Length >= 3 && args[0] == "--sonda-neto")
     return Sondas.Neto(args[1], args[2]);
+// 1.0.35 (TestesPerfilEmUso): o caixa anterior que não saiu, segurando um perfil do WebView2.
+//   Pdv.Testes.exe --sonda-perfil-webview <perfil> <argumentos|->
+if (args.Length >= 3 && args[0] == SondaPerfilWebView2.Modo)
+    return SondaPerfilWebView2.Rodar(args[1], args[2]);
 
 // PROVA COM HARDWARE REAL (14/09/2026, Castelo): roda o teste do pinpad do caixa contra as
 // portas seriais DESTA máquina e imprime a linha que a tela mostraria. Não chama a PGWebLib,
@@ -749,8 +753,20 @@ if (args.Length >= 1 && args[0] == "--so-castelo")
 {
     await TestesTotpDica.RodarAsync((cond, nome) => Check("totp-dica: " + nome, cond));
     await TestesCamadaWebView2.RodarAsync((cond, nome) => Check("camada-web: " + nome, cond));
+    await TestesPerfilEmUso.RodarAsync((cond, nome) => Check("perfil-em-uso: " + nome, cond));
     TestesWebView2Runtime.Rodar((cond, nome) => Check("runtime-web: " + nome, cond));
     Console.WriteLine($"\n=== (so castelo) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
+// MODO DE DESENVOLVIMENTO (14/10/2026, 1.0.35): so o perfil do navegador preso pelo caixa anterior
+// (Savassi, 21:21) e as camadas WebView2. NAO e o gate.
+//   Pdv.Testes.exe --so-perfil
+if (args.Length >= 1 && args[0] == "--so-perfil")
+{
+    await TestesPerfilEmUso.RodarAsync((cond, nome) => Check("perfil-em-uso: " + nome, cond));
+    await TestesCamadaWebView2.RodarAsync((cond, nome) => Check("camada-web: " + nome, cond));
+    Console.WriteLine($"\n=== (so perfil) {ok} OK, {falhas} falhas ===");
     return falhas == 0 ? 0 : 1;
 }
 
@@ -1973,6 +1989,15 @@ await TestesTotpDica.RodarAsync((cond, nome) => Check("totp-dica: " + nome, cond
 Console.WriteLine();
 Console.WriteLine("--- WebView2: as camadas do chat e do WhatsApp nao derrubam o caixa ---");
 await TestesCamadaWebView2.RodarAsync((cond, nome) => Check("camada-web: " + nome, cond));
+
+// -- 14/10/2026: o caixa da Savassi se atualizou (1.0.32 -> 1.0.34) e o chat e o WhatsApp nao
+// abriram ate o PC reiniciar. O navegador do caixa anterior seguia vivo no perfil com as opcoes
+// antigas, e o WebView2 recusava as novas (0x8007139F). Com um segundo processo segurando o perfil
+// de verdade: o caixa entra no navegador dele, encerra o orfao, espera sem gastar o teto, e a troca
+// de versao espera e encerra os navegadores do caixa anterior.
+Console.WriteLine();
+Console.WriteLine("--- WebView2: o perfil preso pelo caixa anterior (Savassi, 1.0.35) ---");
+await TestesPerfilEmUso.RodarAsync((cond, nome) => Check("perfil-em-uso: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Instalador: o componente da Microsoft do chat e do WhatsApp ---");
 TestesWebView2Runtime.Rodar((cond, nome) => Check("runtime-web: " + nome, cond));

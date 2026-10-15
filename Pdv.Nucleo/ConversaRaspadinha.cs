@@ -767,13 +767,17 @@ public static class ConversaRaspadinha
             {
                 ["fase"] = sd.Fase is "ok" or "abrindo" or "login" or "parado" or "aviso" ? sd.Fase : "abrindo",
                 ["recriacoes_hora"] = Math.Clamp(sd.RecriacoesNaHora, 0, 100),
+                // 1.0.35: "anterior" = o perfil estava preso pelo navegador do caixa anterior e o chat
+                // entrou nele com as opções de antes (volta às de agora na próxima abertura)
+                ["navegador"] = sd.OpcoesAnteriores ? "anterior" : "proprio",
             };
         }
         return o.ToJsonString(Json);
     }
 
     /// <summary>1.0.33: a saude da pagina do chat para o sinal (ver <see cref="VigiaChatIfood"/>).</summary>
-    public readonly record struct SaudeDoChat(bool PaginaViva, string Navegacao, string Fase, int RecriacoesNaHora);
+    /// <param name="OpcoesAnteriores">1.0.35: o navegador abriu com as opções de uma versão anterior (perfil em uso).</param>
+    public readonly record struct SaudeDoChat(bool PaginaViva, string Navegacao, string Fase, int RecriacoesNaHora, bool OpcoesAnteriores = false);
 
     // ── O PAPEL (orquestração testável) ──────────────────────────────────────
 

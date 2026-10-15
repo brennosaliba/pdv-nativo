@@ -57,5 +57,10 @@
   <ItemGroup>
     <Compile Include="..\Pdv.Nucleo\HashDeSenha.cs" Link="Nucleo\HashDeSenha.cs" />
   </ItemGroup>
+  <!-- 1.0.35: a troca de versão espera os navegadores do caixa anterior e encerra os que ficam no
+       perfil. O MESMO arquivo que o caixa usa para achar quem segura o perfil. -->
+  <ItemGroup>
+    <Compile Include="..\Pdv.Nucleo\NavegadorDoPerfil.cs" Link="Nucleo\NavegadorDoPerfil.cs" />
+  </ItemGroup>
 
 </Project>

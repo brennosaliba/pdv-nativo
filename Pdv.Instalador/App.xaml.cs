@@ -78,8 +78,12 @@ public partial class App : Application
             return "o caixa não está instalado nesta máquina";
         // O caixa se fecha logo depois de nos chamar; sem o assistente no meio, a
         // cópia podia começar antes de ele sair. Espera até 30 s pelo processo.
-        for (var i = 0; i < 60 && System.Diagnostics.Process.GetProcessesByName("Pdv").Length > 0; i++)
-            System.Threading.Thread.Sleep(500);
+        // 1.0.35 (Savassi, 14/10/2026): e os navegadores do chat e do WhatsApp dele também (até 10 s;
+        // os que ficarem são encerrados). Um navegador do caixa anterior vivo no perfil faz o WebView2
+        // recusar o caixa novo quando as opções mudaram. Tudo anotado em atualizacao.txt.
+        foreach (var linha in Instalacao.EsperarOCaixaAnteriorSair(Instalacao.CaixaAberto, TimeSpan.FromSeconds(30),
+                     Instalacao.PastaDados, TimeSpan.FromSeconds(10)))
+            Instalacao.AnotarTroca(linha);
         string? temporaria = null;
         try
         {

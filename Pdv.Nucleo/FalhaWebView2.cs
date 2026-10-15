@@ -11,6 +11,12 @@ public enum TipoFalhaWeb
     NavegadorCaiu,
     /// <summary>O controle já passou do Ensure com OUTRO ambiente (a nova tentativa antiga fazia isso).</summary>
     JaIniciadoComOutroAmbiente,
+    /// <summary>
+    /// 1.0.35: o perfil está preso por outro navegador com opções diferentes (o do caixa anterior,
+    /// 14/10/2026 na Savassi) e nem a recuperação do hospedeiro entrou. Espera e tenta de novo
+    /// sozinho, sem gastar o teto da hora. Ver <see cref="PerfilEmUsoException"/>.
+    /// </summary>
+    PerfilEmUso,
     /// <summary>Qualquer outra coisa (inclusive a E_NOINTERFACE do controller, a frase do Castelo).</summary>
     Outra,
 }
@@ -41,6 +47,9 @@ public static class FalhaWebView2
     private const string EspacoDoSdk = "Microsoft.Web.WebView2.";
     private const int ControllerFechado = unchecked((int)0x8007139F);
 
+    /// <summary>1.0.35: quanto tempo o painel diz "está esperando" antes de mandar reiniciar o computador.</summary>
+    public static readonly TimeSpan LimiteDaEsperaDoPerfil = TimeSpan.FromMinutes(5);
+
     /// <summary>O botão do painel de erro das camadas.</summary>
     public const string TentarDeNovo = "Tentar de novo";
 
@@ -68,11 +77,33 @@ public static class FalhaWebView2
     {
         var corrente = Corrente(ex).ToList();
         if (corrente.Any(e => e.GetType().Name == "WebView2RuntimeNotFoundException")) return TipoFalhaWeb.RuntimeAusente;
+        // antes do "navegador caiu": a recusa do perfil vem embrulhada e o 0x8007139F dela está dentro
+        if (corrente.Any(e => e is PerfilEmUsoException)) return TipoFalhaWeb.PerfilEmUso;
         if (corrente.Any(e => (e.Message ?? "").Contains(TrechoOutroAmbiente, StringComparison.Ordinal))) return TipoFalhaWeb.JaIniciadoComOutroAmbiente;
         if (corrente.Any(e => (e.Message ?? "").Contains(TrechoNavegadorCaiu, StringComparison.Ordinal) || e.HResult == ControllerFechado))
             return TipoFalhaWeb.NavegadorCaiu;
         return TipoFalhaWeb.Outra;
     }
+
+    /// <summary>
+    /// 1.0.35: é a recusa do perfil? O 0x8007139F (ERROR_INVALID_STATE) no Ensure de um ambiente que
+    /// acabou de nascer: provado em 14/10/2026 com o runtime de verdade, é o WebView2 dizendo que já
+    /// há um navegador vivo neste perfil com OUTRAS opções. Num ambiente velho o mesmo código é o
+    /// controller fechado (navegador que caiu); quem sabe se o ambiente é novo é o hospedeiro.
+    /// </summary>
+    public static bool EhRecusaDoPerfil(Exception? ex) => Corrente(ex).Any(e => e.HResult == ControllerFechado);
+
+    /// <summary>
+    /// 1.0.35: depois da falha <paramref name="vez"/> (1, 2, ...) por perfil em uso, quanto esperar
+    /// para tentar de novo sozinho: 10, 20, 40 e 60 s, e daí a cada minuto. Não gasta o teto da hora.
+    /// </summary>
+    public static TimeSpan EsperaDoPerfil(int vez) => TimeSpan.FromSeconds(vez switch
+    {
+        <= 1 => 10,
+        2 => 20,
+        3 => 40,
+        _ => 60,
+    });
 
     /// <summary>
     /// A frase do painel de erro, em UMA linha: o que fazer. Sem código de erro, sem "detalhe
@@ -83,11 +114,25 @@ public static class FalhaWebView2
     /// de <see cref="SessaoWhatsApp"/>.
     /// </summary>
     /// <param name="oQue">"O chat" ou "O WhatsApp".</param>
-    public static string Painel(TipoFalhaWeb tipo, string oQue) => tipo switch
+    public static string Painel(TipoFalhaWeb tipo, string oQue) => Painel(tipo, oQue, TimeSpan.Zero);
+
+    /// <summary>
+    /// 1.0.35: com o perfil em uso o painel diz que está esperando (o caixa tenta de novo sozinho) e,
+    /// passados <see cref="LimiteDaEsperaDoPerfil"/>, manda reiniciar o computador (foi o que resolveu
+    /// na Savassi em 14/10).
+    /// </summary>
+    /// <param name="esperando">Há quanto tempo o perfil está em uso (zero nas outras falhas).</param>
+    public static string Painel(TipoFalhaWeb tipo, string oQue, TimeSpan esperando) => tipo switch
     {
         TipoFalhaWeb.RuntimeAusente => "Falta um componente da Microsoft neste PC. Chame o suporte.",
+        TipoFalhaWeb.PerfilEmUso when esperando >= LimiteDaEsperaDoPerfil => $"Reinicie o computador para {Minuscula(oQue)} voltar.",
+        TipoFalhaWeb.PerfilEmUso => $"{oQue} está esperando o caixa anterior fechar.",
         _ => $"{oQue} não abriu agora. Toque em {TentarDeNovo}.",
     };
+
+    /// <summary>"O chat" vira "o chat"; "O WhatsApp" vira "o WhatsApp".</summary>
+    private static string Minuscula(string oQue)
+        => oQue.Length > 1 && oQue[0] == 'O' && oQue[1] == ' ' ? "o" + oQue[1..] : oQue;
 
     /// <summary>
     /// Depois de uma falha na inicialização: recriar o controle? descartar o ambiente?
@@ -97,7 +142,7 @@ public static class FalhaWebView2
     ///  · o ambiente só fica guardado quando o Ensure terminou com ele e o navegador não caiu.
     /// </summary>
     public static (bool RecriarControle, bool DescartarAmbiente) AposFalha(bool ensureChamado, bool ensureTerminou, TipoFalhaWeb tipo)
-        => (ensureChamado, !ensureTerminou || tipo is TipoFalhaWeb.NavegadorCaiu or TipoFalhaWeb.RuntimeAusente);
+        => (ensureChamado, !ensureTerminou || tipo is TipoFalhaWeb.NavegadorCaiu or TipoFalhaWeb.RuntimeAusente or TipoFalhaWeb.PerfilEmUso);
 
     /// <summary>
     /// Uma linha para o arquivo de diagnóstico: onde, tipo, exceção, HResult, a frase (curta),
@@ -114,7 +159,7 @@ public static class FalhaWebView2
         return linha.Length <= 400 ? linha : linha[..400];
     }
 
-    private static IEnumerable<Exception> Corrente(Exception? ex)
+    internal static IEnumerable<Exception> Corrente(Exception? ex)
     {
         var fila = new Queue<Exception>();
         if (ex is not null) fila.Enqueue(ex);
@@ -127,6 +172,17 @@ public static class FalhaWebView2
             else if (e.InnerException is not null) fila.Enqueue(e.InnerException);
         }
     }
+}
+
+/// <summary>
+/// 1.0.35: o perfil do navegador está preso por outro navegador com opções diferentes, e o
+/// hospedeiro não conseguiu entrar nem com as opções anteriores do perfil. A recusa do WebView2
+/// (COMException 0x8007139F) vai dentro, para o diagnóstico.
+/// </summary>
+public sealed class PerfilEmUsoException : InvalidOperationException
+{
+    public PerfilEmUsoException(string donos, Exception recusa)
+        : base("o perfil do navegador está em uso por outro navegador com outras opções: " + donos, recusa) { }
 }
 
 /// <summary>
