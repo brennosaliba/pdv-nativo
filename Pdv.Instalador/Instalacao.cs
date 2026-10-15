@@ -182,14 +182,41 @@ public static class Instalacao
         var png = Path.Combine(Path.GetTempPath(), "pdv-conferencia-" + Guid.NewGuid().ToString("N")[..8] + ".png");
         try
         {
-            var psi = new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe)! };
-            psi.ArgumentList.Add("--cupom-teste");
-            psi.ArgumentList.Add(png);
-            var r = RodarComPrazo(psi, prazo);
+            var r = RodarComPrazo(PsiDaConferencia(exe, png), prazo);
             return AvaliarConferencia(r.Terminou, r.Codigo, r.Saida, exe);
         }
         catch (Exception ex) { return AvaliarConferencia(false, -1, ex.Message, exe); }
-        finally { try { File.Delete(png); } catch { } }
+        finally
+        {
+            try { File.Delete(png); } catch { }
+            try { if (Directory.Exists(PastaDaConferencia(exe))) Directory.Delete(PastaDaConferencia(exe), recursive: true); } catch { /* fica para a próxima, protegida como o exe */ }
+        }
+    }
+
+    /// <summary>A variável do .NET que diz onde um exe de arquivo único extrai as bibliotecas nativas.</summary>
+    public const string VariavelDaExtracao = "DOTNET_BUNDLE_EXTRACT_BASE_DIR";
+
+    /// <summary>
+    /// Onde o Pdv.exe da conferência extrai as bibliotecas nativas: AO LADO DO EXE, numa pasta só
+    /// dele, com a mesma proteção do próprio exe (Program Files: só administrador grava).
+    /// </summary>
+    public static string PastaDaConferencia(string exe) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exe))!, ".conferencia");
+
+    /// <summary>
+    /// O processo da conferência (revisão de segurança da 1.0.36). O instalador roda como
+    /// administrador e a conferência nasce elevada com ele. Sem a variável, o Pdv.exe de arquivo único
+    /// extrairia e CARREGARIA as bibliotecas nativas de %TEMP%\.net, que o usuário grava: uma DLL
+    /// plantada ali rodaria como administrador. Com ela, a extração vai para
+    /// <see cref="PastaDaConferencia"/>, que só administrador grava, e é apagada no fim.
+    /// </summary>
+    public static ProcessStartInfo PsiDaConferencia(string exe, string png)
+    {
+        var psi = new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false };
+        psi.ArgumentList.Add("--cupom-teste");
+        psi.ArgumentList.Add(png);
+        psi.Environment[VariavelDaExtracao] = PastaDaConferencia(exe);
+        return psi;
     }
 
     /// <summary>O que aconteceu com um programa rodado com prazo.</summary>
@@ -253,19 +280,37 @@ public static class Instalacao
     }
 
     /// <summary>Como o instalador abre o caixa no fim.</summary>
-    public enum ComoAbrir { Direto, PeloExplorer }
+    public enum ComoAbrir { Direto, PeloExplorer, NaoAbre }
 
     /// <summary>
-    /// ABRIR O CAIXA SEM HERDAR O ADMINISTRADOR (14/09/2026, Castelo). O instalador roda elevado;
-    /// o Pdv.exe aberto por ele também rodava, e um caixa elevado cria a trava com a DACL de
-    /// administrador. Com a área de trabalho do Windows aberta, quem abre é o Explorer, como o
-    /// usuário comum. Sem ela (quiosque), abre direto.
+    /// ABRIR O CAIXA SEM HERDAR O ADMINISTRADOR (14/09/2026, Castelo; fechado de vez na 1.0.36). O
+    /// instalador roda elevado, e tudo que ele abre direto nasce elevado também. Um caixa elevado cria
+    /// a trava com a DACL de administrador, passa o turno inteiro como administrador (com o WebView2
+    /// do chat junto) e carrega as bibliotecas que extrai numa pasta que o usuário grava (%TEMP%\.net).
+    /// Por isso, elevado, o instalador NUNCA abre o Pdv.exe direto: com a área de trabalho aberta,
+    /// quem abre é o Explorer da sessão, como o usuário comum; sem ela (quiosque), não abre, e quem
+    /// chamou reabre (o PDV deixa um cmd comum esperando, Nucleo/ReabrirOCaixa) ou a pessoa reinicia.
+    /// Sem administrador não há o que tirar: abre direto.
     /// </summary>
     public static ComoAbrir DecidirComoAbrir(bool elevado, bool explorerAberto)
-        => elevado && explorerAberto ? ComoAbrir.PeloExplorer : ComoAbrir.Direto;
+        => !elevado ? ComoAbrir.Direto : explorerAberto ? ComoAbrir.PeloExplorer : ComoAbrir.NaoAbre;
 
-    /// <summary>Abre o caixa (fim da instalação, fim da atualização). Silencioso: o atalho continua lá.</summary>
-    public static void AbrirCaixa(string exe)
+    /// <summary>O Explorer pelo caminho absoluto da pasta do Windows (nunca pela busca do Windows, que começa na pasta do instalador).</summary>
+    public static string CaminhoDoExplorer() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+
+    /// <summary>A frase da atualização sem a área de trabalho para reabrir o caixa (quiosque com um PDV antigo chamando).</summary>
+    public const string ReinicieParaAbrir = "O caixa foi atualizado. Reinicie o computador para abrir o caixa.";
+
+    /// <summary>A frase do fim da instalação quando o caixa não abriu sem administrador.</summary>
+    public const string AbraPeloAtalho = "O caixa foi instalado. Abra pelo atalho MMFood na área de trabalho ou reinicie o computador.";
+
+    /// <summary>
+    /// Abre o caixa (fim da instalação, fim da atualização) sem administrador. Devolve true quando o
+    /// caixa apareceu (ou foi aberto direto, sem administrador); false quando não deu para abrir sem
+    /// elevar: quem chamou diz para abrir pelo atalho ou reiniciar. Nunca lança.
+    /// </summary>
+    public static bool AbrirCaixa(string exe)
     {
         try
         {
@@ -280,22 +325,29 @@ public static class Instalacao
                 finally { p.Dispose(); }
             }
 
-            if (DecidirComoAbrir(elevado, explorer) == ComoAbrir.PeloExplorer)
+            switch (DecidirComoAbrir(elevado, explorer))
             {
-                var antes = IdsDoCaixa();
-                var psi = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
-                psi.ArgumentList.Add(exe);
-                using (Process.Start(psi)) { }
-                // O Explorer não devolve erro quando não abre: confere se o caixa apareceu.
-                for (var i = 0; i < 20; i++)
-                {
-                    Thread.Sleep(250);
-                    if (IdsDoCaixa().Except(antes).Any()) return;
-                }
+                case ComoAbrir.Direto:
+                    using (Process.Start(new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = true })) { }
+                    return true;
+                case ComoAbrir.PeloExplorer:
+                    var antes = IdsDoCaixa();
+                    var psi = new ProcessStartInfo(CaminhoDoExplorer()) { UseShellExecute = false };
+                    psi.ArgumentList.Add(exe);
+                    using (Process.Start(psi)) { }
+                    // O Explorer não devolve erro quando não abre: confere se o caixa apareceu. Não
+                    // apareceu: NÃO cai para o direto (seria o caixa como administrador).
+                    for (var i = 0; i < 60; i++)
+                    {
+                        Thread.Sleep(250);
+                        if (IdsDoCaixa().Except(antes).Any()) return true;
+                    }
+                    return false;
+                default:
+                    return false;
             }
-            using (Process.Start(new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = true })) { }
         }
-        catch { /* o atalho e o menu do Windows continuam lá */ }
+        catch { return false; /* o atalho e o menu do Windows continuam lá */ }
     }
 
     private static HashSet<int> IdsDoCaixa()
@@ -439,9 +491,12 @@ public static class Instalacao
                 progresso?.Invoke("Liberando a pasta de dados para os operadores…");
                 // Usuários (S-1-5-32-545) modificam: qualquer conta do caixa grava no
                 // banco. Sem isso o 2º usuário do Windows trava em "readonly database".
+                // Caminho absoluto de System32: pelo nome, o Windows procura PRIMEIRO na pasta do
+                // instalador (na atualização, o TEMP do usuário) e um icacls.exe plantado ali rodaria
+                // como administrador (revisão de segurança da 1.0.36).
                 var icacls = Process.Start(new ProcessStartInfo
                 {
-                    FileName = "icacls",
+                    FileName = ProgramaDoSistema("icacls.exe"),
                     Arguments = $"\"{PastaDados}\" /grant *S-1-5-32-545:(OI)(CI)M /T",
                     UseShellExecute = false, CreateNoWindow = true,
                 });
@@ -884,11 +939,26 @@ public static class Instalacao
         catch (UnauthorizedAccessException) { return "O Windows não deixou mexer nos dados do caixa. Abra o instalador como administrador e tente de novo."; }
     }
 
+    /// <summary>
+    /// Um programa do Windows pelo caminho absoluto de System32. O instalador roda como administrador
+    /// e, pelo nome, o Windows procura primeiro na pasta do instalador e na pasta atual (na
+    /// atualização, o TEMP do usuário): um icacls.exe ou wscript.exe plantado ali rodaria elevado.
+    /// </summary>
+    public static string ProgramaDoSistema(string nome) => Path.Combine(Environment.SystemDirectory, nome);
+
+    /// <summary>
+    /// Onde mora o VBScript do atalho: na pasta do programa (Program Files: só administrador grava),
+    /// com nome único. No TEMP do usuário, com nome fixo, o usuário trocaria o script entre a escrita
+    /// e o wscript, e o script dele rodaria como administrador (revisão de segurança da 1.0.36).
+    /// </summary>
+    public static string ScriptDoAtalho(string alvo) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(alvo))!, "atalho-" + Guid.NewGuid().ToString("N")[..8] + ".vbs");
+
     /// <summary>Atalho .lnk sem referenciar COM tipado: um VBScript de uma vez
     /// evita dependência de Interop no publish single-file.</summary>
     private static void CriarAtalho(string lnk, string alvo)
     {
-        var vbs = Path.Combine(Path.GetTempPath(), "atalho_pdv.vbs");
+        var vbs = ScriptDoAtalho(alvo);
         File.WriteAllText(vbs, $"""
             Set ws = CreateObject("WScript.Shell")
             Set a = ws.CreateShortcut("{lnk}")
@@ -897,12 +967,15 @@ public static class Instalacao
             a.Description = "{NomePrograma}"
             a.Save
             """);
-        var p = Process.Start(new ProcessStartInfo
+        try
         {
-            FileName = "wscript", Arguments = $"//B \"{vbs}\"",
-            UseShellExecute = false, CreateNoWindow = true,
-        });
-        p?.WaitForExit(15_000);
-        try { File.Delete(vbs); } catch { }
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = ProgramaDoSistema("wscript.exe"), Arguments = $"//B \"{vbs}\"",
+                UseShellExecute = false, CreateNoWindow = true,
+            });
+            p?.WaitForExit(15_000);
+        }
+        finally { try { File.Delete(vbs); } catch { } }
     }
 }

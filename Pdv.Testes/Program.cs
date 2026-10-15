@@ -1469,6 +1469,7 @@ TestesSubitensIfood.Rodar((cond, nome) => Check("subitens-ifood: " + nome, cond)
 TestesQuiosque.Rodar((cond, nome) => Check("quiosque: " + nome, cond));
 TestesTravaCtrlAltDel.Rodar((cond, nome) => Check("trava-ctrl-alt-del: " + nome, cond));
 TestesDesfazerQuiosque.Rodar((cond, nome) => Check("desfazer-quiosque: " + nome, cond));
+TestesReabrirOCaixa.Rodar((cond, nome) => Check("reabrir-o-caixa: " + nome, cond));
 TestesConfigLojaPainel.Rodar((cond, nome) => Check("config-painel: " + nome, cond));
 TestesMusica.Rodar((cond, nome) => Check("musica: " + nome, cond));
 

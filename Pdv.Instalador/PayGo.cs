@@ -133,9 +133,11 @@ public static class PayGo
         {
             Directory.CreateDirectory(Path.Combine(PastaTroca, "Req"));
             Directory.CreateDirectory(Path.Combine(PastaTroca, "Resp"));
+            // System32 pelo caminho absoluto: pelo nome, o Windows procura antes na pasta do
+            // instalador, e um icacls.exe plantado ali rodaria como administrador.
             var p = Process.Start(new ProcessStartInfo
             {
-                FileName = "icacls",
+                FileName = Instalacao.ProgramaDoSistema("icacls.exe"),
                 Arguments = $"\"{PastaTroca}\" /grant *S-1-5-32-545:(OI)(CI)M /T",
                 UseShellExecute = false, CreateNoWindow = true,
             });

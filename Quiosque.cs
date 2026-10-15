@@ -24,7 +24,8 @@ namespace Pdv;
 ///  · Fechar o PDV como shell deixaria a tela preta: o Fechar do MainWindow oferece
 ///    "Reiniciar o PDV" ou "Sair para o Windows" (abre o Explorer).
 ///  · Se o PDV morrer (exceção fatal), o App abre o Explorer antes de cair.
-///  · A atualização continua igual: o instalador troca o exe e reabre o PDV.
+///  · A atualização: o instalador troca o exe e quem reabre o PDV é um cmd comum que o próprio
+///    PDV deixa esperando (Nucleo/ReabrirOCaixa), nunca o instalador, que roda como administrador.
 /// </summary>
 public static class Quiosque
 {

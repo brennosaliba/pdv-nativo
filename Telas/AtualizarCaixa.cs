@@ -456,7 +456,7 @@ public static class AtualizarCaixa
             return false;
 
         // 6. ENTREGA.
-        var erro = EntregarAoInstalador(baixa.Caminho!);
+        var erro = EntregarAoInstalador(baixa.Caminho!, out var fechar);
         if (erro is not null)
         {
             Auditar("atualizacao_entrega_falhou", erro);
@@ -466,12 +466,22 @@ public static class AtualizarCaixa
         }
 
         Auditar("atualizacao_entregue", $"{Atualizacao.VersaoInstalada()} → {v.Manifesto.Versao}");
+        // 1.0.36: o instalador subiu, mas a espera que reabre o caixa não. Fechar agora deixaria a
+        // loja sem caixa no fim (no quiosque, tela preta): o caixa fica aberto na versão de agora.
+        if (!fechar)
+        {
+            Dialogo.Avisar(dono, "Atualização", FraseSemReabrir);
+            return true;
+        }
         // O instalador já está de pé e elevado. Sair AGORA é o que deixa a troca
         // limpa: menos arquivo em uso para renomear, e o teste de abertura que o
         // instalador faz no fim roda contra a máquina sem o PDV velho por cima.
         Application.Current.Shutdown();
         return true;
     }
+
+    /// <summary>A frase quando o instalador subiu mas o caixa não tem como se reabrir sozinho depois.</summary>
+    public const string FraseSemReabrir = "A versão nova está sendo instalada. Daqui a alguns minutos, feche e abra o caixa.";
 
     /// <summary>
     /// Chama o instalador e devolve null quando ele subiu.
@@ -481,27 +491,65 @@ public static class AtualizarCaixa
     /// processo em vez de mostrar o UAC. E é justamente por isso que a recusa do UAC
     /// chega aqui como Win32Exception 1223 — que não é falha nenhuma, é o dono dizendo
     /// não. Confundir os dois faria o caixa fechar depois de uma recusa.
+    ///
+    /// QUEM REABRE O CAIXA (1.0.36, revisão de segurança). O instalador roda como administrador, e o
+    /// caixa que ele abria no quiosque nascia administrador também. Agora, quando dá (ver
+    /// Nucleo/ReabrirOCaixa), o caixa passa --sem-abrir ao instalador e, assim que ele sobe, deixa um
+    /// cmd COMUM (filho deste processo, mesma conta, sem elevação) esperando o instalador sair para
+    /// abrir o Pdv.exe novo. <paramref name="fechar"/> diz se o caixa pode fechar agora: false quando o
+    /// instalador subiu mas essa espera não (aí o caixa fica aberto na versão de agora).
     /// </summary>
-    public static string? EntregarAoInstalador(string exe)
+    public static string? EntregarAoInstalador(string exe, out bool fechar)
     {
+        fechar = false;
+        var sistema = Environment.SystemDirectory;
+        var caixa = Environment.ProcessPath;
+        var naoReabre = ReabrirOCaixa.MotivoParaNaoReabrir(caixa, sistema, System.IO.File.Exists);
+        Process? p;
         try
         {
-            var p = Process.Start(new ProcessStartInfo
+            p = Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
-                // 03/09: modo silencioso. O instalador troca o programa e reabre o
-                // caixa sem mostrar o assistente (ver Pdv.Instalador/App.xaml.cs).
-                Arguments = "--atualizar",
+                // 03/09: modo silencioso. O instalador troca o programa sem mostrar o assistente
+                // (ver Pdv.Instalador/App.xaml.cs). 1.0.36: --sem-abrir quando o caixa se reabre.
+                Arguments = ReabrirOCaixa.ArgumentosDoInstalador(caixaReabre: naoReabre is null),
                 WorkingDirectory = System.IO.Path.GetDirectoryName(exe)!,
                 UseShellExecute = true,
             });
-            return p is null ? "O Windows não abriu o instalador." : null;
         }
         catch (Win32Exception w) when (w.NativeErrorCode == 1223)
         {
             return "Permissão do Windows recusada. Toque em Atualizar de novo e responda Sim.";
         }
         catch (Exception ex) { return ex.Message; }
+        if (p is null) return "O Windows não abriu o instalador.";
+
+        using (p)
+        {
+            if (naoReabre is not null)
+            {
+                // sem --sem-abrir: o instalador reabre pelo Explorer ou pede para reiniciar
+                Auditar("atualizacao_reabre_pelo_instalador", naoReabre);
+                fechar = true;
+                return null;
+            }
+            try
+            {
+                using var espera = Process.Start(new ProcessStartInfo(TravaDoCtrlAltDel.CaminhoDoCmd(sistema),
+                    ReabrirOCaixa.MontarComando(p.Id, caixa!, Quiosque.Ligado, sistema))
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WorkingDirectory = sistema,
+                });
+                fechar = espera is not null;
+                if (!fechar) Auditar("atualizacao_reabrir_falhou", "o Windows não abriu o cmd da espera");
+            }
+            catch (Exception ex) { Auditar("atualizacao_reabrir_falhou", ex.GetType().Name + ": " + ex.Message); }
+            return null;
+        }
     }
 
     private static void Auditar(string evento, string? detalhe)
@@ -779,7 +827,7 @@ public static class AtualizarCaixa
             }
 
             // ── A TROCA.
-            var erro = EntregarAoInstalador(pronto!);
+            var erro = EntregarAoInstalador(pronto!, out var fechar);
             if (erro is not null)
             {
                 // ⚠️ O CASO DAS 5 DA MANHÃ SEM NINGUÉM NA MÁQUINA CAI AQUI. O PDV não
@@ -794,7 +842,9 @@ public static class AtualizarCaixa
 
             Auditar("atualizacao_sozinha_entregue",
                 $"{Atualizacao.VersaoInstalada()} → {m.Versao} ({v2.Motivo})");
-            Application.Current?.Dispatcher.Invoke(() => Application.Current.Shutdown());
+            // 1.0.36: sem a espera que reabre o caixa, ele fica aberto na versão de agora (fechar
+            // deixaria a loja sem caixa no fim da troca).
+            if (fechar) Application.Current?.Dispatcher.Invoke(() => Application.Current.Shutdown());
         }
         finally { _umaDeCadaVez.Release(); }
     }

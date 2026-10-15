@@ -64,5 +64,10 @@
     <Compile Include="..\Pdv.Nucleo\TravaDoCtrlAltDel.cs" Link="Nucleo\TravaDoCtrlAltDel.cs" />
     <Compile Include="..\Pdv.Nucleo\DesfazerQuiosque.cs" Link="Nucleo\DesfazerQuiosque.cs" />
   </ItemGroup>
+  <!-- 1.0.36 (revisao de seguranca): na atualizacao quem reabre o caixa e o proprio caixa, sem
+       administrador; o instalador so le o argumento que diz isso. Mesmo arquivo dos dois lados. -->
+  <ItemGroup>
+    <Compile Include="..\Pdv.Nucleo\ReabrirOCaixa.cs" Link="Nucleo\ReabrirOCaixa.cs" />
+  </ItemGroup>
 
 </Project>
