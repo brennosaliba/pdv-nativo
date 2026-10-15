@@ -797,20 +797,30 @@ public sealed class Nuvem
     /// vazia: os tickets ficam como estao ate o proximo ciclo.</summary>
     public async Task<List<(string OrderId, string Status, string? PreparoAte)>> StatusPedidosAsync(
         IReadOnlyList<string> orderIds)
+        => orderIds.Count == 0 ? new() : await StatusPedidosOuNuloAsync(orderIds).ConfigureAwait(false) ?? new();
+
+    /// <summary>
+    /// O mesmo, mas SEM engolir a falha (14/10/2026): null = a nuvem não respondeu (sem
+    /// sessão, rede, HTTP de erro, JSON ilegível). É o que deixa a lista dos que já saíram
+    /// dizer "Sem internet" em vez de fingir que a nuvem não sabia de nada.
+    /// </summary>
+    public async Task<List<(string OrderId, string Status, string? PreparoAte)>?> StatusPedidosOuNuloAsync(
+        IReadOnlyList<string> orderIds)
     {
         try
         {
-            if (orderIds.Count == 0 || !await SessaoOkAsync().ConfigureAwait(false)) return new();
+            if (orderIds.Count == 0) return new();
+            if (!await SessaoOkAsync().ConfigureAwait(false)) return null;
             using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/pdv_kds_status");
             req.Content = new StringContent(
                 JsonSerializer.Serialize(new { _order_ids = orderIds }),
                 Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return new();
+            if (!resp.IsSuccessStatusCode) return null;
 
             var r = new List<(string, string, string?)>();
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return new();
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
             foreach (var e in doc.RootElement.EnumerateArray())
             {
                 var id = e.TryGetProperty("order_id", out var i) ? i.GetString() : null;
@@ -822,7 +832,7 @@ public sealed class Nuvem
             }
             return r;
         }
-        catch { return new(); }
+        catch { return null; }
     }
 
     /// <summary>

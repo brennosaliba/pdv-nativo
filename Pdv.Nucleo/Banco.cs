@@ -182,6 +182,14 @@ public static class Banco
             "ALTER TABLE raspadinha_bonus ADD COLUMN assinatura TEXT",
             "ALTER TABLE raspadinha_bonus ADD COLUMN comanda_onde TEXT",
             "ALTER TABLE raspadinha_bonus ADD COLUMN cabecalho TEXT",
+            // 14/10/2026: PEDIDOS QUE JÁ SAÍRAM DO QUADRO (pedido do dono: "opção de procurar
+            // pedidos finalizados no KDS do PDV"). Quando e POR QUE cada pedido saiu: o status
+            // 'cancelado' junta quatro histórias diferentes (o iFood cancelou, o Gestor
+            // despachou antes de o card andar aqui, expirou, venda cancelada), e só o motivo
+            // separa. Gravados uma vez (coalesce), nunca reescritos. NULL = saiu antes desta
+            // versão: a tela diz "SAIU DO QUADRO", que é o que se sabe. Ver FinalizadosKds.
+            "ALTER TABLE kds_ticket ADD COLUMN encerrado_em TEXT",
+            "ALTER TABLE kds_ticket ADD COLUMN encerrado_motivo TEXT",
         })
         {
             try { using var c = cx.CreateCommand(); c.CommandText = alter; c.ExecuteNonQuery(); }
@@ -196,6 +204,18 @@ public static class Banco
             using var c = cx.CreateCommand();
             c.CommandText = "CREATE INDEX IF NOT EXISTS ix_outbox_a_drenar ON outbox(id) "
                           + "WHERE enviado_em IS NULL AND desistido_em IS NULL";
+            c.ExecuteNonQuery();
+        }
+        catch { /* índice já existe */ }
+
+        // A lista dos que JÁ SAÍRAM (14/10/2026) procura por dia de chegada, e o único índice
+        // do quadro (ix_kds_aberto) só cobre os abertos. Uns 60 mil pedidos por ano neste
+        // caixa: sem índice, a contagem "Saíram hoje" do cabeçalho leria a tabela inteira a
+        // cada 10 s.
+        try
+        {
+            using var c = cx.CreateCommand();
+            c.CommandText = "CREATE INDEX IF NOT EXISTS ix_kds_criado ON kds_ticket(criado_em)";
             c.ExecuteNonQuery();
         }
         catch { /* índice já existe */ }

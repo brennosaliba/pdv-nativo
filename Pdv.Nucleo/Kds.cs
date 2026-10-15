@@ -26,7 +26,15 @@ public sealed record Ticket(
     /// <summary>Início da faixa marcada, em hora LOCAL da loja.</summary>
     DateTime? AgendadoPara = null,
     /// <summary>Fim da faixa marcada (null = um instante só).</summary>
-    DateTime? AgendadoAte = null)
+    DateTime? AgendadoAte = null,
+    /// <summary>Quando o balcão ou o Gestor tirou o pedido PRONTO do quadro (coluna entregue_em).</summary>
+    DateTime? EntregueEm = null,
+    /// <summary>Quando o pedido saiu do quadro, por qualquer caminho (14/10/2026). Null = saiu
+    /// antes desta versão, ou ainda está no quadro.</summary>
+    DateTime? EncerradoEm = null,
+    /// <summary>POR QUE saiu (FinalizadosKds.Motivo*). É o que separa o cancelamento de verdade
+    /// dos outros três jeitos de virar 'cancelado'. Null = não se sabe.</summary>
+    string? EncerradoMotivo = null)
 {
     /// <summary>Há quanto tempo esse pedido está esperando. É o que decide a cor do card.</summary>
     public TimeSpan Espera => (ProntoEm ?? DateTime.Now) - CriadoEm;
@@ -330,9 +338,23 @@ public static class Kds
         return true;
     }
 
-    /// <summary>Terceiro toque: o entregador levou (ou o cliente retirou). Sai do quadro.</summary>
-    public static bool Entregar(string ticketId) =>
-        Avancar(ticketId, de: Pronto, para: Entregue, carimbo: "entregue_em");
+    /// <summary>
+    /// Terceiro toque: o entregador levou (ou o cliente retirou). Sai do quadro, e a saída
+    /// fica anotada (hora e motivo) para a lista dos que já saíram (14/10/2026).
+    /// </summary>
+    public static bool Entregar(string ticketId)
+    {
+        var agora = DateTime.Now.ToString("o");
+        using var cx = Banco.Abrir();
+        return cx.Execute(
+            @"UPDATE kds_ticket
+                 SET status = @para, entregue_em = @agora,
+                     encerrado_em = coalesce(encerrado_em, @agora),
+                     encerrado_motivo = coalesce(encerrado_motivo, @motivo)
+               WHERE id = @id AND status = @de",
+            new { id = ticketId, de = Pronto, para = Entregue, agora,
+                  motivo = FinalizadosKds.MotivoClienteLevou }) == 1;
+    }
 
     /// <summary>
     /// Desfazer o "assumir": o pedido volta para A PREPARAR. O carimbo de início
@@ -556,10 +578,44 @@ public static class Kds
     public static void CancelarPorVenda(string vendaId)
     {
         using var cx = Banco.Abrir();
+        using var tx = cx.BeginTransaction();
+        AnotarCancelamento(cx, tx, "balcao", vendaId, FinalizadosKds.MotivoVendaCancelada);
         cx.Execute(
             @"UPDATE kds_ticket SET status = @s
                WHERE origem = 'balcao' AND ref_id = @r AND status <> 'pronto'",
-            new { s = Cancelado, r = vendaId });
+            new { s = Cancelado, r = vendaId }, tx);
+        tx.Commit();
+    }
+
+    /// <summary>
+    /// Anota a SAÍDA de um cancelamento certo (o iFood cancelou, a venda foi cancelada) ANTES
+    /// do UPDATE de status de sempre, sobre as MESMAS linhas dele (status &lt;&gt; 'pronto').
+    /// A hora só vai para quem estava no quadro: um pedido que já tinha saído não saiu de
+    /// novo agora. O motivo certo ganha de "não sei" (vazio ou expirou) e nunca do resto:
+    /// "o Gestor despachou" é fato, e um cancelamento depois dele não apaga a saída.
+    /// O feed repete o pedido cancelado a cada 10 s por 4 h: tudo aqui é idempotente.
+    ///
+    /// Pedido do CARDÁPIO próprio (número "CD-") é exceção: a nuvem manda "cancelado" para
+    /// todo estado que o quadro não conhece (cardapio_digital_kds_status), inclusive
+    /// "coletado". Ali "cancelado" não prova cancelamento, e o motivo fica "o cardápio
+    /// largou", que a tela mostra como SAIU DO QUADRO.
+    /// </summary>
+    private static void AnotarCancelamento(Microsoft.Data.Sqlite.SqliteConnection cx,
+                                           Microsoft.Data.Sqlite.SqliteTransaction tx,
+                                           string origem, string refId, string motivo)
+    {
+        cx.Execute(
+            @"UPDATE kds_ticket SET encerrado_em = coalesce(encerrado_em, @em)
+               WHERE origem = @o AND ref_id = @r AND status IN ('recebido','preparando')",
+            new { o = origem, r = refId, em = DateTime.Now.ToString("o") }, tx);
+        cx.Execute(
+            @"UPDATE kds_ticket
+                 SET encerrado_motivo = CASE WHEN origem = 'ifood' AND upper(numero) LIKE 'CD-%'
+                                             THEN @cd ELSE @m END
+               WHERE origem = @o AND ref_id = @r AND status <> 'pronto'
+                 AND (encerrado_motivo IS NULL OR encerrado_motivo IN (@exp, @cd))",
+            new { o = origem, r = refId, m = motivo, exp = FinalizadosKds.MotivoExpirou,
+                  cd = FinalizadosKds.MotivoCardapioLargou }, tx);
     }
 
     /// <summary>
@@ -650,12 +706,19 @@ public static class Kds
         {
             // AGENDADO conta da hora MARCADA (fim da faixa), não da chegada: ele
             // entra no quadro de manhã para as 18:00 e não pode "expirar" às 13:00.
+            // A saída por expiração fica anotada (14/10/2026): hora de agora e motivo
+            // "expirou", que é o "não sei" honesto. A nuvem pode trocá-lo depois
+            // (FinalizadosKds.AplicarNuvem); um cancelamento de verdade também.
+            var agoraIso = DateTime.Now.ToString("o");
             cxLimpa.Execute(
-                @"UPDATE kds_ticket SET status = @s
+                @"UPDATE kds_ticket SET status = @s,
+                         encerrado_em = coalesce(encerrado_em, @em),
+                         encerrado_motivo = coalesce(encerrado_motivo, @m)
                    WHERE origem = 'ifood' AND status = 'recebido'
                      AND CASE WHEN agendado = 1 THEN coalesce(agendado_ate, agendado_para, criado_em)
                               ELSE criado_em END < @limite",
-                new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o") });
+                new { s = Cancelado, limite = DateTime.Now.AddHours(-4).ToString("o"),
+                      em = agoraIso, m = FinalizadosKds.MotivoExpirou });
             // SO 'recebido' nas 4h: expirar quem esta 'preparando' cancelaria um
             // pedido que o cozinheiro ACABOU de assumir (chegou as 3h58 do limite e
             // foi pego) - o card sumiria da tela no meio da producao.
@@ -668,11 +731,14 @@ public static class Kds
             // nao ter quadro. 12h e folgado para qualquer preparo real e mata o
             // fantasma no primeiro sync do dia seguinte.
             cxLimpa.Execute(
-                @"UPDATE kds_ticket SET status = @s
+                @"UPDATE kds_ticket SET status = @s,
+                         encerrado_em = coalesce(encerrado_em, @em),
+                         encerrado_motivo = coalesce(encerrado_motivo, @m)
                    WHERE origem = 'ifood' AND status IN ('preparando','pronto')
                      AND CASE WHEN agendado = 1 THEN coalesce(agendado_ate, agendado_para, criado_em)
                               ELSE criado_em END < @limite",
-                new { s = Cancelado, limite = DateTime.Now.AddHours(-12).ToString("o") });
+                new { s = Cancelado, limite = DateTime.Now.AddHours(-12).ToString("o"),
+                      em = agoraIso, m = FinalizadosKds.MotivoExpirou });
         }
 
         var novos = 0;
@@ -775,24 +841,35 @@ public static class Kds
 
     public static void DespacharDelivery(string orderId)
     {
+        // As duas saídas anotam hora e motivo "gestor" (14/10/2026). É o motivo que impede a
+        // lista dos que já saíram de chamar de CANCELADO o pedido que o Gestor despachou
+        // antes de o card andar aqui (o status local continua 'cancelado', como sempre foi).
+        var em = DateTime.Now.ToString("o");
         using var cx = Banco.Abrir();
         cx.Execute(
-            @"UPDATE kds_ticket SET status = @e, entregue_em = @em
+            @"UPDATE kds_ticket SET status = @e, entregue_em = @em,
+                     encerrado_em = coalesce(encerrado_em, @em),
+                     encerrado_motivo = coalesce(encerrado_motivo, @m)
                WHERE origem = 'ifood' AND ref_id = @r AND status = 'pronto'",
-            new { e = Entregue, r = orderId, em = DateTime.Now.ToString("o") });
+            new { e = Entregue, r = orderId, em, m = FinalizadosKds.MotivoGestor });
         cx.Execute(
-            @"UPDATE kds_ticket SET status = @c
+            @"UPDATE kds_ticket SET status = @c,
+                     encerrado_em = coalesce(encerrado_em, @em),
+                     encerrado_motivo = coalesce(encerrado_motivo, @m)
                WHERE origem = 'ifood' AND ref_id = @r AND status IN ('recebido','preparando')",
-            new { c = Cancelado, r = orderId });
+            new { c = Cancelado, r = orderId, em, m = FinalizadosKds.MotivoGestor });
     }
 
     public static void CancelarDelivery(string orderId)
     {
         using var cx = Banco.Abrir();
+        using var tx = cx.BeginTransaction();
+        AnotarCancelamento(cx, tx, "ifood", orderId, FinalizadosKds.MotivoIfoodCancelou);
         cx.Execute(
             @"UPDATE kds_ticket SET status = @s
                WHERE origem = 'ifood' AND ref_id = @r AND status <> 'pronto'",
-            new { s = Cancelado, r = orderId });
+            new { s = Cancelado, r = orderId }, tx);
+        tx.Commit();
     }
 
     /// <summary>
@@ -909,5 +986,9 @@ public static class Kds
         // agendado (04/09): idem, ausencia = imediato
         r.agendado is long ag && ag == 1,
         r.agendado_para is string ap ? DateTime.Parse(ap) : (DateTime?)null,
-        r.agendado_ate  is string aa ? DateTime.Parse(aa) : (DateTime?)null);
+        r.agendado_ate  is string aa ? DateTime.Parse(aa) : (DateTime?)null,
+        // a saída (14/10/2026): idem, banco antigo não tem e a leitura tolera
+        r.entregue_em is string en ? DateTime.Parse(en) : (DateTime?)null,
+        r.encerrado_em is string ee ? DateTime.Parse(ee) : (DateTime?)null,
+        r.encerrado_motivo as string);
 }

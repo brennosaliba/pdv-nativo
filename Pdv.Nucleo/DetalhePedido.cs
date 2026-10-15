@@ -31,7 +31,9 @@ public sealed record ItemDetalhe(string Qtd, string Nome, IReadOnlyList<LinhaCar
 /// </summary>
 /// <param name="Numero">"#5077", já com o cerquilha.</param>
 /// <param name="Etapa">A coluna em que o card está, com o MESMO nome do quadro
-/// ("NA FILA", "FAZENDO", "PRONTO"): o detalhe abre de qualquer coluna.</param>
+/// ("NA FILA", "FAZENDO", "PRONTO"): o detalhe abre de qualquer coluna. Pedido que já
+/// saiu do quadro (14/10/2026) mostra o rótulo da lista dos que saíram ("SAIU",
+/// "RETIRADO", "CANCELADO", "SAIU DO QUADRO"), nunca o status cru.</param>
 /// <param name="Canal">"via iFood", "via Cardápio" ou "Balcão".</param>
 /// <param name="Cliente">Nome do cliente; null quando o pedido não trouxe.</param>
 /// <param name="FeitoAs">"Feito às 16:53" (ou "Feito 03/09 às 23:10" quando não é hoje).</param>
@@ -45,14 +47,20 @@ public sealed record ItemDetalhe(string Qtd, string Nome, IReadOnlyList<LinhaCar
 /// <param name="Observacoes">Da nuvem: observação do pedido inteiro. Null = some.</param>
 /// <param name="AgrupadoCom">Da nuvem: os OUTROS pedidos do grupo, já como "#3788". Vazio = some.</param>
 /// <param name="Itens">Os itens, na ordem do pedido. Nunca vazio para um ticket de verdade.</param>
+/// <param name="SaiuAs">"Saiu às 14:32" (ou "Cancelado às", ou com a data quando não é hoje),
+/// só em pedido que já saiu e com a hora anotada; null no resto.</param>
 public sealed record DetalhePedido(
     string Numero, string Etapa, string Canal, string? Cliente,
     string FeitoAs, string? Agendado, string? Modalidade, string? Prazo,
     string? Comecou, string? ProntoAs,
     string? Localizador, string? CodigoColeta, string? Observacoes,
     IReadOnlyList<string> AgrupadoCom,
-    IReadOnlyList<ItemDetalhe> Itens)
+    IReadOnlyList<ItemDetalhe> Itens,
+    string? SaiuAs = null)
 {
+    /// <summary>O pedido já saiu do quadro: o detalhe é de consulta (sem raspadinha, sem voltar etapa).</summary>
+    public bool JaSaiu { get; init; }
+
     /// <summary>"Agrupado com #3788 #9002", ou null quando o pedido vai sozinho.</summary>
     public string? AgrupadoTexto =>
         AgrupadoCom.Count == 0 ? null : "Agrupado com " + string.Join(" ", AgrupadoCom);
@@ -70,12 +78,22 @@ public sealed record DetalhePedido(
     {
         var eCardapio = t.Numero.StartsWith("CD-", StringComparison.OrdinalIgnoreCase);
         var canal = t.Origem == "ifood" ? (eCardapio ? "via Cardápio" : "via iFood") : "Balcão";
-        var etapa = t.Status switch
+        // Quem já saiu (entregue/cancelado) caía em "NA FILA" aqui: agora ganha o rótulo da
+        // lista dos que saíram, que lê o MOTIVO da saída e não o status cru.
+        var saiu = FinalizadosKds.Saiu(t.Status);
+        var estado = FinalizadosKds.Estado(t);
+        var etapa = saiu ? FinalizadosKds.Rotulo(estado) : t.Status switch
         {
             Kds.Preparando => "FAZENDO",
             Kds.Pronto => "PRONTO",
             _ => "NA FILA",
         };
+        string? saiuAs = null;
+        if (saiu && FinalizadosKds.HoraDaSaida(t) is { } h)
+        {
+            var verbo = estado == EstadoFinalizado.Cancelado ? "Cancelado" : "Saiu";
+            saiuAs = h.Date == agora.Date ? $"{verbo} às {h:HH:mm}" : $"{verbo} {h:dd/MM} às {h:HH:mm}";
+        }
         // A hora de CHEGADA, a mesma que a comanda chama de "Chegou": é o relógio
         // que a cozinha usa para saber quem está esperando há mais tempo.
         var feito = t.CriadoEm.Date == agora.Date
@@ -107,7 +125,7 @@ public sealed record DetalhePedido(
             t.ProntoEm is { } pronto ? $"Pronto às {pronto:HH:mm}" : null,
             Limpo(nuvem?.Localizador), Limpo(nuvem?.CodigoColeta), Limpo(nuvem?.Observacoes),
             Agrupados(nuvem?.AgrupadoCom, t.Numero),
-            itens);
+            itens, saiuAs) { JaSaiu = saiu };
     }
 
     /// <summary>O mesmo detalhe, agora com o complemento que a nuvem acabou de mandar.</summary>
