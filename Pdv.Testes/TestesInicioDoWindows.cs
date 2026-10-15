@@ -68,7 +68,7 @@ public static class TestesInicioDoWindows
         var cfgXaml = Fonte(Path.Combine("Telas", "Configuracao.xaml")) ?? "";
         checar(no.Contains("if (!Quiosque.Ligado) return;") && no.Contains("if (!InicioDoWindows.Ligado(ligado))"),
             "IW-8 só abre no quiosque (fora dele o Windows já abre) e com a opção ligada");
-        var iSp = app.IndexOf("SpotifyNoCaixa.Iniciar();", StringComparison.Ordinal);
+        var iSp = app.IndexOf("SpotifyNoCaixa.AoAbrirOPdv(", StringComparison.Ordinal);
         var iIw = app.IndexOf("InicioDoWindowsNoCaixa.AbrirNoQuiosque(", StringComparison.Ordinal);
         checar(iSp > 0 && iIw > iSp && app.Contains("TimeSpan.FromSeconds(8));"),
             "IW-9 abre depois do Spotify escondido, com 8 s de espera (o Spotify já estará aberto e não abre duas vezes)");

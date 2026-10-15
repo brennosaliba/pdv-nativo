@@ -118,16 +118,24 @@ public static class InicioDoWindowsNoCaixa
         catch (Exception ex) { Anotar("abrir: " + ex.GetType().Name); }
     }
 
-    /// <summary>Uma linha datada em ProgramData\PdvNativo\inicio-windows.txt (nomes de programa, nada mais).</summary>
-    private static void Anotar(string texto)
+    private static readonly object _travaLog = new();
+
+    /// <summary>
+    /// Uma linha datada em ProgramData\PdvNativo\inicio-windows.txt (nomes de programa, nada mais).
+    /// 1.0.37: compartilhada com o Spotify do caixa (linhas "[spotify]"), que escreve de outra thread.
+    /// </summary>
+    internal static void Anotar(string texto)
     {
         try
         {
-            var pasta = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PdvNativo");
-            Directory.CreateDirectory(pasta);
-            var arq = Path.Combine(pasta, "inicio-windows.txt");
-            if (File.Exists(arq) && new FileInfo(arq).Length > 200_000) File.Delete(arq);
-            File.AppendAllText(arq, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {texto}{Environment.NewLine}");
+            lock (_travaLog)
+            {
+                var pasta = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PdvNativo");
+                Directory.CreateDirectory(pasta);
+                var arq = Path.Combine(pasta, "inicio-windows.txt");
+                if (File.Exists(arq) && new FileInfo(arq).Length > 200_000) File.Delete(arq);
+                File.AppendAllText(arq, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {texto}{Environment.NewLine}");
+            }
         }
         catch { /* diagnóstico nunca derruba nada */ }
     }

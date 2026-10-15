@@ -34,9 +34,6 @@ public static class TestesSpotifyNoCaixa
         checar(!SpotifyNoCaixa.EsteCaixaNaLista(aps, "DESKTOP-7AJ1OD7"), "o caixa da loja não está (é o caso do dono)");
         checar(!SpotifyNoCaixa.EsteCaixaNaLista(Array.Empty<Spotify.Aparelho>(), "X"), "lista vazia: não está");
 
-        var cands = SpotifyNoCaixa.Candidatos(@"C:\U\AppData\Local", @"C:\U\AppData\Roaming").ToList();
-        checar(cands.Count == 2 && cands[0].EndsWith(@"WindowsApps\Spotify.exe") && cands[1].EndsWith(@"Spotify\Spotify.exe"),
-            "procura a versão da Loja (atalho de execução) e a clássica, nessa ordem");
         checar(SpotifyNoCaixa.Chave == "spotify_escondido", "a chave de config é estável (o painel e o caixa leem o mesmo nome)");
 
         RegrasDoInicio(checar);
@@ -46,20 +43,49 @@ public static class TestesSpotifyNoCaixa
         var confXaml = Fonte(Path.Combine("Telas", "Configuracao.xaml")) ?? "";
         var musica = Fonte(Path.Combine("Telas", "Musica.cs")) ?? "";
         var sp = Fonte("SpotifyNoCaixa.cs") ?? "";
-        checar(app.Contains("if (Vendas.Config(cx, SpotifyNoCaixa.Chave) == \"1\") SpotifyNoCaixa.Iniciar();"),
-            "ao iniciar, com a opção ligada, o PDV abre o Spotify escondido");
+        var nucleo = Fonte(Path.Combine("Pdv.Nucleo", "MusicaNoInicio.cs")) ?? "";
+        var iw = Fonte("InicioDoWindowsNoCaixa.cs") ?? "";
+        checar(app.Contains("SpotifyNoCaixa.AoAbrirOPdv(Vendas.Config(cx, SpotifyNoCaixa.Chave));")
+               && sp.Contains("if (opcao != \"1\") { Log(\"desligado na Configuração\"); return; }")
+               && sp.Contains("catch (Exception ex) { Log(\"ao abrir o PDV: \" + ex.GetType().Name); }"),
+            "ao iniciar, o PDV entrega a opção ao Spotify do caixa, que anota até o \"desligado\" e nunca lança");
         checar(confXaml.Contains("x:Name=\"ChkSpotifyEscondido\"") && conf.Contains("SpotifyNoCaixa.Iniciar()") && conf.Contains("SpotifyNoCaixa.Parar()"),
             "a Configuração tem a opção e já aplica ao salvar");
         checar(musica.Contains("_sp.AparelhosAsync()") && musica.Contains("SpotifyNoCaixa.EsteCaixaNaLista(aps, Environment.MachineName)"),
             "a janela da música diz se este caixa está na lista de aparelhos");
-        checar(sp.Contains("SW_HIDE") && !sp.Contains("SW_MINIMIZE") && sp.Contains("EnumWindows(") && sp.Contains("\"--minimized\"")
-               && sp.Contains("TimeSpan.FromMinutes(2)") && sp.Contains("TimeSpan.FromSeconds(5)"),
+        checar(sp.Contains("SW_HIDE") && !sp.Contains("SW_MINIMIZE") && sp.Contains("EnumWindows(") && nucleo.Contains("\"--minimized\"")
+               && nucleo.Contains("FolgaReabrir = TimeSpan.FromMinutes(2)") && sp.Contains("TimeSpan.FromSeconds(5)"),
             "1.0.33: o Spotify sobe minimizado e toda janela dele é ESCONDIDA (fora do Alt+Tab) a cada 5 s; a reabertura tem folga de 2 min");
-        checar(sp.Contains("lock (_escondidas) _escondidas.Add(h);") && sp.Contains("ShowWindow(h, SW_SHOWMINNOACTIVE)")
+        checar(sp.Contains("lock (_escondidas) nova = _escondidas.Add(h);") && sp.Contains("ShowWindow(h, SW_SHOWMINNOACTIVE)")
                && sp.IndexOf("ShowWindow(h, SW_SHOWMINNOACTIVE)", StringComparison.Ordinal) > sp.IndexOf("public static void Parar()", StringComparison.Ordinal),
             "1.0.33 (revisão): desligar a opção devolve as janelas que o PDV escondeu (um Spotify pedindo login não some para sempre)");
         checar(!sp.Contains("Kill(") && !sp.Contains("senha", StringComparison.OrdinalIgnoreCase) || sp.Contains("Senha é dele"),
             "o PDV nunca mata o Spotify nem mexe em senha: só abre e esconde");
+
+        // SP-13..17 (1.0.37) o lado Windows, pelo fonte
+        var iEsc = sp.IndexOf("public static bool Esconder()", StringComparison.Ordinal);
+        checar(iEsc > 0 && sp.IndexOf("PidsDoSpotify(Sessao)", iEsc, StringComparison.Ordinal) > iEsc
+               && sp.Contains("if (p.SessionId == sessao) pids.Add((uint)p.Id);")
+               && sp.Contains("MusicaNoInicio.PodeAbrir(MusicaNoInicio.Rodando(procs, sessao), MusicaNoInicio.Abrindo(procs, sessao), DateTime.Now, _ultimaAbertura)"),
+            "SP-13 esconde e conta só o Spotify desta sessão; abrir passa pela regra anti-duplicata");
+        checar(sp.Contains("await EsperarRedeAsync(TimeSpan.FromSeconds(90))") && sp.Contains("await ConfirmarProcessoAsync(sessao, TimeSpan.FromSeconds(30))")
+               && sp.Contains("Dns.GetHostAddressesAsync(\"api.spotify.com\"") && sp.Contains("Process.GetProcessesByName(\"sihost\")"),
+            "SP-14 abre depois da rede (até 90 s), confere o Spotify.exe nesta sessão (até 30 s), e mede o logon pelo sihost (inicialização rápida não zera o relógio)");
+        checar(sp.Contains("InicioDoWindowsNoCaixa.Anotar(\"[spotify] \" + texto)") && iw.Contains("internal static void Anotar(string texto)")
+               && iw.Contains("lock (_travaLog)") && iw.Contains("\"inicio-windows.txt\""),
+            "SP-15 o log do Spotify vai para ProgramData/PdvNativo/inicio-windows.txt com [spotify], com trava (escreve de outra thread)");
+        checar(sp.Contains("catch (Exception ex) { Log(\"abrir: \" + ex.GetType().Name); }")
+               && sp.Contains("catch (Exception ex) { Log(\"tocar sozinho: \" + ex.GetType().Name); }")
+               && sp.Contains("catch (Exception ex) { Log(\"mostrar: \" + ex.GetType().Name); return \"Não consegui mostrar o Spotify.\"; }")
+               && sp.Contains("cts.CancelAfter(TimeSpan.FromSeconds(10));"),
+            "SP-16 abrir, tocar sozinho e mostrar rodam com try/catch e cada pergunta ao Spotify tem prazo de 10 s: falha do Spotify não derruba o PDV");
+        checar(!sp.Contains("schtasks", StringComparison.OrdinalIgnoreCase) && !sp.Contains("TaskScheduler") && !sp.Contains("SetWindowsHookEx")
+               && !sp.Contains("Winlogon") && !sp.Contains("Policies") && !sp.Contains("CreateProcessAsUser"),
+            "SP-17 sem tarefa agendada, sem sessão de serviço, sem gancho de teclado e sem mexer no Winlogon nem nas políticas");
+        var esc = SpotifyNoCaixa.Escolha();
+        var som = SpotifyNoCaixa.SaidaDeSomPadrao();
+        checar(som.Length > 0, "SP-18 ler a saída de som padrão deste PC não lança");
+        Console.WriteLine($"  (info) Spotify deste PC: {MusicaNoInicio.Descrever(esc)}; saída de som: {som}");
     }
 
     /// <summary>
