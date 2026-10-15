@@ -231,6 +231,8 @@ public static class ServicoConversaChat
 
     // ── 1.0.38 (caso #0434): a observação do cartão vira fala sintética do cliente ──
     private static readonly MemoriaDeFalaCliente FalasCliente = new();
+    /// <summary>Revisao 1.0.38: a janela da solicitacao do cliente (o resumo "Quero ..."), a mesma regra e os mesmos prazos do arquivo.</summary>
+    private static readonly QuadroSendbird.JanelaDaObservacao JanelaObs = new();
     private static int _obsMandadas, _obsPuladas;
 
     /// <summary>Quantas observações do cartão o robô mandou e quantas pulou (para o sinal).</summary>
@@ -244,8 +246,14 @@ public static class ServicoConversaChat
     /// </summary>
     private static void Observacao(string payload, string? wsUserId, DateTime agora)
     {
-        var obs = QuadroSendbird.ObservacaoNoCartao(payload);
-        if (obs is null) return;
+        // Revisao 1.0.38: so os cartoes da janela da solicitacao do cliente, como o arquivo. Um cartao qualquer
+        // do pedido (avaliacao, resumo de itens sem solicitacao) nao vira fala do cliente; o itemSummary que
+        // chega antes do resumo "Quero ..." espera a marca com a observacao lida na chegada
+        foreach (var obs in JanelaObs.Ver(payload, agora)) MandarObservacao(obs, wsUserId, agora);
+    }
+
+    private static void MandarObservacao(QuadroSendbird.ObservacaoDoPedido obs, string? wsUserId, DateTime agora)
+    {
         var ms = obs.CriadoEmMs ?? new DateTimeOffset(agora).ToUnixTimeMilliseconds();
         var m = new MensagemSendbird(QuadroSendbird.ComandoMensagem, obs.Canal, null, null, null, "CUSTOMER", obs.Texto, ms, false);
         var t = ConversaRaspadinha.Triagem(m, _ultimo.Sinal, Canais, Eco, wsUserId ?? _wsUserId, _sdkUserId, agora);

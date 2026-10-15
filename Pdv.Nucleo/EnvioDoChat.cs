@@ -134,3 +134,31 @@ public sealed class TetoDaRecargaDoEnvio
         }
     }
 }
+
+/// <summary>
+/// Revisão 1.0.38: o resultado de uma varredura da heap pelo CDP (camada A) e quando pode haver a
+/// próxima. Antes o teto era sempre 2 min, e a varredura logo depois da recarga do plano B (o SDK ainda
+/// não tinha nascido) travava a próxima por 2 min, justamente no caso da Savassi 15/10.
+/// </summary>
+public sealed record VarreduraDaHeap(int Prototipos, int Objetos, int Novas)
+{
+    public static readonly VarreduraDaHeap Nada = new(0, 0, 0);
+    /// <summary>Achou objeto da classe: o berço já os guarda (mesmo antes do connect); só varre de novo em 2 min.</summary>
+    public static readonly TimeSpan TetoComObjetos = TimeSpan.FromMinutes(2);
+    /// <summary>Achou a classe mas nenhum objeto (o SDK ainda não nasceu): tenta de novo em 10 s.</summary>
+    public static readonly TimeSpan TetoSemObjetos = TimeSpan.FromSeconds(10);
+
+    /// <summary>Quando pode varrer de novo. Sem protótipo não houve queryObjects (custo zero): na próxima procura.</summary>
+    public DateTime Proxima(DateTime agora)
+        => Prototipos <= 0 ? agora : agora + (Objetos > 0 ? TetoComObjetos : TetoSemObjetos);
+
+    /// <summary>A linha do rastro, SEMPRE (também quando não acha nada): só contagens.</summary>
+    public string Linha => $"heap: prototipos={Prototipos} objetos={Objetos} novas={Novas}";
+
+    /// <summary>Um inteiro da resposta do CDP (0 quando falta ou não é inteiro), com teto.</summary>
+    public static int Inteiro(JsonNode? n)
+    {
+        try { return n is JsonValue v && v.TryGetValue<int>(out var i) ? Math.Clamp(i, 0, 100_000) : 0; }
+        catch { return 0; }
+    }
+}

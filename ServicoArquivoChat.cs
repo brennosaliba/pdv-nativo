@@ -133,11 +133,15 @@ public static class ServicoArquivoChat
     {
         var cartao = ChatArquivo.LerCartaoDoIfood(payload);
         if (cartao is null) return;
-        var registrar = Janela.Ver(cartao, ChatArquivo.EhSolicitacaoDoCliente(m), agora);
-        if (registrar.Count == 0) return;
-        // 1.0.38 (caso #0434): a observacao do cliente dentro deste cartao vira uma linha sintetica do
-        // arquivo (MESG do lado cliente, custom_type "solicitacao", chave sol:) e uma linha de prova local
-        if (registrar.Any(x => x.Chave == cartao.Chave)) ObservacaoDoCartao(payload, cartao, canal, agora);
+        // 1.0.38 (caso #0434): a observacao do cliente dentro do cartao vira uma linha sintetica do arquivo
+        // (MESG do lado cliente, custom_type "solicitacao", chave sol:) e uma linha de prova local.
+        // Revisao: ela e lida na CHEGADA de cada cartao e espera junto na janela (o itemSummary chega antes
+        // do summary "Quero ..."); quando a marca chega, sai a de cada cartao devolvido, nao so a do atual
+        var vistos = Janela.VerComObservacao(cartao, QuadroSendbird.ObservacaoNoCartao(payload), ChatArquivo.EhSolicitacaoDoCliente(m), agora);
+        if (vistos.Count == 0) return;
+        var registrar = vistos.Select(x => x.Cartao).ToList();
+        foreach (var (c, obs) in vistos)
+            if (obs is not null) ObservacaoDoCartao(obs, c, canal);
         // fora da tela: o banco e o arquivo de texto
         _ = Task.Run(() =>
         {
@@ -171,10 +175,8 @@ public static class ServicoArquivoChat
     /// (MESG do lado cliente, custom_type "solicitacao", chave sol:) para o ERP guardar, e uma linha de prova
     /// local (chat-observacao.txt) com tudo mascarado. Nada e tocado no Gestor; o ERP nao recebe campo novo.
     /// </summary>
-    private static void ObservacaoDoCartao(string payload, CartaoDoIfood cartao, CanalDaFala canal, DateTime agora)
+    private static void ObservacaoDoCartao(QuadroSendbird.ObservacaoDoPedido obs, CartaoDoIfood cartao, CanalDaFala canal)
     {
-        var obs = QuadroSendbird.ObservacaoNoCartao(payload);
-        if (obs is null) return;
         Interlocked.Increment(ref _obsLidas);
         var sint = new MensagemArquivo("MESG", canal.Canal, null, null, null, null, LadoArquivo.Cliente, "solicitacao",
             obs.Texto, obs.CriadoEmMs, false, false);

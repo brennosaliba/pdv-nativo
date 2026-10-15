@@ -124,13 +124,14 @@ public static class QuadroSendbird
     // pedido: <texto>" e o robô lia; agora o MESG do cliente é só "Adicionar observação ao pedido" e o
     // texto vem dentro do cartão da loja (BRDM/AEDI), no campo "data", codificado duas vezes. O lugar
     // provado (07/10, buttonList real): data -> messageData.buttons[0] -> metadata -> dialog.options[0]
-    // (type input) -> metadata.initialValue. A reserva, para o summary/itemSummary: o primeiro texto que
-    // contenha o código da raspadinha. Isto NÃO conhece o formato do prêmio: quem decide é o ERP. Lê só.
+    // (type input) -> metadata.initialValue. Revisão 1.0.38: a reserva (o primeiro texto com cara de código
+    // da raspadinha) SAIU. Ela inventava fala do cliente com palavra comum do cartão ("Adicione", "Adrielly")
+    // e punha o formato do código no caixa, que não deve conhecê-lo (FT-2): quem acha o código é o ERP. Só o
+    // lugar provado vale; o arquivo guarda a forma do data (chat-observacao.txt e chat-solicitacao.txt). Lê só.
 
     /// <summary>
     /// A observação do cliente achada num cartão do iFood: o pedido, o cartão e o texto, com a origem
-    /// ("initialValue" quando veio do campo do diálogo, "codigo_no_cartao" quando foi achada por um
-    /// código solto num texto). A chave é igual em todos os terminais, no BRDM e no AEDI.
+    /// ("initialValue": o campo do diálogo). A chave é igual em todos os terminais, no BRDM e no AEDI.
     /// </summary>
     public sealed record ObservacaoDoPedido(string Canal, string OrderId, string? MsgId, long? CriadoEmMs, string Texto, string Origem)
     {
@@ -140,11 +141,6 @@ public static class QuadroSendbird
 
     /// <summary>Os tipos de cartão do iFood que podem trazer a observação.</summary>
     private static readonly IReadOnlySet<string> TiposDeCartao = new HashSet<string>(StringComparer.Ordinal) { "summary", "itemSummary", "buttonList" };
-    /// <summary>As chaves do quadro cujo texto NÃO é observação (rótulos, dicas, endereços de resposta, tipos).</summary>
-    private static readonly IReadOnlySet<string> ChavesSemObservacao = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        { "title", "label", "hint", "message", "replyUrl", "flowId", "dataClassType" };
-    private static readonly Regex ReCodigoNoCartao = new(@"\bAD-?[A-Z0-9]{6}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex ReUuidNoCartao = new(@"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", RegexOptions.CultureInvariant);
     /// <summary>O <c>data</c> (e cada texto embutido) maior que isto não é aberto.</summary>
     public const int TetoObservacaoBytes = 32 * 1024;
     private const int ProfundidadeMaxima = 12;
@@ -160,9 +156,8 @@ public static class QuadroSendbird
     /// <summary>
     /// A observação do cliente dentro de um cartão do iFood (BRDM ou AEDI, custom_type summary,
     /// itemSummary ou buttonList, em canal de pedido), ou null. Abre o <c>data</c> e qualquer texto que
-    /// pareça JSON (até 3 decodificações, profundidade até 12, teto de 32 KB). Prioridade 1: o primeiro
-    /// <c>initialValue</c> não vazio (o lugar provado). Prioridade 2: o primeiro texto com o código da
-    /// raspadinha, fora das chaves de rótulo. Nunca lança.
+    /// pareça JSON (até 3 decodificações, profundidade até 12, teto de 32 KB). Só o primeiro
+    /// <c>initialValue</c> não vazio (o lugar provado). Nunca lança.
     /// </summary>
     public static ObservacaoDoPedido? ObservacaoNoCartao(string? payload)
     {
@@ -196,9 +191,8 @@ public static class QuadroSendbird
     private sealed class BuscaDaObservacao
     {
         public string? InitialValue;
-        public string? Codigo;
-        public string? Resultado => InitialValue ?? Codigo;
-        public string? Origem => InitialValue is not null ? "initialValue" : Codigo is not null ? "codigo_no_cartao" : null;
+        public string? Resultado => InitialValue;
+        public string? Origem => InitialValue is not null ? "initialValue" : null;
     }
 
     private static void Vasculhar(JsonElement e, int prof, int decode, string? chave, BuscaDaObservacao b)
@@ -237,16 +231,129 @@ public static class QuadroSendbird
                         Vasculhar(d.RootElement, prof + 1, decode - 1, chave, b);
                     }
                     catch { /* texto que não era JSON de verdade */ }
-                    return;
-                }
-                if (b.Codigo is null && (chave is null || !ChavesSemObservacao.Contains(chave))
-                    && !st.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !ReUuidNoCartao.IsMatch(s.Trim()))
-                {
-                    var m = ReCodigoNoCartao.Match(s);
-                    if (m.Success) b.Codigo = m.Value.ToUpperInvariant();
                 }
                 return;
         }
+    }
+
+    /// <summary>
+    /// O cartão que abre a solicitação do cliente: BRDM summary cujo texto começa com "Quero " (até 120),
+    /// como "Quero adicionar observação ao pedido". Nunca a resposta ("A loja aceitou"). A MESMA regra para o
+    /// arquivo de conversas e para o robô.
+    /// </summary>
+    public static bool EhMarcaDaSolicitacao(string? comando, string? customType, string? texto)
+    {
+        if (comando != "BRDM" || !string.Equals(customType, "summary", StringComparison.OrdinalIgnoreCase)) return false;
+        var t = (texto ?? "").Trim();
+        return t.StartsWith("Quero ", StringComparison.OrdinalIgnoreCase) && t.Length <= 120;
+    }
+
+    /// <summary>
+    /// Revisão 1.0.38: a janela da solicitação para o robô, só com o que o quadro diz. A observação de um cartão
+    /// só sai dentro de 5 min depois do resumo "Quero ..." da MESMA conversa; a do itemSummary que chega antes
+    /// espera a marca até 60 s (até 3 por conversa). Um cartão qualquer do pedido (avaliação, resumo de itens
+    /// sem solicitação) nunca vira fala do cliente. A mesma regra e os mesmos prazos da janela do arquivo.
+    /// </summary>
+    public sealed class JanelaDaObservacao
+    {
+        public static readonly TimeSpan Janela = TimeSpan.FromMinutes(5);
+        public static readonly TimeSpan EsperaDoItem = TimeSpan.FromSeconds(60);
+        private const int TetoDeConversas = 500;
+
+        private readonly object _trava = new();
+        private readonly Dictionary<string, DateTime> _marcas = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<(ObservacaoDoPedido Obs, DateTime Em)>> _antes = new(StringComparer.Ordinal);
+
+        /// <summary>Um quadro BRDM/AEDI chegou. Devolve as observações que podem sair agora (nenhuma fora da janela). Nunca lança.</summary>
+        public IReadOnlyList<ObservacaoDoPedido> Ver(string? payload, DateTime agora)
+        {
+            try
+            {
+                var cmd = Comando(payload);
+                if (cmd is not ("BRDM" or "AEDI")) return Array.Empty<ObservacaoDoPedido>();
+                string? canal, custom, texto;
+                using (var doc = JsonDocument.Parse(payload!.AsMemory(4)))
+                {
+                    var r = doc.RootElement;
+                    if (r.ValueKind != JsonValueKind.Object) return Array.Empty<ObservacaoDoPedido>();
+                    canal = Texto(r, "channel_url"); custom = Texto(r, "custom_type"); texto = Texto(r, "message");
+                }
+                if (CanalIfood.Ler(canal) is null) return Array.Empty<ObservacaoDoPedido>();
+                var obs = ObservacaoNoCartao(payload);
+                lock (_trava)
+                {
+                    Limpar(agora);
+                    if (EhMarcaDaSolicitacao(cmd, custom, texto))
+                    {
+                        _marcas[canal!] = agora;
+                        var saida = new List<ObservacaoDoPedido>();
+                        if (_antes.Remove(canal!, out var l)) saida.AddRange(l.Where(x => agora - x.Em <= EsperaDoItem).Select(x => x.Obs));
+                        if (obs is not null) saida.Add(obs);
+                        return saida;
+                    }
+                    if (obs is null) return Array.Empty<ObservacaoDoPedido>();
+                    if (_marcas.TryGetValue(canal!, out var marca) && agora - marca <= Janela) return new[] { obs };
+                    if (string.Equals((custom ?? "").Trim(), "itemSummary", StringComparison.Ordinal))
+                    {
+                        if (!_antes.TryGetValue(canal!, out var l)) _antes[canal!] = l = new();
+                        if (l.Count < 3) l.Add((obs, agora));
+                    }
+                    return Array.Empty<ObservacaoDoPedido>();
+                }
+            }
+            catch { return Array.Empty<ObservacaoDoPedido>(); }
+        }
+
+        private void Limpar(DateTime agora)
+        {
+            foreach (var k in _marcas.Where(x => agora - x.Value > Janela).Select(x => x.Key).ToList()) _marcas.Remove(k);
+            foreach (var k in _antes.Where(x => x.Value.All(i => agora - i.Em > EsperaDoItem)).Select(x => x.Key).ToList()) _antes.Remove(k);
+            if (_marcas.Count > TetoDeConversas) _marcas.Clear();
+            if (_antes.Count > TetoDeConversas) _antes.Clear();
+        }
+    }
+
+    // ── revisão 1.0.38: o socket do Sendbird visto pelo CDP ──────────────────
+
+    /// <summary>A URL é de um WebSocket do Sendbird (host *.sendbird.com)?</summary>
+    public static bool EhSocketDoSendbird(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var u)) return false;
+        var h = u.Host.ToLowerInvariant();
+        return h == "sendbird.com" || h.EndsWith(".sendbird.com", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Quem abriu o socket, pelo <c>initiator</c> do <c>Network.webSocketCreated</c>: só o nome do arquivo do
+    /// script (sem caminho, query nem host), "blob" para script de blob, ou o tipo do iniciador. Passa pelo
+    /// <see cref="ConversaRaspadinha.NomeSeguroDoDiag"/>; fora disso, null. Nunca lança.
+    /// </summary>
+    public static string? IniciadorDoSocket(string? parametroJson)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(parametroJson)) return null;
+            using var d = JsonDocument.Parse(parametroJson);
+            if (!d.RootElement.TryGetProperty("initiator", out var ini) || ini.ValueKind != JsonValueKind.Object) return null;
+            string? url = null;
+            for (var st = ini.TryGetProperty("stack", out var s0) ? s0 : default; url is null && st.ValueKind == JsonValueKind.Object;
+                 st = st.TryGetProperty("parent", out var pai) ? pai : default)
+            {
+                if (st.TryGetProperty("callFrames", out var cfs) && cfs.ValueKind == JsonValueKind.Array)
+                    foreach (var cf in cfs.EnumerateArray())
+                        if (Texto(cf, "url") is { Length: > 0 } cu) { url = cu; break; }
+            }
+            url ??= Texto(ini, "url");
+            if (string.IsNullOrWhiteSpace(url)) return ConversaRaspadinha.NomeSeguroDoDiag(Texto(ini, "type"));
+            if (url.StartsWith("blob:", StringComparison.OrdinalIgnoreCase)) return "blob";
+            var corte = url.IndexOfAny(new[] { '?', '#' });
+            if (corte >= 0) url = url[..corte];
+            var nome = url.TrimEnd('/');
+            nome = nome[(nome.LastIndexOf('/') + 1)..];
+            if (nome.Length > 80) nome = nome[..80];
+            return ConversaRaspadinha.NomeSeguroDoDiag(nome);
+        }
+        catch { return null; }
     }
 
     // ── json ─────────────────────────────────────────────────────────────────

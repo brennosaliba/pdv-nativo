@@ -587,12 +587,13 @@ function exec(sb) { return Array.from(sb.__exec).join(','); }
       + "  __exec.push('7001');"
       + "  var host = 'wss://ws-app.sendbird.com';"
       + "  function SendbirdChat(){}"
-      + "  SendbirdChat.prototype.connect = function(){ return Promise.resolve(); };"
+      // revisao 1.0.38: como o @sendbird/chat 4 de verdade, o init devolve SEM usuario e o connect e que poe o usuario
+      + "  SendbirdChat.prototype.connect = function(uid){ var s = this; return Promise.resolve().then(function(){ s.currentUser = { userId: uid }; s.connectionState = 'OPEN'; return s.currentUser; }); };"
       + "  Object.defineProperty(SendbirdChat, 'instance', { get: function(){ return null; }, configurable: true });"   // singleton sempre vazio
       + "  SendbirdChat.init = function (p) {"
       + "    var s = new SendbirdChat();"
-      + "    s.currentUser = { userId: p.userId };"
-      + "    s.connectionState = 'OPEN';"
+      + "    s.currentUser = null;"
+      + "    s.connectionState = 'CLOSED';"
       + "    s.groupChannel = { getChannel: function (u) { return Promise.resolve({ url: u, cachedMetaData: { orderUuid: p.uuid }, isFrozen: false,"
       + "      members: [{ metaData: { userType: 'CUSTOMER' } }],"
       + "      sendUserMessage: function (pp) { __enviadas.push({ por: 'berco', canal: u, texto: pp.message }); return { onSucceeded: function (cb) { cb({ messageId: 7 }); return this; }, onFailed: function () { return this; } }; } }); } };"
@@ -604,24 +605,57 @@ function exec(sb) { return Array.from(sb.__exec).join(','); }
     const d0 = await diag(sb, 'bw0', 'loja-1', []);
     checar(d0 && d0.modulos === 1 && d0.via_berco === false && d0.heap_inst === 0 && d0.singleton === 'vazio',
       '120 o modulo e achado (singleton vazio); o init ainda nao aconteceu, berco vazio');
-    rodar(sb, "R('7001').ZP.init({ userId: 'loja-1', uuid: 'uuid-7' });");   // troca de token: nasce uma conexao
+    rodar(sb, "var nova = R('7001').ZP.init({ uuid: 'uuid-7' });");   // troca de token: nasce uma conexao, ainda sem usuario
+    const dm = await diag(sb, 'bwm', 'loja-1', []);
+    checar(dm && dm.achou === false && dm.heap_inst === 1 && dm.heap_validas === 0 && dm.via_berco === false,
+      '123 o init devolve antes do connect: o berco guarda a candidata (heap_inst:1) sem usa-la (heap_validas:0)');
+    await rodar(sb, "nova.connect('loja-1')");                            // o Gestor conecta depois
     const d1 = await diag(sb, 'bw1', 'loja-1', []);
     checar(d1 && d1.achou === true && d1.instancias === 1 && d1.via_berco === true && d1.via_webpack === false && d1.heap_validas === 1,
-      '121 o init embrulhado (camada B) registra a conexao nova no berco (via_berco), mesmo com o singleton vazio');
+      '121 o init embrulhado (camada B) registra a conexao nova no berco e ela vale depois do connect (via_berco), mesmo com o singleton vazio');
     const e1 = await enviar(sb, 'bw2', 'tk-bw', 'canal-7', 'uuid-7', 'Oi!', 'loja-1');
     checar(e1 && e1.ok === true && sb.__enviadas[sb.__enviadas.length - 1].por === 'berco', '122 e a resposta sai pela conexao do berco');
   }
 
-  // ── MUNDO WEBSOCKET (1.0.38, camada B): o Proxy conta os sockets do Sendbird sem mudar nada ──
+  // ── MUNDO HEAP ANTES DO CONNECT (revisao 1.0.38): o plano B varre logo depois da recarga ──
+  {
+    const sb = mundo();
+    rodar(sb, "var R = montarRuntime('webpackChunkrecarga', __marca({"
+      + "'7002': function (module, exports, req) {"
+      + "  var host = 'wss://ws-app.sendbird.com';"
+      + "  function SendbirdChat(){ this.currentUser = null; this.connectionState = 'CLOSED';"
+      + "    this.groupChannel = { getChannel: function (u) { return Promise.resolve({ url: u, cachedMetaData: { orderUuid: 'uuid-8' }, isFrozen: false,"
+      + "      members: [{ metaData: { userType: 'CUSTOMER' } }],"
+      + "      sendUserMessage: function (pp) { __enviadas.push({ por: 'heap', canal: u, texto: pp.message }); return { onSucceeded: function (cb) { cb({ messageId: 8 }); return this; }, onFailed: function () { return this; } }; } }); } }; }"
+      + "  SendbirdChat.prototype.connect = function(uid){ var s = this; return Promise.resolve().then(function(){ s.currentUser = { userId: uid }; s.connectionState = 'OPEN'; }); };"
+      + "  Object.defineProperty(SendbirdChat, 'instance', { get: function(){ return null; }, configurable: true });"
+      + "  SendbirdChat.init = function () { return new SendbirdChat(); };"
+      + "  exports.ZP = SendbirdChat;"
+      + "} })); var s8 = R('7002').ZP.init();");
+    carregar(sb);
+    await diag(sb, 'hc0', 'loja-1', []);
+    checar(rodar(sb, 'window.pdvSb.registrar([s8, {}, null])') === 1,
+      '124 a heap logo depois da recarga entrega a instancia ainda sem connect: o berco aceita a candidata (e so ela)');
+    await rodar(sb, "s8.connect('loja-1')");
+    const d1 = await diag(sb, 'hc1', 'loja-1', []);
+    checar(d1 && d1.achou === true && d1.via_heap === true && d1.heap_validas === 1 && d1.heap_abertas === 1,
+      '125 depois do connect a mesma candidata vale sem varrer de novo (via_heap, heap_abertas:1)');
+    const e1 = await enviar(sb, 'hc2', 'tk-hc', 'canal-8', 'uuid-8', 'Oi!', 'loja-1');
+    checar(e1 && e1.ok === true && sb.__enviadas[sb.__enviadas.length - 1].por === 'heap', '126 e a resposta sai por ela');
+  }
+
+  // ── MUNDO WEBSOCKET (revisao 1.0.38): o script nao mexe no WebSocket da pagina ──
   {
     const sb = mundo();
     rodar(sb, "function FakeWS(url){ this.url = url; this.readyState = 1; } FakeWS.CONNECTING = 0; FakeWS.OPEN = 1; FakeWS.CLOSED = 3; window.WebSocket = FakeWS;");
     carregar(sb);
-    await diag(sb, 'pw0', 'loja-1', []);   // instala o Proxy
-    checar(rodar(sb, "(function(){ var w = new window.WebSocket('wss://ws-app.sendbird.com/?x=1'); var o = new window.WebSocket('wss://outro.example.com'); return (w instanceof FakeWS) && (window.WebSocket.OPEN === 1); })()") === true,
-      '130 o Proxy do WebSocket mantem instanceof e as constantes');
-    const d = await diag(sb, 'pw1', 'loja-1', []);
-    checar(d && d.ws_sb_doc === 1 && d.ws_sb_abertos === 1, '131 o diagnostico conta so o socket do Sendbird (1 aberto), ignorando o de outro host');
+    const d = await diag(sb, 'pw0', 'loja-1', []);
+    await enviar(sb, 'pw1', 'tk-pw', 'canal-1', 'uuid-1', 'Oi!', 'loja-1');
+    checar(rodar(sb, 'window.WebSocket === FakeWS') === true
+           && rodar(sb, "(function(){ class Rastreado extends window.WebSocket { marca(){ return 'ok'; } } var r = new Rastreado('wss://x.example.com'); return (r instanceof Rastreado) && r.marca() === 'ok'; })()") === true,
+      '130 depois do diag e do envio o WebSocket da pagina e o mesmo (sem Proxy) e a subclasse criada depois segue inteira');
+    checar(d && !('ws_sb_doc' in d) && !('ws_sb_abertos' in d) && !('workers' in d),
+      '131 o diag da pagina nao leva mais contagem de socket nem workers (os sockets do Sendbird sao contados no C# pelo CDP)');
   }
 
   // ── MUNDO PRIVACIDADE DO DIAG (1.0.38): os campos novos nunca levam segredo ──
@@ -632,7 +666,7 @@ function exec(sb) { return Array.from(sb.__exec).join(','); }
     const d = await diag(sb, 'dp0', 'loja-31994412725', ['canal-1']);
     const novos = JSON.stringify({ singleton: d.singleton, singleton_conexao: d.singleton_conexao, versao_sdk: d.versao_sdk, bundle: d.bundle, globais_wp: d.globais_wp });
     checar(novos.indexOf('31994412725') < 0 && novos.indexOf('tk-super-secreto') < 0, '140 os campos de texto do diag novo nunca levam segredo (telefone, token)');
-    checar(typeof d.singleton === 'string' && typeof d.fabricas === 'number' && typeof d.via_heap === 'boolean' && typeof d.mf === 'boolean' && typeof d.ws_sb_doc === 'number',
+    checar(typeof d.singleton === 'string' && typeof d.fabricas === 'number' && typeof d.via_heap === 'boolean' && typeof d.mf === 'boolean' && typeof d.heap_inst === 'number',
       '141 os campos novos existem com o tipo do contrato (enum, inteiro, booleano)');
     checar(d.versao_sdk === '4.19.9' && d.globais_wp === 'webpackChunkgestor_pedidos', '142 versao_sdk e globais_wp saem do bundle, nao de dado pessoal (' + d.versao_sdk + '/' + d.globais_wp + ')');
   }

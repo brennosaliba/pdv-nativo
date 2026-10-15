@@ -233,16 +233,45 @@ public static class TestesAprovacaoDono
         var novo = new JsonObject
         {
             ["via_heap"] = true, ["via_berco"] = false, ["mf"] = false,
-            ["heap_inst"] = 2, ["heap_validas"] = 1, ["heap_abertas"] = 1, ["ws_sb_doc"] = 3, ["ws_sb_abertos"] = 1,
+            ["heap_inst"] = 2, ["heap_validas"] = 1, ["heap_abertas"] = 1, ["heap_protos"] = 3, ["heap_objetos"] = 2,
+            ["ws_sb_cdp"] = 3, ["ws_sb_cdp_vivos"] = 1, ["ws_sb_iniciador"] = "main.9a3f.js",
             ["fabricas"] = 2416, ["fab_sendbird"] = 4, ["dom_sendbird"] = 5, ["dom_fibras"] = 2, ["iframes"] = 1, ["iframes_outros"] = 0,
-            ["esm"] = 0, ["workers"] = 0, ["singleton"] = "sem_usuario", ["singleton_conexao"] = "OPEN",
+            ["esm"] = 0, ["singleton"] = "sem_usuario", ["singleton_conexao"] = "OPEN",
             ["versao_sdk"] = "4.19.9", ["bundle"] = "main.9a3f.js", ["globais_wp"] = "webpackChunkgestor_pedidos",
+            ["ws_sb_doc"] = 3, ["workers"] = 0,
         };
         var e3 = JsonNode.Parse(ConversaRaspadinha.EstadoDoSinal("logado", true, Agora, 0, null, novo, null))!["sdk"]!.AsObject();
         checar((bool?)e3["via_heap"] == true && (int?)e3["heap_validas"] == 1 && (int?)e3["fabricas"] == 2416 && (int?)e3["fab_sendbird"] == 4
                && (string?)e3["singleton"] == "sem_usuario" && (string?)e3["singleton_conexao"] == "OPEN"
                && (string?)e3["versao_sdk"] == "4.19.9" && (string?)e3["bundle"] == "main.9a3f.js" && (string?)e3["globais_wp"] == "webpackChunkgestor_pedidos",
             "AP-36 o diagnóstico novo (via_heap, heap, fábricas, singleton, bundle) passa pela lista branca");
+        checar((int?)e3["heap_protos"] == 3 && (int?)e3["heap_objetos"] == 2 && (int?)e3["ws_sb_cdp"] == 3 && (int?)e3["ws_sb_cdp_vivos"] == 1
+               && (string?)e3["ws_sb_iniciador"] == "main.9a3f.js" && !e3.ContainsKey("ws_sb_doc") && !e3.ContainsKey("workers"),
+            "AP-38 revisão: as contagens brutas da heap e os sockets do Sendbird pelo CDP passam; ws_sb_doc e workers (cegos) não");
+
+        // revisão 1.0.38: o teto da heap depende do que a varredura achou (o plano B logo depois da recarga)
+        var t = new DateTime(2026, 10, 15, 13, 30, 0);
+        checar(new VarreduraDaHeap(0, 0, 0).Proxima(t) == t && new VarreduraDaHeap(2, 0, 0).Proxima(t) == t.AddSeconds(10)
+               && new VarreduraDaHeap(2, 1, 1).Proxima(t) == t.AddMinutes(2) && new VarreduraDaHeap(2, 1, 0).Proxima(t) == t.AddMinutes(2),
+            "AP-39 sem protótipo varre de novo na próxima; classe sem objeto (SDK ainda não nasceu) em 10 s; com objeto, 2 min");
+        checar(VarreduraDaHeap.Nada.Linha == "heap: prototipos=0 objetos=0 novas=0"
+               && VarreduraDaHeap.Inteiro(JsonNode.Parse("{\"n\":5}")!["n"]) == 5 && VarreduraDaHeap.Inteiro(JsonNode.Parse("{\"n\":\"5\"}")!["n"]) == 0
+               && VarreduraDaHeap.Inteiro(null) == 0 && VarreduraDaHeap.Inteiro(JsonNode.Parse("{\"n\":-3}")!["n"]) == 0,
+            "AP-40 a varredura deixa rastro também sem achar nada, e a resposta do CDP vira inteiro seguro");
+
+        // revisão 1.0.38: o socket do Sendbird pelo CDP e quem o abriu (só o nome do script)
+        checar(QuadroSendbird.EhSocketDoSendbird("wss://ws-app.sendbird.com/?user_id=x") && QuadroSendbird.EhSocketDoSendbird("wss://sendbird.com/")
+               && !QuadroSendbird.EhSocketDoSendbird("wss://sendbird.com.evil.example/") && !QuadroSendbird.EhSocketDoSendbird("wss://chat.ifood.com.br/socket")
+               && !QuadroSendbird.EhSocketDoSendbird(null),
+            "AP-41 só host *.sendbird.com conta como socket do Sendbird");
+        string Ini(string initiator) => "{\"requestId\":\"1\",\"url\":\"wss://ws-app.sendbird.com/?user_id=31994412725\",\"initiator\":" + initiator + "}";
+        checar(QuadroSendbird.IniciadorDoSocket(Ini("{\"type\":\"script\",\"stack\":{\"callFrames\":[{\"url\":\"https://gestordepedidos.ifood.com.br/static/js/main.9a3f.js?v=31994412725\"}]}}")) == "main.9a3f.js"
+               && QuadroSendbird.IniciadorDoSocket(Ini("{\"type\":\"script\",\"stack\":{\"callFrames\":[{\"url\":\"\"}],\"parent\":{\"callFrames\":[{\"url\":\"https://x/w/sb.worker.js\"}]}}}")) == "sb.worker.js"
+               && QuadroSendbird.IniciadorDoSocket(Ini("{\"type\":\"script\",\"stack\":{\"callFrames\":[{\"url\":\"blob:https://x/6c1d2e3f\"}]}}")) == "blob"
+               && QuadroSendbird.IniciadorDoSocket(Ini("{\"type\":\"other\"}")) == "other"
+               && QuadroSendbird.IniciadorDoSocket(Ini("{\"type\":\"script\",\"url\":\"https://x/a b'; drop.js\"}")) is null
+               && QuadroSendbird.IniciadorDoSocket("{quebrado") is null,
+            "AP-42 o iniciador do socket é só o nome do script (sem host, caminho nem query), 'blob' ou o tipo; nome estranho cai");
         var sujo2 = new JsonObject
         {
             ["singleton"] = "inventado", ["singleton_conexao"] = "QUALQUER", ["versao_sdk"] = "nao-e-versao",
@@ -338,15 +367,23 @@ public static class TestesAprovacaoDono
         // 1.0.38: o berço (camada B) e o que a heap (camada A) usa estão no script
         checar(js.Contains("prototipos: prototipos, registrar: registrar", StringComparison.Ordinal)
                && js.Contains("function prototipos()", StringComparison.Ordinal) && js.Contains("function registrar(lista)", StringComparison.Ordinal)
-               && js.Contains("function embrulhaClasse(ex)", StringComparison.Ordinal) && js.Contains("new Proxy(OrigWS", StringComparison.Ordinal)
-               && js.Contains("prototype.connect", StringComparison.Ordinal),
-            "AF-17 o script tem o berço (init embrulhado, Proxy do WebSocket) e expõe prototipos/registrar para a heap do C#");
+               && js.Contains("function embrulhaClasse(ex)", StringComparison.Ordinal) && js.Contains("prototype.connect", StringComparison.Ordinal)
+               && js.Contains("function candidata(x)", StringComparison.Ordinal) && !js.Contains("new Proxy(", StringComparison.Ordinal)
+               && !js.Contains("WebSocket =", StringComparison.Ordinal),
+            "AF-17 o script tem o berço (init embrulhado, candidata antes do connect), expõe prototipos/registrar e não troca o WebSocket da página");
         var telaToda = Ler("Telas", "ChatIfood.xaml.cs");
         checar(telaToda.Contains("Runtime.queryObjects", StringComparison.Ordinal) && telaToda.Contains("Runtime.callFunctionOn", StringComparison.Ordinal)
                && telaToda.Contains("Runtime.releaseObjectGroup", StringComparison.Ordinal)
-               && telaToda.Contains("window.pdvSb.registrar(Array.prototype.slice.call(this))", StringComparison.Ordinal)
-               && telaToda.Contains("_ultimaVarreduraHeap", StringComparison.Ordinal) && telaToda.Contains("VarrerHeapSdkAsync", StringComparison.Ordinal),
-            "AF-18 o caixa varre a heap pelo CDP (queryObjects, callFunctionOn, releaseObjectGroup), entrega ao berço e só a cada 2 min");
+               && telaToda.Contains("window.pdvSb.registrar(a)", StringComparison.Ordinal)
+               && telaToda.Contains("_proximaVarreduraHeap = v.Proxima(DateTime.Now);", StringComparison.Ordinal)
+               && telaToda.Contains("_proximaVarreduraHeap = DateTime.MinValue;", StringComparison.Ordinal)
+               && telaToda.Contains("Task<VarreduraDaHeap> VarrerHeapSdkAsync", StringComparison.Ordinal)
+               && telaToda.Contains("DiagRaspadinha(v.Linha);", StringComparison.Ordinal),
+            "AF-18 o caixa varre a heap pelo CDP (queryObjects, callFunctionOn, releaseObjectGroup), entrega ao berço, deixa rastro sempre; o teto zera na navegação");
+        checar(telaToda.Contains("\"Network.webSocketClosed\"", StringComparison.Ordinal)
+               && telaToda.Contains("QuadroSendbird.EhSocketDoSendbird(u.GetString())", StringComparison.Ordinal)
+               && telaToda.Contains("r[\"ws_sb_cdp_vivos\"] = _wsSbVivos.Count;", StringComparison.Ordinal),
+            "AF-19 os sockets do Sendbird são contados pelo CDP (criado e fechado) e vão no diag");
 
         var csproj = Ler("Pdv.csproj");
         checar(csproj.Contains("<Version>1.0.38</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.38 (o SDK pela heap e pelo berço, o diagnóstico novo e a observação do cartão)");

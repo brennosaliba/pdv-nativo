@@ -1090,10 +1090,12 @@ public static class ConversaRaspadinha
             foreach (var k in new[] { "achou", "user_id_igual_ws", "tem_order_uuid", "via_webpack", "via_react", "via_heap", "via_berco", "mf" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<bool>(out var b))
                     sdk[k] = b;
-            // 1.0.38: as contagens novas do diagnóstico (heap, sockets do Sendbird, fábricas, DOM, iframes, esm, workers)
+            // 1.0.38: as contagens novas do diagnóstico (heap, fábricas, DOM, iframes, esm). Revisão: os sockets do
+            // Sendbird vêm do CDP no C# (ws_sb_cdp, ws_sb_cdp_vivos), não do Proxy da página; workers saiu (era fixo);
+            // heap_protos e heap_objetos são as contagens brutas da última varredura
             foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes",
-                "heap_inst", "heap_validas", "heap_abertas", "ws_sb_doc", "ws_sb_abertos", "fabricas", "fab_sendbird",
-                "dom_sendbird", "dom_fibras", "iframes", "iframes_outros", "esm", "workers" })
+                "heap_inst", "heap_validas", "heap_abertas", "heap_protos", "heap_objetos", "ws_sb_cdp", "ws_sb_cdp_vivos",
+                "fabricas", "fab_sendbird", "dom_sendbird", "dom_fibras", "iframes", "iframes_outros", "esm" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<int>(out var n))
                     sdk[k] = Math.Clamp(n, 0, 100_000);
             // 1.0.35: o estado da conexão do SDK, só como enum (OPEN, CONNECTING, CLOSED, OUTRO)
@@ -1112,7 +1114,7 @@ public static class ConversaRaspadinha
             if (sdkDaPagina.TryGetPropertyValue("versao_sdk", out var vv) && vv is JsonValue vjv && vjv.TryGetValue<string>(out var vsdk)
                 && Regex.IsMatch(vsdk, @"^[0-9][0-9.]{0,15}$"))
                 sdk["versao_sdk"] = vsdk;
-            foreach (var k in new[] { "bundle", "globais_wp" })
+            foreach (var k in new[] { "bundle", "globais_wp", "ws_sb_iniciador" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var tv) && tv is JsonValue tjv && tjv.TryGetValue<string>(out var ts)
                     && NomeSeguroDoDiag(ts) is { } limpo)
                     sdk[k] = limpo;

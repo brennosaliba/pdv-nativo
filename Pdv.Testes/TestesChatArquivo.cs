@@ -123,12 +123,12 @@ public static class TestesChatArquivo
         checar(o2 is not null && o2.Texto == "AD-XGJZ4B" && o2.Chave == o1!.Chave && o2.Chave.StartsWith("sol:", StringComparison.Ordinal),
             $"OB-2 o AEDI dá a mesma observação e a mesma chave sol: do BRDM ({o2?.Chave})");
 
-        // 3) a reserva: o codigo num texto do data do summary (sem initialValue)
+        // 3) revisao: sem initialValue nao ha observacao, mesmo com um texto com cara de codigo (o caixa nao conhece o formato)
         var summary = Brdm("summary", "Quero adicionar observação ao pedido",
             "{\"messageData\":{\"subtitle\":\"Observação do cliente: AD-XGJZ4B\",\"replyUrl\":\"https://x/y\"}}", 9202);
         var o3 = QuadroSendbird.ObservacaoNoCartao(summary);
-        checar(o3 is not null && o3.Texto == "AD-XGJZ4B" && o3.Origem == "codigo_no_cartao",
-            $"OB-3 sem initialValue, o código achado no texto do data (reserva do summary) ({o3?.Texto}/{o3?.Origem})");
+        checar(o3 is null,
+            $"OB-3 sem initialValue não há observação, nem com texto que parece código: o caixa não procura código, quem acha é o ERP ({o3?.Texto})");
 
         // 4) nada que gere fala: "Avalie o atendimento", o botao Recusar (sem initialValue, sem codigo), MESG cru
         checar(QuadroSendbird.ObservacaoNoCartao(Brdm("buttonList", "Avalie o atendimento", "{\"messageData\":{\"stars\":5}}", 9203)) is null
@@ -157,6 +157,55 @@ public static class TestesChatArquivo
         var guardado = comFone is null ? "" : ChatArquivo.TextoParaGuardar(comFone.Texto);
         checar(comFone is not null && guardado.Contains("AD-7KQ2MX") && !guardado.Contains("31994412725") && guardado.Contains("[telefone]"),
             $"OB-8 ao guardar a observação, o telefone vira rótulo e o código AD- fica ({guardado})");
+
+        // ── revisão 1.0.38: a reserva saiu; palavra comum do cartão nunca vira fala do cliente ──
+        var palavras = new[] { "Adicione a observacao na comanda", "Cliente: Adrielly Souza", "Adelaide", "ADICIONE" };
+        checar(palavras.All(p => QuadroSendbird.ObservacaoNoCartao(Brdm("summary", "Quero adicionar observação ao pedido",
+                   "{\"messageData\":{\"subtitle\":" + JsonSerializer.Serialize(p) + "}}", 9208)) is null
+                   && QuadroSendbird.ObservacaoNoCartao(Brdm("itemSummary", "Cliente fez uma solicitação:",
+                   "{\"messageData\":{\"items\":[{\"name\":" + JsonSerializer.Serialize(p) + "}]}}", 9209)) is null),
+            "OB-9 palavra comum do cartão ('Adicione', 'Adrielly', 'Adelaide') não vira fala do cliente em summary nem itemSummary");
+        var fonteQuadro = File.ReadAllText(Path.Combine(Raiz() ?? ".", "Pdv.Nucleo", "QuadroSendbird.cs"));
+        checar(!fonteQuadro.Contains("codigo_no_cartao", StringComparison.Ordinal) && !Regex.IsMatch(fonteQuadro, @"AD\[|AD-\?|ABCDEFGHJKMN"),
+            "OB-10 o núcleo do quadro não tem padrão de código da raspadinha (FT-2): só o initialValue provado");
+
+        // ── revisão 1.0.38: a observação do itemSummary que chega ANTES do resumo não se perde ──
+        var j = new JanelaDaSolicitacao();
+        var itemQ = Brdm("itemSummary", "Cliente fez uma solicitação:", DataComInitialValue("AD-XGJZ4B"), 9210);
+        var item = ChatArquivo.LerCartaoDoIfood(itemQ)!;
+        var oItem = QuadroSendbird.ObservacaoNoCartao(itemQ);
+        var resumo = ChatArquivo.LerCartaoDoIfood(Brdm("summary", "Quero adicionar observação ao pedido", null, 9211))!;
+        var a1 = j.VerComObservacao(item, oItem, false, Agora);
+        var a2 = j.VerComObservacao(resumo, null, true, Agora.AddMilliseconds(500));
+        checar(oItem is not null && a1.Count == 0 && a2.Count == 2 && a2[0].Cartao.MsgId == "9210" && a2[0].Obs?.Texto == "AD-XGJZ4B" && a2[1].Obs is null,
+            "OB-11 a observação lida no itemSummary espera junto com ele e sai quando o resumo 'Quero ...' chega");
+        var j2 = new JanelaDaSolicitacao();
+        var semMarca = j2.VerComObservacao(ChatArquivo.LerCartaoDoIfood(Brdm("buttonList", "Analise", DataComInitialValue("AD-XGJZ4B"), 9212))!,
+            QuadroSendbird.ObservacaoNoCartao(Brdm("buttonList", "Analise", DataComInitialValue("AD-XGJZ4B"), 9212)), false, Agora);
+        checar(semMarca.Count == 0 && j2.Ver(item, false, Agora).Count == 0,
+            "OB-12 fora da janela da solicitação (sem o resumo 'Quero ...') o cartão não solta observação; o Ver antigo segue igual");
+
+        // ── revisão 1.0.38: a janela do robô (só o quadro, sem o arquivo) segue a mesma regra ──
+        var jr = new QuadroSendbird.JanelaDaObservacao();
+        var botoesQ = Brdm("buttonList", "Analise", DataComInitialValue("AD-XGJZ4B"), 9213);
+        var outroCanal = Brdm("buttonList", "Analise", DataComInitialValue("AD-XGJZ4B"), 9214, "sendbird_gc_cm_" + Pedido + "_" + Castelo);
+        var s0 = jr.Ver(botoesQ, Agora.AddMinutes(-20));                                         // sem marca: nada
+        var s1 = jr.Ver(itemQ, Agora);                                                           // item antes da marca: espera
+        var s2 = jr.Ver(Brdm("summary", "Quero adicionar observação ao pedido", null, 9211), Agora.AddMilliseconds(500));
+        var s3 = jr.Ver(botoesQ, Agora.AddSeconds(2));
+        var s4 = jr.Ver("AEDI" + botoesQ[4..], Agora.AddSeconds(3));
+        var s5 = jr.Ver(outroCanal, Agora.AddSeconds(4));
+        var s6 = jr.Ver(botoesQ, Agora.AddMinutes(6));
+        var s7 = jr.Ver(Brdm("summary", "A loja aceitou", null, 9215), Agora.AddMinutes(7));
+        checar(s0.Count == 0 && s1.Count == 0 && s2.Count == 1 && s2[0].Texto == "AD-XGJZ4B" && s3.Count == 1 && s3[0].Origem == "initialValue"
+               && s4.Count == 1 && s4[0].Chave == s3[0].Chave && s5.Count == 0 && s6.Count == 0 && s7.Count == 0
+               && jr.Ver(null, Agora).Count == 0 && jr.Ver("BRDM{quebrado", Agora).Count == 0,
+            "OB-14 o robô só manda a observação dentro da janela: o item espera a marca, botões e AEDI entram, outra conversa, 6 min depois e a resposta da loja não");
+        checar(ChatArquivo.EhSolicitacaoDoCliente(new MensagemArquivo("BRDM", Canal, null, null, null, null, LadoArquivo.Ifood, "summary", "Quero cancelar o pedido", null, false, false))
+               && !ChatArquivo.EhSolicitacaoDoCliente(new MensagemArquivo("BRDM", Canal, null, null, null, null, LadoArquivo.Ifood, "summary", "A loja aceitou", null, false, false))
+               && QuadroSendbird.EhMarcaDaSolicitacao("BRDM", "SUMMARY", " Quero trocar um item ") && !QuadroSendbird.EhMarcaDaSolicitacao("AEDI", "summary", "Quero x")
+               && !QuadroSendbird.EhMarcaDaSolicitacao("BRDM", "summary", "Quero " + new string('x', 120)),
+            "OB-15 a regra da marca é uma só (arquivo e robô): BRDM summary 'Quero ...' até 120, nunca a resposta nem o AEDI");
     }
 
     // ── 1.0.35 (caso #8039): o cartao da solicitacao do cliente, so LIDO ─────
@@ -274,6 +323,13 @@ public static class TestesChatArquivo
                && servico.Contains("Telas.HospedeWebView2.Anotar(\"chat-solicitacao.txt\", ChatArquivo.LinhaDoCartao(c, numero)", StringComparison.Ordinal)
                && Ler(Path.Combine("Pdv.Nucleo", "Banco.cs")).Contains("CREATE TABLE IF NOT EXISTS chat_cartao_solicitacao", StringComparison.Ordinal),
             "SC-19 o servico registra na tabela local, no chat-solicitacao.txt e nas contagens do sinal; a faxina apaga em 7 dias");
+        var robo = Ler("ServicoConversaChat.cs");
+        checar(servico.Contains("Janela.VerComObservacao(cartao, QuadroSendbird.ObservacaoNoCartao(payload)", StringComparison.Ordinal)
+               && servico.Contains("if (obs is not null) ObservacaoDoCartao(obs, c, canal);", StringComparison.Ordinal)
+               && robo.Contains("foreach (var obs in JanelaObs.Ver(payload, agora)) MandarObservacao(obs, wsUserId, agora);", StringComparison.Ordinal)
+               && nucleo.Contains("=> QuadroSendbird.EhMarcaDaSolicitacao(m.Comando, m.CustomType, m.Texto);", StringComparison.Ordinal)
+               && nucleo.Contains("public static readonly TimeSpan Janela = QuadroSendbird.JanelaDaObservacao.Janela;", StringComparison.Ordinal),
+            "OB-13 o arquivo e o robô leem a observação na chegada de cada cartão, só dentro da janela, com a mesma regra da marca e os mesmos prazos");
         var iLote = nucleo.IndexOf("public static (string Corpo, IReadOnlyList<string> Chaves) CorpoLote(", StringComparison.Ordinal);
         var lote = iLote < 0 ? "" : nucleo.Substring(iLote, Math.Min(2500, nucleo.Length - iLote));
         checar(lote.Length > 0 && !lote.Contains("dados", StringComparison.OrdinalIgnoreCase) && !lote.Contains("botoes", StringComparison.OrdinalIgnoreCase),

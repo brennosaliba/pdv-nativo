@@ -193,11 +193,7 @@ public static class ChatArquivo
     /// um item"). So o cartao de abertura, nunca a resposta ("A loja aceitou", "recusou").
     /// </summary>
     public static bool EhSolicitacaoDoCliente(MensagemArquivo m)
-    {
-        if (m.Comando != "BRDM" || !string.Equals(m.CustomType, "summary", StringComparison.OrdinalIgnoreCase)) return false;
-        var t = (m.Texto ?? "").Trim();
-        return t.StartsWith("Quero ", StringComparison.OrdinalIgnoreCase) && t.Length <= 120;
-    }
+        => QuadroSendbird.EhMarcaDaSolicitacao(m.Comando, m.CustomType, m.Texto);   // revisao 1.0.38: a regra num lugar so
 
     /// <summary>"#1234: o cliente quer cancelar o pedido. Responda no Gestor em ate 5 min." (sem travessao, ate 160).</summary>
     public static string TextoDaSolicitacao(string? numero, string? pedido)
@@ -844,16 +840,26 @@ public sealed class AgrupadorDoArquivo
 /// </summary>
 public sealed class JanelaDaSolicitacao
 {
-    public static readonly TimeSpan Janela = TimeSpan.FromMinutes(5);
-    public static readonly TimeSpan EsperaDoItem = TimeSpan.FromSeconds(60);
+    // revisao 1.0.38: os prazos sao os mesmos da janela do robo (QuadroSendbird.JanelaDaObservacao)
+    public static readonly TimeSpan Janela = QuadroSendbird.JanelaDaObservacao.Janela;
+    public static readonly TimeSpan EsperaDoItem = QuadroSendbird.JanelaDaObservacao.EsperaDoItem;
     private const int TetoDeConversas = 500;
 
     private readonly object _trava = new();
     private readonly Dictionary<string, DateTime> _marcas = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<(CartaoDoIfood Cartao, DateTime Em)>> _itensAntes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<(CartaoDoIfood Cartao, DateTime Em, QuadroSendbird.ObservacaoDoPedido? Obs)>> _itensAntes = new(StringComparer.Ordinal);
 
     /// <summary>Um cartao chegou. Devolve os cartoes a registrar agora (o proprio, e os itens que esperavam a marca).</summary>
     public IReadOnlyList<CartaoDoIfood> Ver(CartaoDoIfood c, bool ehSolicitacao, DateTime agora)
+        => VerComObservacao(c, null, ehSolicitacao, agora).Select(x => x.Cartao).ToList();
+
+    /// <summary>
+    /// Revisao 1.0.38: o mesmo <see cref="Ver"/>, levando junto a observacao lida de cada cartao NA CHEGADA. O
+    /// itemSummary chega antes do summary "Quero ..." e espera a marca; antes so o payload do summary era lido
+    /// e a observacao que estivesse no item se perdia. Agora ela espera junto e sai quando a marca chega.
+    /// </summary>
+    public IReadOnlyList<(CartaoDoIfood Cartao, QuadroSendbird.ObservacaoDoPedido? Obs)> VerComObservacao(
+        CartaoDoIfood c, QuadroSendbird.ObservacaoDoPedido? obs, bool ehSolicitacao, DateTime agora)
     {
         lock (_trava)
         {
@@ -861,19 +867,19 @@ public sealed class JanelaDaSolicitacao
             if (ehSolicitacao)
             {
                 _marcas[c.Canal] = agora;
-                var saida = new List<CartaoDoIfood>();
+                var saida = new List<(CartaoDoIfood, QuadroSendbird.ObservacaoDoPedido?)>();
                 if (_itensAntes.Remove(c.Canal, out var antes))
-                    saida.AddRange(antes.Where(x => agora - x.Em <= EsperaDoItem).Select(x => x.Cartao));
-                saida.Add(c);
+                    saida.AddRange(antes.Where(x => agora - x.Em <= EsperaDoItem).Select(x => (x.Cartao, x.Obs)));
+                saida.Add((c, obs));
                 return saida;
             }
-            if (_marcas.TryGetValue(c.Canal, out var marca) && agora - marca <= Janela) return new[] { c };
+            if (_marcas.TryGetValue(c.Canal, out var marca) && agora - marca <= Janela) return new[] { (c, obs) };
             if (c.CustomType == "itemSummary")
             {
-                if (!_itensAntes.TryGetValue(c.Canal, out var l)) _itensAntes[c.Canal] = l = new List<(CartaoDoIfood, DateTime)>();
-                if (l.Count < 3) l.Add((c, agora));
+                if (!_itensAntes.TryGetValue(c.Canal, out var l)) _itensAntes[c.Canal] = l = new();
+                if (l.Count < 3) l.Add((c, agora, obs));
             }
-            return Array.Empty<CartaoDoIfood>();
+            return Array.Empty<(CartaoDoIfood, QuadroSendbird.ObservacaoDoPedido?)>();
         }
     }
 

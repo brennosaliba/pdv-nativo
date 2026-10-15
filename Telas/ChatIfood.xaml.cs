@@ -97,7 +97,16 @@ public partial class ChatIfood : UserControl
     private string? _authRequestId;
 
     // guarda os receivers para não serem coletados
-    private CoreWebView2DevToolsProtocolEventReceiver? _wsCreated, _wsRecv, _wsSent, _reqWill, _respRecv, _loadFin;
+    private CoreWebView2DevToolsProtocolEventReceiver? _wsCreated, _wsRecv, _wsSent, _reqWill, _respRecv, _loadFin, _wsClosed;
+
+    /// <summary>
+    /// Revisão 1.0.38: os sockets do Sendbird contados pelo CDP (o Proxy do WebSocket na página saiu: nascia
+    /// depois do socket do Gestor e contava 0). Só o requestId, a contagem e o nome do script que abriu o
+    /// último (para o sinal dizer onde o socket mora). Nada da URL além disso.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> _wsSbVivos = new(StringComparer.Ordinal);
+    private int _wsSbCriados;
+    private string? _wsSbIniciador;
 
     /// <summary>
     /// O <c>user_id</c> da URL de cada WebSocket, pelo requestId do CDP (07/10/2026, resgate pelo
@@ -256,6 +265,10 @@ public partial class ChatIfood : UserControl
                 // 120 s). Antes ficava "toque em Recarregar" e o chat parado até alguém ver.
                 _navegacao = e.IsSuccess ? "ok" : "falhou";
                 Interlocked.Increment(ref _navegacoes);   // 1.0.35: o plano B espera a recarga terminar
+                // revisão 1.0.38: página nova, berço novo. A varredura da página velha não vale aqui, e o plano B
+                // precisa varrer logo depois da recarga (antes ficava travado pelo teto de 2 min da anterior)
+                _proximaVarreduraHeap = DateTime.MinValue;
+                _ultimaVarredura = null;
                 Diag(e.IsSuccess ? "navegou: ok" : $"navegou: falhou {e.WebErrorStatus}");
                 TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: tentando de novo sozinho";
                 // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
@@ -859,9 +872,24 @@ public partial class ChatIfood : UserControl
                     {
                         if (_wsUserPorConexao.Count > 200) _wsUserPorConexao.Clear();
                         _wsUserPorConexao[req] = QuadroSendbird.UserIdDaUrl(u.GetString());
+                        // revisão 1.0.38: o socket do Sendbird contado pelo CDP, e quem o abriu (só o nome do script)
+                        if (QuadroSendbird.EhSocketDoSendbird(u.GetString()))
+                        {
+                            if (_wsSbVivos.Count > 200) _wsSbVivos.Clear();
+                            _wsSbVivos[req] = 1;
+                            Interlocked.Increment(ref _wsSbCriados);
+                            _wsSbIniciador = QuadroSendbird.IniciadorDoSocket(e.ParameterObjectAsJson);
+                        }
                     }
                 }
                 AgendarDiagnostico();
+            });
+
+            _wsClosed = core.GetDevToolsProtocolEventReceiver("Network.webSocketClosed");
+            _wsClosed.DevToolsProtocolEventReceived += (_, e) => Seguro(() =>
+            {
+                using var d = JsonDocument.Parse(e.ParameterObjectAsJson);
+                if (d.RootElement.TryGetProperty("requestId", out var rq) && rq.GetString() is { } req) _wsSbVivos.TryRemove(req, out byte _);
             });
 
             _wsRecv = core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameReceived");
@@ -1038,14 +1066,29 @@ public partial class ChatIfood : UserControl
         var core = _pronto ? Web.CoreWebView2 : null;
         if (core is null) return null;
         var r = await UmDiagSdkAsync(core, canais, ws).ConfigureAwait(true);
-        // 1.0.38 (caso #0434 vizinho): SDK não achado? varre a heap pelo CDP (camada A, no máximo a cada
-        // 2 min) e refaz o diag uma vez. A heap acha a instância conectada de verdade sem depender do
-        // singleton, do React nem do momento em que ela nasceu, e entrega ao berço (window.pdvSb.registrar).
-        if (NaoAchouSdk(r) && DateTime.Now - _ultimaVarreduraHeap > TimeSpan.FromMinutes(2))
+        // 1.0.38 (caso #0434 vizinho): SDK não achado? varre a heap pelo CDP (camada A) e refaz o diag uma
+        // vez. A heap acha a instância sem depender do singleton, do React nem do momento em que ela nasceu,
+        // e entrega ao berço (window.pdvSb.registrar), que a guarda mesmo antes do connect.
+        // Revisão: o teto depende do que a varredura achou (VarreduraDaHeap.Proxima): com objeto, 2 min;
+        // sem objeto (o SDK ainda não nasceu, logo depois da recarga), 10 s; sem protótipo, na próxima.
+        if (NaoAchouSdk(r) && DateTime.Now >= _proximaVarreduraHeap)
         {
-            _ultimaVarreduraHeap = DateTime.Now;
-            var novas = await VarrerHeapSdkAsync(core).ConfigureAwait(true);
-            if (novas > 0) r = await UmDiagSdkAsync(core, canais, ws).ConfigureAwait(true);
+            var v = await VarrerHeapSdkAsync(core).ConfigureAwait(true);
+            _ultimaVarredura = v;
+            _proximaVarreduraHeap = v.Proxima(DateTime.Now);
+            if (v.Novas > 0) r = await UmDiagSdkAsync(core, canais, ws).ConfigureAwait(true);
+        }
+        if (r is not null)
+        {
+            // revisão 1.0.38: as contagens brutas da última varredura e os sockets do Sendbird pelo CDP
+            if (_ultimaVarredura is { } u)
+            {
+                r["heap_protos"] = u.Prototipos;
+                r["heap_objetos"] = u.Objetos;
+            }
+            r["ws_sb_cdp"] = Volatile.Read(ref _wsSbCriados);
+            r["ws_sb_cdp_vivos"] = _wsSbVivos.Count;
+            if (_wsSbIniciador is { } ini) r["ws_sb_iniciador"] = ini;
         }
         return r;
     }
@@ -1069,20 +1112,24 @@ public partial class ChatIfood : UserControl
         finally { _diagsSdk.TryRemove(id, out _); }
     }
 
-    /// <summary>A última varredura de heap (camada A): no máximo uma a cada 2 min, para não pausar a página.</summary>
-    private DateTime _ultimaVarreduraHeap = DateTime.MinValue;
+    /// <summary>Quando pode haver a próxima varredura de heap (camada A), para não pausar a página. Zera na navegação.</summary>
+    private DateTime _proximaVarreduraHeap = DateTime.MinValue;
+    /// <summary>As contagens brutas da última varredura desta página (para o sinal).</summary>
+    private VarreduraDaHeap? _ultimaVarredura;
     private bool _runtimeLigado;
 
     /// <summary>
     /// 1.0.38 (camada A): a heap pelo CDP. Pede à página os protótipos candidatos
     /// (<c>pdvSb.prototipos()</c>), e para cada um chama <c>Runtime.queryObjects</c>, que devolve TODAS
     /// as instâncias vivas daquela classe, sem depender do singleton. A lista volta para o berço por
-    /// <c>pdvSb.registrar</c>, e o grupo de objetos é liberado no fim. Nunca lança; devolve quantas
-    /// instâncias novas o berço aceitou. Roda na thread da tela.
+    /// <c>pdvSb.registrar</c>, e o grupo de objetos é liberado no fim. Nunca lança; devolve as contagens
+    /// brutas (protótipos, objetos achados, candidatas novas no berço) e SEMPRE deixa rastro, também
+    /// quando não acha nada (revisão 1.0.38). Roda na thread da tela.
     /// </summary>
-    public async Task<int> VarrerHeapSdkAsync(CoreWebView2 core)
+    public async Task<VarreduraDaHeap> VarrerHeapSdkAsync(CoreWebView2 core)
     {
         const string grupo = "pdvsb-heap";
+        var protos = 0; var objetos = 0; var total = 0;
         try
         {
             if (!_runtimeLigado)
@@ -1096,7 +1143,7 @@ public partial class ChatIfood : UserControl
                 objectGroup = grupo,
             }));
             var arrId = JsonNode.Parse(av)?["result"]?["objectId"]?.GetValue<string>();
-            if (arrId is null) return 0;
+            if (arrId is null) { DiagRaspadinha(VarreduraDaHeap.Nada.Linha); return VarreduraDaHeap.Nada; }
             var props = await core.CallDevToolsProtocolMethodAsync("Runtime.getProperties",
                 JsonSerializer.Serialize(new { objectId = arrId, ownProperties = true }));
             var protoIds = new List<string>();
@@ -1106,7 +1153,7 @@ public partial class ChatIfood : UserControl
                 if (p?["value"]?["objectId"]?.GetValue<string>() is { } oid) protoIds.Add(oid);
                 if (protoIds.Count >= 20) break;
             }
-            var total = 0;
+            protos = protoIds.Count;
             foreach (var pid in protoIds)
             {
                 var qo = await core.CallDevToolsProtocolMethodAsync("Runtime.queryObjects",
@@ -1115,16 +1162,23 @@ public partial class ChatIfood : UserControl
                 var cf = await core.CallDevToolsProtocolMethodAsync("Runtime.callFunctionOn", JsonSerializer.Serialize(new
                 {
                     objectId = objsId,
-                    functionDeclaration = "function(){ try { return (window.pdvSb && window.pdvSb.registrar) ? window.pdvSb.registrar(Array.prototype.slice.call(this)) : 0; } catch (e) { return 0; } }",
+                    functionDeclaration = "function(){ var a = []; try { a = Array.prototype.slice.call(this); } catch (e) {} var n = 0; try { n = (window.pdvSb && window.pdvSb.registrar) ? window.pdvSb.registrar(a) : 0; } catch (e) {} return { objetos: a.length, novas: n }; }",
                     returnByValue = true,
                     objectGroup = grupo,
                 }));
-                total += JsonNode.Parse(cf)?["result"]?["value"]?.GetValue<int>() ?? 0;
+                var val = JsonNode.Parse(cf)?["result"]?["value"];
+                objetos += VarreduraDaHeap.Inteiro(val?["objetos"]);
+                total += VarreduraDaHeap.Inteiro(val?["novas"]);
             }
-            if (total > 0) DiagRaspadinha($"heap: {total} instancia(s) do SDK registrada(s) pelo berco");
-            return total;
+            var v = new VarreduraDaHeap(protos, objetos, total);
+            DiagRaspadinha(v.Linha);
+            return v;
         }
-        catch (Exception ex) { DiagRaspadinha("heap: " + ex.GetType().Name); return 0; }
+        catch (Exception ex)
+        {
+            DiagRaspadinha("heap: " + ex.GetType().Name);
+            return new VarreduraDaHeap(protos, objetos, total);
+        }
         finally
         {
             try { await core.CallDevToolsProtocolMethodAsync("Runtime.releaseObjectGroup", JsonSerializer.Serialize(new { objectGroup = grupo })); } catch { }
@@ -2443,22 +2497,38 @@ public partial class ChatIfood : UserControl
       // envio parava em sdk_ausente mesmo com a conexao viva. O berco guarda toda instancia valida que
       // nasce (o init embrulhado, camada B) ou que a heap do C# entrega (camada A, Runtime.queryObjects).
       // Nao depende do singleton, do React nem do momento em que a instancia nasceu.
-      var berco = [];          // instancias validas pelo berco (init) ou pela heap (CDP)
-      var wsSb = [];           // sockets *.sendbird.com vistos pelo Proxy do WebSocket
-      var viaHeap = false, viaBerco = false;
-      var wsProxiado = false;
+      // Revisao 1.0.38: o init do @sendbird/chat 4 devolve a instancia ANTES do connect (sem currentUser),
+      // e a heap logo depois da recarga tambem a acha antes do connect. Por isso o berco guarda a CANDIDATA
+      // (tem groupChannel.getChannel) e a validade (usuario conectado) e conferida so na hora de usar.
+      var berco = [];          // candidatas pelo init (camada B) ou pela heap (camada A), conectadas ou nao
+      var daHeap = [];         // as do berco que vieram da heap (as outras vieram do init)
       var contaFabSb = 0;      // fabricas com 'sendbird' no corpo ja lidas (so o diag)
 
-      function registrarUm(x){ if (valida(x) && berco.indexOf(x) < 0) { berco.push(x); return true; } return false; }
+      function candidata(x){
+        try { return !!(x && x.groupChannel && typeof x.groupChannel.getChannel === 'function'); }
+        catch (e) { return false; }
+      }
+      function registrarUm(x, peloHeap){
+        if (!candidata(x) || berco.indexOf(x) >= 0) return false;
+        berco.push(x);
+        if (peloHeap) daHeap.push(x);
+        if (berco.length > 50) {
+          // teto: sai primeiro a que nao vale mais; sem nenhuma assim, a mais antiga
+          var k = -1;
+          for (var i = 0; i < berco.length - 1 && k < 0; i++) if (!valida(berco[i])) k = i;
+          var fora = berco.splice(k < 0 ? 0 : k, 1)[0];
+          var h = daHeap.indexOf(fora); if (h >= 0) daHeap.splice(h, 1);
+        }
+        return true;
+      }
 
       // CAMADA A: o C# entrega aqui a lista de instancias que a heap achou (Runtime.queryObjects pelo
-      // prototipo). Devolve quantas novas. Nunca depende do singleton.
+      // prototipo). Devolve quantas candidatas novas (conectadas ou nao). Nunca depende do singleton.
       function registrar(lista){
         var n = 0;
         try {
           var arr = (lista && typeof lista.length === 'number' && typeof lista !== 'string') ? lista : [lista];
-          for (var i = 0; i < arr.length && i < 200; i++) if (registrarUm(arr[i])) { n++; viaHeap = true; }
-          if (berco.length > 50) berco = berco.filter(valida).slice(-50);
+          for (var i = 0; i < arr.length && i < 200; i++) if (registrarUm(arr[i], true)) n++;
         } catch (e) {}
         return n;
       }
@@ -2503,7 +2573,7 @@ public partial class ChatIfood : UserControl
             if (typeof c === 'function' && !c.__pdvInit && typeof c.init === 'function'
                 && c.prototype && typeof c.prototype.connect === 'function') {
               var origInit = c.init;
-              c.init = function () { var r = origInit.apply(this, arguments); try { if (registrarUm(r)) viaBerco = true; } catch (e) {} return r; };
+              c.init = function () { var r = origInit.apply(this, arguments); try { registrarUm(r, false); } catch (e) {} return r; };
               try { c.init.__pdvDe = origInit; } catch (e) {}
               c.__pdvInit = true;
             }
@@ -2511,29 +2581,14 @@ public partial class ChatIfood : UserControl
         }
       }
 
-      // CAMADA B: o Proxy do WebSocket conta os sockets do Sendbird no documento (instanceof, constantes
-      // e prototipo seguem os mesmos). So conta; nao muda nada do socket.
-      function proxiarWebSocket(){
-        try {
-          if (wsProxiado || typeof WebSocket !== 'function') return;
-          var OrigWS = WebSocket;
-          var P = new Proxy(OrigWS, {
-            construct: function (alvo, args){
-              var s = Reflect.construct(alvo, args);
-              try { if (/[a-z0-9-]*\.sendbird\.com/i.test(String(args && args[0] || '')) && wsSb.indexOf(s) < 0) { wsSb.push(s); if (wsSb.length > 60) wsSb.shift(); } } catch (e) {}
-              return s;
-            }
-          });
-          try { self.WebSocket = P; } catch (e) { window.WebSocket = P; }
-          wsProxiado = true;
-        } catch (e) {}
-      }
+      // Revisao 1.0.38: o Proxy do WebSocket saiu. Ele so nascia na primeira procura, depois do socket
+      // do Gestor (contava 0 com o socket aberto) e trocava a classe de quem estendesse o WebSocket
+      // depois. Os sockets do Sendbird sao contados no C#, pelo Network.webSocketCreated do CDP.
 
       // CAMADA B: acha a classe SendbirdChat pelo mesmo require do webpack e embrulha o init, para que
       // toda instancia nova (troca de token, segunda conexao) caia no berco. Idempotente. Roda no
       // carregamento e a cada procura; so toca a fabrica que ja casou com a assinatura (nenhuma a mais).
       function capturarBerco(){
-        proxiarWebSocket();
         try {
           capturar();
           for (var a = 0; a < achados.length; a++) {
@@ -2607,7 +2662,6 @@ public partial class ChatIfood : UserControl
         return n;
       }
       function conta(sel){ try { return document.querySelectorAll(sel).length; } catch (e) { return 0; } }
-      function wsAbertos(){ var n = 0; for (var i = 0; i < wsSb.length; i++) { try { if (wsSb[i].readyState === 1) n++; } catch (e) {} } return n; }
 
       // 1) O MODULO DO @sendbird/chat NO WEBPACK (1.0.20).
       // O runtime do Gestor nao expoe o cache de modulos (req.c): o 1.0.19 parava ali e o sinal
@@ -2759,9 +2813,15 @@ public partial class ChatIfood : UserControl
         var lista = [];
         // 1.0.38: o BERCO primeiro (a heap do C# pela camada A e o init embrulhado pela camada B), sem
         // depender do singleton nem do React nem do momento em que a instancia nasceu
+        // (revisao: so as que ja valem; as candidatas que ainda nao conectaram ficam para a proxima procura)
         capturarBerco();
-        berco = berco.filter(valida);
-        for (var b = 0; b < berco.length; b++) if (lista.indexOf(berco[b]) < 0) lista.push(berco[b]);
+        via.heap = false; via.berco = false;
+        for (var b = 0; b < berco.length; b++) {
+          var xb = berco[b];
+          if (!valida(xb) || lista.indexOf(xb) >= 0) continue;
+          lista.push(xb);
+          if (daHeap.indexOf(xb) >= 0) via.heap = true; else via.berco = true;
+        }
         var antesWp = lista.length;
         doWebpack(lista);
         via.webpack = lista.length > antesWp;
@@ -2887,15 +2947,13 @@ public partial class ChatIfood : UserControl
             r.runtimes = Object.keys(reqs).length;
             // 1.0.38: o diagnostico novo (sem dado pessoal), computado ANTES do corte do sem-instancia:
             // e exatamente o caso em que o sdk sumiu que a loja precisa provar
-            r.via_heap = viaHeap;
-            r.via_berco = viaBerco;
+            r.via_heap = !!via.heap;
+            r.via_berco = !!via.berco;
             r.mf = temFederacao();
             var vb = berco.filter(valida);
-            r.heap_inst = berco.length;
+            r.heap_inst = berco.length;   // candidatas (conectadas ou nao); heap_validas, as que valem
             r.heap_validas = vb.length;
             r.heap_abertas = vb.filter(function (x) { return conexaoDe(x) === 'OPEN'; }).length;
-            r.ws_sb_doc = wsSb.length;
-            r.ws_sb_abertos = wsAbertos();
             r.fabricas = contaFabricas();
             r.fab_sendbird = contaFabSb;
             r.globais_wp = globaisWp();
@@ -2909,7 +2967,6 @@ public partial class ChatIfood : UserControl
             r.iframes = conta('iframe');
             r.iframes_outros = iframesOutros();
             r.esm = conta('script[type="module"]');
-            r.workers = 0;
             if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
             // 1.0.35: o estado da conexao da primeira instancia (OPEN, CONNECTING, CLOSED ou OUTRO):
             // o plano B espera ela voltar OPEN depois de recarregar o Gestor
