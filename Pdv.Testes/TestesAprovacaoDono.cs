@@ -228,6 +228,30 @@ public static class TestesAprovacaoDono
         checar(!e2.ContainsKey("via_webpack") && !e2.ContainsKey("modulos") && (int?)e2["runtimes"] == 100_000
                && !e.ToJsonString().Contains("segredo"),
             "AP-32 e só bool e número, com teto; texto da página não passa");
+
+        // 1.0.38: o diagnóstico novo (heap, berço, singleton, bundle) passa pela mesma lista branca
+        var novo = new JsonObject
+        {
+            ["via_heap"] = true, ["via_berco"] = false, ["mf"] = false,
+            ["heap_inst"] = 2, ["heap_validas"] = 1, ["heap_abertas"] = 1, ["ws_sb_doc"] = 3, ["ws_sb_abertos"] = 1,
+            ["fabricas"] = 2416, ["fab_sendbird"] = 4, ["dom_sendbird"] = 5, ["dom_fibras"] = 2, ["iframes"] = 1, ["iframes_outros"] = 0,
+            ["esm"] = 0, ["workers"] = 0, ["singleton"] = "sem_usuario", ["singleton_conexao"] = "OPEN",
+            ["versao_sdk"] = "4.19.9", ["bundle"] = "main.9a3f.js", ["globais_wp"] = "webpackChunkgestor_pedidos",
+        };
+        var e3 = JsonNode.Parse(ConversaRaspadinha.EstadoDoSinal("logado", true, Agora, 0, null, novo, null))!["sdk"]!.AsObject();
+        checar((bool?)e3["via_heap"] == true && (int?)e3["heap_validas"] == 1 && (int?)e3["fabricas"] == 2416 && (int?)e3["fab_sendbird"] == 4
+               && (string?)e3["singleton"] == "sem_usuario" && (string?)e3["singleton_conexao"] == "OPEN"
+               && (string?)e3["versao_sdk"] == "4.19.9" && (string?)e3["bundle"] == "main.9a3f.js" && (string?)e3["globais_wp"] == "webpackChunkgestor_pedidos",
+            "AP-36 o diagnóstico novo (via_heap, heap, fábricas, singleton, bundle) passa pela lista branca");
+        var sujo2 = new JsonObject
+        {
+            ["singleton"] = "inventado", ["singleton_conexao"] = "QUALQUER", ["versao_sdk"] = "nao-e-versao",
+            ["bundle"] = "roubo' OR 1=1; drop", ["globais_wp"] = new string('x', 200), ["heap_inst"] = "muitas",
+        };
+        var e4 = JsonNode.Parse(ConversaRaspadinha.EstadoDoSinal("logado", true, Agora, 0, null, sujo2, null))!["sdk"]!.AsObject();
+        checar(!e4.ContainsKey("singleton") && !e4.ContainsKey("singleton_conexao") && !e4.ContainsKey("versao_sdk")
+               && !e4.ContainsKey("bundle") && !e4.ContainsKey("globais_wp") && !e4.ContainsKey("heap_inst"),
+            "AP-37 enum fora do contrato, versão que não é versão, nome com caractere estranho ou longo demais, e inteiro em texto: tudo cai");
     }
 
     // ── O FIO DO SERVIÇO (pelo fonte) ────────────────────────────────────────
@@ -311,8 +335,21 @@ public static class TestesAprovacaoDono
                && js.Contains("achados.push(", StringComparison.Ordinal) && js.Contains("shadowRoot", StringComparison.Ordinal),
             "AF-13 o script procura pelas fábricas (req.m), guarda o achado e desce em shadowRoot; não depende mais de req.c");
 
+        // 1.0.38: o berço (camada B) e o que a heap (camada A) usa estão no script
+        checar(js.Contains("prototipos: prototipos, registrar: registrar", StringComparison.Ordinal)
+               && js.Contains("function prototipos()", StringComparison.Ordinal) && js.Contains("function registrar(lista)", StringComparison.Ordinal)
+               && js.Contains("function embrulhaClasse(ex)", StringComparison.Ordinal) && js.Contains("new Proxy(OrigWS", StringComparison.Ordinal)
+               && js.Contains("prototype.connect", StringComparison.Ordinal),
+            "AF-17 o script tem o berço (init embrulhado, Proxy do WebSocket) e expõe prototipos/registrar para a heap do C#");
+        var telaToda = Ler("Telas", "ChatIfood.xaml.cs");
+        checar(telaToda.Contains("Runtime.queryObjects", StringComparison.Ordinal) && telaToda.Contains("Runtime.callFunctionOn", StringComparison.Ordinal)
+               && telaToda.Contains("Runtime.releaseObjectGroup", StringComparison.Ordinal)
+               && telaToda.Contains("window.pdvSb.registrar(Array.prototype.slice.call(this))", StringComparison.Ordinal)
+               && telaToda.Contains("_ultimaVarreduraHeap", StringComparison.Ordinal) && telaToda.Contains("VarrerHeapSdkAsync", StringComparison.Ordinal),
+            "AF-18 o caixa varre a heap pelo CDP (queryObjects, callFunctionOn, releaseObjectGroup), entrega ao berço e só a cada 2 min");
+
         var csproj = Ler("Pdv.csproj");
-        checar(csproj.Contains("<Version>1.0.37</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.37 (o Spotify no quiosque: o caixa abre a versão logada e a música toca sozinha)");
+        checar(csproj.Contains("<Version>1.0.38</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.38 (o SDK pela heap e pelo berço, o diagnóstico novo e a observação do cartão)");
         var testes = new[] { Ler("Pdv.Testes", "TestesAprovacaoDono.cs"), Ler("Pdv.Testes", "TestesScriptSendbird.cs") };
         var novos = new[] { servico, js }.Concat(testes).ToArray();
         checar(testes.All(t => t.Length > 0) && novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),

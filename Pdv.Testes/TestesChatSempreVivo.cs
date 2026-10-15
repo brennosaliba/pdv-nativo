@@ -98,10 +98,11 @@ public static class TestesChatSempreVivo
                    && !pa.GetCustomAttributes(typeof(System.Runtime.CompilerServices.RequiredMemberAttribute), false).Any(),
                 "CV-11f a porta do aquecimento e opcional na ponte (a bateria e o teste nao precisam dela)");
         }
-        // 1.0.26: as duas conexoes do Sendbird (clientes e entregador)
-        checar(chat.Contains("var doPacote = lista.length;") && chat.Contains("via.react = lista.length > doPacote;")
+        // 1.0.26: as duas conexoes do Sendbird (clientes e entregador). 1.0.38: o berco entra antes, e
+        // as marcas viraram antesWp/antesReact, mas o React segue sendo procurado SEMPRE (nao e mais gated)
+        checar(chat.Contains("var antesReact = lista.length;") && chat.Contains("via.react = lista.length > antesReact;")
                && !chat.Contains("if (!lista.length) doReact(lista);"),
-            "CV-27 o React e procurado SEMPRE, somando ao webpack (o singleton so mostra a ultima conexao)");
+            "CV-27 o React e procurado SEMPRE, somando ao webpack e ao berco (o singleton so mostra a ultima conexao)");
         checar(chat.Contains("document.querySelectorAll('[class*=\"sendbird-\"]'), 0, 40)") && chat.Contains("if (vistos.indexOf(f) >= 0) break;"),
             "CV-28 a procura do React parte de ate 40 elementos do Sendbird, sem repetir no da arvore");
         checar(servico.Contains("if (!string.IsNullOrWhiteSpace(wsUserId) && CanalIfood.Ler(m.Canal) is not null) _wsUserId = wsUserId;"),

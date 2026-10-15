@@ -58,6 +58,105 @@ public static class TestesChatArquivo
         OTempo(checar);
         PeloFonte(checar);
         OCartaoDaSolicitacao(checar);
+        AObservacaoDoCartao(checar);
+    }
+
+    // ── 1.0.38 (caso #0434): a observacao que o cliente escreveu no cartao ───
+    private const string ObsUuid = "6c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+
+    /// <summary>O data de um cartao buttonList com a observacao do cliente no initialValue (o lugar provado em 07/10).</summary>
+    private static string DataComInitialValue(string valor, bool comReplyUrl = true)
+    {
+        var metadata = JsonSerializer.Serialize(new
+        {
+            allowActionButtonInteraction = "false",
+            dialog = new
+            {
+                dialogTitle = "Aceitar",
+                replyUrl = comReplyUrl ? "https://merchant-api.ifood.com.br/orderManager/v1.0/orders/x/chats/y/negotiation/reply" : "",
+                flowId = "abc123def",
+                action = "render_dialog",
+                options = new object[]
+                {
+                    new
+                    {
+                        dataClassType = "com.ifood.lcops.model.opsRulesEngine.ActionDialogOption",
+                        type = "input",
+                        label = "Edite a mensagem pra incluir na comanda",
+                        required = true,
+                        name = "REJECT_REASON",
+                        metadata = new { hint = "Ao aceitar, voce podera imprimir outra comanda", initialValue = valor, data = new { DISPUTE_ID = ObsUuid } },
+                    },
+                },
+            },
+        });
+        return JsonSerializer.Serialize(new
+        {
+            processable = false,
+            recipients = new[] { "merchant" },
+            whisperMode = false,
+            messageData = new
+            {
+                title = "Analise a solicitacao e selecione uma opcao em ate 5 min.",
+                showButtons = true,
+                buttons = new object[]
+                {
+                    new { title = "Aceitar", action = "render_dialog", style = "secondary", metadata },
+                    new { title = "Recusar", action = "render_dialog", style = "secondary" },
+                    new { title = "Cancelar pedido", action = "render_dialog", style = "secondary" },
+                },
+            },
+        });
+    }
+
+    private static void AObservacaoDoCartao(Action<bool, string> checar)
+    {
+        // 1) o lugar provado: o initialValue dentro do cartao buttonList
+        var buttonList = Brdm("buttonList", "Analise a solicitação e selecione uma opção em até 5 min.", DataComInitialValue("AD-XGJZ4B"), 9201);
+        var o1 = QuadroSendbird.ObservacaoNoCartao(buttonList);
+        checar(o1 is not null && o1.Texto == "AD-XGJZ4B" && o1.Origem == "initialValue" && o1.OrderId == Pedido && o1.Canal == Canal && o1.MsgId == "9201",
+            $"OB-1 a observação sai do initialValue do cartão buttonList ({o1?.Texto}/{o1?.Origem})");
+
+        // 2) o mesmo cartao editado (AEDI) da a MESMA chave, no BRDM e no AEDI
+        var aedi = "AEDI" + buttonList[4..];
+        var o2 = QuadroSendbird.ObservacaoNoCartao(aedi);
+        checar(o2 is not null && o2.Texto == "AD-XGJZ4B" && o2.Chave == o1!.Chave && o2.Chave.StartsWith("sol:", StringComparison.Ordinal),
+            $"OB-2 o AEDI dá a mesma observação e a mesma chave sol: do BRDM ({o2?.Chave})");
+
+        // 3) a reserva: o codigo num texto do data do summary (sem initialValue)
+        var summary = Brdm("summary", "Quero adicionar observação ao pedido",
+            "{\"messageData\":{\"subtitle\":\"Observação do cliente: AD-XGJZ4B\",\"replyUrl\":\"https://x/y\"}}", 9202);
+        var o3 = QuadroSendbird.ObservacaoNoCartao(summary);
+        checar(o3 is not null && o3.Texto == "AD-XGJZ4B" && o3.Origem == "codigo_no_cartao",
+            $"OB-3 sem initialValue, o código achado no texto do data (reserva do summary) ({o3?.Texto}/{o3?.Origem})");
+
+        // 4) nada que gere fala: "Avalie o atendimento", o botao Recusar (sem initialValue, sem codigo), MESG cru
+        checar(QuadroSendbird.ObservacaoNoCartao(Brdm("buttonList", "Avalie o atendimento", "{\"messageData\":{\"stars\":5}}", 9203)) is null
+               && QuadroSendbird.ObservacaoNoCartao(Brdm("summary", "A loja aceitou", null, 9204)) is null
+               && QuadroSendbird.ObservacaoNoCartao(Quadro("MESG", "Adicionar observação ao pedido")) is null,
+            "OB-4 'Avalie o atendimento', a resposta da loja e o MESG cru não geram observação");
+
+        // 5) o initialValue vence mesmo com replyUrl e flowId no caminho; as chaves de rótulo não viram código
+        var o5 = QuadroSendbird.ObservacaoNoCartao(Brdm("buttonList", "Analise", DataComInitialValue("oi, o pedido é pro Raul AD-9JTB7G", comReplyUrl: true), 9205));
+        checar(o5 is not null && o5.Texto.StartsWith("oi, o pedido", StringComparison.Ordinal) && o5.Origem == "initialValue",
+            "OB-5 com initialValue, ele vence o código solto, e replyUrl/flowId não atrapalham");
+
+        // 6) a chave sol: e a MESMA que o ChatArquivo usa na linha sintetica do arquivo
+        var sol = QuadroSendbird.ChaveSolicitacao(Canal, "AD-XGJZ4B");
+        var sint = new MensagemArquivo("MESG", Canal, null, null, null, null, LadoArquivo.Cliente, "solicitacao", "AD-XGJZ4B", Ms(Agora), false, false);
+        checar(o1!.Chave == sol && ChatArquivo.Chave(sint) == sol && sol.StartsWith("sol:", StringComparison.Ordinal),
+            $"OB-6 a chave sol: liga a observação do robô à linha sintética do arquivo ({sol})");
+
+        // 7) a linha sintetica guarda o texto mascarado e o canal; o cartao gigante nao estoura
+        var gigante = Brdm("buttonList", "x", DataComInitialValue(new string('y', 40000)), 9206);
+        var o7 = QuadroSendbird.ObservacaoNoCartao(gigante);
+        checar(o7 is null || o7.Texto.Length <= 1000, "OB-7 initialValue gigante (acima de 32 KB) não é aberto; nada estoura");
+
+        // 8) o telefone dentro do initialValue e mascarado na linha do arquivo, o codigo fica
+        var comFone = QuadroSendbird.ObservacaoNoCartao(Brdm("buttonList", "Analise", DataComInitialValue("me liga 31994412725 AD-7KQ2MX"), 9207));
+        var guardado = comFone is null ? "" : ChatArquivo.TextoParaGuardar(comFone.Texto);
+        checar(comFone is not null && guardado.Contains("AD-7KQ2MX") && !guardado.Contains("31994412725") && guardado.Contains("[telefone]"),
+            $"OB-8 ao guardar a observação, o telefone vira rótulo e o código AD- fica ({guardado})");
     }
 
     // ── 1.0.35 (caso #8039): o cartao da solicitacao do cliente, so LIDO ─────

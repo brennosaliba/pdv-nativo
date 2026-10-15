@@ -200,7 +200,14 @@ public static class ServicoConversaChat
             if (string.IsNullOrEmpty(payload) || _iniciado == 0) return;
             var agora = DateTime.Now;
             if (!enviado) Contadores.Registrar(payload, wsUserId, agora);
-            if (QuadroSendbird.Comando(payload) != QuadroSendbird.ComandoMensagem) return;
+            var cmd = QuadroSendbird.Comando(payload);
+            if (cmd != QuadroSendbird.ComandoMensagem)
+            {
+                // 1.0.38 (caso #0434): a observação que o cliente escreveu no cartão do iFood (BRDM/AEDI)
+                // vira uma fala sintética do cliente; o resto do quadro de controle não interessa ao robô
+                if (!enviado && cmd is "BRDM" or "AEDI") Observacao(payload!, wsUserId, agora);
+                return;
+            }
             var m = QuadroSendbird.Ler(payload);
             if (m is null) return;
             // 1.0.26: o id da loja so vem da conexao do chat de CLIENTES (canal de pedido
@@ -213,11 +220,43 @@ public static class ServicoConversaChat
 
             var t = ConversaRaspadinha.Triagem(m, _ultimo.Sinal, Canais, Eco, wsUserId ?? _wsUserId, _sdkUserId, agora);
             if (!t.Entra) return;
+            // 1.0.38: guarda o que o cliente escreve, para a observação do cartão não repetir o mesmo texto
+            if (t.Fala!.Lado == LadoFala.Cliente) FalasCliente.Registrar(t.Canal!.Canal, t.Fala.Texto, agora);
             if (!Nova(t.Fala!.Chave)) return;
             var canal = t.Canal!; var fala = t.Fala!;
             _ = Task.Run(() => Guardar(canal, fala, agora));
         }
         catch (Exception ex) { Diag("quadro: " + ex.GetType().Name); }
+    }
+
+    // ── 1.0.38 (caso #0434): a observação do cartão vira fala sintética do cliente ──
+    private static readonly MemoriaDeFalaCliente FalasCliente = new();
+    private static int _obsMandadas, _obsPuladas;
+
+    /// <summary>Quantas observações do cartão o robô mandou e quantas pulou (para o sinal).</summary>
+    public static (int Mandadas, int Puladas) Observacoes => (Volatile.Read(ref _obsMandadas), Volatile.Read(ref _obsPuladas));
+
+    /// <summary>
+    /// A observação que o cliente escreveu num cartão do iFood (o texto fica no campo data, não no MESG).
+    /// Vira uma fala sintética do cliente que passa pela MESMA triagem; a chave é a sol:, igual em todos os
+    /// terminais. Não manda se o cliente já tinha escrito o mesmo texto numa fala comum (guarda de 10 min);
+    /// a mesma observação duas vezes é barrada pela chave. Quem acha o código e decide é o ERP.
+    /// </summary>
+    private static void Observacao(string payload, string? wsUserId, DateTime agora)
+    {
+        var obs = QuadroSendbird.ObservacaoNoCartao(payload);
+        if (obs is null) return;
+        var ms = obs.CriadoEmMs ?? new DateTimeOffset(agora).ToUnixTimeMilliseconds();
+        var m = new MensagemSendbird(QuadroSendbird.ComandoMensagem, obs.Canal, null, null, null, "CUSTOMER", obs.Texto, ms, false);
+        var t = ConversaRaspadinha.Triagem(m, _ultimo.Sinal, Canais, Eco, wsUserId ?? _wsUserId, _sdkUserId, agora);
+        if (!t.Entra) return;
+        if (FalasCliente.Contem(obs.Canal, obs.Texto, agora)) { Interlocked.Increment(ref _obsPuladas); return; }
+        var fala = t.Fala! with { Chave = obs.Chave };
+        if (!Nova(fala.Chave)) return;
+        Interlocked.Increment(ref _obsMandadas);
+        var canal = t.Canal!;
+        Diag($"observacao origem={obs.Origem} chave={Curta(fala.Chave)} pedido={Curta(canal.OrderId)} texto=(len {fala.Texto.Length})");
+        _ = Task.Run(() => Guardar(canal, fala, agora));
     }
 
     private static bool Nova(string chave)
@@ -669,7 +708,8 @@ public static class ServicoConversaChat
     }
 
     private static ConversaRaspadinha.ContagemDoEnvio ContagemDoEnvio(DateTime agora)
-        => new(Volatile.Read(ref _falhasSeguidas), Recargas.Count(t => agora - t <= TimeSpan.FromHours(1)));
+        => new(Volatile.Read(ref _falhasSeguidas), Recargas.Count(t => agora - t <= TimeSpan.FromHours(1)),
+            Volatile.Read(ref _obsMandadas), Volatile.Read(ref _obsPuladas));
 
     /// <summary>
     /// 1.0.25: o SDK esta frio? Achou a instancia e nao conferiu canal nenhum, tendo canais para

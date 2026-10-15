@@ -234,7 +234,7 @@ function modulosDoGestor() {
       var ap = function () {
         function za(p) { this.appId = p.appId; }
         za.init = function (p) {
-          if (tp) tp.currentUser = null;
+          if (tp && !p.manter) tp.currentUser = null;   // 1.0.38: 'manter' deixa a conexao anterior viva (o caso do 15/10)
           var sb = new za(p);
           sb.apiHost = "https://api-".concat(p.appId || "app", ".sendbird.com");
           sb.nome = p.nome;
@@ -543,6 +543,98 @@ function exec(sb) { return Array.from(sb.__exec).join(','); }
     const primeiro = rodar(sb, 'window.pdvSb');
     carregar(sb);
     checar(rodar(sb, 'window.pdvSb') === primeiro, '60 o script injetado duas vezes nao troca o pdvSb da pagina');
+  }
+
+  // ── MUNDO SAVASSI 15/10 (1.0.38, camada A): o modulo achado mas o singleton invalido; a heap salva ──
+  {
+    const sb = mundo();
+    rodar(sb, "var G = bootGestor('webpackChunkgestor_pedidos', 'loja-1', [{ url: 'canal-1', uuid: 'uuid-1' }], 'primeira');"
+      + "var prim = G.inst;"                                                    // a conexao viva de verdade
+      + "G.SB.init({ userId: 'loja-1', nome: 'segunda', canais: {}, manter: true });"   // o singleton vira a segunda, a primeira segue viva
+      + "G.SB.instance.currentUser = null;");                                   // e a segunda perde o usuario: singleton invalido
+    carregar(sb);
+    const d0 = await diag(sb, 'bh0', 'loja-1', ['canal-1']);
+    checar(d0 && d0.modulos === 1 && d0.runtimes === 1 && d0.via_webpack === false && d0.via_react === false && d0.achou === false && d0.instancias === 0,
+      '100 Savassi 15/10: o webpack acha o modulo mas o singleton e invalido (via_webpack:false, instancias:0)');
+    checar(d0 && d0.singleton === 'sem_usuario' && d0.heap_validas === 0 && d0.via_heap === false,
+      '101 o diagnostico diz o motivo: singleton sem_usuario, berco vazio (' + (d0 && d0.singleton) + ')');
+    // a heap do C# (Runtime.queryObjects) entrega a instancia conectada ao berco (pdvSb.registrar)
+    checar(rodar(sb, 'window.pdvSb.registrar([prim])') === 1, '102 a heap entrega a instancia conectada ao berco (camada A)');
+    const d1 = await diag(sb, 'bh1', 'loja-1', ['canal-1']);
+    checar(d1 && d1.achou === true && d1.instancias === 1 && d1.via_heap === true && d1.heap_validas === 1 && d1.heap_abertas === 1 && d1.via_webpack === false,
+      '103 com a heap, o SDK e achado (via_heap, instancias:1) mesmo com o singleton invalido');
+    const e1 = await enviar(sb, 'bh2', 'tk-bh', 'canal-1', 'uuid-1', 'Oi, Ana!', 'loja-1');
+    checar(e1 && e1.ok === true && sb.__enviadas[sb.__enviadas.length - 1].por === 'primeira',
+      '104 e a resposta sai pela instancia do berco (a conexao viva), nao pelo singleton');
+    checar(rodar(sb, 'window.pdvSb.registrar([prim])') === 0, '105 registrar a mesma instancia de novo nao duplica');
+  }
+
+  // ── MUNDO PROTOTIPOS (1.0.38, camada A): os prototipos candidatos para a heap do C# ──
+  {
+    const sb = mundo();
+    rodar(sb, "var G = bootGestor('webpackChunkgestor_pedidos', 'loja-1', [{ url: 'canal-1', uuid: 'uuid-1' }], 'p');");
+    carregar(sb);
+    checar(rodar(sb, '(window.pdvSb.prototipos() || []).length') >= 1, '110 prototipos() devolve ao menos um candidato (o C# pede queryObjects de cada)');
+    checar(rodar(sb, "window.pdvSb.prototipos().some(function (p) { return p === G.SB.prototype; })") === true,
+      '111 o prototipo candidato e o da classe SendbirdChat achada no modulo');
+  }
+
+  // ── MUNDO BERCO NO NASCIMENTO (1.0.38, camada B): o init embrulhado registra a conexao nova ──
+  {
+    const sb = mundo();
+    rodar(sb, "var R = montarRuntime('webpackChunkberco', __marca({"
+      + "'7001': function (module, exports, req) {"
+      + "  __exec.push('7001');"
+      + "  var host = 'wss://ws-app.sendbird.com';"
+      + "  function SendbirdChat(){}"
+      + "  SendbirdChat.prototype.connect = function(){ return Promise.resolve(); };"
+      + "  Object.defineProperty(SendbirdChat, 'instance', { get: function(){ return null; }, configurable: true });"   // singleton sempre vazio
+      + "  SendbirdChat.init = function (p) {"
+      + "    var s = new SendbirdChat();"
+      + "    s.currentUser = { userId: p.userId };"
+      + "    s.connectionState = 'OPEN';"
+      + "    s.groupChannel = { getChannel: function (u) { return Promise.resolve({ url: u, cachedMetaData: { orderUuid: p.uuid }, isFrozen: false,"
+      + "      members: [{ metaData: { userType: 'CUSTOMER' } }],"
+      + "      sendUserMessage: function (pp) { __enviadas.push({ por: 'berco', canal: u, texto: pp.message }); return { onSucceeded: function (cb) { cb({ messageId: 7 }); return this; }, onFailed: function () { return this; } }; } }); } };"
+      + "    return s;"
+      + "  };"
+      + "  exports.ZP = SendbirdChat;"
+      + "} }));");
+    carregar(sb);
+    const d0 = await diag(sb, 'bw0', 'loja-1', []);
+    checar(d0 && d0.modulos === 1 && d0.via_berco === false && d0.heap_inst === 0 && d0.singleton === 'vazio',
+      '120 o modulo e achado (singleton vazio); o init ainda nao aconteceu, berco vazio');
+    rodar(sb, "R('7001').ZP.init({ userId: 'loja-1', uuid: 'uuid-7' });");   // troca de token: nasce uma conexao
+    const d1 = await diag(sb, 'bw1', 'loja-1', []);
+    checar(d1 && d1.achou === true && d1.instancias === 1 && d1.via_berco === true && d1.via_webpack === false && d1.heap_validas === 1,
+      '121 o init embrulhado (camada B) registra a conexao nova no berco (via_berco), mesmo com o singleton vazio');
+    const e1 = await enviar(sb, 'bw2', 'tk-bw', 'canal-7', 'uuid-7', 'Oi!', 'loja-1');
+    checar(e1 && e1.ok === true && sb.__enviadas[sb.__enviadas.length - 1].por === 'berco', '122 e a resposta sai pela conexao do berco');
+  }
+
+  // ── MUNDO WEBSOCKET (1.0.38, camada B): o Proxy conta os sockets do Sendbird sem mudar nada ──
+  {
+    const sb = mundo();
+    rodar(sb, "function FakeWS(url){ this.url = url; this.readyState = 1; } FakeWS.CONNECTING = 0; FakeWS.OPEN = 1; FakeWS.CLOSED = 3; window.WebSocket = FakeWS;");
+    carregar(sb);
+    await diag(sb, 'pw0', 'loja-1', []);   // instala o Proxy
+    checar(rodar(sb, "(function(){ var w = new window.WebSocket('wss://ws-app.sendbird.com/?x=1'); var o = new window.WebSocket('wss://outro.example.com'); return (w instanceof FakeWS) && (window.WebSocket.OPEN === 1); })()") === true,
+      '130 o Proxy do WebSocket mantem instanceof e as constantes');
+    const d = await diag(sb, 'pw1', 'loja-1', []);
+    checar(d && d.ws_sb_doc === 1 && d.ws_sb_abertos === 1, '131 o diagnostico conta so o socket do Sendbird (1 aberto), ignorando o de outro host');
+  }
+
+  // ── MUNDO PRIVACIDADE DO DIAG (1.0.38): os campos novos nunca levam segredo ──
+  {
+    const sb = mundo();
+    rodar(sb, "var G = bootGestor('webpackChunkgestor_pedidos', 'loja-31994412725', [{ url: 'canal-1', uuid: 'uuid-1' }], 'p'); G.inst.token = 'tk-super-secreto';");
+    carregar(sb);
+    const d = await diag(sb, 'dp0', 'loja-31994412725', ['canal-1']);
+    const novos = JSON.stringify({ singleton: d.singleton, singleton_conexao: d.singleton_conexao, versao_sdk: d.versao_sdk, bundle: d.bundle, globais_wp: d.globais_wp });
+    checar(novos.indexOf('31994412725') < 0 && novos.indexOf('tk-super-secreto') < 0, '140 os campos de texto do diag novo nunca levam segredo (telefone, token)');
+    checar(typeof d.singleton === 'string' && typeof d.fabricas === 'number' && typeof d.via_heap === 'boolean' && typeof d.mf === 'boolean' && typeof d.ws_sb_doc === 'number',
+      '141 os campos novos existem com o tipo do contrato (enum, inteiro, booleano)');
+    checar(d.versao_sdk === '4.19.9' && d.globais_wp === 'webpackChunkgestor_pedidos', '142 versao_sdk e globais_wp saem do bundle, nao de dado pessoal (' + d.versao_sdk + '/' + d.globais_wp + ')');
   }
 
   console.log(JSON.stringify(res));

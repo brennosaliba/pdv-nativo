@@ -259,10 +259,14 @@ public static class ChatArquivo
     /// mensagem arquivada ao evento do resgate no ERP, por (loja, chave).
     /// </summary>
     public static string Chave(MensagemArquivo m)
-        => m.MsgId is { Length: > 0 } id
-            ? "sb:" + id.Trim()
-            : "h:" + Sha256(string.Join('|', m.Canal, m.AutorId ?? "",
-                m.CriadoEmMs?.ToString(CultureInfo.InvariantCulture) ?? "", m.Texto));
+        // 1.0.38: a fala sintética da observação (custom_type "solicitacao") usa a chave sol:, a MESMA
+        // do robô, para a linha do arquivo e o evento do resgate se ligarem por (loja, chave)
+        => string.Equals(m.CustomType, "solicitacao", StringComparison.Ordinal)
+            ? QuadroSendbird.ChaveSolicitacao(m.Canal, m.Texto)
+            : m.MsgId is { Length: > 0 } id
+                ? "sb:" + id.Trim()
+                : "h:" + Sha256(string.Join('|', m.Canal, m.AutorId ?? "",
+                    m.CriadoEmMs?.ToString(CultureInfo.InvariantCulture) ?? "", m.Texto));
 
     private static string Sha256(string s)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s))).ToLowerInvariant();
@@ -571,7 +575,8 @@ public static class ChatArquivo
     {
         try
         {
-            if (QuadroSendbird.Comando(payload) != "BRDM") return null;
+            // 1.0.38: o AEDI (cartão editado) carrega o mesmo data do BRDM; os dois são lidos
+            if (QuadroSendbird.Comando(payload) is not ("BRDM" or "AEDI")) return null;
             using var doc = JsonDocument.Parse(payload!.AsMemory(4));
             var r = doc.RootElement;
             if (r.ValueKind != JsonValueKind.Object) return null;

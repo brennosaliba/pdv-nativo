@@ -1037,6 +1037,24 @@ public partial class ChatIfood : UserControl
         if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => DiagSdkAsync(canais, ws));
         var core = _pronto ? Web.CoreWebView2 : null;
         if (core is null) return null;
+        var r = await UmDiagSdkAsync(core, canais, ws).ConfigureAwait(true);
+        // 1.0.38 (caso #0434 vizinho): SDK não achado? varre a heap pelo CDP (camada A, no máximo a cada
+        // 2 min) e refaz o diag uma vez. A heap acha a instância conectada de verdade sem depender do
+        // singleton, do React nem do momento em que ela nasceu, e entrega ao berço (window.pdvSb.registrar).
+        if (NaoAchouSdk(r) && DateTime.Now - _ultimaVarreduraHeap > TimeSpan.FromMinutes(2))
+        {
+            _ultimaVarreduraHeap = DateTime.Now;
+            var novas = await VarrerHeapSdkAsync(core).ConfigureAwait(true);
+            if (novas > 0) r = await UmDiagSdkAsync(core, canais, ws).ConfigureAwait(true);
+        }
+        return r;
+    }
+
+    private static bool NaoAchouSdk(JsonObject? r)
+        => r is null || !(r.TryGetPropertyValue("achou", out var a) && a is JsonValue av && av.TryGetValue<bool>(out var b) && b);
+
+    private async Task<JsonObject?> UmDiagSdkAsync(CoreWebView2 core, IReadOnlyList<string> canais, string? ws)
+    {
         var id = Guid.NewGuid().ToString("N");
         var tcs = new TaskCompletionSource<JsonObject?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _diagsSdk[id] = tcs;
@@ -1049,6 +1067,68 @@ public partial class ChatIfood : UserControl
         }
         catch { return null; }
         finally { _diagsSdk.TryRemove(id, out _); }
+    }
+
+    /// <summary>A última varredura de heap (camada A): no máximo uma a cada 2 min, para não pausar a página.</summary>
+    private DateTime _ultimaVarreduraHeap = DateTime.MinValue;
+    private bool _runtimeLigado;
+
+    /// <summary>
+    /// 1.0.38 (camada A): a heap pelo CDP. Pede à página os protótipos candidatos
+    /// (<c>pdvSb.prototipos()</c>), e para cada um chama <c>Runtime.queryObjects</c>, que devolve TODAS
+    /// as instâncias vivas daquela classe, sem depender do singleton. A lista volta para o berço por
+    /// <c>pdvSb.registrar</c>, e o grupo de objetos é liberado no fim. Nunca lança; devolve quantas
+    /// instâncias novas o berço aceitou. Roda na thread da tela.
+    /// </summary>
+    public async Task<int> VarrerHeapSdkAsync(CoreWebView2 core)
+    {
+        const string grupo = "pdvsb-heap";
+        try
+        {
+            if (!_runtimeLigado)
+            {
+                try { await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}"); _runtimeLigado = true; } catch { }
+            }
+            var av = await core.CallDevToolsProtocolMethodAsync("Runtime.evaluate", JsonSerializer.Serialize(new
+            {
+                expression = "window.pdvSb && window.pdvSb.prototipos ? window.pdvSb.prototipos() : []",
+                returnByValue = false,
+                objectGroup = grupo,
+            }));
+            var arrId = JsonNode.Parse(av)?["result"]?["objectId"]?.GetValue<string>();
+            if (arrId is null) return 0;
+            var props = await core.CallDevToolsProtocolMethodAsync("Runtime.getProperties",
+                JsonSerializer.Serialize(new { objectId = arrId, ownProperties = true }));
+            var protoIds = new List<string>();
+            foreach (var p in JsonNode.Parse(props)?["result"]?.AsArray() ?? new JsonArray())
+            {
+                if (p?["name"]?.GetValue<string>() is not { } nome || !int.TryParse(nome, out _)) continue;   // só os índices do array
+                if (p?["value"]?["objectId"]?.GetValue<string>() is { } oid) protoIds.Add(oid);
+                if (protoIds.Count >= 20) break;
+            }
+            var total = 0;
+            foreach (var pid in protoIds)
+            {
+                var qo = await core.CallDevToolsProtocolMethodAsync("Runtime.queryObjects",
+                    JsonSerializer.Serialize(new { prototypeObjectId = pid, objectGroup = grupo }));
+                if (JsonNode.Parse(qo)?["objects"]?["objectId"]?.GetValue<string>() is not { } objsId) continue;
+                var cf = await core.CallDevToolsProtocolMethodAsync("Runtime.callFunctionOn", JsonSerializer.Serialize(new
+                {
+                    objectId = objsId,
+                    functionDeclaration = "function(){ try { return (window.pdvSb && window.pdvSb.registrar) ? window.pdvSb.registrar(Array.prototype.slice.call(this)) : 0; } catch (e) { return 0; } }",
+                    returnByValue = true,
+                    objectGroup = grupo,
+                }));
+                total += JsonNode.Parse(cf)?["result"]?["value"]?.GetValue<int>() ?? 0;
+            }
+            if (total > 0) DiagRaspadinha($"heap: {total} instancia(s) do SDK registrada(s) pelo berco");
+            return total;
+        }
+        catch (Exception ex) { DiagRaspadinha("heap: " + ex.GetType().Name); return 0; }
+        finally
+        {
+            try { await core.CallDevToolsProtocolMethodAsync("Runtime.releaseObjectGroup", JsonSerializer.Serialize(new { objectGroup = grupo })); } catch { }
+        }
     }
 
     /// <summary>
@@ -2357,6 +2437,178 @@ public partial class ChatIfood : UserControl
       }
       function junta(lista, x){ if (valida(x) && lista.indexOf(x) < 0) lista.push(x); }
 
+      // ── BERCO (1.0.38, caso #0434 vizinho do SDK): a instancia registrada no nascimento ou pela heap ─
+      // A 1.0.37 so achava o SDK pelo singleton do webpack ou pelo provider do React. Quando o Gestor
+      // guarda o SDK fora dos dois (singleton apontando para outra conexao, ou um store proprio), o
+      // envio parava em sdk_ausente mesmo com a conexao viva. O berco guarda toda instancia valida que
+      // nasce (o init embrulhado, camada B) ou que a heap do C# entrega (camada A, Runtime.queryObjects).
+      // Nao depende do singleton, do React nem do momento em que a instancia nasceu.
+      var berco = [];          // instancias validas pelo berco (init) ou pela heap (CDP)
+      var wsSb = [];           // sockets *.sendbird.com vistos pelo Proxy do WebSocket
+      var viaHeap = false, viaBerco = false;
+      var wsProxiado = false;
+      var contaFabSb = 0;      // fabricas com 'sendbird' no corpo ja lidas (so o diag)
+
+      function registrarUm(x){ if (valida(x) && berco.indexOf(x) < 0) { berco.push(x); return true; } return false; }
+
+      // CAMADA A: o C# entrega aqui a lista de instancias que a heap achou (Runtime.queryObjects pelo
+      // prototipo). Devolve quantas novas. Nunca depende do singleton.
+      function registrar(lista){
+        var n = 0;
+        try {
+          var arr = (lista && typeof lista.length === 'number' && typeof lista !== 'string') ? lista : [lista];
+          for (var i = 0; i < arr.length && i < 200; i++) if (registrarUm(arr[i])) { n++; viaHeap = true; }
+          if (berco.length > 50) berco = berco.filter(valida).slice(-50);
+        } catch (e) {}
+        return n;
+      }
+
+      // CAMADA A: os prototipos candidatos para a heap do C#. Candidato e cada export funcao do modulo
+      // casado que tenha 'instance' ou init. O C# pega o objectId de cada um e pede Runtime.queryObjects.
+      function candidatosDoModulo(ex){
+        var out = [];
+        if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) return out;
+        var cands = [ex];
+        try { if (ex.default) cands.push(ex.default); } catch (e) {}
+        try { for (var p in ex) { var v = ex[p]; if (typeof v === 'function') cands.push(v); } } catch (e) {}
+        for (var j = 0; j < cands.length; j++) {
+          var c = cands[j];
+          try { if (typeof c === 'function' && (('instance' in c) || typeof c.init === 'function')) out.push(c); } catch (e) {}
+        }
+        return out;
+      }
+      function prototipos(){
+        var protos = [];
+        try {
+          doWebpack([]);   // garante achados preenchido (a lista e descartada)
+          for (var a = 0; a < achados.length; a++) {
+            candidatosDoModulo(exportsDe(achados[a].nome, achados[a].id)).forEach(function (c) {
+              try { if (c && c.prototype && protos.indexOf(c.prototype) < 0) protos.push(c.prototype); } catch (e) {}
+            });
+          }
+        } catch (e) {}
+        return protos;
+      }
+
+      // CAMADA B: o init embrulhado. Achada a classe SendbirdChat (funcao com init e prototype.connect),
+      // embrulha o init (chama o original primeiro e devolve o mesmo) para registrar cada instancia nova.
+      function embrulhaClasse(ex){
+        if (!ex || (typeof ex !== 'object' && typeof ex !== 'function')) return;
+        var cands = [ex];
+        try { if (ex.default) cands.push(ex.default); } catch (e) {}
+        try { for (var p in ex) { var v = ex[p]; if (typeof v === 'function') cands.push(v); } } catch (e) {}
+        for (var j = 0; j < cands.length; j++) {
+          var c = cands[j];
+          try {
+            if (typeof c === 'function' && !c.__pdvInit && typeof c.init === 'function'
+                && c.prototype && typeof c.prototype.connect === 'function') {
+              var origInit = c.init;
+              c.init = function () { var r = origInit.apply(this, arguments); try { if (registrarUm(r)) viaBerco = true; } catch (e) {} return r; };
+              try { c.init.__pdvDe = origInit; } catch (e) {}
+              c.__pdvInit = true;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // CAMADA B: o Proxy do WebSocket conta os sockets do Sendbird no documento (instanceof, constantes
+      // e prototipo seguem os mesmos). So conta; nao muda nada do socket.
+      function proxiarWebSocket(){
+        try {
+          if (wsProxiado || typeof WebSocket !== 'function') return;
+          var OrigWS = WebSocket;
+          var P = new Proxy(OrigWS, {
+            construct: function (alvo, args){
+              var s = Reflect.construct(alvo, args);
+              try { if (/[a-z0-9-]*\.sendbird\.com/i.test(String(args && args[0] || '')) && wsSb.indexOf(s) < 0) { wsSb.push(s); if (wsSb.length > 60) wsSb.shift(); } } catch (e) {}
+              return s;
+            }
+          });
+          try { self.WebSocket = P; } catch (e) { window.WebSocket = P; }
+          wsProxiado = true;
+        } catch (e) {}
+      }
+
+      // CAMADA B: acha a classe SendbirdChat pelo mesmo require do webpack e embrulha o init, para que
+      // toda instancia nova (troca de token, segunda conexao) caia no berco. Idempotente. Roda no
+      // carregamento e a cada procura; so toca a fabrica que ja casou com a assinatura (nenhuma a mais).
+      function capturarBerco(){
+        proxiarWebSocket();
+        try {
+          capturar();
+          for (var a = 0; a < achados.length; a++) {
+            try { embrulhaClasse(exportsDe(achados[a].nome, achados[a].id)); } catch (e) {}
+          }
+        } catch (e) {}
+      }
+
+      // ── O DIAGNOSTICO NOVO (1.0.38), sem dado pessoal: por que o SDK sumiu sem abrir o caixa ──
+      // A classe SendbirdChat do modulo casado (a que tem o getter instance), para olhar o singleton.
+      function classeDoModulo(){
+        try {
+          doWebpack([]);
+          for (var a = 0; a < achados.length; a++) {
+            var cs = candidatosDoModulo(exportsDe(achados[a].nome, achados[a].id));
+            for (var i = 0; i < cs.length; i++) { try { if ('instance' in cs[i]) return cs[i]; } catch (e) {} }
+          }
+        } catch (e) {}
+        return null;
+      }
+      function singletonDoModulo(){
+        var c = classeDoModulo();
+        if (!c) return { estado: 'sem_modulo', inst: null };
+        try {
+          var inst = c.instance;
+          if (!inst) return { estado: 'vazio', inst: null };
+          if (!inst.currentUser) return { estado: 'sem_usuario', inst: inst };
+          if (!(inst.groupChannel && typeof inst.groupChannel.getChannel === 'function')) return { estado: 'sem_canal', inst: inst };
+          return { estado: 'ok', inst: inst };
+        } catch (e) { return { estado: 'erro', inst: null }; }
+      }
+      function versaoDoSdk(){
+        try { var c = classeDoModulo(); var v = c && c.version; if (typeof v === 'string' && /^[0-9][0-9.]{0,15}$/.test(v)) return v; } catch (e) {}
+        return '';
+      }
+      function bundlePrincipal(){
+        try {
+          var ss = document.querySelectorAll('script[src]');
+          for (var i = 0; i < ss.length; i++) {
+            var base = ((ss[i].getAttribute('src') || '').split('?')[0].split('/').pop() || '');
+            if (/main|index|runtime|app|vendor|bundle/i.test(base)) return base.slice(0, 80);
+          }
+          if (ss.length) return ((ss[0].getAttribute('src') || '').split('?')[0].split('/').pop() || '').slice(0, 80);
+        } catch (e) {}
+        return '';
+      }
+      function globaisWp(){
+        try { return Object.keys(self).filter(function (k) { return k.indexOf('webpackChunk') === 0; }).slice(0, 3).join(','); }
+        catch (e) { return ''; }
+      }
+      function temFederacao(){
+        try {
+          if (self.__webpack_require__ && self.__webpack_require__.federation) return true;
+          return Object.keys(self).some(function (k) { return /^__federation|^__remote/.test(k); });
+        } catch (e) { return false; }
+      }
+      function contaFabricas(){ var n = 0; try { for (var nm in reqs) { var m = reqs[nm] && reqs[nm].m; if (m) n += Object.keys(m).length; } } catch (e) {} return n; }
+      function contaFibras(){
+        var n = 0;
+        try {
+          var els = document.querySelectorAll('[class*="sendbird-"]');
+          for (var i = 0; i < els.length && i < 300; i++) {
+            if (Object.keys(els[i]).some(function (k) { return k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0; })) n++;
+          }
+        } catch (e) {}
+        return n;
+      }
+      function iframesOutros(){
+        var n = 0;
+        try { var fs = document.querySelectorAll('iframe'); for (var i = 0; i < fs.length; i++) { try { if (!fs[i].contentDocument) n++; } catch (e) { n++; } } } catch (e) {}
+        return n;
+      }
+      function conta(sel){ try { return document.querySelectorAll(sel).length; } catch (e) { return 0; } }
+      function wsAbertos(){ var n = 0; for (var i = 0; i < wsSb.length; i++) { try { if (wsSb[i].readyState === 1) n++; } catch (e) {} } return n; }
+
       // 1) O MODULO DO @sendbird/chat NO WEBPACK (1.0.20).
       // O runtime do Gestor nao expoe o cache de modulos (req.c): o 1.0.19 parava ali e o sinal
       // dizia instancias=0. Ele expoe req.m, as fabricas dos modulos. A do SDK e reconhecida pelo
@@ -2399,12 +2651,8 @@ public partial class ChatIfood : UserControl
       // apiHost/websocketHost em sendbird.com, fica num modulo; a versao fica no nucleo e o
       // sendUserMessage no canal. Pedir a versao ou o envio no mesmo corpo do getter nao casava
       // com nenhuma das 2416 fabricas, e o sinal seguia achou=false. A marca nao depende da versao.
-      function casa(f){
-        var s = '';
-        try { s = toStr.call(f); } catch (e) { return false; }
-        if (s.indexOf('sendbird.com') < 0) return false;
-        return temInstance.test(s);
-      }
+      // 1.0.38: a conferencia virou embutida no doWebpack (uma leitura so do corpo por fabrica, para
+      // tambem contar as de sendbird no diag), entao a funcao casa saiu.
 
       // exports.instance, exports.default.instance ou o export que tiver .instance
       function deModulo(ex, lista){
@@ -2426,9 +2674,10 @@ public partial class ChatIfood : UserControl
       function doWebpack(lista){
         try {
           capturar();
+          var antes = lista.length;   // 1.0.38: a contribuicao do WEBPACK, nao a lista inteira (o berco ja pos a sua)
           // a) pelo id guardado: so o require, sem ler fabrica nenhuma
           for (var a = 0; a < achados.length; a++) deModulo(exportsDe(achados[a].nome, achados[a].id), lista);
-          if (lista.length) return;
+          if (lista.length > antes) return;
           // b) ainda nao achou, ou a instancia deixou de valer: le so as fabricas que nao leu
           for (var nome in reqs) {
             var m = reqs[nome].m;
@@ -2437,9 +2686,16 @@ public partial class ChatIfood : UserControl
             for (var id in m) {
               if (!Object.prototype.hasOwnProperty.call(m, id) || v[id]) continue;
               v[id] = true;
-              if (typeof m[id] !== 'function' || !casa(m[id])) continue;
+              var f = m[id];
+              if (typeof f !== 'function') continue;
+              // UMA leitura do corpo por fabrica (a mesma do casa): o conta de sendbird e a assinatura juntos
+              var src = ''; try { src = toStr.call(f); } catch (e) { continue; }
+              if (src.indexOf('sendbird') >= 0) contaFabSb++;
+              if (src.indexOf('sendbird.com') < 0 || !temInstance.test(src)) continue;
               achados.push({ nome: nome, id: id });
-              deModulo(exportsDe(nome, id), lista);
+              var exW = exportsDe(nome, id);
+              deModulo(exW, lista);
+              embrulhaClasse(exW);   // berco (camada B): embrulha o init para as proximas conexoes
             }
           }
         } catch (e) {}
@@ -2501,22 +2757,31 @@ public partial class ChatIfood : UserControl
           if (ainda.length) return ainda;
         }
         var lista = [];
+        // 1.0.38: o BERCO primeiro (a heap do C# pela camada A e o init embrulhado pela camada B), sem
+        // depender do singleton nem do React nem do momento em que a instancia nasceu
+        capturarBerco();
+        berco = berco.filter(valida);
+        for (var b = 0; b < berco.length; b++) if (lista.indexOf(berco[b]) < 0) lista.push(berco[b]);
+        var antesWp = lista.length;
         doWebpack(lista);
-        var doPacote = lista.length;
-        via.webpack = doPacote > 0;
-        // 1.0.26: o React SEMPRE, somando ao webpack (o singleton so mostra uma das conexoes)
+        via.webpack = lista.length > antesWp;
+        // 1.0.26: o React SEMPRE, somando (o singleton so mostra uma das conexoes)
+        var antesReact = lista.length;
         doReact(lista);
-        via.react = lista.length > doPacote;
+        via.react = lista.length > antesReact;
         cache = lista; cacheEm = Date.now();
         return lista;
       }
 
-      // a que tem o usuario do WebSocket vem primeiro; as outras ficam de reserva
+      // 1.0.38 (#8039): a do mesmo usuario do WebSocket e aberta primeiro, depois a aberta, depois o resto
+      function nota(x, ws){
+        var n = 0;
+        try { if (ws && x.currentUser && String(x.currentUser.userId) === String(ws)) n += 2; } catch (e) {}
+        try { if (conexaoDe(x) === 'OPEN') n += 1; } catch (e) {}
+        return n;
+      }
       function ordenar(lista, ws){
-        if (!ws) return lista.slice();
-        var a = [], b = [];
-        lista.forEach(function (x) { try { if (x.currentUser && String(x.currentUser.userId) === String(ws)) a.push(x); else b.push(x); } catch (e) { b.push(x); } });
-        return a.concat(b);
+        return lista.slice().sort(function (p, q) { return nota(q, ws) - nota(p, ws); });
       }
 
       // 1.0.21 (07/10): o canal do getChannel pode vir sem o metadata no cache (o sinal da loja
@@ -2620,6 +2885,31 @@ public partial class ChatIfood : UserControl
             r.via_react = via.react;
             r.modulos = achados.length;
             r.runtimes = Object.keys(reqs).length;
+            // 1.0.38: o diagnostico novo (sem dado pessoal), computado ANTES do corte do sem-instancia:
+            // e exatamente o caso em que o sdk sumiu que a loja precisa provar
+            r.via_heap = viaHeap;
+            r.via_berco = viaBerco;
+            r.mf = temFederacao();
+            var vb = berco.filter(valida);
+            r.heap_inst = berco.length;
+            r.heap_validas = vb.length;
+            r.heap_abertas = vb.filter(function (x) { return conexaoDe(x) === 'OPEN'; }).length;
+            r.ws_sb_doc = wsSb.length;
+            r.ws_sb_abertos = wsAbertos();
+            r.fabricas = contaFabricas();
+            r.fab_sendbird = contaFabSb;
+            r.globais_wp = globaisWp();
+            r.bundle = bundlePrincipal();
+            r.versao_sdk = versaoDoSdk();
+            var sg = singletonDoModulo();
+            r.singleton = sg.estado;
+            r.singleton_conexao = sg.inst ? conexaoDe(sg.inst) : 'OUTRO';
+            r.dom_sendbird = conta('[class*="sendbird-"]');
+            r.dom_fibras = contaFibras();
+            r.iframes = conta('iframe');
+            r.iframes_outros = iframesOutros();
+            r.esm = conta('script[type="module"]');
+            r.workers = 0;
             if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
             // 1.0.35: o estado da conexao da primeira instancia (OPEN, CONNECTING, CLOSED ou OUTRO):
             // o plano B espera ela voltar OPEN depois de recarregar o Gestor
@@ -2724,7 +3014,7 @@ public partial class ChatIfood : UserControl
         } catch (e) { falha('erro_envio', 'geral', e); return 'erro'; }
       }
 
-      window.pdvSb = { diag: diag, enviar: enviar };
+      window.pdvSb = { diag: diag, enviar: enviar, prototipos: prototipos, registrar: registrar };
     })();
     """;
 }

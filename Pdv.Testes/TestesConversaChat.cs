@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Dapper;
@@ -58,9 +59,56 @@ public static class TestesConversaChat
         AConfirmacao(checar);
         OEstado(checar);
         ODetalheDoErro(checar);
+        AObservacao(checar);
         await OPapel(checar);
         await ABancoEAFila(checar);
         Fonte(checar);
+    }
+
+    // ── 1.0.38 (caso #0434): a observação do cartão vira fala sintética ──────
+    /// <summary>Um cartão com a observação no initialValue (o BRDM ou o AEDI), no formato do Sendbird.</summary>
+    private static string CartaoComObs(string cmd, string valor, string canal = Canal)
+    {
+        var meta = JsonSerializer.Serialize(new { dialog = new { replyUrl = "https://x/y", flowId = "f1", options = new object[] { new { type = "input", label = "Edite", metadata = new { initialValue = valor } } } } });
+        var data = JsonSerializer.Serialize(new { recipients = new[] { "merchant" }, messageData = new { title = "Analise", buttons = new object[] { new { title = "Aceitar", metadata = meta } } } });
+        return cmd + "{\"msg_id\":9301,\"message\":\"Analise a solicitação\",\"channel_url\":\"" + canal + "\",\"created_at\":"
+               + Ms(Agora.AddSeconds(-10)) + ",\"custom_type\":\"buttonList\",\"data\":" + JsonSerializer.Serialize(data) + "}";
+    }
+
+    private static void AObservacao(Action<bool, string> checar)
+    {
+        var sinal = ConversaRaspadinha.LerSinal(SinalJson("sombra"));
+        var obs = QuadroSendbird.ObservacaoNoCartao(CartaoComObs("BRDM", "AD-XGJZ4B"));
+        checar(obs is not null && obs.Texto == "AD-XGJZ4B" && obs.Chave.StartsWith("sol:", StringComparison.Ordinal),
+            $"OB-1 a observação do cartão é lida com a chave sol: ({obs?.Texto})");
+
+        // a fala sintética do cliente passa pela MESMA triagem; a chave é trocada pela sol:
+        var m = new MensagemSendbird("MESG", obs!.Canal, null, null, null, "CUSTOMER", obs.Texto, Ms(Agora.AddSeconds(-10)), false);
+        var t = ConversaRaspadinha.Triagem(m, sinal, new CacheDeCanais(), new MemoriaDeEco(), "loja-1", null, Agora);
+        var fala = t.Entra ? t.Fala! with { Chave = obs.Chave } : null;
+        checar(t.Entra && t.Fala!.Lado == LadoFala.Cliente && fala!.Chave == QuadroSendbird.ChaveSolicitacao(obs.Canal, obs.Texto),
+            "OB-2 a observação vira fala do cliente na triagem, com a chave sol:");
+
+        // formato A: o cliente já escreveu o texto numa fala comum; o robô não repete (guarda de 10 min)
+        var mem = new MemoriaDeFalaCliente();
+        mem.Registrar(Canal, "Quero adicionar observação do pedido: AD-XGJZ4B", Agora);
+        checar(mem.Contem(Canal, "AD-XGJZ4B", Agora) && mem.Contem(Canal, "AD-XGJZ4B", Agora.AddMinutes(9)),
+            "OB-3 formato A: a fala comum do cliente contém a observação, então não duplica");
+        checar(!mem.Contem(Canal, "AD-XGJZ4B", Agora.AddMinutes(11)), "OB-4 passados 10 min, a guarda solta");
+        checar(!mem.Contem("sendbird_gc_cm_" + Pedido + "_" + Castelo, "AD-XGJZ4B", Agora), "OB-5 a guarda é por canal");
+
+        // a chave é a mesma no BRDM e no AEDI, e diferente por canal
+        var bl = CartaoComObs("BRDM", "AD-9JTB7G");
+        var oB = QuadroSendbird.ObservacaoNoCartao(bl)!;
+        var oA = QuadroSendbird.ObservacaoNoCartao("AEDI" + bl[4..])!;
+        var outraLoja = QuadroSendbird.ObservacaoNoCartao(CartaoComObs("BRDM", "AD-9JTB7G", "sendbird_gc_cm_" + Pedido + "_" + Castelo));
+        checar(oB.Chave == oA.Chave && outraLoja is not null && outraLoja.Chave != oB.Chave,
+            "OB-6 a chave sol: é igual no BRDM e no AEDI, e muda com o canal");
+
+        // o cartão de avaliação não gera observação (nunca vira fala)
+        checar(QuadroSendbird.ObservacaoNoCartao("BRDM{\"channel_url\":\"" + Canal + "\",\"custom_type\":\"buttonList\",\"created_at\":"
+                   + Ms(Agora) + ",\"message\":\"Avalie o atendimento\",\"data\":\"{\\\"messageData\\\":{\\\"stars\\\":5}}\"}") is null,
+            "OB-7 'Avalie o atendimento' não gera observação");
     }
 
     // ── LADO ─────────────────────────────────────────────────────────────────
@@ -549,16 +597,16 @@ public static class TestesConversaChat
         var hoje = ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "falhou", "erro_envio", null);
         checar(hoje == """{"acao":"chat_saida","terminal":"CAIXA-01","saida_id":84,"resultado":"falhou","erro":"erro_envio"}""",
             $"ED-7 sem detalhe o corpo é byte a byte o de hoje ({hoje})");
-        var det = ConversaRaspadinha.MontarDetalhe(d, 3, 3, new int?[] { 900100, null, 900100 }, true, "na_frente", null, "1.0.37");
+        var det = ConversaRaspadinha.MontarDetalhe(d, 3, 3, new int?[] { 900100, null, 900100 }, true, "na_frente", null, "1.0.38");
         var falhou = JsonNode.Parse(ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "falhou", "erro_envio", null, det))!.AsObject();
         var incerta = JsonNode.Parse(ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "incerta", "erro_envio", null, det))!.AsObject();
         var enviada = JsonNode.Parse(ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "enviada", null, "991", det))!.AsObject();
         checar(falhou["erro_detalhe"] is JsonObject fd && (string?)fd["etapa"] == "falhou_sdk" && (int?)fd["tentativa"] == 3 && (int?)fd["tentativas"] == 3
                && fd["codigos"] is JsonArray ca && ca.Count == 3 && ca[1] is null && (int?)ca[2] == 900100
-               && (bool?)fd["aqueceu"] == true && (string?)fd["plano_b"] == "na_frente" && (string?)fd["versao"] == "1.0.37"
+               && (bool?)fd["aqueceu"] == true && (string?)fd["plano_b"] == "na_frente" && (string?)fd["versao"] == "1.0.38"
                && (string?)falhou["erro"] == "erro_envio" && incerta.ContainsKey("erro_detalhe") && !enviada.ContainsKey("erro_detalhe"),
             $"ED-8 o corpo leva erro_detalhe (última tentativa + tentativas, códigos, aqueceu, plano B, versão) só em falhou e incerta ({falhou.ToJsonString()})");
-        checar(ConversaRaspadinha.MontarDetalhe(null, 0, 0, null, false, null, null, "1.0.37") is null
+        checar(ConversaRaspadinha.MontarDetalhe(null, 0, 0, null, false, null, null, "1.0.38") is null
                && ConversaRaspadinha.MontarDetalhe(null, 1, 1, new int?[] { null }, false, "inventado", "outro", "versao ruim") is { } m0
                && !m0.ContainsKey("plano_b") && !m0.ContainsKey("erro_script") && !m0.ContainsKey("versao"),
             "ED-9 sem tentativa nenhuma não há detalhe; plano B, erro do script e versão fora do contrato caem");
@@ -570,7 +618,7 @@ public static class TestesConversaChat
             ["nome"] = new string('N', 40), ["conexao"] = "CONNECTING", ["instancia"] = 20, ["instancias"] = 20, ["uid_igual_ws"] = false, ["ms"] = 60000,
         };
         var cinco = new int?[] { int.MinValue, int.MinValue, int.MinValue, int.MinValue, int.MinValue };
-        var cheio = ConversaRaspadinha.MontarDetalhe(gordo, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.37")!;
+        var cheio = ConversaRaspadinha.MontarDetalhe(gordo, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.38")!;
         var bytes = System.Text.Encoding.UTF8.GetByteCount(cheio.ToJsonString(new System.Text.Json.JsonSerializerOptions
             { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         var msgCortada = (string?)cheio["msg"];
@@ -579,7 +627,7 @@ public static class TestesConversaChat
             $"ED-10 o detalhe cabe em 600 bytes: a mensagem encolhe primeiro ({bytes} bytes, msg {msgCortada?.Length ?? 0})");
         var semMsg = (JsonObject)gordo.DeepClone(); semMsg.Remove("msg");
         semMsg["nome"] = new string('N', 40);
-        var codigosCortados = ConversaRaspadinha.MontarDetalhe(semMsg, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.37")!;
+        var codigosCortados = ConversaRaspadinha.MontarDetalhe(semMsg, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.38")!;
         checar(System.Text.Encoding.UTF8.GetByteCount(codigosCortados.ToJsonString()) <= ConversaRaspadinha.TetoDetalheBytes,
             "ED-11 sem mensagem para cortar, quem encolhe são os códigos (e o detalhe continua dentro do teto)");
 
@@ -1012,7 +1060,7 @@ public static class TestesConversaChat
         // git não separa as duas, então a prova é pelo conteúdo)
         checar(impressao.Length > 0 && !Regex.IsMatch(impressao, @"ConversaRaspadinha|ServicoConversaChat|comanda_onde|RESGATE|ItemBonus"),
             "FN-17 Impressao.cs não tem nada desta entrega");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.37</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.37 (o Spotify no quiosque: o caixa abre a versão logada e a música toca sozinha)");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.38</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.38 (o SDK pela heap e pelo berço, o diagnóstico novo e a observação do cartão)");
     }
 
     private static string? Raiz()

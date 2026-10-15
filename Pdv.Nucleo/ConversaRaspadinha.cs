@@ -410,6 +410,21 @@ public static class ConversaRaspadinha
         "OPEN", "CONNECTING", "CLOSED", "OUTRO",
     };
 
+    /// <summary>1.0.38: o estado do singleton do SDK no diagnóstico (o dado que faltava no 15/10).</summary>
+    public static readonly IReadOnlySet<string> EstadosDoSingleton = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "ok", "vazio", "sem_usuario", "sem_canal", "erro", "sem_modulo",
+    };
+
+    private static readonly Regex ReNomeSeguroDiag = new(@"^[A-Za-z0-9._,\-]{1,80}$", RegexOptions.CultureInvariant);
+
+    /// <summary>1.0.38: um nome do diagnóstico (bundle, globais do webpack) só se for curto e sem nada além de letra, dígito, ponto, vírgula, hífen e underscore. Vazio ou fora disso vira null.</summary>
+    public static string? NomeSeguroDoDiag(string? s)
+    {
+        if (string.IsNullOrEmpty(s) || s.Length > 80) return null;
+        return ReNomeSeguroDiag.IsMatch(s) ? s : null;
+    }
+
     /// <summary>O que o plano B fez (1.0.35): o resultado da recarga do Gestor escondido.</summary>
     public static readonly IReadOnlySet<string> PlanosB = new HashSet<string>(StringComparer.Ordinal)
     {
@@ -1070,16 +1085,37 @@ public static class ConversaRaspadinha
             // 1.0.20: por onde achou (o módulo do webpack ou a árvore do React), quantos runtimes do
             // webpack e quantos módulos casaram com a assinatura do SDK. Só contagens, para o teste
             // na loja dizer por que o sdk.achou deu falso sem ninguém abrir o caixa.
-            foreach (var k in new[] { "achou", "user_id_igual_ws", "tem_order_uuid", "via_webpack", "via_react" })
+            // 1.0.38: via_heap (a camada A, pela heap do CDP), via_berco (a camada B, o init embrulhado)
+            // e mf (federação de módulos) entram na lista de booleanos
+            foreach (var k in new[] { "achou", "user_id_igual_ws", "tem_order_uuid", "via_webpack", "via_react", "via_heap", "via_berco", "mf" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<bool>(out var b))
                     sdk[k] = b;
-            foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes" })
+            // 1.0.38: as contagens novas do diagnóstico (heap, sockets do Sendbird, fábricas, DOM, iframes, esm, workers)
+            foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes",
+                "heap_inst", "heap_validas", "heap_abertas", "ws_sb_doc", "ws_sb_abertos", "fabricas", "fab_sendbird",
+                "dom_sendbird", "dom_fibras", "iframes", "iframes_outros", "esm", "workers" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<int>(out var n))
                     sdk[k] = Math.Clamp(n, 0, 100_000);
             // 1.0.35: o estado da conexão do SDK, só como enum (OPEN, CONNECTING, CLOSED, OUTRO)
             if (sdkDaPagina.TryGetPropertyValue("conexao", out var cv) && cv is JsonValue cjv && cjv.TryGetValue<string>(out var cs)
                 && ConexoesDoSdk.Contains(cs))
                 sdk["conexao"] = cs;
+            // 1.0.38: o estado do singleton (o dado que faltava no 15/10), só como enum
+            if (sdkDaPagina.TryGetPropertyValue("singleton", out var sv) && sv is JsonValue sjv && sjv.TryGetValue<string>(out var sgl)
+                && EstadosDoSingleton.Contains(sgl))
+                sdk["singleton"] = sgl;
+            if (sdkDaPagina.TryGetPropertyValue("singleton_conexao", out var scv) && scv is JsonValue scjv && scjv.TryGetValue<string>(out var scs)
+                && ConexoesDoSdk.Contains(scs))
+                sdk["singleton_conexao"] = scs;
+            // 1.0.38: a versão do SDK e o nome do bundle (para datar o deploy do Gestor) e os globais do webpack,
+            // só como texto curto e seguro (dígitos e ponto na versão; nome de arquivo ou de global no resto)
+            if (sdkDaPagina.TryGetPropertyValue("versao_sdk", out var vv) && vv is JsonValue vjv && vjv.TryGetValue<string>(out var vsdk)
+                && Regex.IsMatch(vsdk, @"^[0-9][0-9.]{0,15}$"))
+                sdk["versao_sdk"] = vsdk;
+            foreach (var k in new[] { "bundle", "globais_wp" })
+                if (sdkDaPagina.TryGetPropertyValue(k, out var tv) && tv is JsonValue tjv && tjv.TryGetValue<string>(out var ts)
+                    && NomeSeguroDoDiag(ts) is { } limpo)
+                    sdk[k] = limpo;
         }
         if (canaisPorMerchant is not null)
         {
@@ -1119,6 +1155,9 @@ public static class ConversaRaspadinha
             {
                 ["falhas_seguidas"] = Math.Clamp(ev.FalhasSeguidas, 0, 100_000),
                 ["recargas_hora"] = Math.Clamp(ev.RecargasNaHora, 0, 100),
+                // 1.0.38: a observação do cartão que virou fala sintética (mandadas) e a que o cliente já tinha escrito (puladas)
+                ["obs_mandadas"] = Math.Clamp(ev.ObsMandadas, 0, 100_000),
+                ["obs_puladas"] = Math.Clamp(ev.ObsPuladas, 0, 100_000),
             };
         if (solicitacao is { } so)
             o["solicitacao"] = new JsonObject
@@ -1126,6 +1165,8 @@ public static class ConversaRaspadinha
                 ["cartoes"] = Math.Clamp(so.Cartoes, 0, 100_000),
                 ["com_data"] = Math.Clamp(so.ComData, 0, 100_000),
                 ["botoes_max"] = Math.Clamp(so.BotoesMax, 0, 100),
+                // 1.0.38: quantos cartões traziam a observação do cliente
+                ["obs_lidas"] = Math.Clamp(so.ObsLidas, 0, 100_000),
             };
         return o.ToJsonString(Json);
     }
@@ -1134,11 +1175,13 @@ public static class ConversaRaspadinha
     /// <param name="OpcoesAnteriores">1.0.35: o navegador abriu com as opções de uma versão anterior (perfil em uso).</param>
     public readonly record struct SaudeDoChat(bool PaginaViva, string Navegacao, string Fase, int RecriacoesNaHora, bool OpcoesAnteriores = false);
 
-    /// <summary>1.0.35: o envio pelo SDK neste caixa, para o sinal: falhas seguidas e recargas do plano B na última hora.</summary>
-    public readonly record struct ContagemDoEnvio(int FalhasSeguidas, int RecargasNaHora);
+    /// <summary>1.0.35: o envio pelo SDK neste caixa, para o sinal: falhas seguidas e recargas do plano B na última hora.
+    /// 1.0.38: as observações do cartão que o robô mandou e que pulou (o cliente já tinha escrito o texto).</summary>
+    public readonly record struct ContagemDoEnvio(int FalhasSeguidas, int RecargasNaHora, int ObsMandadas = 0, int ObsPuladas = 0);
 
-    /// <summary>1.0.35: os cartões da solicitação do cliente registrados nesta sessão (só contagens).</summary>
-    public readonly record struct ContagemDeCartoes(int Cartoes, int ComData, int BotoesMax);
+    /// <summary>1.0.35: os cartões da solicitação do cliente registrados nesta sessão (só contagens).
+    /// 1.0.38: quantos desses cartões traziam a observação do cliente (ObsLidas).</summary>
+    public readonly record struct ContagemDeCartoes(int Cartoes, int ComData, int BotoesMax, int ObsLidas = 0);
 
     // ── O PAPEL (orquestração testável) ──────────────────────────────────────
 
@@ -1500,6 +1543,59 @@ public sealed class MemoriaDeEco
     }
 
     private static string Chave(string canal, string texto) => canal + "|" + ConversaRaspadinha.HashTexto(texto);
+}
+
+/// <summary>
+/// 1.0.38 (caso #0434): a memória curta das falas do cliente, por canal, para não repetir a observação.
+/// Quando o texto da observação vem num cartão (BRDM/AEDI), o robô só manda a fala sintética se o cliente
+/// AINDA NÃO escreveu esse texto numa fala comum (o formato antigo "Quero adicionar observação do pedido:
+/// &lt;texto&gt;", ou o cliente que digitou o código antes). Guarda 10 min por canal. Puro: relógio de fora.
+/// </summary>
+public sealed class MemoriaDeFalaCliente
+{
+    public static readonly TimeSpan Janela = TimeSpan.FromMinutes(10);
+    private const int TetoDeCanais = 500;
+    private const int TetoPorCanal = 20;
+    private readonly object _trava = new();
+    private readonly Dictionary<string, List<(string Texto, DateTime Em)>> _porCanal = new(StringComparer.Ordinal);
+
+    public void Registrar(string canal, string texto, DateTime agora)
+    {
+        var t = Norm(texto);
+        if (t.Length == 0) return;
+        lock (_trava)
+        {
+            Limpar(agora);
+            if (!_porCanal.TryGetValue(canal, out var l)) _porCanal[canal] = l = new List<(string, DateTime)>();
+            l.Add((t, agora));
+            if (l.Count > TetoPorCanal) l.RemoveAt(0);
+        }
+    }
+
+    /// <summary>Alguma fala do cliente dos últimos 10 min neste canal já contém o texto da observação?</summary>
+    public bool Contem(string canal, string observacao, DateTime agora)
+    {
+        var o = Norm(observacao);
+        if (o.Length == 0) return false;
+        lock (_trava)
+        {
+            Limpar(agora);
+            return _porCanal.TryGetValue(canal, out var l)
+                   && l.Any(x => agora - x.Em <= Janela && x.Texto.Contains(o, StringComparison.Ordinal));
+        }
+    }
+
+    private void Limpar(DateTime agora)
+    {
+        foreach (var k in _porCanal.Keys.ToList())
+        {
+            _porCanal[k].RemoveAll(x => agora - x.Em > Janela);
+            if (_porCanal[k].Count == 0) _porCanal.Remove(k);
+        }
+        if (_porCanal.Count > TetoDeCanais) _porCanal.Clear();
+    }
+
+    private static string Norm(string? s) => Regex.Replace(s ?? "", @"\s+", " ").Trim().ToLowerInvariant();
 }
 
 /// <summary>Até 20 envios por minuto por terminal (seção 5). O script tem a mesma trava.</summary>

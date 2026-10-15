@@ -83,8 +83,9 @@ public static class ServicoArquivoChat
             if (ChatArquivo.EhSolicitacaoDoCliente(t.Mensagem!))
                 AvisarSolicitacao(t.Canal!, t.Mensagem!);
             // 1.0.35 (caso #8039): os cartoes da solicitacao sao so LIDOS e registrados (o data e os botoes)
-            if (t.Mensagem!.Comando == "BRDM" && t.Mensagem.CustomType is { } ct && ChatArquivo.TiposDeCartao.Contains(ct))
-                CartaoDaSolicitacao(payload!, t.Mensagem, agora);
+            // 1.0.38 (caso #0434): o AEDI (cartao editado) tambem traz o data, entao entra aqui tambem
+            if (t.Mensagem!.Comando is "BRDM" or "AEDI" && t.Mensagem.CustomType is { } ct && ChatArquivo.TiposDeCartao.Contains(ct))
+                CartaoDaSolicitacao(payload!, t.Mensagem, t.Canal!, agora);
             Interlocked.Increment(ref _lidas);
             Interlocked.Increment(ref _naFila);
             if (!Gravacoes.Writer.TryWrite((t.Canal!, t.Mensagem!, agora))) Interlocked.Decrement(ref _naFila);
@@ -122,18 +123,21 @@ public static class ServicoArquivoChat
     // arquivo continua igual (o ERP nao recebe campo novo).
 
     private static readonly JanelaDaSolicitacao Janela = new();
-    private static int _cartoes, _cartoesComData, _botoesMax;
+    private static int _cartoes, _cartoesComData, _botoesMax, _obsLidas;
 
-    /// <summary>As contagens para o sinal do chat: cartoes registrados, quantos com data, o maior numero de botoes.</summary>
+    /// <summary>As contagens para o sinal do chat: cartoes registrados, quantos com data, o maior numero de botoes e quantos traziam a observacao.</summary>
     public static ConversaRaspadinha.ContagemDeCartoes Contagem()
-        => new(Volatile.Read(ref _cartoes), Volatile.Read(ref _cartoesComData), Volatile.Read(ref _botoesMax));
+        => new(Volatile.Read(ref _cartoes), Volatile.Read(ref _cartoesComData), Volatile.Read(ref _botoesMax), Volatile.Read(ref _obsLidas));
 
-    private static void CartaoDaSolicitacao(string payload, MensagemArquivo m, DateTime agora)
+    private static void CartaoDaSolicitacao(string payload, MensagemArquivo m, CanalDaFala canal, DateTime agora)
     {
         var cartao = ChatArquivo.LerCartaoDoIfood(payload);
         if (cartao is null) return;
         var registrar = Janela.Ver(cartao, ChatArquivo.EhSolicitacaoDoCliente(m), agora);
         if (registrar.Count == 0) return;
+        // 1.0.38 (caso #0434): a observacao do cliente dentro deste cartao vira uma linha sintetica do
+        // arquivo (MESG do lado cliente, custom_type "solicitacao", chave sol:) e uma linha de prova local
+        if (registrar.Any(x => x.Chave == cartao.Chave)) ObservacaoDoCartao(payload, cartao, canal, agora);
         // fora da tela: o banco e o arquivo de texto
         _ = Task.Run(() =>
         {
@@ -160,6 +164,43 @@ public static class ServicoArquivoChat
                 catch (Exception ex) { Diag("cartao da solicitacao: " + ex.GetType().Name); }
             }
         });
+    }
+
+    /// <summary>
+    /// 1.0.38 (caso #0434): a observacao do cliente dentro do cartao. Grava uma linha sintetica do arquivo
+    /// (MESG do lado cliente, custom_type "solicitacao", chave sol:) para o ERP guardar, e uma linha de prova
+    /// local (chat-observacao.txt) com tudo mascarado. Nada e tocado no Gestor; o ERP nao recebe campo novo.
+    /// </summary>
+    private static void ObservacaoDoCartao(string payload, CartaoDoIfood cartao, CanalDaFala canal, DateTime agora)
+    {
+        var obs = QuadroSendbird.ObservacaoNoCartao(payload);
+        if (obs is null) return;
+        Interlocked.Increment(ref _obsLidas);
+        var sint = new MensagemArquivo("MESG", canal.Canal, null, null, null, null, LadoArquivo.Cliente, "solicitacao",
+            obs.Texto, obs.CriadoEmMs, false, false);
+        Interlocked.Increment(ref _naFila);
+        if (!Gravacoes.Writer.TryWrite((canal, sint, DateTime.Now))) Interlocked.Decrement(ref _naFila);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                string? numero = null;
+                using (var cx = Banco.Abrir())
+                    numero = Dapper.SqlMapper.ExecuteScalar<string?>(cx,
+                        "SELECT numero FROM kds_ticket WHERE origem = 'ifood' AND ref_id = @r LIMIT 1", new { r = canal.OrderId });
+                Telas.HospedeWebView2.Anotar("chat-observacao.txt", LinhaDaObservacao(obs, cartao, numero), Relogio.Elapsed);
+            }
+            catch (Exception ex) { Diag("observacao: " + ex.GetType().Name); }
+        });
+    }
+
+    /// <summary>A linha do chat-observacao.txt: pedido, tipo, msg_id, a origem, a forma do data e a observacao mascarada. Nunca texto livre em claro.</summary>
+    private static string LinhaDaObservacao(QuadroSendbird.ObservacaoDoPedido obs, CartaoDoIfood c, string? numero)
+    {
+        var forma = System.Text.Json.JsonSerializer.Serialize(c.Dados);
+        if (forma.Length > 800) forma = forma[..800] + "...";
+        return $"pedido=#{(string.IsNullOrWhiteSpace(numero) ? "?" : numero!.Trim())} tipo={c.CustomType} msg_id={obs.MsgId ?? "-"} "
+             + $"origem={obs.Origem} data={forma} obs=({ChatArquivo.Mascarar(obs.Texto)})";
     }
 
     /// <summary>Os relogios nascem no primeiro quadro, uma vez so.</summary>

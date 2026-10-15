@@ -125,7 +125,7 @@ public static class TestesPlanoBDoEnvio
                 Esperar = t => { Agora += t; return Task.CompletedTask; },
                 Agora = () => Agora,
                 Diag = Diags.Add,
-                Versao = "1.0.37",
+                Versao = "1.0.38",
                 Recarregou = () => RecargasContadas++,
                 PrazoDaRecarga = PrazoDaRecarga,
             };
@@ -222,7 +222,7 @@ public static class TestesPlanoBDoEnvio
         var det = d.Relatos.SingleOrDefault().Detalhe;
         checar(d.Enviados.Count == 2 && d.Recargas == 1 && d.Relatos.Count == 1 && d.Relatos[0] is ("falhou", "erro_envio", _)
                && Str(det, "plano_b") == "recarregou" && Int(det, "tentativa") == 2 && Int(det, "tentativas") == 2
-               && Str(det, "etapa") == "falhou_sdk" && Int(det, "codigo") == 900100 && Str(det, "versao") == "1.0.37",
+               && Str(det, "etapa") == "falhou_sdk" && Int(det, "codigo") == 900100 && Str(det, "versao") == "1.0.38",
             $"PB-15 recarregou e o SDK recusou de novo: falhou com o detalhe (plano_b recarregou, 2 tentativas), sem 3a tentativa ({det?.ToJsonString()})");
     }
 

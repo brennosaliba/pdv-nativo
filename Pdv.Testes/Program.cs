@@ -818,6 +818,17 @@ if (args.Length >= 1 && args[0] == "--so-conta")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (15/10/2026): so o banco de conversas (arquivo) e a observacao do cartao.
+// NAO e o gate.
+//   Pdv.Testes.exe --so-arquivo
+if (args.Length >= 1 && args[0] == "--so-arquivo")
+{
+    await TestesChatArquivo.RodarAsync((cond, nome) => Check("chat-arquivo: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so arquivo) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 // MODO DE DESENVOLVIMENTO (14/10/2026): so as suites do KDS, mais a dos pedidos que ja sairam do quadro.
 // NAO e o gate.
 //   Pdv.Testes.exe --so-kds
