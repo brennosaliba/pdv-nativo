@@ -959,7 +959,7 @@ public static class ConversaRaspadinha
     /// </summary>
     public static string EstadoDoSinal(string gestor, bool wsVivo, DateTime? ultimoQuadro, int fila,
         JsonObject? quadros, JsonObject? sdkDaPagina, IReadOnlyDictionary<string, int>? canaisPorMerchant,
-        SaudeDoChat? saude = null)
+        SaudeDoChat? saude = null, ContagemDoEnvio? envio = null, ContagemDeCartoes? solicitacao = null)
     {
         var sdk = new JsonObject();
         if (sdkDaPagina is not null)
@@ -973,6 +973,10 @@ public static class ConversaRaspadinha
             foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<int>(out var n))
                     sdk[k] = Math.Clamp(n, 0, 100_000);
+            // 1.0.35: o estado da conexão do SDK, só como enum (OPEN, CONNECTING, CLOSED, OUTRO)
+            if (sdkDaPagina.TryGetPropertyValue("conexao", out var cv) && cv is JsonValue cjv && cjv.TryGetValue<string>(out var cs)
+                && ConexoesDoSdk.Contains(cs))
+                sdk["conexao"] = cs;
         }
         if (canaisPorMerchant is not null)
         {
@@ -1002,11 +1006,32 @@ public static class ConversaRaspadinha
                 ["recriacoes_hora"] = Math.Clamp(sd.RecriacoesNaHora, 0, 100),
             };
         }
+        // 1.0.35: o envio pelo SDK (falhas seguidas deste caixa e recargas do plano B na hora) e os
+        // cartões da solicitação do cliente que o caixa registrou. Só inteiros, nunca texto nem id.
+        if (envio is { } ev)
+            o["envio"] = new JsonObject
+            {
+                ["falhas_seguidas"] = Math.Clamp(ev.FalhasSeguidas, 0, 100_000),
+                ["recargas_hora"] = Math.Clamp(ev.RecargasNaHora, 0, 100),
+            };
+        if (solicitacao is { } so)
+            o["solicitacao"] = new JsonObject
+            {
+                ["cartoes"] = Math.Clamp(so.Cartoes, 0, 100_000),
+                ["com_data"] = Math.Clamp(so.ComData, 0, 100_000),
+                ["botoes_max"] = Math.Clamp(so.BotoesMax, 0, 100),
+            };
         return o.ToJsonString(Json);
     }
 
     /// <summary>1.0.33: a saude da pagina do chat para o sinal (ver <see cref="VigiaChatIfood"/>).</summary>
     public readonly record struct SaudeDoChat(bool PaginaViva, string Navegacao, string Fase, int RecriacoesNaHora);
+
+    /// <summary>1.0.35: o envio pelo SDK neste caixa, para o sinal: falhas seguidas e recargas do plano B na última hora.</summary>
+    public readonly record struct ContagemDoEnvio(int FalhasSeguidas, int RecargasNaHora);
+
+    /// <summary>1.0.35: os cartões da solicitação do cliente registrados nesta sessão (só contagens).</summary>
+    public readonly record struct ContagemDeCartoes(int Cartoes, int ComData, int BotoesMax);
 
     // ── O PAPEL (orquestração testável) ──────────────────────────────────────
 
@@ -1443,12 +1468,26 @@ public sealed class ConfirmacaoDeEnvio
     private readonly object _trava = new();
     private readonly Dictionary<long, (string Canal, string Hash, DateTime Ate, bool VistoSaindo)> _esperando = new();
 
-    public void Aguardar(long saidaId, string canal, string texto, DateTime agora)
+    /// <param name="prazo">
+    /// 1.0.35: a GUARDA do plano B usa um prazo maior (a recarga do Gestor leva até 40 s): um quadro
+    /// desta resposta que passar durante a recarga (o SDK reenviando sozinho) também conta, e a mesma
+    /// resposta não sai duas vezes. Sem prazo, os 15 s de sempre.
+    /// </param>
+    public void Aguardar(long saidaId, string canal, string texto, DateTime agora, TimeSpan? prazo = null)
     {
-        lock (_trava) _esperando[saidaId] = (canal, ConversaRaspadinha.HashTexto(texto), agora + Prazo, false);
+        lock (_trava) _esperando[saidaId] = (canal, ConversaRaspadinha.HashTexto(texto), agora + (prazo ?? Prazo), false);
     }
 
     public bool Pendente(long saidaId) { lock (_trava) return _esperando.ContainsKey(saidaId); }
+
+    /// <summary>
+    /// 1.0.35: como está a espera de uma saída, sem mexer nela. null = não espera mais (o quadro de
+    /// volta confirmou, ou venceu); true = o quadro dela foi visto SAINDO; false = nada passou ainda.
+    /// </summary>
+    public bool? Estado(long saidaId)
+    {
+        lock (_trava) return _esperando.TryGetValue(saidaId, out var e) ? e.VistoSaindo : null;
+    }
 
     /// <summary>
     /// Tira a saída da espera porque o script disse que NÃO mandou. Devolve null quando ela já não

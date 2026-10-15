@@ -913,7 +913,7 @@ public static class TestesConversaChat
 
         // a espera da confirmação nasce ANTES do script: o SDK só responde depois que o quadro de
         // volta já passou pelo CDP, e esperando depois nada casava (toda resposta virava "incerta")
-        var iEnviarUma = servico.IndexOf("private static async Task EnviarUmaAsync(", StringComparison.Ordinal);
+        var iEnviarUma = servico.IndexOf("public static async Task EnviarComTentativasAsync(", StringComparison.Ordinal);   // 1.0.35: o laco com portas
         var iAguardar = iEnviarUma < 0 ? -1 : servico.IndexOf("Confirmacoes.Aguardar(", iEnviarUma, StringComparison.Ordinal);
         var iScriptChamado = iEnviarUma < 0 ? -1 : servico.IndexOf("ponte.EnviarPeloSdk(", iEnviarUma, StringComparison.Ordinal);
         checar(iEnviarUma > 0 && iAguardar > iEnviarUma && iScriptChamado > iAguardar,

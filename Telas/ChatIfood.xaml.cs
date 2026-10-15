@@ -239,6 +239,7 @@ public partial class ChatIfood : UserControl
                 // 1.0.33: a navegação deixa rastro, e a que falhou tenta de novo sozinha (30, 60 e
                 // 120 s). Antes ficava "toque em Recarregar" e o chat parado até alguém ver.
                 _navegacao = e.IsSuccess ? "ok" : "falhou";
+                Interlocked.Increment(ref _navegacoes);   // 1.0.35: o plano B espera a recarga terminar
                 Diag(e.IsSuccess ? "navegou: ok" : $"navegou: falhou {e.WebErrorStatus}");
                 TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: tentando de novo sozinho";
                 // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
@@ -301,6 +302,8 @@ public partial class ChatIfood : UserControl
                     : new ConversaRaspadinha.SaudeDoChat(false, _navegacao, "abrindo", 0),
                 // 1.0.25: aquece o SDK abrindo a conversa do pedido (com o numero) ou so a lista
                 AquecerConversa = AquecerConversaAsync,
+                // 1.0.35: o plano B do envio (recarrega o Gestor escondido; nunca com ele na frente)
+                RecarregarParaEnvio = RecarregarParaEnvioAsync,
             });
             // 1.0.25: e aquece uma vez sozinho, logo depois de o Gestor carregar, para o primeiro
             // pedido do dia nao cair em canal_errado
@@ -1121,6 +1124,77 @@ public partial class ChatIfood : UserControl
             return ok;
         }
         catch (Exception ex) { DiagRaspadinha("aquecer: " + ex.GetType().Name); return false; }
+    }
+
+    // ── 1.0.35: O PLANO B DO ENVIO (caso #8039) ──────────────────────────────
+
+    /// <summary>Quantas navegações do Gestor terminaram (o plano B só confia no diagnóstico depois da recarga).</summary>
+    private int _navegacoes;
+    /// <summary>O teto próprio da recarga do plano B: 1 a cada 10 min, 3 por hora (fora do teto de recriar).</summary>
+    private readonly TetoDaRecargaDoEnvio _tetoRecargaEnvio = new();
+
+    /// <summary>
+    /// 1.0.35 (14/10/2026, caso #8039): o SDK do Sendbird recusou o envio sem nenhum quadro sair. Na
+    /// Savassi isso durou 5 dias (41 de 42 respostas do robô). A conexão nova vem SÓ pela recarga da
+    /// página: o caixa nunca chama connect, disconnect nem reconnect do SDK. Recarrega o Gestor
+    /// ESCONDIDO, espera o SDK voltar aberto (OPEN) e abre a conversa do pedido. Nunca com a camada do
+    /// chat na frente do operador, nunca no meio de um "Abrir e colar", nunca com o Gestor pedindo login
+    /// e no máximo 1 a cada 10 min e 3 por hora. A recarga leva menos que o silêncio da vigia (2 min):
+    /// ela não recria o controle por causa disso. Devolve recarregou, na_frente, login, teto, sem_sdk ou
+    /// erro. Chamado de qualquer thread; roda na da tela.
+    /// </summary>
+    public async Task<string> RecarregarParaEnvioAsync(string? numero, string? orderUuid)
+    {
+        if (!Dispatcher.CheckAccess()) return await HospedeWebView2.NaTela(Dispatcher, () => RecarregarParaEnvioAsync(numero, orderUuid));
+        try
+        {
+            if (PlanoBDoEnvio.Impedimento(_pronto, IsHitTestVisible, !_colagens.IsEmpty, _gestorPedeLogin) is { } nao)
+            {
+                DiagRaspadinha($"plano b: {nao}, o Gestor nao e recarregado");
+                return nao;
+            }
+            if (!_tetoRecargaEnvio.Permitir(DateTime.UtcNow))
+            {
+                DiagRaspadinha("plano b: teto (1 a cada 10 min, 3 por hora)");
+                return PlanoBDoEnvio.Teto;
+            }
+            var core = Web.CoreWebView2;
+            if (core is null) return PlanoBDoEnvio.SemSdk;
+            var minha = _tentativa;
+            var antes = Volatile.Read(ref _navegacoes);
+            var inicio = DateTime.Now;
+            Diag("plano b: recarregando o Gestor escondido para o envio");
+            DiagRaspadinha("plano b: recarregando o Gestor escondido para o envio");
+            core.Reload();
+            var aberto = false;
+            while (DateTime.Now - inicio < PlanoBDoEnvio.EsperaDoSdk)
+            {
+                await Task.Delay(PlanoBDoEnvio.PassoDaEspera);
+                if (minha != _tentativa || !_pronto || Web.CoreWebView2 is null) return PlanoBDoEnvio.SemSdk;
+                // o diagnóstico só vale depois que a recarga terminou (antes ainda responde a página velha)
+                if (Volatile.Read(ref _navegacoes) == antes) continue;
+                if (_navegacao == "falhou") { DiagRaspadinha("plano b: a recarga nao navegou"); return PlanoBDoEnvio.SemSdk; }
+                var d = await DiagSdkAsync(Array.Empty<string>(), _ultimoWsUser);
+                if (PlanoBDoEnvio.PedeLogin(d)) { DiagRaspadinha("plano b: depois da recarga o Gestor pede login"); return PlanoBDoEnvio.Login; }
+                if (PlanoBDoEnvio.SdkAberto(d)) { aberto = true; break; }
+            }
+            if (!aberto)
+            {
+                DiagRaspadinha($"plano b: o SDK nao voltou aberto em {PlanoBDoEnvio.EsperaDoSdk.TotalSeconds:0} s");
+                return PlanoBDoEnvio.SemSdk;
+            }
+            // a conversa do pedido abre no Gestor escondido; se o operador trouxe o chat para a frente no
+            // meio da recarga, so a lista (o aquecimento sem pedido nao mexe com ele na tela)
+            try { await AquecerConversaAsync(IsHitTestVisible ? null : numero, orderUuid).WaitAsync(PlanoBDoEnvio.Aquecimento); }
+            catch (Exception ex) { DiagRaspadinha("plano b, aquecer: " + ex.GetType().Name); }
+            DiagRaspadinha($"plano b: recarregou, SDK aberto em {(DateTime.Now - inicio).TotalSeconds:0} s");
+            return PlanoBDoEnvio.Recarregou;
+        }
+        catch (Exception ex)
+        {
+            DiagRaspadinha("plano b: " + ex.GetType().Name);
+            return PlanoBDoEnvio.Erro;
+        }
     }
 
     /// <summary>1.0.25: 25 s depois de o Gestor carregar, abre a lista de conversas uma vez (e mais uma, se a primeira nao deu).</summary>

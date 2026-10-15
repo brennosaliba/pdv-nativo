@@ -2019,6 +2019,13 @@ Console.WriteLine();
 Console.WriteLine("--- Resgate pelo chat: a conversa, o portao de envio, o papel e a fila ---");
 await TestesConversaChat.RodarAsync((cond, nome) => Check("conversa: " + nome, cond));
 
+// -- 14/10/2026: O PLANO B DO ENVIO PELO SDK (caixa 1.0.35, caso #8039) --------------------
+// Na Savassi o SDK recusou 41 de 42 respostas do robo em 5 dias. O caixa guarda o motivo e, na
+// primeira recusa, recarrega o Gestor escondido e tenta UMA vez mais, dentro da reserva.
+Console.WriteLine();
+Console.WriteLine("--- Plano B do envio: recarga do Gestor escondido, Gestor na frente, reserva vencida, mensagem dobrada ---");
+await TestesPlanoBDoEnvio.RodarAsync((cond, nome) => Check("plano-b: " + nome, cond));
+
 // -- 07/10/2026: APROVACAO PELO WHATSAPP DO DONO (caixa 1.0.20) --------------------------
 // O dono aprova pelo WhatsApp pessoal e a resposta sai sozinha no chat do iFood, pelo SDK que o
 // caixa acha no webpack do Gestor. O caixa ignora a proposta, manda a aprovada pelo portao de hoje,

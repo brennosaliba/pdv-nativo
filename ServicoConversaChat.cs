@@ -40,6 +40,38 @@ public sealed class PonteDoChat
     public Func<string?, string?, Task<bool>>? AquecerConversa { get; init; }
     /// <summary>1.0.33: a saude da pagina (viva, navegacao, fase da vigia) para o sinal. Opcional.</summary>
     public Func<ConversaRaspadinha.SaudeDoChat>? Saude { get; init; }
+    /// <summary>
+    /// 1.0.35 (caso #8039), o PLANO B: (numero do pedido, uuid) → a tela recarrega o Gestor ESCONDIDO
+    /// (conexão nova do SDK), espera o SDK voltar aberto e aquece a conversa do pedido. Devolve
+    /// recarregou, na_frente, login, teto, sem_sdk ou erro. Nunca recarrega com o Gestor na frente do
+    /// operador. Opcional: sem ela, o envio é o de hoje.
+    /// </summary>
+    public Func<string?, string?, Task<string>>? RecarregarParaEnvio { get; init; }
+}
+
+/// <summary>
+/// 1.0.35: as portas do laço de envio (<see cref="ServicoConversaChat.EnviarComTentativasAsync"/>). O
+/// serviço liga nas de verdade (o portão, a confirmação pelo quadro, o sinal, a ponte da tela e o
+/// relato ao ERP); a bateria liga nas falsas, com relógio e espera de mentira.
+/// </summary>
+public sealed class LacoDeEnvio
+{
+    public required PortaoDeEnvio Portao { get; init; }
+    public required ConfirmacaoDeEnvio Confirmacoes { get; init; }
+    /// <summary>O último sinal e quando chegou.</summary>
+    public required Func<(SinalConversa Sinal, DateTime? Em)> Sinal { get; init; }
+    public required Func<PonteDoChat?> Ponte { get; init; }
+    /// <summary>(saida_id, resultado, erro, saída, detalhe) → conta ao ERP.</summary>
+    public required Func<long, string, string?, SaidaConversa?, JsonObject?, Task> Relatar { get; init; }
+    public Func<TimeSpan, Task> Esperar { get; init; } = t => Task.Delay(t);
+    public Func<DateTime> Agora { get; init; } = () => DateTime.Now;
+    public Action<string> Diag { get; init; } = _ => { };
+    /// <summary>A versão do caixa que vai no detalhe do erro.</summary>
+    public string? Versao { get; init; }
+    /// <summary>Quanto o laço espera a recarga do plano B.</summary>
+    public TimeSpan PrazoDaRecarga { get; init; } = PlanoBDoEnvio.PrazoDaRecarga;
+    /// <summary>A recarga do plano B aconteceu (conta para o sinal).</summary>
+    public Action? Recarregou { get; init; }
 }
 
 /// <summary>
@@ -117,6 +149,12 @@ public static class ServicoConversaChat
 
     /// <summary>O último sinal lido (para a tela e para os testes de fumaça).</summary>
     public static SinalConversa Sinal => _ultimo.Sinal;
+
+    /// <summary>
+    /// 1.0.35: as contagens dos cartões da solicitação do cliente, para o sinal. Quem registra os
+    /// cartões é o leitor do arquivo do chat, que liga esta porta no primeiro quadro.
+    /// </summary>
+    public static Func<ConversaRaspadinha.ContagemDeCartoes>? Cartoes { get; set; }
 
     /// <summary>
     /// Liga o serviço com a ponte da tela do chat. Idempotente: a ponte é trocada quando a tela é
@@ -380,79 +418,205 @@ public static class ServicoConversaChat
     public static readonly TimeSpan IntervaloDoAquecimento = TimeSpan.FromMinutes(2);
     private static DateTime _ultimoAquecimento = DateTime.MinValue;
 
-    private static async Task EnviarUmaAsync(SaidaConversa s, DateTime recebida)
+    private static Task EnviarUmaAsync(SaidaConversa s, DateTime recebida)
+        => EnviarComTentativasAsync(s, recebida, new LacoDeEnvio
+        {
+            Portao = Portao,
+            Confirmacoes = Confirmacoes,
+            Sinal = () => { var u = _ultimo; return (u.Sinal, u.Em); },
+            Ponte = () => _ponte,
+            Relatar = (id, resultado, erro, saida, detalhe) => RelatarAsync(id, resultado, erro, null, saida, detalhe),
+            Diag = Diag,
+            Versao = Versao,
+            Recarregou = () => ContarRecarga(DateTime.Now),
+        });
+
+    /// <summary>
+    /// O LAÇO DO ENVIO de uma saída "sdk" reservada a este terminal. Público para a bateria, que liga
+    /// as portas falsas (<see cref="LacoDeEnvio"/>); o serviço liga as de verdade em EnviarUmaAsync.
+    ///
+    /// 1.0.24 (08/10/2026): com o Gestor recem-carregado e nenhuma conversa aberta, o script
+    /// devolve canal_errado ou erro_envio de primeira (SDK frio). Antes, uma falha ja virava
+    /// "falhou": 5 seguidas as 12:27 pausaram as mensagens do pedido e a resposta de um
+    /// resgate foi para o "Abrir e colar" que ninguem tocou. Agora o envio tenta de novo, com
+    /// o portao decidido de novo (token novo) e 15 s de respiro, ate 3 vezes; so entao falha.
+    /// 1.0.25 (08/10/2026, 17:15): a nova tentativa passava de novo pelo portao, e o eco que a
+    /// PRIMEIRA decisao registrou barrava a segunda como repetida: toda mensagem do pedido virou
+    /// "incerta/eco" sem sair. Agora so a primeira tentativa decide; as seguintes repetem a mesma
+    /// permissao com token novo (Portao.Repetir), e antes de cada uma o caixa aquece o SDK
+    /// abrindo a conversa do pedido no Gestor escondido.
+    /// 1.0.35 (14/10/2026, caso #8039): o rastro guarda o motivo de cada recusa e vai ao ERP no
+    /// relato. E o PLANO B: na primeira recusa do SDK (erro_envio de falhou_sdk ou promessa, sem quadro
+    /// saindo), a tela recarrega o Gestor escondido (conexão nova) e o caixa tenta UMA vez mais, com a
+    /// mesma permissão (Portao.Repetir) e dentro do prazo da reserva. Gestor na frente, login, teto ou
+    /// SDK que não volta: segue o laço de hoje. Reserva vencida depois da recarga: "falhou" (sem_tempo),
+    /// nunca "incerta", porque a mensagem com certeza não saiu e precisa ir para a pessoa.
+    /// </summary>
+    public static async Task EnviarComTentativasAsync(SaidaConversa s, DateTime recebida, LacoDeEnvio l)
     {
-        // 1.0.24 (08/10/2026): com o Gestor recem-carregado e nenhuma conversa aberta, o script
-        // devolve canal_errado ou erro_envio de primeira (SDK frio). Antes, uma falha ja virava
-        // "falhou": 5 seguidas as 12:27 pausaram as mensagens do pedido e a resposta de um
-        // resgate foi para o "Abrir e colar" que ninguem tocou. Agora o envio tenta de novo, com
-        // o portao decidido de novo (token novo) e 15 s de respiro, ate 3 vezes; so entao falha.
-        // 1.0.25 (08/10/2026, 17:15): a nova tentativa passava de novo pelo portao, e o eco que a
-        // PRIMEIRA decisao registrou barrava a segunda como repetida: toda mensagem do pedido virou
-        // "incerta/eco" sem sair. Agora so a primeira tentativa decide; as seguintes repetem a mesma
-        // permissao com token novo (Portao.Repetir), e antes de cada uma o caixa aquece o SDK
-        // abrindo a conversa do pedido no Gestor escondido.
-        // 1.0.35 (caso #8039): o rastro guarda o motivo de cada recusa e vai ao ERP no relato
         string? erro = null;
         PermissaoDeEnvio? primeira = null;
-        var rastro = new RastroDoEnvio(Versao);
+        var rastro = new RastroDoEnvio(l.Versao);
+        var planoBFeito = false;
         for (var tentativa = 1; tentativa <= TentativasDeEnvio; tentativa++)
         {
-            var ultimo = _ultimo;
+            var (sinal, sinalEm) = l.Sinal();
             PermissaoDeEnvio? permissao;
             MotivoPortao motivo;
             if (tentativa == 1)
             {
-                (permissao, motivo) = Portao.Decidir(s, ultimo.Sinal, ultimo.Em, recebida, DateTime.Now);
+                (permissao, motivo) = l.Portao.Decidir(s, sinal, sinalEm, recebida, l.Agora());
                 primeira = permissao;
             }
             else
             {
-                permissao = primeira is null ? null : Portao.Repetir(primeira, recebida, DateTime.Now);
+                permissao = primeira is null ? null : l.Portao.Repetir(primeira, recebida, l.Agora());
                 motivo = permissao is null ? MotivoPortao.ReservaVencida : MotivoPortao.Liberado;
             }
-            Diag($"saida={s.Id} etapa={s.Etapa} portao={motivo}{(tentativa > 1 ? " tentativa=" + tentativa : "")}");
+            l.Diag($"saida={s.Id} etapa={s.Etapa} portao={motivo}{(tentativa > 1 ? " tentativa=" + tentativa : "")}");
             if (permissao is null)
             {
                 if (PortaoDeEnvio.Relato(motivo) is { } rel)
-                    await RelatarAsync(s.Id, rel.Resultado, rel.Erro, null, s, rastro.Detalhe()).ConfigureAwait(false);
+                    await l.Relatar(s.Id, rel.Resultado, rel.Erro, s, rastro.Detalhe()).ConfigureAwait(false);
                 return;
             }
-            var ponte = _ponte;
+            var ponte = l.Ponte();
             if (ponte is null)
             {
-                await RelatarAsync(s.Id, "falhou", "sdk_ausente", null, s).ConfigureAwait(false);
+                await l.Relatar(s.Id, "falhou", "sdk_ausente", s, null).ConfigureAwait(false);
                 return;
             }
-            // A confirmação é PELO QUADRO (seção 0, decisão 9), e a espera nasce ANTES do script: o SDK
-            // só responde depois que o servidor devolve a mensagem, e a essa altura o quadro que saiu e
-            // a volta com o msg_id já passaram pelo CDP. Esperando só depois, nada nunca casava e toda
-            // resposta mandada virava "incerta".
-            Confirmacoes.Aguardar(s.Id, permissao.Canal, permissao.Texto, DateTime.Now);
-            ResultadoDoScript res;
-            try { res = await ponte.EnviarPeloSdk(permissao).ConfigureAwait(false); }
-            catch { res = new ResultadoDoScript(false, "sem_resposta", null); }
-            rastro.Registrar(tentativa, res.Detalhe, res.Erro);
-            Diag($"saida={s.Id} script ok={res.Ok} erro={res.Erro ?? "-"}{ConversaRaspadinha.LinhaDoDetalhe(res.Detalhe)}");
-            // Mandou, ou não respondeu (pode ter saído): quem decide é o quadro, em até 15 s. Sem ele,
-            // "incerta" (ConfirmacaoDeEnvio.Vencidas), e nunca de novo.
-            if (res.Ok || res.Erro is "sem_resposta") return;
-            // O script disse que não mandou. Se o quadro já confirmou, vale o quadro; se o quadro foi
-            // visto saindo, é dúvida e vira incerta. Só sem quadro nenhum é "falhou" (vai para a pessoa).
-            var visto = Confirmacoes.Cancelar(s.Id);
-            if (visto is null) return;
-            if (visto == true) { await RelatarAsync(s.Id, "incerta", "erro_envio", null, s, rastro.Detalhe()).ConfigureAwait(false); return; }
-            erro = res.Erro is "sdk_ausente" or "canal_errado" or "congelada" or "sem_cliente" or "erro_envio"
-                ? res.Erro : "erro_envio";
+            var vez = await TentarAsync(s, permissao, ponte, tentativa, rastro, l).ConfigureAwait(false);
+            if (vez.Desfecho != DesfechoDaTentativa.Falhou) return;
+            erro = vez.Erro;
+            // 1.0.35: o plano B, uma vez por saída, na primeira recusa que pede conexão nova
+            if (!planoBFeito && PlanoBDoEnvio.Cabe(erro, vez.Detalhe) && ponte.RecarregarParaEnvio is { } recarregar && primeira is not null)
+            {
+                planoBFeito = true;
+                if (await PlanoBAsync(s, recebida, primeira, ponte, recarregar, tentativa, rastro, l).ConfigureAwait(false)) return;
+            }
             // congelada e sem_cliente nao mudam com o tempo; o resto e o SDK frio: aquece, respira e tenta de novo
             if (erro is "congelada" or "sem_cliente" || tentativa == TentativasDeEnvio) break;
             var aqueceu = await AquecerAsync(ponte, s.PedidoNumero, s.IfoodOrderId).ConfigureAwait(false);
             rastro.Aqueceu |= aqueceu;
-            Diag($"saida={s.Id} erro={erro}: aqueceu={aqueceu}, tenta de novo em {RespiroEntreTentativas.TotalSeconds:0} s");
-            await Task.Delay(RespiroEntreTentativas).ConfigureAwait(false);
+            l.Diag($"saida={s.Id} erro={erro}: aqueceu={aqueceu}, tenta de novo em {RespiroEntreTentativas.TotalSeconds:0} s");
+            await l.Esperar(RespiroEntreTentativas).ConfigureAwait(false);
         }
-        await RelatarAsync(s.Id, "falhou", erro ?? "erro_envio", null, s, rastro.Detalhe()).ConfigureAwait(false);
+        await l.Relatar(s.Id, "falhou", erro ?? "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
     }
+
+    /// <summary>Como terminou uma tentativa: só "Falhou" deixa o laço seguir.</summary>
+    public enum DesfechoDaTentativa
+    {
+        /// <summary>O script disse que mandou: quem confirma é o quadro.</summary>
+        Saiu,
+        /// <summary>O script não respondeu (pode ter saído): o quadro decide, e sem ele vira "incerta".</summary>
+        SemResposta,
+        /// <summary>O script disse que não, mas o quadro já tinha confirmado: vale o quadro.</summary>
+        JaConfirmada,
+        /// <summary>O script disse que não e o quadro foi visto saindo: "incerta", nunca de novo.</summary>
+        Incerta,
+        /// <summary>O script disse que não e nenhum quadro passou: pode tentar de novo.</summary>
+        Falhou,
+    }
+
+    /// <summary>
+    /// UMA tentativa: a espera pelo quadro nasce ANTES do script, o script manda, o rastro guarda o motivo
+    /// e a confirmação decide. A confirmação é PELO QUADRO (seção 0, decisão 9): o SDK só responde depois
+    /// que o servidor devolve a mensagem, e a essa altura o quadro que saiu e a volta com o msg_id já
+    /// passaram pelo CDP. Esperando só depois, nada nunca casava e toda resposta mandada virava "incerta".
+    /// </summary>
+    private static async Task<(DesfechoDaTentativa Desfecho, string? Erro, JsonObject? Detalhe)> TentarAsync(
+        SaidaConversa s, PermissaoDeEnvio permissao, PonteDoChat ponte, int tentativa, RastroDoEnvio rastro, LacoDeEnvio l)
+    {
+        l.Confirmacoes.Aguardar(s.Id, permissao.Canal, permissao.Texto, l.Agora());
+        ResultadoDoScript res;
+        try { res = await ponte.EnviarPeloSdk(permissao).ConfigureAwait(false); }
+        catch { res = new ResultadoDoScript(false, "sem_resposta", null); }
+        rastro.Registrar(tentativa, res.Detalhe, res.Erro);
+        l.Diag($"saida={s.Id} script ok={res.Ok} erro={res.Erro ?? "-"}{ConversaRaspadinha.LinhaDoDetalhe(res.Detalhe)}");
+        // Mandou, ou não respondeu (pode ter saído): quem decide é o quadro, em até 15 s. Sem ele,
+        // "incerta" (ConfirmacaoDeEnvio.Vencidas), e nunca de novo.
+        if (res.Ok) return (DesfechoDaTentativa.Saiu, null, null);
+        if (res.Erro is "sem_resposta") return (DesfechoDaTentativa.SemResposta, null, null);
+        // O script disse que não mandou. Se o quadro já confirmou, vale o quadro; se o quadro foi
+        // visto saindo, é dúvida e vira incerta. Só sem quadro nenhum é "falhou" (vai para a pessoa).
+        var visto = l.Confirmacoes.Cancelar(s.Id);
+        if (visto is null) return (DesfechoDaTentativa.JaConfirmada, null, null);
+        if (visto == true)
+        {
+            await l.Relatar(s.Id, "incerta", "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
+            return (DesfechoDaTentativa.Incerta, null, null);
+        }
+        var erro = res.Erro is "sdk_ausente" or "canal_errado" or "congelada" or "sem_cliente" or "erro_envio"
+            ? res.Erro : "erro_envio";
+        return (DesfechoDaTentativa.Falhou, erro, res.Detalhe);
+    }
+
+    /// <summary>
+    /// 1.0.35: o PLANO B (ver <see cref="PlanoBDoEnvio"/>). Devolve true quando a saída já tem desfecho
+    /// (mandou, ou foi relatada) e o laço para; false quando não houve recarga e o laço de hoje segue.
+    /// Durante a recarga a GUARDA espera o quadro desta resposta: se o SDK a reenviar sozinho ao
+    /// reconectar, ela não sai de novo.
+    /// </summary>
+    private static async Task<bool> PlanoBAsync(SaidaConversa s, DateTime recebida, PermissaoDeEnvio primeira, PonteDoChat ponte,
+        Func<string?, string?, Task<string>> recarregar, int tentativa, RastroDoEnvio rastro, LacoDeEnvio l)
+    {
+        l.Confirmacoes.Aguardar(s.Id, primeira.Canal, primeira.Texto, l.Agora(), PlanoBDoEnvio.GuardaDaRecarga);
+        var inicio = l.Agora();
+        string pb;
+        try { pb = PlanoBDoEnvio.Normalizar(await recarregar(s.PedidoNumero, s.IfoodOrderId).WaitAsync(l.PrazoDaRecarga).ConfigureAwait(false)); }
+        catch { pb = PlanoBDoEnvio.Erro; }
+        rastro.PlanoB = PlanoBDoEnvio.ParaODetalhe(pb);
+        var seg = Math.Max(0, (l.Agora() - inicio).TotalSeconds);
+        switch (l.Confirmacoes.Estado(s.Id))
+        {
+            case null:
+                l.Diag($"saida={s.Id} plano b={pb} em {seg:0} s: o quadro desta resposta confirmou durante a recarga");
+                return true;
+            case true:
+                l.Confirmacoes.Cancelar(s.Id);
+                l.Diag($"saida={s.Id} plano b={pb} em {seg:0} s: um quadro desta resposta saiu durante a recarga, incerta e sem reenvio");
+                await l.Relatar(s.Id, "incerta", "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
+                return true;
+        }
+        if (pb != PlanoBDoEnvio.Recarregou)
+        {
+            l.Confirmacoes.Cancelar(s.Id);
+            l.Diag($"saida={s.Id} plano b={pb}: sem recarga, segue o laço de hoje");
+            return false;
+        }
+        l.Recarregou?.Invoke();
+        var n = tentativa + 1;
+        var extra = l.Portao.Repetir(primeira, recebida, l.Agora());
+        if (extra is null)
+        {
+            l.Confirmacoes.Cancelar(s.Id);
+            rastro.PlanoB = PlanoBDoEnvio.SemTempo;
+            l.Diag($"saida={s.Id} plano b=recarregou em {seg:0} s, tentativa {n}: sem tempo (a reserva venceu), falhou");
+            await l.Relatar(s.Id, "falhou", "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
+            return true;
+        }
+        var vez = await TentarAsync(s, extra, ponte, n, rastro, l).ConfigureAwait(false);
+        var como = vez.Desfecho == DesfechoDaTentativa.Saiu ? "ok" : vez.Desfecho.ToString().ToLowerInvariant();
+        l.Diag($"saida={s.Id} plano b=recarregou em {seg:0} s, tentativa {n}: {como}");
+        if (vez.Desfecho == DesfechoDaTentativa.Falhou)
+            await l.Relatar(s.Id, "falhou", vez.Erro ?? "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
+        return true;
+    }
+
+    // 1.0.35: o envio no sinal (falhas seguidas deste caixa e recargas do plano B na última hora)
+    private static int _falhasSeguidas;
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<DateTime> Recargas = new();
+
+    private static void ContarRecarga(DateTime agora)
+    {
+        Recargas.Enqueue(agora);
+        while (Recargas.TryPeek(out var t) && agora - t > TimeSpan.FromHours(1)) Recargas.TryDequeue(out _);
+    }
+
+    private static ConversaRaspadinha.ContagemDoEnvio ContagemDoEnvio(DateTime agora)
+        => new(Volatile.Read(ref _falhasSeguidas), Recargas.Count(t => agora - t <= TimeSpan.FromHours(1)));
 
     /// <summary>
     /// 1.0.25: o SDK esta frio? Achou a instancia e nao conferiu canal nenhum, tendo canais para
@@ -530,6 +694,9 @@ public static class ServicoConversaChat
     {
         try
         {
+            // 1.0.35: as falhas seguidas do envio deste caixa, para o sinal (os mesmos códigos que o alarme do ERP conta)
+            if (resultado == "enviada") Interlocked.Exchange(ref _falhasSeguidas, 0);
+            else if (resultado == "falhou" && erro is "erro_envio" or "sdk_ausente" or "canal_errado") Interlocked.Increment(ref _falhasSeguidas);
             var doDono = s?.PeloDono == true || EraDoDono(saidaId);
             // 1.0.35: o detalhe do erro só vai com falhou/incerta (CorpoSaida confere); o ERP sem o SQL 176 ignora
             var corpo = ConversaRaspadinha.CorpoSaida(Terminal, saidaId, resultado, erro, msgId, detalhe);
@@ -606,9 +773,12 @@ public static class ServicoConversaChat
                 }
             }
             var ultimo = Contadores.UltimoQuadro;
+            ConversaRaspadinha.ContagemDeCartoes? cartoes = null;
+            try { cartoes = Cartoes?.Invoke(); } catch { }
             var estado = ConversaRaspadinha.EstadoDoSinal(_ponte?.Gestor() ?? "ausente",
                 ultimo is { } uq && uq > agora - TimeSpan.FromMinutes(2), ultimo, fila,
-                Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant(), _ponte?.Saude?.Invoke());
+                Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant(), _ponte?.Saude?.Invoke(),
+                ContagemDoEnvio(agora), cartoes);
             var corpo = ConversaRaspadinha.CorpoSinal(Terminal, Versao, estado);
             var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
                 .ConfigureAwait(false);
