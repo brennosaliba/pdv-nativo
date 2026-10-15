@@ -10,7 +10,12 @@ namespace Pdv;
 public sealed record AvisoDoChat(string Tipo, string Texto, string? TextoParaColar, string? OrderUuid, string? Numero);
 
 /// <summary>O que o script de envio contou: mandou, ou o erro do contrato (sdk_ausente, canal_errado...).</summary>
-public sealed record ResultadoDoScript(bool Ok, string? Erro, string? MsgId);
+/// <param name="Detalhe">
+/// 1.0.35 (caso #8039): o motivo da recusa que a página mandou, já pela lista branca de
+/// <see cref="ConversaRaspadinha.DetalheDoErro"/> (etapa, código e mensagem do erro do Sendbird, conexão,
+/// contagens). Nunca texto, canal, pedido, usuário nem token.
+/// </param>
+public sealed record ResultadoDoScript(bool Ok, string? Erro, string? MsgId, JsonObject? Detalhe = null);
 
 /// <summary>
 /// O que a tela do chat oferece ao serviço. O serviço não encosta no WebView2: tudo que roda na
@@ -387,8 +392,10 @@ public static class ServicoConversaChat
         // "incerta/eco" sem sair. Agora so a primeira tentativa decide; as seguintes repetem a mesma
         // permissao com token novo (Portao.Repetir), e antes de cada uma o caixa aquece o SDK
         // abrindo a conversa do pedido no Gestor escondido.
+        // 1.0.35 (caso #8039): o rastro guarda o motivo de cada recusa e vai ao ERP no relato
         string? erro = null;
         PermissaoDeEnvio? primeira = null;
+        var rastro = new RastroDoEnvio(Versao);
         for (var tentativa = 1; tentativa <= TentativasDeEnvio; tentativa++)
         {
             var ultimo = _ultimo;
@@ -408,7 +415,7 @@ public static class ServicoConversaChat
             if (permissao is null)
             {
                 if (PortaoDeEnvio.Relato(motivo) is { } rel)
-                    await RelatarAsync(s.Id, rel.Resultado, rel.Erro, null, s).ConfigureAwait(false);
+                    await RelatarAsync(s.Id, rel.Resultado, rel.Erro, null, s, rastro.Detalhe()).ConfigureAwait(false);
                 return;
             }
             var ponte = _ponte;
@@ -425,7 +432,8 @@ public static class ServicoConversaChat
             ResultadoDoScript res;
             try { res = await ponte.EnviarPeloSdk(permissao).ConfigureAwait(false); }
             catch { res = new ResultadoDoScript(false, "sem_resposta", null); }
-            Diag($"saida={s.Id} script ok={res.Ok} erro={res.Erro ?? "-"}");
+            rastro.Registrar(tentativa, res.Detalhe, res.Erro);
+            Diag($"saida={s.Id} script ok={res.Ok} erro={res.Erro ?? "-"}{ConversaRaspadinha.LinhaDoDetalhe(res.Detalhe)}");
             // Mandou, ou não respondeu (pode ter saído): quem decide é o quadro, em até 15 s. Sem ele,
             // "incerta" (ConfirmacaoDeEnvio.Vencidas), e nunca de novo.
             if (res.Ok || res.Erro is "sem_resposta") return;
@@ -433,16 +441,17 @@ public static class ServicoConversaChat
             // visto saindo, é dúvida e vira incerta. Só sem quadro nenhum é "falhou" (vai para a pessoa).
             var visto = Confirmacoes.Cancelar(s.Id);
             if (visto is null) return;
-            if (visto == true) { await RelatarAsync(s.Id, "incerta", "erro_envio", null, s).ConfigureAwait(false); return; }
+            if (visto == true) { await RelatarAsync(s.Id, "incerta", "erro_envio", null, s, rastro.Detalhe()).ConfigureAwait(false); return; }
             erro = res.Erro is "sdk_ausente" or "canal_errado" or "congelada" or "sem_cliente" or "erro_envio"
                 ? res.Erro : "erro_envio";
             // congelada e sem_cliente nao mudam com o tempo; o resto e o SDK frio: aquece, respira e tenta de novo
             if (erro is "congelada" or "sem_cliente" || tentativa == TentativasDeEnvio) break;
             var aqueceu = await AquecerAsync(ponte, s.PedidoNumero, s.IfoodOrderId).ConfigureAwait(false);
+            rastro.Aqueceu |= aqueceu;
             Diag($"saida={s.Id} erro={erro}: aqueceu={aqueceu}, tenta de novo em {RespiroEntreTentativas.TotalSeconds:0} s");
             await Task.Delay(RespiroEntreTentativas).ConfigureAwait(false);
         }
-        await RelatarAsync(s.Id, "falhou", erro ?? "erro_envio", null, s).ConfigureAwait(false);
+        await RelatarAsync(s.Id, "falhou", erro ?? "erro_envio", null, s, rastro.Detalhe()).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -516,12 +525,14 @@ public static class ServicoConversaChat
     /// 1.0.20: a saída do dono que falhou NUNCA vira texto para colar, nem pela reserva do ERP nem
     /// sem rede (D8: quem recebe o texto é o dono, no WhatsApp). Com o caixa mudo, nenhuma vira.
     /// </summary>
-    private static async Task RelatarAsync(long saidaId, string resultado, string? erro, string? msgId, SaidaConversa? s)
+    private static async Task RelatarAsync(long saidaId, string resultado, string? erro, string? msgId, SaidaConversa? s,
+        JsonObject? detalhe = null)
     {
         try
         {
             var doDono = s?.PeloDono == true || EraDoDono(saidaId);
-            var corpo = ConversaRaspadinha.CorpoSaida(Terminal, saidaId, resultado, erro, msgId);
+            // 1.0.35: o detalhe do erro só vai com falhou/incerta (CorpoSaida confere); o ERP sem o SQL 176 ignora
+            var corpo = ConversaRaspadinha.CorpoSaida(Terminal, saidaId, resultado, erro, msgId, detalhe);
             for (var i = 0; i < 3; i++)
             {
                 var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)

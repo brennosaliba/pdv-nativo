@@ -196,8 +196,17 @@ function canais(lista, quem) {
       members: [{ metaData: { userType: 'CUSTOMER' } }, { metaData: { userType: 'MERCHANT' } }],
       sendUserMessage: function (params) {
         __enviadas.push({ por: quem, canal: c.url, texto: params.message });
+        // 1.0.35: o SDK que RECUSA, nas tres formas que o script trata (onFailed, then rejeitado, throw)
+        if (c.falha && c.modo === 'lanca') throw c.falha;
+        if (c.falha && c.modo === 'promessa') return Promise.reject(c.falha);
+        if (c.falha) return { onSucceeded: function () { return this; }, onFailed: function (cb) { cb(c.falha, { errorCode: c.falha.code, message: params.message }); return this; } };
         return { onSucceeded: function (cb) { cb({ messageId: 991 }); return this; }, onFailed: function () { return this; } };
       } };
+    // 1.0.35: a forma antiga, com callback (msg, err)
+    if (c.modo === 'callback') o[c.url].sendUserMessage = function (params, cb) {
+      __enviadas.push({ por: quem, canal: c.url, texto: params.message });
+      cb({ message: params.message }, c.falha);
+    };
   });
   return o;
 }
@@ -230,6 +239,7 @@ function modulosDoGestor() {
           sb.apiHost = "https://api-".concat(p.appId || "app", ".sendbird.com");
           sb.nome = p.nome;
           sb.currentUser = { userId: p.userId };
+          sb.connectionState = p.estado || 'OPEN';
           var cs = p.canais;
           sb.groupChannel = { getChannel: function (url) { return cs[url] ? Promise.resolve(cs[url]) : Promise.reject(new Error('nao achei')); } };
           tp = sb;
@@ -252,11 +262,11 @@ function modulosDoGestor() {
     '1006': function (module, exports, req) { __exec.push('1006'); exports.host = "wss://ws-".concat("app", ".sendbird.com"); }
   });
 }
-function bootGestor(nome, userId, lista, nomeInst) {
+function bootGestor(nome, userId, lista, nomeInst, estado) {
   var req = montarRuntime(nome, modulosDoGestor());
   var SB = req('45369').ZP;
   req('1001');
-  var inst = SB.init({ userId: userId, nome: nomeInst || 'gestor', canais: canais(lista, nomeInst || 'gestor') });
+  var inst = SB.init({ userId: userId, nome: nomeInst || 'gestor', canais: canais(lista, nomeInst || 'gestor'), estado: estado });
   return { req: req, SB: SB, inst: inst };
 }
 `;
@@ -454,6 +464,76 @@ function exec(sb) { return Array.from(sb.__exec).join(','); }
     checar(e2 && e2.ok === false && e2.erro === 'canal_errado', '76 tres falhas seguidas do metadata: canal_errado, sem insistir para sempre');
     const e3 = await enviar(sb, 'f3', 'tk-f3', 'canal-que-nao-existe', 'uuid-x', 'texto', 'loja-1');
     checar(e3 && e3.ok === false && e3.erro === 'canal_errado', '77 canal que nao existe: canal_errado depois das tentativas');
+  }
+
+  // ── MUNDO G (1.0.35, caso #8039): o SDK recusa e o MOTIVO chega ao caixa, limpo ──
+  {
+    const U = 'aa11bb22-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
+    const URL_G = 'sendbird_gc_cm_' + U + '_ff493e25-f413-42e5-a46a-96c0b788813f';
+    const sb = mundo();
+    rodar(sb, "function Erro(c, m) { var e = new Error(m); e.name = 'SendbirdError'; e.code = c; return e; }"
+      + "var G = bootGestor('webpackChunkgestor_pedidos', 'loja-1', ["
+      + "{ url: '" + URL_G + "', uuid: '" + U + "', falha: Erro(900100, 'Not a member of " + URL_G + " (user loja-1, tel 31994412725, 31 99441-2725, joao@x.com, https://api-x.sendbird.com/v3?token=abc)') },"
+      + "{ url: 'canal-cb', uuid: 'uuid-cb', modo: 'callback', falha: Erro(800180, 'Request timeout') },"
+      + "{ url: 'canal-pr', uuid: 'uuid-pr', modo: 'promessa', falha: Erro('400111', 'Invalid parameter') },"
+      + "{ url: 'canal-th', uuid: 'uuid-th', modo: 'lanca', falha: new TypeError('x is not a function') },"
+      + "{ url: 'canal-ok', uuid: 'uuid-ok' }], 'gestor');");
+    carregar(sb);
+    const TEXTO = 'Oi, Heitor! Seu premio e 1 Cookie Classico. Qual sabor?';
+    const TOKEN = 'tk-0123456789abcdef0123456789abcdef';
+    const e1 = await enviar(sb, 'g1', TOKEN, URL_G, U, TEXTO, 'loja-1');
+    const d1 = (e1 && e1.detalhe) || {};
+    checar(e1 && e1.ok === false && e1.erro === 'erro_envio', '80 o SDK recusou (onFailed): o erro do contrato continua erro_envio');
+    checar(d1.etapa === 'falhou_sdk' && d1.codigo === 900100 && d1.codigo_msg === 900100 && d1.nome === 'SendbirdError',
+      '81 o detalhe leva a etapa falhou_sdk, o codigo do Sendbird (900100), o errorCode da mensagem e o nome do erro (' + JSON.stringify(d1) + ')');
+    checar(typeof d1.msg === 'string' && d1.msg.indexOf('31994412725') < 0 && d1.msg.indexOf('99441') < 0 && !/[0-9]{6,}/.test(d1.msg)
+      && d1.msg.indexOf('@') < 0 && d1.msg.indexOf('http') < 0 && d1.msg.indexOf(U) < 0 && d1.msg.indexOf('sendbird_gc') < 0
+      && d1.msg.indexOf('loja-1') < 0 && d1.msg.length <= 120 && d1.msg.indexOf('Not a member of') === 0,
+      '82 a mensagem do erro chega limpa: sem telefone, e-mail, endereco, canal, uuid nem usuario (' + d1.msg + ')');
+    checar(d1.conexao === 'OPEN' && d1.instancia === 0 && d1.instancias === 1 && d1.uid_igual_ws === true && typeof d1.ms === 'number' && d1.ms >= 0,
+      '83 e o estado da conexao da instancia usada, qual instancia, quantas, se o usuario bate com o WebSocket e o tempo');
+    const tudo = JSON.stringify(e1);
+    checar(tudo.indexOf('loja-1') < 0 && tudo.indexOf('Heitor') < 0 && tudo.indexOf(U) < 0 && tudo.indexOf(TOKEN) < 0
+      && tudo.indexOf('0123456789abcdef') < 0 && tudo.indexOf('stack') < 0,
+      '84 nunca o texto, o canal, o pedido, o usuario, o token nem a pilha de chamadas');
+    const e2 = await enviar(sb, 'g2', 'tk-g2', 'canal-cb', 'uuid-cb', 'texto', 'loja-1');
+    checar(e2 && e2.ok === false && e2.erro === 'erro_envio' && e2.detalhe && e2.detalhe.etapa === 'falhou_sdk' && e2.detalhe.codigo === 800180
+      && e2.detalhe.msg === 'Request timeout', '85 a forma antiga com callback (msg, err) tambem leva o motivo');
+    const e3 = await enviar(sb, 'g3', 'tk-g3', 'canal-pr', 'uuid-pr', 'texto', 'loja-1');
+    checar(e3 && e3.ok === false && e3.erro === 'erro_envio' && e3.detalhe && e3.detalhe.etapa === 'promessa' && e3.detalhe.codigo === 400111,
+      '86 a promessa rejeitada vira etapa promessa (codigo em texto vira inteiro)');
+    const e4 = await enviar(sb, 'g4', 'tk-g4', 'canal-th', 'uuid-th', 'texto', 'loja-1');
+    checar(e4 && e4.ok === false && e4.erro === 'erro_envio' && e4.detalhe && e4.detalhe.etapa === 'excecao' && e4.detalhe.nome === 'TypeError'
+      && e4.detalhe.codigo === null, '87 o throw no envio vira etapa excecao, com o nome do erro e sem codigo');
+    sb.__arg = { id: 'g5', token: 'tk-sem-c', canal: 'canal-ok', orderUuid: 'uuid-ok', texto: 't', ws: 'loja-1' };
+    rodar(sb, 'window.pdvSb.enviar(__arg)');
+    const e5 = await esperar(sb, 'g5');
+    checar(e5 && e5.erro === 'token' && e5.detalhe && e5.detalhe.etapa === 'token' && e5.detalhe.instancias === 0 && !('conexao' in e5.detalhe),
+      '88 sem o token: etapa token, antes de procurar o SDK');
+    const e6 = await enviar(sb, 'g6', 'tk-g6', 'canal-ok', 'uuid-outro', 't', 'loja-1');
+    checar(e6 && e6.erro === 'canal_errado' && e6.detalhe && e6.detalhe.etapa === 'canal_errado' && e6.detalhe.instancia === 0 && e6.detalhe.conexao === 'OPEN',
+      '89 canal de outro pedido: etapa canal_errado, com a instancia que achou o canal');
+    const e7 = await enviar(sb, 'g7', 'tk-g7', 'canal-ok', 'uuid-ok', 't', 'loja-1');
+    checar(e7 && e7.ok === true && e7.msgId === '991' && !('detalhe' in e7), '90 o envio que deu continua como era (sem detalhe)');
+    for (let i = 0; i < 15; i++) await enviar(sb, 'gl' + i, 'tk-gl' + i, 'canal-ok', 'uuid-ok', 't', 'loja-1');
+    const e8 = await enviar(sb, 'g8', 'tk-g8', 'canal-ok', 'uuid-ok', 't', 'loja-1');
+    checar(e8 && e8.erro === 'limite' && e8.detalhe && e8.detalhe.etapa === 'limite', '91 o 21o envio do minuto: etapa limite');
+    const dg = await diag(sb, 'gd', 'loja-1', []);
+    checar(dg && dg.conexao === 'OPEN' && dg.achou === true, '92 o diagnostico leva o estado da conexao (o plano B espera OPEN)');
+  }
+
+  // ── MUNDO H (1.0.35): a conexao fechada aparece no detalhe e no diagnostico ──
+  {
+    const sb = mundo();
+    rodar(sb, "var G = bootGestor('webpackChunkgestor_pedidos', 'loja-1', [{ url: 'canal-1', uuid: 'uuid-1', "
+      + "falha: (function () { var e = new Error('Connection is closed.'); e.code = 800200; return e; })() }], 'gestor', 'CLOSED');");
+    carregar(sb);
+    const e1 = await enviar(sb, 'h1', 'tk-h1', 'canal-1', 'uuid-1', 'texto', 'loja-1');
+    checar(e1 && e1.erro === 'erro_envio' && e1.detalhe && e1.detalhe.conexao === 'CLOSED' && e1.detalhe.codigo === 800200 && e1.detalhe.nome === 'Error',
+      '93 conexao fechada: o detalhe diz CLOSED e o codigo 800200');
+    rodar(sb, "G.inst.connectionState = 'esquisito';");
+    const dh = await diag(sb, 'hd', 'loja-1', []);
+    checar(dh && dh.conexao === 'OUTRO', '94 estado que nao e do contrato vira OUTRO');
   }
 
   // ── MUNDO E: o script carregado duas vezes na mesma pagina nao duplica ──

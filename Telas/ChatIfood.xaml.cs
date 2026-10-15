@@ -554,10 +554,15 @@ public partial class ChatIfood : UserControl
                 var r = doc.RootElement;
                 var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
                 if (id is not null && _envios.TryRemove(id, out var tcs))
-                    tcs.TrySetResult(new ResultadoDoScript(
+                {
+                    var res = new ResultadoDoScript(
                         r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True,
                         r.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String ? er.GetString() : null,
-                        r.TryGetProperty("msgId", out var mi) && mi.ValueKind == JsonValueKind.String ? mi.GetString() : null));
+                        r.TryGetProperty("msgId", out var mi) && mi.ValueKind == JsonValueKind.String ? mi.GetString() : null,
+                        // 1.0.35: o motivo da recusa, pela lista branca do núcleo (a página é dado não confiável)
+                        r.TryGetProperty("detalhe", out var de) ? ConversaRaspadinha.DetalheDoErro(de) : null);
+                    tcs.TrySetResult(res);
+                }
             }
             else if (tipo == "pdvsbdiag")
             {
@@ -964,7 +969,15 @@ public partial class ChatIfood : UserControl
                 $"window.__pdvEnvioToken = {JsonSerializer.Serialize(token)}; window.pdvSb ? window.pdvSb.enviar({args}) : 'sem_script'");
             if (r.Contains("sem_script", StringComparison.Ordinal)) return new ResultadoDoScript(false, "sdk_ausente", null);
             var fim = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(12)));
-            return fim == tcs.Task ? tcs.Task.Result : new ResultadoDoScript(false, "sem_resposta", null);
+            if (fim != tcs.Task) return new ResultadoDoScript(false, "sem_resposta", null);
+            // 1.0.35: o detalhe passa de novo sem o que este envio sabe que é segredo, e deixa rastro
+            var res = tcs.Task.Result with
+            {
+                Detalhe = ConversaRaspadinha.DetalheSemSegredos(tcs.Task.Result.Detalhe,
+                    permissao.Texto, permissao.Canal, permissao.OrderUuid, token, _ultimoWsUser),
+            };
+            if (!res.Ok) DiagRaspadinha($"envio pelo sdk: nao deu erro={res.Erro ?? "-"}{ConversaRaspadinha.LinhaDoDetalhe(res.Detalhe)}");
+            return res;
         }
         catch (Exception ex)
         {
@@ -2428,14 +2441,53 @@ public partial class ChatIfood : UserControl
         return '';
       }
 
+      // 1.0.35: devolve tambem QUAL instancia achou o canal (o detalhe do erro diz a conexao dela)
       async function acharCanal(lista, canal){
         for (var t = 0; t < 3; t++) {
           for (var i = 0; i < lista.length; i++) {
-            try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return ch; } catch (e) {}
+            try { var ch = await lista[i].groupChannel.getChannel(canal); if (ch) return { ch: ch, i: i }; } catch (e) {}
           }
           await espera(1500);
         }
         return null;
+      }
+
+      // 1.0.35 (14/10/2026, caso #8039): o MOTIVO da recusa. Na Savassi 41 de 42 envios falharam
+      // em 5 dias e o caixa so sabia 'erro_envio': o erro do Sendbird era jogado fora. O detalhe
+      // leva SO o codigo, o nome, a mensagem do erro limpa, o estado da conexao e contagens; nunca
+      // o texto, o canal, o pedido, o usuario ou o token. O C# passa de novo por uma lista branca.
+      var UUID_SOLTO = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+      var NUMERO_LONGO = /(?:[0-9][ .()\/-]?){5,}[0-9]/g;
+      var TRAVESSOES = new RegExp('[' + String.fromCharCode(8211) + String.fromCharCode(8212) + ']', 'g');
+      function limpaMsg(s, segredos){
+        if (s === null || s === undefined) return null;
+        var t = '';
+        try { t = String(s); } catch (e) { return null; }
+        // o que a pagina SABE que e segredo (texto, canal, pedido, token, usuarios) sai antes de tudo
+        (segredos || []).forEach(function (x) { try { x = String(x || ''); if (x.length >= 3) t = t.split(x).join('#'); } catch (e) {} });
+        t = t.replace(/[\r\n\t]+/g, ' ').replace(TRAVESSOES, '-');
+        t = t.replace(/(?:https?|wss?):\/\/\S*/gi, 'url').replace(/\S*@\S*/g, 'email');
+        t = t.replace(/sendbird_[A-Za-z0-9_-]*/g, 'canal').replace(UUID_SOLTO, 'uuid');
+        t = t.replace(/[0-9a-f]{16,}/gi, '#').replace(NUMERO_LONGO, '#');
+        t = t.replace(/\s+/g, ' ').trim();
+        if (t.length > 120) t = t.slice(0, 120).trim();
+        return t.length ? t : null;
+      }
+      function inteiro(v){
+        var n = (typeof v === 'number') ? v : (typeof v === 'string' && /^-?[0-9]{1,10}$/.test(v) ? parseInt(v, 10) : NaN);
+        if (!isFinite(n) || Math.floor(n) !== n || n < -2147483648 || n > 2147483647) return null;
+        return n;
+      }
+      function conexaoDe(x){
+        var c = '';
+        try { c = String(x && x.connectionState).toUpperCase(); } catch (e) { c = ''; }
+        return (c === 'OPEN' || c === 'CONNECTING' || c === 'CLOSED') ? c : 'OUTRO';
+      }
+      function nomeDe(err){
+        var n = '';
+        try { n = String((err && (err.name || (err.constructor && err.constructor.name))) || ''); } catch (e) { n = ''; }
+        n = n.replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
+        return n.length ? n : null;
       }
 
       function diag(a){
@@ -2454,6 +2506,9 @@ public partial class ChatIfood : UserControl
             r.modulos = achados.length;
             r.runtimes = Object.keys(reqs).length;
             if (lista.length && lista[0].currentUser && lista[0].currentUser.userId) r.uid = String(lista[0].currentUser.userId);
+            // 1.0.35: o estado da conexao da primeira instancia (OPEN, CONNECTING, CLOSED ou OUTRO):
+            // o plano B espera ela voltar OPEN depois de recarregar o Gestor
+            if (lista.length) r.conexao = conexaoDe(lista[0]);
             // 1.0.33: sem instancia nao ha canal para conferir: responde na hora (antes esperava
             // 1,5 s por canal e estourava o prazo do caixa, e o achou=false nunca chegava)
             if (!lista.length) { r.conferidos = 0; envia(r); return; }
@@ -2486,41 +2541,72 @@ public partial class ChatIfood : UserControl
 
       function enviar(a){
         var id = a && a.id;
+        var t0 = Date.now(), lista = [], inst = -1;
         function fim(o){ o.tipo = 'pdvsb'; o.id = id; envia(o); }
+        // 1.0.35: todo ok:false leva o detalhe (etapa, codigo e mensagem do erro, conexao, contagens)
+        function detalhe(etapa, err, msg){
+          var d = { etapa: etapa, codigo: null, codigo_msg: null, msg: null, nome: null };
+          try {
+            if (err !== null && err !== undefined) {
+              var segredos = a ? [a.texto, a.canal, a.orderUuid, a.token, a.ws] : [];
+              lista.forEach(function (y) { try { if (y.currentUser) segredos.push(y.currentUser.userId); } catch (e) {} });
+              d.codigo = inteiro(err.code);
+              d.msg = limpaMsg(typeof err === 'string' ? err : err.message, segredos);
+              d.nome = nomeDe(err);
+            }
+          } catch (e) {}
+          try { if (msg) d.codigo_msg = inteiro(msg.errorCode); } catch (e) {}
+          d.instancias = Math.min(lista.length, 20);
+          var x = lista.length ? lista[inst >= 0 ? inst : 0] : null;
+          if (x) {
+            d.conexao = conexaoDe(x);
+            try { d.uid_igual_ws = !!(a && a.ws && x.currentUser && String(x.currentUser.userId) === String(a.ws)); } catch (e) { d.uid_igual_ws = false; }
+          }
+          if (inst >= 0) d.instancia = Math.min(inst, 20);
+          d.ms = Math.max(0, Math.min(60000, Date.now() - t0));
+          return d;
+        }
+        function falha(erro, etapa, err, msg){ fim({ ok: false, erro: erro, detalhe: detalhe(etapa, err, msg) }); }
         try {
           // o token de uso unico: sem ele igual ao que o C# acabou de por, nada sai
           var esperado = window.__pdvEnvioToken;
           window.__pdvEnvioToken = null;
-          if (!a || !a.token || !esperado || esperado !== a.token) { fim({ ok: false, erro: 'token' }); return 'token'; }
+          if (!a || !a.token || !esperado || esperado !== a.token) { falha('token', 'token'); return 'token'; }
           var agora = Date.now();
           enviados = enviados.filter(function (t) { return agora - t < 60000; });
-          if (enviados.length >= 20) { fim({ ok: false, erro: 'limite' }); return 'limite'; }
-          var lista = ordenar(instancias(), a.ws);
-          if (!lista.length) { fim({ ok: false, erro: 'sdk_ausente' }); return 'sdk_ausente'; }
+          if (enviados.length >= 20) { falha('limite', 'limite'); return 'limite'; }
+          lista = ordenar(instancias(), a.ws);
+          if (!lista.length) { falha('sdk_ausente', 'sdk_ausente'); return 'sdk_ausente'; }
           (async function () {
-            var ch = await acharCanal(lista, a.canal);
-            if (!ch) { fim({ ok: false, erro: 'canal_errado' }); return; }
+            var achado = await acharCanal(lista, a.canal);
+            var ch = achado ? achado.ch : null;
+            if (!ch) { falha('canal_errado', 'canal_errado'); return; }
+            inst = achado.i;
             var pedido = await pedidoDoCanal(ch);
-            if (!a.orderUuid || pedido.toLowerCase() !== String(a.orderUuid).toLowerCase()) { fim({ ok: false, erro: 'canal_errado' }); return; }
-            if (ch.isFrozen) { fim({ ok: false, erro: 'congelada' }); return; }
+            if (!a.orderUuid || pedido.toLowerCase() !== String(a.orderUuid).toLowerCase()) { falha('canal_errado', 'canal_errado'); return; }
+            if (ch.isFrozen) { falha('congelada', 'congelada'); return; }
             var cliente = (ch.members || []).some(function (m) { return !!(m && m.metaData && m.metaData.userType === 'CUSTOMER'); });
-            if (!cliente) { fim({ ok: false, erro: 'sem_cliente' }); return; }
+            if (!cliente) { falha('sem_cliente', 'sem_cliente'); return; }
             enviados.push(Date.now());
             var feito = false;
             function deu(msg){ if (feito) return; feito = true; fim({ ok: true, msgId: msg && msg.messageId ? String(msg.messageId) : null }); }
-            function naoDeu(){ if (feito) return; feito = true; fim({ ok: false, erro: 'erro_envio' }); }
+            // 1.0.35: o erro do SDK chega ate aqui (antes naoDeu nao recebia nada)
+            function naoDeu(err, msg, etapa){ if (feito) return; feito = true; falha('erro_envio', etapa, err, msg); }
             try {
               var params = { message: String(a.texto || '') };
               var r = ch.sendUserMessage.length >= 2
-                ? ch.sendUserMessage(params, function (msg, err) { if (err) naoDeu(); else deu(msg); })
+                ? ch.sendUserMessage(params, function (msg, err) { if (err) naoDeu(err, msg, 'falhou_sdk'); else deu(msg); })
                 : ch.sendUserMessage(params);
-              if (r && typeof r.onSucceeded === 'function') { r.onSucceeded(deu); if (typeof r.onFailed === 'function') r.onFailed(naoDeu); }
-              else if (r && typeof r.then === 'function') r.then(deu, naoDeu);
+              if (r && typeof r.onSucceeded === 'function') {
+                r.onSucceeded(deu);
+                if (typeof r.onFailed === 'function') r.onFailed(function (err, msg) { naoDeu(err, msg, 'falhou_sdk'); });
+              }
+              else if (r && typeof r.then === 'function') r.then(deu, function (err) { naoDeu(err, null, 'promessa'); });
               else if (ch.sendUserMessage.length < 2) deu(r);
-            } catch (e) { naoDeu(); }
-          })().catch(function () { fim({ ok: false, erro: 'erro_envio' }); });
+            } catch (e) { naoDeu(e, null, 'excecao'); }
+          })().catch(function (e) { falha('erro_envio', 'geral', e); });
           return 'iniciado';
-        } catch (e) { fim({ ok: false, erro: 'erro_envio' }); return 'erro'; }
+        } catch (e) { falha('erro_envio', 'geral', e); return 'erro'; }
       }
 
       window.pdvSb = { diag: diag, enviar: enviar };

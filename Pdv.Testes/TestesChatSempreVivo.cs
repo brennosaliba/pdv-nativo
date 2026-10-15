@@ -66,7 +66,7 @@ public static class TestesChatSempreVivo
                && enviar.Contains("Portao.Repetir(primeira, recebida, DateTime.Now)")
                && enviar.Contains("if (erro is \"congelada\" or \"sem_cliente\" || tentativa == TentativasDeEnvio) break;")
                && enviar.Contains("await AquecerAsync(ponte, s.PedidoNumero, s.IfoodOrderId)")
-               && enviar.Contains("await RelatarAsync(s.Id, \"falhou\", erro ?? \"erro_envio\", null, s)"),
+               && enviar.Contains("await RelatarAsync(s.Id, \"falhou\", erro ?? \"erro_envio\", null, s, rastro.Detalhe())"),
             "CV-11 a 1a tentativa passa pelo portao; as seguintes pelo Repetir (token novo, sem o eco) depois de aquecer; congelada e sem_cliente nao tentam de novo; so no fim relata falhou");
         // 1.0.25: o SDK frio e reconhecido pelo diagnostico, e o caixa aquece sozinho
         {
