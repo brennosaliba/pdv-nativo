@@ -63,17 +63,28 @@ Como funciona desde a 1.0.36:
 1. Configuração → marque (ou desmarque) a trava → **Salvar alterações**.
 2. O PDV tenta gravar direto. Dá certo só com o UAC desligado ou com o PDV aberto como
    administrador; aí não aparece aviso nenhum.
-3. Negado, o PDV chama a si mesmo como administrador:
-   `Pdv.exe --travas on|off --sid <SID do usuário do caixa>`. O Windows escurece a tela e
-   pergunta "Pdv.exe, editor desconhecido". Usuário administrador toca em **Sim**; usuário
-   comum digita a senha de um administrador.
-4. O ajudante grava em `HKEY_USERS\<SID>\...` (o registro de quem pediu, não o do
-   administrador que digitou a senha) e sai. Ele só aceita on/off, só os quatro valores,
-   só o SID de quem está logado (ou da própria conta), e só roda se o `Pdv.exe` estiver
-   em Arquivos de Programas.
-5. O PDV relê o registro. Deu certo: nada na tela. Responderam Não: "Sem a permissão do
-   Windows, a trava do Ctrl+Alt+Del não foi ligada. O resto foi salvo." O detalhe técnico
-   vai só para a auditoria (`ctrl_alt_del_travado`, `_destravado`, `_recusado`, `_falhou`).
+3. Negado, o PDV pede ao Windows para rodar como administrador **um programa do próprio
+   Windows**: o `cmd.exe` de `C:\Windows\System32`, com quatro `reg.exe` (também de
+   System32) que gravam (ou apagam) as quatro políticas em `HKEY_USERS\<SID do caixa>`.
+   O Windows escurece a tela e mostra **Processador de Comandos do Windows**, editor
+   verificado **Microsoft Windows**. Usuário administrador toca em **Sim**; usuário comum
+   digita a senha de um administrador. Um aviso só para as quatro políticas.
+4. `HKEY_USERS\<SID>` e não `HKCU`: com usuário comum quem digita a senha é outra conta, e
+   o HKCU do processo elevado seria o dela. O SID vem da conta do processo do PDV (nunca de
+   arquivo nem de texto digitado) e passa por um formato estrito; a linha do cmd é montada
+   só de constantes e desse SID (`cmd /d /v:off /s /c "...reg.exe add ... /f & ..."`; o
+   `/d` desliga o AutoRun, que o usuário consegue gravar).
+5. O PDV espera o cmd até 20 s e **relê o registro** (o código de saída de um processo
+   elevado não volta para quem pediu). Deu certo: nada na tela. Responderam Não: "Sem a
+   permissão do Windows, a trava do Ctrl+Alt+Del não foi ligada. O resto foi salvo." O
+   detalhe técnico vai só para a auditoria (`ctrl_alt_del_travado`, `_destravado`,
+   `_recusado`, `_falhou`).
+
+**Por que não o próprio Pdv.exe (revisão de segurança da 1.0.36).** O rascunho da 1.0.36
+relançava o `Pdv.exe --travas on|off --sid SID` como administrador. O Pdv.exe é publicado em
+arquivo único e extrai bibliotecas nativas numa pasta que o usuário grava (`%TEMP%\.net`):
+elevar o Pdv.exe seria dar administrador a código que um usuário comum consegue plantar. O
+modo `--travas` foi removido; o Pdv.exe não tem modo de administrador nenhum.
 
 A abertura do PDV **nunca** pede permissão ao Windows. Se o quiosque foi desligado por fora
 e a trava ficou, ela tenta tirar direto e, sem permissão, deixa `ctrl_alt_del_ficou` na
@@ -87,11 +98,30 @@ reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System"
 reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
 ```
 
-Por dentro: regra pura em `Pdv.Nucleo/TravaDoCtrlAltDel.cs` (argumento, SID, ordem das
-tentativas, frases); registro e ajudante em `Quiosque.cs` (`GravarTravas`, `TentarDireto`,
-`MudarTrava`, `RodarAjudante`); o modo `--travas` sai no começo de `App.OnStartup`, antes
-da trava de instância, do banco e do TEF. A bateria grava só numa chave isolada
-(`HKCU\Software\PdvNativoTeste\<guid>`), apagada no fim.
+Por dentro: regra pura em `Pdv.Nucleo/TravaDoCtrlAltDel.cs` (SID, pasta do sistema, linha do
+cmd, ordem das tentativas, frases); registro e processo em `Quiosque.cs` (`GravarTravas`,
+`TentarDireto`, `MudarTrava`, `PedirAoWindows`). A bateria grava só numa chave isolada
+(`HKCU\Software\PdvNativoTeste\<guid>`), apagada no fim, e roda a linha de verdade num cmd
+comum (sem administrador) contra essa chave.
+
+### Desinstalar desfaz o quiosque (1.0.36)
+
+Desinstalar apagava o Pdv.exe e deixava no registro do usuário do caixa o `Shell` apontando
+para ele e as quatro políticas da trava: na próxima entrada, tela preta e um Ctrl+Alt+Del só
+com Cancelar. Agora o desinstalador (que já roda como administrador), **antes** de apagar o
+programa, percorre os perfis carregados em `HKEY_USERS` e, onde o `Shell` é o do PDV
+(`"...\Pdv.exe" --quiosque` apontando para o Pdv.exe que sai, ou para um que já não existe),
+apaga as políticas da trava que estão em DWORD 1 e depois o `Shell`. Shell de outro programa,
+política em 0 ou de outro tipo, `.DEFAULT`, SYSTEM e os perfis sem o nosso Shell ficam como
+estão. A mensagem final diz "O modo quiosque foi desfeito" quando houve.
+
+O instalador não sabe quem é o usuário do caixa, por isso olha os perfis **carregados**:
+desinstale com o usuário do caixa logado (pelo botão "Sair para o Windows" da Configuração).
+Perfil não carregado (o caixa deslogado) não é tocado.
+
+Por dentro: regra pura em `Pdv.Nucleo/DesfazerQuiosque.cs` (o mesmo formato de Shell que o
+`Quiosque.cs` grava), registro em `Pdv.Instalador/QuiosqueDoCaixa.cs`, chamada no começo de
+`Instalacao.Desinstalar`.
 
 ## 2. Música da loja (Spotify)
 
