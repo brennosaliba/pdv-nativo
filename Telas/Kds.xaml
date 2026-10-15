@@ -14,9 +14,15 @@
 
          Os rótulos são UMA palavra e começam com letras diferentes de propósito:
          "A PREPARAR" e "EM PREPARO" viravam a mesma mancha de tinta a três
-         metros de distância, que é a distância de quem produz. -->
+         metros de distância, que é a distância de quem produz.
+
+         OS QUE JÁ SAÍRAM (14/10/2026, pedido do dono): o botão "Saíram hoje" no cabeçalho da
+         coluna PRONTO (o pedido sai pela direita) troca as três colunas pela lista dos que
+         saíram; a faixa abaixo do cabeçalho aparece só com busca, e diz quantos estão no
+         quadro e quantos já saíram. A lógica mora em Nucleo.FinalizadosKds. -->
     <Grid Background="{DynamicResource Fundo}">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
@@ -53,7 +59,7 @@
                     <Border CornerRadius="10" BorderThickness="1" Padding="8,0" Margin="0,0,8,0"
                             Background="{DynamicResource Painel}" BorderBrush="{DynamicResource Borda}" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="🔍" FontSize="14" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="IconeBusca" Text="🔍" FontSize="14" Margin="0,0,6,0" VerticalAlignment="Center"/>
                             <TextBox x:Name="TxtBusca" Width="120" MinHeight="34" FontSize="15" BorderThickness="0"
                                      Background="Transparent" VerticalContentAlignment="Center"
                                      Tag="nº do pedido" ToolTip="Procurar um pedido pelo número"
@@ -101,7 +107,33 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1" Margin="12,10,12,12">
+        <!-- A FAIXA DA BUSCA (14/10/2026). Só aparece com busca: "No quadro: nenhum. Já saíram: 1."
+             e o atalho para a lista. Mora aqui, e não na linha de aviso do cabeçalho, porque a
+             1024x768 aquela linha fica com largura perto de zero (os botões da direita comem
+             tudo) e a contagem da busca nunca aparecia. Também é onde a etiqueta lida dentro
+             da busca avisa o que fazer. -->
+        <Border x:Name="FaixaBusca" Grid.Row="1" Visibility="Collapsed" Margin="16,10,16,0" Padding="16,4,6,4"
+                CornerRadius="12" BorderThickness="1"
+                Background="{DynamicResource ChipInfoFundo}" BorderBrush="{DynamicResource ChipInfoBorda}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="TxtFaixaBusca" FontSize="16" FontWeight="SemiBold" Foreground="{DynamicResource Texto}"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
+                <Button x:Name="BtnVerSairam" Grid.Column="1" Click="VerOsQueSairam"
+                        Style="{StaticResource BotaoBarra}" MinHeight="44" FontWeight="Bold"
+                        ToolTip="Ver os pedidos que já saíram do quadro">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="TxtVerSairam" Text="Ver os que saíram" VerticalAlignment="Center"/>
+                        <TextBlock Text="›" FontSize="18" Margin="8,-2,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
+
+        <Grid x:Name="Quadro" Grid.Row="2" Margin="12,10,12,12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="*"/>
@@ -167,12 +199,32 @@
                     </Grid.RowDefinitions>
                     <Border Grid.Row="0" Padding="14,10" CornerRadius="14,14,0,0"
                             Background="{DynamicResource ChipOkFundo}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="PRONTO" Foreground="{DynamicResource Ok}"
-                                       FontSize="14" FontWeight="Bold"/>
-                            <TextBlock x:Name="TxtQtdPronto" Text="0" Foreground="{DynamicResource Ok}"
-                                       FontSize="14" FontWeight="Bold" Margin="8,0,0,0"/>
-                        </StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="PRONTO" Foreground="{DynamicResource Ok}"
+                                           FontSize="14" FontWeight="Bold"/>
+                                <TextBlock x:Name="TxtQtdPronto" Text="0" Foreground="{DynamicResource Ok}"
+                                           FontSize="14" FontWeight="Bold" Margin="8,0,0,0"/>
+                            </StackPanel>
+                            <!-- SAÍRAM HOJE (14/10/2026): a entrada da lista dos que já saíram. Aqui, e
+                                 não no cabeçalho de cima (que a 1024 não tem um pixel sobrando), porque
+                                 o pedido sai do quadro por esta coluna. As margens negativas deixam o
+                                 botão com 36 px sem engordar o cabeçalho: as três colunas continuam
+                                 com o cabeçalho da mesma altura. -->
+                            <Button x:Name="BtnSairamHoje" Grid.Column="1" Click="AbrirSairamHoje"
+                                    Style="{StaticResource BotaoBarra}" HorizontalAlignment="Right"
+                                    MinHeight="36" Margin="8,-8,-6,-8" Padding="12,0" FontSize="13"
+                                    ToolTip="Ver os pedidos que já saíram do quadro">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="TxtSairamHoje" Text="Saíram hoje: 0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="›" FontSize="16" Margin="6,-2,0,0" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
                     </Border>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="8,8">
                         <Grid x:Name="ColPronto"/>
@@ -180,6 +232,52 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <!-- OS QUE JÁ SAÍRAM (14/10/2026). Ocupa o lugar das três colunas; o cabeçalho de cima
+             continua igual (a busca dele filtra esta lista por número ou nome). As linhas são
+             montadas em código (Kds.xaml.cs, LinhaDaLista); a régua de quem entra, em que ordem
+             e com que rótulo é do Nucleo.FinalizadosKds. A lista NÃO se redesenha no timer de
+             10 s, senão perderia a rolagem: recarrega ao abrir, ao trocar o dia ou a busca, e no
+             Atualizar. -->
+        <Border x:Name="PainelFinalizados" Grid.Row="2" Visibility="Collapsed" Margin="16,10,16,12" CornerRadius="14"
+                Background="{DynamicResource FundoAfundado}" BorderBrush="{DynamicResource Borda}" BorderThickness="1">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Padding="10,8" CornerRadius="14,14,0,0" Background="{DynamicResource ChipOkFundo}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="BtnVoltarQuadro" Click="VoltarAoQuadro" Style="{StaticResource BotaoBarra}"
+                                    Margin="0" FontWeight="Bold" ToolTip="Volta para as três colunas">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="←" FontSize="16" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Voltar ao quadro" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="BtnHoje" Click="EscolherPeriodo" Tag="Hoje" Style="{StaticResource BotaoBarra}" Margin="12,0,0,0" Content="Hoje"/>
+                            <Button x:Name="BtnOntem" Click="EscolherPeriodo" Tag="Ontem" Style="{StaticResource BotaoBarra}" Content="Ontem"/>
+                            <Button x:Name="Btn7Dias" Click="EscolherPeriodo" Tag="SeteDias" Style="{StaticResource BotaoBarra}" Content="7 dias"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TxtFonteLista" Grid.Column="1" FontSize="13" Foreground="{DynamicResource TextoFraco}"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="12,0,6,0"
+                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    </Grid>
+                </Border>
+                <TextBlock x:Name="TxtAvisoLista" Grid.Row="1" Visibility="Collapsed" FontSize="14" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextoEspera}" Margin="18,10,18,0" TextTrimming="CharacterEllipsis"/>
+                <ScrollViewer x:Name="RolFinalizados" Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="10,8,10,8"
+                              PanningMode="VerticalOnly">
+                    <StackPanel x:Name="ListaFinalizados"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
 
         <!-- DETALHE DO PEDIDO (04/09, pedido do dono olhando o KDS na loja): "um pop-up
              que quando clica ele visualiza o pedido, com uma tela melhor, assim como é o
@@ -190,7 +288,7 @@
              do modo foto-kds. O véu escurece o quadro (e fecha no toque); o painel é montado
              em código por Telas/DetalhePedidoKds. Fecha pelo botão grande, pelo Esc ou
              pelo toque fora — nada de X pequeno no canto de uma tela de toque. -->
-        <Grid x:Name="Veu" Grid.Row="0" Grid.RowSpan="2" Visibility="Collapsed">
+        <Grid x:Name="Veu" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed">
             <Border Background="{DynamicResource Fundo}" Opacity="0.82" MouseLeftButtonDown="ToqueNoVeu"/>
             <!-- Stretch + MaxWidth: o painel ocupa até 760 px e o WPF o centraliza quando
                  sobra tela. Center na vertical: ele encolhe até o conteúdo e, quando o

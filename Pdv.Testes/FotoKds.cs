@@ -19,6 +19,7 @@ namespace Pdv.Testes;
 /// Sem foto, "melhorei o layout" é opinião.
 ///
 /// Uso: Pdv.Testes.exe --foto-kds saida.png largura altura [claro|escuro] [--detalhe N] [--nuvem]
+///                     [--finalizados hoje|ontem|7dias] [--busca X] [--sem-finalizados]
 ///
 ///   --detalhe N  abre o DETALHE do pedido #N por cima do quadro antes da foto
 ///                (04/09: é a prova visual do painel a 1024x768 sem cortar item).
@@ -26,6 +27,12 @@ namespace Pdv.Testes;
 ///                código de coleta, observação do pedido, agrupado com) para as seções
 ///                da nuvem saírem na foto. Sem ele, elas ficam de fora — que é o que
 ///                a loja vê quando a nuvem não responde.
+///   --finalizados P  (14/10/2026) abre a LISTA DOS QUE JÁ SAÍRAM no período P antes da foto.
+///                Com --detalhe N, o detalhe abre por cima da lista. Com --nuvem, a consulta
+///                pdv_kds_status responde (fabricada); sem ele, a lista diz "Sem internet".
+///   --busca X    digita X na busca do cabeçalho: no quadro, aparece a faixa da busca; na
+///                lista, ela filtra por número ou nome.
+///   --sem-finalizados  não semeia pedido nenhum que já saiu (a lista vazia).
 ///
 /// Segurança: NÃO usa o banco do caixa. Monta um SQLite temporário do zero com um
 /// quadro fabricado (os mesmos cards da foto que o dono mandou) e a nuvem apontada
@@ -41,10 +48,22 @@ public static class FotoKds
         var tema = "claro";
         string? detalhe = null;
         var comNuvem = false;
+        PeriodoFinalizados? finalizados = null;
+        string? busca = null;
+        var semFinalizados = false;
         for (var i = 4; i < args.Length; i++)
         {
             if (args[i] == "--detalhe" && i + 1 < args.Length) detalhe = args[++i];
             else if (args[i] == "--nuvem") comNuvem = true;
+            else if (args[i] == "--finalizados" && i + 1 < args.Length)
+                finalizados = args[++i].ToLowerInvariant() switch
+                {
+                    "ontem" => PeriodoFinalizados.Ontem,
+                    "7dias" or "7" => PeriodoFinalizados.SeteDias,
+                    _ => PeriodoFinalizados.Hoje,
+                };
+            else if (args[i] == "--busca" && i + 1 < args.Length) busca = args[++i];
+            else if (args[i] == "--sem-finalizados") semFinalizados = true;
             else if (args[i] is "claro" or "escuro") tema = args[i];
         }
 
@@ -52,6 +71,7 @@ public static class FotoKds
         Banco.Migrar(fixture);
         Banco.CaminhoForcado = fixture;
         Semear();
+        if (!semFinalizados) SemearFinalizados();
 
         // O complemento FABRICADO da nuvem. O próprio número vai na lista de propósito:
         // o Gestor manda assim, e a foto tem que provar que ele não aparece.
@@ -64,7 +84,7 @@ public static class FotoKds
         var codigo = 1;
         var t = new Thread(() =>
         {
-            try { codigo = Fotografar(saida, w, h, tema, detalhe, complemento); }
+            try { codigo = Fotografar(saida, w, h, tema, detalhe, complemento, finalizados, busca, comNuvem); }
             catch (Exception ex) { Console.Error.WriteLine("foto-kds: " + ex); codigo = 1; }
         });
         t.SetApartmentState(ApartmentState.STA);
@@ -231,8 +251,90 @@ public static class FotoKds
         });
     }
 
+    /// <summary>
+    /// OS QUE JÁ SAÍRAM (14/10/2026): um dia de pedidos que saíram do quadro, com um de cada
+    /// história (o Gestor despachou, retirada, balcão, cardápio próprio, o iFood cancelou,
+    /// expirou, pedido de antes desta versão sem motivo), ontem, e 320 linhas espalhadas
+    /// pelos 7 dias para a lista bater no teto de 300. O #4719 é o do --detalhe: combo com
+    /// sabores e observação, como o do quadro.
+    /// </summary>
+    private static void SemearFinalizados()
+    {
+        using var cx = Banco.Abrir();
+        var agora = DateTime.Now;
+        static object Item(string nome, int qtd, string? obs = null, string[]? escolhas = null)
+            => new { Descricao = nome, Qtd = qtd * 1000, Observacao = obs, Escolhas = escolhas };
+        void Saiu(string numero, string origem, string status, DateTime chegou, DateTime? saiu, string? motivo,
+                  string? cliente, object[] itens, bool retirada = false, bool soEntregue = false)
+            => cx.Execute(
+                @"INSERT INTO kds_ticket (id, origem, ref_id, numero, cliente, itens_json, status, criado_em,
+                                          preparo_em, pronto_em, entregue_em, encerrado_em, encerrado_motivo,
+                                          retirada, impresso_em)
+                  VALUES (@id, @o, @r, @n, @c, @j, @s, @t, @pe, @pr, @en, @ee, @m, @ret, @t)",
+                new
+                {
+                    id = Guid.NewGuid().ToString(), o = origem, r = "ref-" + numero, n = numero, c = cliente,
+                    j = System.Text.Json.JsonSerializer.Serialize(itens), s = status,
+                    t = chegou.ToString("o"),
+                    pe = chegou.AddMinutes(2).ToString("o"),
+                    pr = status == Kds.Entregue ? chegou.AddMinutes(14).ToString("o") : null,
+                    en = status == Kds.Entregue ? saiu?.ToString("o") : null,
+                    // soEntregue: pedido de antes desta versão, só com a hora antiga
+                    ee = soEntregue ? null : saiu?.ToString("o"),
+                    m = motivo, ret = retirada ? 1 : 0,
+                });
+
+        // ── hoje: uma linha de cada história ──
+        Saiu("4719", "ifood", Kds.Entregue, agora.AddMinutes(-41), agora.AddMinutes(-12), FinalizadosKds.MotivoGestor,
+             "Ana Beatriz Souza", new[]
+             {
+                 Item("Combo Box 4un", 1, "sem granulado no Homer", new[] { "2x Donut Homer", "1x Donut Morango c/ Ninho", "1x Donut Calabresa" }),
+                 Item("Donut Ninho com Nutella", 2, "embalar separado"),
+                 Item("Café Coado 300ml", 1),
+             });
+        Saiu("4711", "ifood", Kds.Entregue, agora.AddMinutes(-48), agora.AddMinutes(-19), FinalizadosKds.MotivoGestor,
+             "Patrícia Gomes", new[] { Item("Donut Homer", 2), Item("Cookie Red Velvet", 1) });
+        Saiu("4702", "ifood", Kds.Entregue, agora.AddMinutes(-52), agora.AddMinutes(-26), FinalizadosKds.MotivoGestor,
+             "Fernanda Lima", new[] { Item("Donut Ovomaltine", 3) }, retirada: true);
+        Saiu("77", "balcao", Kds.Entregue, agora.AddMinutes(-35), agora.AddMinutes(-28), FinalizadosKds.MotivoClienteLevou,
+             null, new[] { Item("Cookie Tradicional", 2), Item("Café Coado 300ml", 1) });
+        Saiu("4698", "ifood", Kds.Cancelado, agora.AddMinutes(-58), agora.AddMinutes(-33), FinalizadosKds.MotivoGestor,
+             "Lucas Martins", new[] { Item("Tortinha de Frango com Catupiry", 1), Item("Donut Banoffee", 2) });
+        Saiu("CD-2246", "ifood", Kds.Entregue, agora.AddMinutes(-66), agora.AddMinutes(-38), FinalizadosKds.MotivoGestor,
+             "Asani Vasconcelos", new[] { Item("Cookie Duplo", 3, "sem castanha") });
+        Saiu("4690", "ifood", Kds.Cancelado, agora.AddMinutes(-71), agora.AddMinutes(-66), FinalizadosKds.MotivoIfoodCancelou,
+             "Roberto Dias", new[] { Item("Donut Doce de Leite", 4) });
+        Saiu("4655", "ifood", Kds.Cancelado, agora.AddMinutes(-290), agora.AddMinutes(-50), FinalizadosKds.MotivoExpirou,
+             "Juliana Ferreira", new[] { Item("Pão de Queijo Recheado", 2) });
+        // antes desta versão: 'cancelado' sem motivo e sem hora (a nuvem esclarece com --nuvem)
+        Saiu("4640", "ifood", Kds.Cancelado, agora.AddMinutes(-95), null, null,
+             "Rafael Andrade", new[] { Item("Donut Ninho", 6) });
+        // antes desta versão: entregue, só com a hora antiga
+        Saiu("4633", "ifood", Kds.Entregue, agora.AddMinutes(-110), agora.AddMinutes(-80), null,
+             "Carla Menezes", new[] { Item("Coxinha de Frango", 2), Item("Suco de Laranja 500ml", 1) }, soEntregue: true);
+        var nomes = new[] { "Bruno Carvalho", "Marcela Prado", "Thiago Rocha", "Beatriz Nunes", "Gustavo Pires", "Larissa Alves" };
+        for (var i = 0; i < 6; i++)
+            Saiu((4600 + i * 3).ToString(), "ifood", Kds.Entregue, agora.AddMinutes(-130 - i * 12), agora.AddMinutes(-100 - i * 12),
+                 FinalizadosKds.MotivoGestor, nomes[i], new[] { Item("Donut Homer", 1 + i % 3), Item("Cookie Red Velvet", 1) });
+
+        // ── ontem ──
+        var ontem = agora.Date.AddDays(-1).AddHours(19);
+        for (var i = 0; i < 8; i++)
+            Saiu((4400 + i * 7).ToString(), "ifood", Kds.Entregue, ontem.AddMinutes(i * 17), ontem.AddMinutes(i * 17 + 26),
+                 FinalizadosKds.MotivoGestor, nomes[i % nomes.Length], new[] { Item("Donut Ovomaltine", 2), Item("Café Coado 300ml", 1) });
+
+        // ── 7 dias: 320 linhas, para a lista bater no teto de 300 ──
+        for (var i = 0; i < 320; i++)
+        {
+            var dia = agora.Date.AddDays(-2 - i % 5).AddHours(10).AddMinutes(i * 2 % 700);
+            Saiu((3000 + i).ToString(), "ifood", Kds.Entregue, dia, dia.AddMinutes(25), FinalizadosKds.MotivoGestor,
+                 nomes[i % nomes.Length], new[] { Item("Donut Homer", 2) });
+        }
+    }
+
     private static int Fotografar(string saida, int w, int h, string tema,
-                                  string? detalhe, DetalheNuvem? complemento)
+                                  string? detalhe, DetalheNuvem? complemento,
+                                  PeriodoFinalizados? finalizados = null, string? busca = null, bool comNuvem = false)
     {
         // mesmos dicionários do Pdv.exe, na mesma ordem (contrato: [0] paleta, [1] estilos)
         static ResourceDictionary Dic(string caminho) => new()
@@ -248,6 +350,13 @@ public static class FotoKds
             => { erros.Add(e.Exception.GetType().Name + ": " + e.Exception.Message); e.Handled = true; };
 
         var tela = new Pdv.Telas.Kds("foto");
+        // A consulta da nuvem da lista dos que saíram (14/10/2026). Com --nuvem, responde
+        // como a pdv_kds_status: o pedido sem motivo foi concluído; os outros, "pronto" (não
+        // prova nada, ficam como estão). Sem --nuvem, a de verdade, que bate no endereço
+        // morto e devolve null: a lista diz "Sem internet".
+        if (comNuvem)
+            tela.ConsultaNuvem = ids => Task.FromResult<List<(string OrderId, string Status, string? PreparoAte)>?>(
+                ids.Select(id => (id, id == "ref-4640" ? "concluido" : "pronto", (string?)null)).ToList());
         var janela = new Window
         {
             Title = "foto-kds", Width = w, Height = h,
@@ -259,6 +368,8 @@ public static class FotoKds
         var codigo = 1;
         var etapa = 0;
         var abriuDetalhe = false;
+        var abriuLista = false;
+        var esperaNuvem = 0;
         var relogio = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         relogio.Tick += (_, _) =>
         {
@@ -266,13 +377,26 @@ public static class FotoKds
             // 3 batidas: a primeira puxada da nuvem morta tem que terminar (ela
             // repinta o quadro no finally) antes de a foto sair.
             if (etapa < 3) return;
+            // A busca e a lista dos que saíram antes do detalhe, cada uma com uma batida
+            // inteira para assentar (a consulta da nuvem da lista responde nesse meio tempo).
+            if (!abriuLista && (busca is not null || finalizados is not null))
+            {
+                abriuLista = true;
+                if (busca is not null) tela.Buscar(busca);
+                if (finalizados is { } p) tela.AbrirFinalizados(p);
+                return;
+            }
+            // Batidas a mais para a consulta da nuvem da lista responder. A de verdade bate no
+            // endereço morto e volta null, e é ela que escreve "Sem internet" na barra: no
+            // Windows a porta fechada leva uns 2 s por tentativa para recusar, então espera ~6 s.
+            if (finalizados is not null && esperaNuvem++ < (comNuvem ? 1 : 9)) return;
             // O detalhe abre DEPOIS do quadro pronto e ganha uma batida inteira para
             // o layout assentar (a lista decide se rola só depois de medida).
             if (detalhe is not null && !abriuDetalhe)
             {
                 abriuDetalhe = true;
                 if (!tela.AbrirDetalhe(detalhe, complemento))
-                    erros.Add($"o pedido #{detalhe} não está no quadro fabricado");
+                    erros.Add($"o pedido #{detalhe} não está no quadro fabricado nem entre os que saíram");
                 return;
             }
             relogio.Stop();
@@ -285,6 +409,8 @@ public static class FotoKds
                 Directory.CreateDirectory(Path.GetDirectoryName(saida)!);
                 using (var fs = File.Create(saida)) enc.Save(fs);
                 Console.WriteLine($"foto-kds: {saida} ({w}x{h}, tema {tema}" +
+                                  (finalizados is null ? "" : $", finalizados {finalizados}") +
+                                  (busca is null ? "" : $", busca \"{busca}\"") +
                                   (detalhe is null ? ")" : $", detalhe #{detalhe}{(complemento is null ? "" : " com nuvem")})"));
                 foreach (var e in erros.Distinct()) Console.WriteLine("  aviso: " + e);
                 codigo = 0;

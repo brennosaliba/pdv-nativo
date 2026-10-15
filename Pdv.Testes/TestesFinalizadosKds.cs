@@ -42,6 +42,7 @@ public static class TestesFinalizadosKds
         Bipe(checar);
         Detalhe(checar);
         NoBanco(checar);
+        Tela(checar);
     }
 
     private static void Periodo(Action<bool, string> checar)
@@ -293,6 +294,80 @@ public static class TestesFinalizadosKds
             "FK-94 detalhe de quem está no quadro continua igual (FAZENDO, sem 'Saiu às')");
         checar(saiu.ComNuvem(new DetalheNuvem("ref-4719", "3121 4455", "0807", null, null, null, null, Array.Empty<string>())) is { JaSaiu: true, SaiuAs: "Saiu às 14:32", Localizador: "3121 4455" },
             "FK-95 o complemento da nuvem continua vindo, sem perder o 'Saiu às'");
+    }
+
+    /// <summary>
+    /// A TELA, pelo fonte (o WPF não roda na bateria; as fotos de docs/kds-fotos-finalizados são a
+    /// prova visual): os nomes que o código usa, o véu cobrindo as três linhas, a lista que não
+    /// redesenha no timer, o detalhe de quem saiu sem raspadinha e com "Comanda de novo".
+    /// </summary>
+    private static void Tela(Action<bool, string> checar)
+    {
+        var xaml = Fonte(Path.Combine("Telas", "Kds.xaml")) ?? "";
+        var cs = Fonte(Path.Combine("Telas", "Kds.xaml.cs")) ?? "";
+        var det = Fonte(Path.Combine("Telas", "DetalhePedidoKds.cs")) ?? "";
+        var foto = Fonte(Path.Combine("Pdv.Testes", "FotoKds.cs")) ?? "";
+        checar(xaml.Length > 0 && cs.Length > 0 && det.Length > 0, "FK-100 achei Kds.xaml, Kds.xaml.cs e DetalhePedidoKds.cs");
+        var nomes = new[] { "BtnSairamHoje", "TxtSairamHoje", "FaixaBusca", "TxtFaixaBusca", "BtnVerSairam", "Quadro",
+                            "PainelFinalizados", "BtnVoltarQuadro", "BtnHoje", "BtnOntem", "Btn7Dias", "TxtFonteLista",
+                            "TxtAvisoLista", "RolFinalizados", "ListaFinalizados" };
+        var faltam = nomes.Where(n => !xaml.Contains($"x:Name=\"{n}\"")).ToList();
+        checar(faltam.Count == 0, "FK-101 o quadro tem o botão 'Saíram hoje', a faixa da busca e o painel da lista"
+                                  + (faltam.Count == 0 ? "" : ": faltam " + string.Join(", ", faltam)));
+        checar(System.Text.RegularExpressions.Regex.IsMatch(xaml, "x:Name=\"Veu\"[^>]*Grid.RowSpan=\"3\""),
+            "FK-102 o véu do detalhe cobre as três linhas (cabeçalho, faixa e quadro ou lista)");
+        var periodos = new[] { "Tag=\"Hoje\"", "Tag=\"Ontem\"", "Tag=\"SeteDias\"" };
+        checar(periodos.All(xaml.Contains) && Enum.GetNames<PeriodoFinalizados>().All(n => xaml.Contains($"Tag=\"{n}\"")),
+            "FK-103 cada botão de período tem no Tag o nome do PeriodoFinalizados que o código lê");
+        checar(cs.Contains("FinalizadosKds.Montar(sete, _periodo, _busca, agora)") && cs.Contains("FinalizadosKds.TextoVazio(_periodo, _busca)")
+               && cs.Contains("FinalizadosKds.TextoCortada()"),
+            "FK-104 a lista sai da régua do núcleo, com os textos de vazia e cortada");
+        var timer = Trecho(cs, "_timer.Tick += (_, _) =>", "};");
+        checar(timer.Length > 0 && !timer.Contains("PintarFinalizados"),
+            "FK-105 o timer de 10 s NÃO redesenha a lista (perderia a rolagem)");
+        checar(cs.Contains("if (_finalizados) FecharFinalizados();") && Trecho(cs, "public void PiscarPronto(", "}").Contains("FecharFinalizados"),
+            "FK-106 o bipe que marca PRONTO com a lista aberta volta para o quadro e pisca o card");
+        checar(cs.Contains("!saiu && t.Origem == \"ifood\" && PediuResgate") && cs.Contains("saiu && t.Origem == \"ifood\" && Impressoes.MostraBotaoComanda(_politicaComanda)"),
+            "FK-107 detalhe de quem saiu: sem raspadinha, e 'Comanda de novo' na mesma regra do 🖨 do card");
+        checar(det.Contains("FinalizadosKds.TextoComandaSaiu") && det.Contains("FinalizadosKds.TextoComandaNaoSaiu")
+               && det.Contains("TimeSpan.FromSeconds(3)"),
+            "FK-108 a resposta da 'Comanda de novo' aparece no próprio botão por 3 s");
+        checar(cs.Contains("StatusPedidosOuNuloAsync") && cs.Contains("Task.Delay(TimeSpan.FromSeconds(5))")
+               && cs.Contains("FinalizadosKds.TextoSemInternet") && cs.Contains("FinalizadosKds.AplicarNuvem(resposta)"),
+            "FK-109 o reforço da nuvem espera no máximo 5 s; sem resposta, a barra diz 'Sem internet'");
+        checar(cs.Contains("MinHeight = 64") && cs.Contains("AbrirDetalhe(l.Ticket)"),
+            "FK-110 a linha inteira é o alvo do toque (64 px) e abre o detalhe que já existe");
+        checar(cs.Contains("Nucleo.Kds.FiltrarPorNumero(todos, _busca)"),
+            "FK-111 a busca do quadro aberto continua a mesma (só número)");
+        checar(cs.Contains("FinalizadosKds.TextoEtiquetaNaBusca") && Trecho(cs, "private void PintarFaixaBusca(", "\n    }").Contains("_etiquetaNaBusca"),
+            "FK-112 a etiqueta lida dentro da busca avisa na faixa, que aparece a 1024");
+        var textosXaml = System.Text.RegularExpressions.Regex.Matches(xaml, "(?:Text|Content|ToolTip|Tag)=\"([^\"]*)\"")
+            .Select(m => m.Groups[1].Value).ToList();
+        checar(textosXaml.All(t => !t.Contains('\u2014') && !t.Contains('\u2013')),
+            "FK-113 nenhum texto do Kds.xaml tem travessão");
+        checar(foto.Contains("--finalizados") && foto.Contains("--busca") && foto.Contains("--sem-finalizados")
+               && foto.Contains("SemearFinalizados"),
+            "FK-114 o modo --foto-kds fotografa a lista, a busca e a lista vazia");
+    }
+
+    private static string Trecho(string fonte, string inicio, string fim)
+    {
+        var i = fonte.IndexOf(inicio, StringComparison.Ordinal);
+        if (i < 0) return "";
+        var j = fonte.IndexOf(fim, i + inicio.Length, StringComparison.Ordinal);
+        return j < 0 ? fonte[i..] : fonte[i..(j + fim.Length)];
+    }
+
+    private static string? Fonte(string relativo)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "Pdv.csproj")))
+            {
+                var c = Path.Combine(dir.FullName, relativo);
+                return File.Exists(c) ? File.ReadAllText(c).Replace("\r\n", "\n") : null;
+            }
+        return null;
     }
 
     private static void NoBanco(Action<bool, string> checar)
