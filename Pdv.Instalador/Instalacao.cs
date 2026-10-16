@@ -593,7 +593,61 @@ public static class Instalacao
         bool MigrarAntiga = true,
         // Desligada na suíte porque lá o "Pdv.exe" é um arquivo de texto: mandar
         // ABRIR o programa é o teste da instalação de verdade, não da cópia.
-        bool ConferirQueAbre = true);
+        bool ConferirQueAbre = true,
+        // 1.0.41: o relógio do PC acertando sozinho (w32time + tarefa agendada). Na suíte o
+        // executor é trocado por um falso: nada do Windows é tocado.
+        bool AcertarRelogio = true);
+
+    // ── 1.0.41: O RELÓGIO DO PC ACERTADO SOZINHO (pedido do dono, 16/10/2026) ─────────────────
+
+    /// <summary>
+    /// Roda UM programa do Windows (caminho absoluto de System32) e devolve o código de saída e a saída
+    /// (até 60 s). A suíte troca por um falso que grava cada linha. Nunca lança.
+    /// </summary>
+    public static Func<string, string, (int Codigo, string Saida)> ExecutarPrograma = (programa, argumentos) =>
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(programa, argumentos)
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                WorkingDirectory = Environment.SystemDirectory,
+            });
+            if (p is null) return (-1, "não abriu");
+            var saida = p.StandardOutput.ReadToEndAsync();
+            var erro = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(60_000)) { try { p.Kill(); } catch { } return (-2, "não terminou em 60 s"); }
+            p.WaitForExit();
+            return (p.ExitCode, (saida.Result + " " + erro.Result).Trim());
+        }
+        catch (Exception ex) { return (-3, ex.GetType().Name + ": " + ex.Message); }
+    };
+
+    /// <summary>
+    /// As seis etapas de <see cref="RelogioDoWindows.PassosDaInstalacao"/>, uma a uma, cada falha só
+    /// anotada (a instalação segue). Devolve as linhas do diário (nome da etapa, código, começo da
+    /// saída). Nunca lança.
+    /// </summary>
+    public static IReadOnlyList<string> AcertarRelogio(Func<string, string, (int Codigo, string Saida)>? executar = null)
+    {
+        var linhas = new List<string>();
+        executar ??= ExecutarPrograma;
+        IReadOnlyList<RelogioDoWindows.Passo> passos;
+        try { passos = RelogioDoWindows.PassosDaInstalacao(Environment.SystemDirectory); }
+        catch (Exception ex) { linhas.Add("relogio: pasta do sistema fora do esperado (" + ex.GetType().Name + ")"); return linhas; }
+        foreach (var p in passos)
+        {
+            try
+            {
+                var (codigo, saida) = executar(p.Programa, p.Argumentos);
+                var resumo = (saida ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
+                if (resumo.Length > 120) resumo = resumo[..120];
+                linhas.Add($"relogio {p.Nome}: {(RelogioDoWindows.PassoDeu(p, codigo) ? "ok" : "falhou")} codigo={codigo}" + (resumo.Length > 0 ? " " + resumo : ""));
+            }
+            catch (Exception ex) { linhas.Add($"relogio {p.Nome}: falhou {ex.GetType().Name}"); }
+        }
+        return linhas;
+    }
 
     /// <summary>Instala (ou ATUALIZA por cima — preservando os dados). Devolve
     /// null no sucesso, mensagem de erro no fracasso.</summary>
@@ -691,6 +745,14 @@ public static class Instalacao
             {
                 progresso?.Invoke("Criando o atalho na área de trabalho…");
                 CriarAtalho(Path.Combine(AreaDeTrabalho, NomePrograma + ".lnk"), destinoExe);
+            }
+
+            // 1.0.41 (pedido do dono): o relógio do PC acertando sozinho, em toda instalação e
+            // atualização. Falha não aborta: só vai para o diário (atualizacao.txt).
+            if (o.AcertarRelogio)
+            {
+                progresso?.Invoke("Acertando o relógio do Windows…");
+                foreach (var linha in AcertarRelogio()) AnotarTroca(linha);
             }
 
             if (o.MigrarAntiga)

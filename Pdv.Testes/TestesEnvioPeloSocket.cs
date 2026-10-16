@@ -26,18 +26,18 @@ public static class TestesEnvioPeloSocket
     private const string Pedido = TestesQuadroSendbird.Pedido;
     private const string Savassi = TestesQuadroSendbird.MerchantSavassi;
     private const string Texto = "Oi, Ana! Vale só um prêmio por pedido. Responda 1) ou 2).";
-    private const string Loja = "31994412725";
-    private const string Jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiMzE5OTQ0MTI3MjUifQ.c2VncmVkby1kby1zb2NrZXQ";
-    private const string Chave = "Zk9QbW1hY2hhdmVTZWNyZXRhRG9Tb2NrZXQxMjM0NTY";
+    internal const string Loja = "31994412725";
+    internal const string Jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiMzE5OTQ0MTI3MjUifQ.c2VncmVkby1kby1zb2NrZXQ";
+    internal const string Chave = "Zk9QbW1hY2hhdmVTZWNyZXRhRG9Tb2NrZXQxMjM0NTY";
     // a URL como o navegador a guarda em ws.url (com a barra) e como o CDP a viu no webSocketCreated (sem a barra)
-    private const string UrlLoja = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&access_token=" + Jwt;
-    private const string UrlLojaCdp = "wss://ws-6913ab.sendbird.com?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&access_token=" + Jwt;
-    private const string UrlEntregador = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=entregador-77&key=" + Chave;
-    private const string UrlOutro = "wss://chat.ifood.com.br/socket?token=" + Chave;
+    internal const string UrlLoja = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&access_token=" + Jwt;
+    internal const string UrlLojaCdp = "wss://ws-6913ab.sendbird.com?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&access_token=" + Jwt;
+    internal const string UrlEntregador = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=entregador-77&key=" + Chave;
+    internal const string UrlOutro = "wss://chat.ifood.com.br/socket?token=" + Chave;
     // 1.0.40: o SDK JS abre cada conexão com a query DIFERENTE (Request-Sent-Timestamp, key da sessão, token renovado)
-    private const string UrlLoja2 = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&key=" + Chave + "&Request-Sent-Timestamp=1760543650999";
-    private const string UrlLoja2Cdp = "wss://ws-6913ab.sendbird.com?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&key=" + Chave + "&Request-Sent-Timestamp=1760543650999";
-    private const string UrlSemUsuario = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&key=" + Chave;
+    internal const string UrlLoja2 = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&key=" + Chave + "&Request-Sent-Timestamp=1760543650999";
+    internal const string UrlLoja2Cdp = "wss://ws-6913ab.sendbird.com?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&key=" + Chave + "&Request-Sent-Timestamp=1760543650999";
+    internal const string UrlSemUsuario = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&key=" + Chave;
     private const string CanalEntregador = "sendbird_gc_" + Pedido + "_entregador-77";
     private static readonly DateTime T0 = new(2026, 10, 15, 12, 54, 10);
 
@@ -722,7 +722,7 @@ public static class TestesEnvioPeloSocket
                && tela.IndexOf("_sockets = null;", StringComparison.Ordinal) is var zera && zera > 0
                && tela.IndexOf("_socketEscolhido = null;", zera, StringComparison.Ordinal) is var zeraEscolhido && zeraEscolhido > zera && zeraEscolhido - zera < 80,
             "SK-97 o diag recalcula a atividade do socket escolhido pelo livro na hora do sinal; o escolhido vem do envio e da contagem; a navegação zera");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.40</Version>", StringComparison.Ordinal), "SK-59 a versão do caixa é 1.0.40 (a escolha do socket pela atividade)");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.41</Version>", StringComparison.Ordinal), "SK-59 a versão do caixa é 1.0.41 (a recuperação pelo histórico e o relógio do PC)");
         var novos = new[] { nucleo, Ler("Pdv.Testes", "TestesEnvioPeloSocket.cs") };
         checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),
             "SK-60 nada com travessão nos arquivos novos");

@@ -289,6 +289,7 @@ public partial class ChatIfood : UserControl
                 // 120 s). Antes ficava "toque em Recarregar" e o chat parado até alguém ver.
                 _navegacao = e.IsSuccess ? "ok" : "falhou";
                 Interlocked.Increment(ref _navegacoes);   // 1.0.35: o plano B espera a recarga terminar
+                if (e.IsSuccess) ServicoRecuperacaoChat.GestorRecarregou();   // 1.0.41: varredura depois do LOGI da recarga
                 // revisão 1.0.38: página nova, berço novo. A varredura da página velha não vale aqui, e o plano B
                 // precisa varrer logo depois da recarga (antes ficava travado pelo teto de 2 min da anterior)
                 _proximaVarreduraHeap = DateTime.MinValue;
@@ -329,6 +330,8 @@ public partial class ChatIfood : UserControl
 
             // injeta o script do painel ANTES de navegar (roda a cada carga)
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptPainel);
+            // 1.0.41 (pedido do dono, 16/10): o X do painel da conversa não fecha o chat; a gaveta que some volta
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptFechar);
             // e o do SDK do Sendbird (07/10/2026, resgate pelo chat): diag() e enviar(). O envio só
             // roda com o token de uso único que o C# põe logo antes (EnviarPeloSdkAsync).
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptSendbird);
@@ -362,6 +365,9 @@ public partial class ChatIfood : UserControl
                 // 1.0.35: o plano B do envio (recarrega o Gestor escondido; nunca com ele na frente)
                 RecarregarParaEnvio = RecarregarParaEnvioAsync,
             });
+            // 1.0.41 (pedido 2029): a recuperação pelo histórico do Sendbird. Cada quadro recuperado entra
+            // no MESMO funil do webSocketFrameReceived, menos o que é da conexão (ver EntregarRecuperado).
+            ServicoRecuperacaoChat.Ligar(new PonteDaRecuperacao { Entregar = EntregarRecuperado });
             // 1.0.25: e aquece uma vez sozinho, logo depois de o Gestor carregar, para o primeiro
             // pedido do dia nao cair em canal_errado
             _ = AquecerDepoisDoInicioAsync(minha);
@@ -545,13 +551,41 @@ public partial class ChatIfood : UserControl
         catch (Exception ex) { Diag("vigia: " + ex.GetType().Name + " " + ex.Message); }
     }
 
-    /// <summary>"Reabrir" do aviso na venda: controle novo agora, sem o teto (é gesto de gente).</summary>
+    /// <summary>
+    /// "Reabrir" do aviso na venda: controle novo agora, sem o teto (é gesto de gente). 1.0.41: com a página
+    /// VIVA (vigia ok e a página falou há menos de 2 min) NÃO recria: só manda o sinal na hora e diz que o
+    /// chat está vivo (o alarme era do sinal preso, não da página).
+    /// </summary>
     public Task ReabrirAsync() => HospedeWebView2.NaTela(Dispatcher, async () =>
     {
+        if (!VigiaChatIfood.ReabrirRecria(_vigia.Fase, PaginaFalouEm, DateTime.Now))
+        {
+            Diag("reabrir: pedido pelo aviso da venda, pagina viva: so o sinal");
+            ServicoConversaChat.SinalAgora();
+            ServicoVigiaChat.AvisarVoltou();
+            ServicoConversaChat.AvisoLocal("info", VigiaChatIfood.TextoChatVivo, null, null);
+            return;
+        }
         Diag("reabrir: pedido pelo aviso da venda");
         _vigia.Reabriu(DateTime.Now);
         await RecriarAsync("reabrir pelo aviso", porGente: true);
     });
+
+    /// <summary>
+    /// 1.0.41: um quadro recuperado pelo histórico do Sendbird entra no MESMO funil do webSocketFrameReceived,
+    /// menos o que é da conexão: nada de _conexoes.Recebeu, _ecosSocket, _conexaoPorCanal nem Contadores
+    /// (ws_vivo). Na thread da tela, como o quadro do socket.
+    /// </summary>
+    private void EntregarRecuperado(string payload)
+    {
+        _ = Dispatcher.BeginInvoke(() => Seguro(() =>
+        {
+            var loja = ServicoConversaChat.UsuarioDaLoja;
+            ServicoConversaChat.QuadroRecuperado(payload, loja);
+            ServicoArquivoChat.Quadro(payload, enviado: false, conexao: "rest", loja);
+            OuvirMensagem(ChatCaptura.NormalizarFrame(payload), "rest", null, null);
+        }));
+    }
 
     /// <summary>A navegação falhou (sem rede, DNS): tenta de novo em 30, 60 e 120 s, sem recriar nada.</summary>
     private async Task NavegarDeNovoAsync(int minha)
@@ -660,6 +694,14 @@ public partial class ChatIfood : UserControl
                 var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
                 if (id is not null && _colagens.TryRemove(id, out var tcs))
                     tcs.TrySetResult(r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True);
+            }
+            else if (tipo == "painelfechou")
+            {
+                // 1.0.41: a gaveta do chat sumiu sem o operador sair (o X do painel da conversa, Esc, clique
+                // fora) e o ScriptFechar a reabriu pelo caminho do aquecimento. Só o diag: nada de recriar.
+                var resultado = doc.RootElement.TryGetProperty("resultado", out var rs) && rs.ValueKind == JsonValueKind.String
+                    ? ConversaRaspadinha.NomeSeguroDoDiag(rs.GetString()) ?? "?" : "?";
+                Diag("painel do chat fechou: reaberto (" + resultado + ")");
             }
             else if (tipo == "ajuda")
             {
@@ -895,6 +937,16 @@ public partial class ChatIfood : UserControl
                 if (d.RootElement.TryGetProperty("url", out var u))
                 {
                     _captura.RegistrarWebSocket(u.GetString());
+                    // 1.0.41: a key= das reconexões do SDK é credencial (fonte url); o socket da loja
+                    // abrindo de novo é gatilho da recuperação (varredura depois do LOGI)
+                    if (QuadroSendbird.EhSocketDoSendbird(u.GetString()))
+                    {
+                        ServicoRecuperacaoChat.OferecerCredencial(SessaoSendbird.DaUrlDoSocket(u.GetString(), DateTime.Now));
+                        var usuarioDoSocket = QuadroSendbird.UserIdDaUrl(u.GetString());
+                        if (usuarioDoSocket is not null && ServicoConversaChat.UsuarioDaLoja is { } lojaAgora
+                            && string.Equals(usuarioDoSocket, lojaAgora, StringComparison.Ordinal))
+                            ServicoRecuperacaoChat.GestorRecarregou();
+                    }
                     // o id da loja nesta conexão (user_id da URL do Sendbird), só em memória
                     if (d.RootElement.TryGetProperty("requestId", out var rq) && rq.GetString() is { } req)
                     {
@@ -930,6 +982,15 @@ public partial class ChatIfood : UserControl
                 // 1.0.40: qualquer quadro recebido num socket do Sendbird (PONG, binário, o que for) é atividade daquela conexão
                 var doSendbird = _conexoes.Recebeu(conexao, DateTime.Now);
                 if (p is null) return;
+                // 1.0.41: o LOGI traz a chave da sessão (campo key): lida ANTES de qualquer log, só em memória
+                if (doSendbird && QuadroSendbird.Comando(p) == "LOGI")
+                {
+                    ServicoRecuperacaoChat.OferecerCredencial(SessaoSendbird.DoLogi(p, WsUser(conexao),
+                        SessaoSendbird.AppIdDaUrl(_conexoes.Url(conexao)), DateTime.Now));
+                    ServicoRecuperacaoChat.LogiVisto();
+                }
+                // 1.0.41: a marca d'água e o dedup da recuperação aprendem com todo quadro recebido
+                if (doSendbird) ServicoRecuperacaoChat.Viu(p);
                 // 1.0.39 (camada C): o eco (MESG ou EROR com o req_id do caixa) resolve a espera do envio pelo
                 // socket; e a conexão que recebeu o quadro daquele canal é a pista "canal" da escolha
                 _ecosSocket.Ver(p);
@@ -982,6 +1043,14 @@ public partial class ChatIfood : UserControl
                     var jwt = TokenDeHeaders(h);
                     if (jwt is not null) { _captura.RegistrarToken(jwt); AgendarDiagnostico(); }
                 }
+                // 1.0.41: a chamada do próprio SDK a api-<appid>.sendbird.com traz Session-Key e App-Id
+                // (fonte cabecalho, a de maior prioridade). Só em memória; nunca em log.
+                if (SessaoSendbird.EhApiDoSendbird(url) && req.TryGetProperty("headers", out var hs)
+                    && SessaoSendbird.DosCabecalhos(url, hs, DateTime.Now) is { } sessao)
+                {
+                    ServicoRecuperacaoChat.OferecerCabecalhos(sessao.Cabecalhos);
+                    ServicoRecuperacaoChat.OferecerCredencial(sessao.Credencial);
+                }
             });
 
             _respRecv = core.GetDevToolsProtocolEventReceiver("Network.responseReceived");
@@ -990,6 +1059,11 @@ public partial class ChatIfood : UserControl
                 using var d = JsonDocument.Parse(e.ParameterObjectAsJson);
                 var id = d.RootElement.TryGetProperty("requestId", out var ri) ? ri.GetString() : null;
                 if (id is not null && id == _authRequestId) _authRequestId = id; // marca para o loadingFinished
+                // 1.0.41: 401/403 numa chamada do próprio SDK = a sessão não vale mais (espera o próximo LOGI)
+                if (d.RootElement.TryGetProperty("response", out var rs) && rs.ValueKind == JsonValueKind.Object
+                    && rs.TryGetProperty("url", out var ru) && SessaoSendbird.EhApiDoSendbird(ru.GetString())
+                    && rs.TryGetProperty("status", out var rst) && rst.TryGetInt32(out var status) && status is 401 or 403)
+                    ServicoRecuperacaoChat.Invalidar("sdk_" + status);
             });
 
             _loadFin = core.GetDevToolsProtocolEventReceiver("Network.loadingFinished");
@@ -2097,6 +2171,8 @@ public partial class ChatIfood : UserControl
         }
         return null;
       }
+      // 1.0.41: a gaveta para o ScriptFechar (o X do painel da conversa e a vigia da gaveta)
+      window.pdvGaveta = candidato;
       // AJUDA DO iFOOD (12/09/2026). A gaveta do Atendimento ("Fale com o iFood") e o
       // help-center: mora no CABECALHO do Gestor, irma do botao com o icone de fone.
       // Mapeado pelo diagnostico da loja de 11/09 20:42 (gestor-diagnostico-204245).
@@ -2662,6 +2738,147 @@ public partial class ChatIfood : UserControl
     })();
     """;
 
+    // ── O X DO PAINEL DA CONVERSA (1.0.41, 16/10/2026, pedido do dono com fotos) ─────────
+    // O X da gaveta (na linha do titulo "Conversas") ja some desde 04/09. Mas o painel da CONVERSA
+    // ("#5041 Maluma Lopes") tem o proprio cabecalho, com a seta de voltar a esquerda e um X a
+    // direita, e esse X fecha a gaveta INTEIRA: a tela ficava so com "AJUDA iFOOD" e "Respostas
+    // prontas", a equipe tocava em Reabrir e o WebView2 era recriado (30 s parado). O dono: "um frame
+    // ali no X impedindo de fechar, so com a seta de retornar".
+    //  (a) o X do cabecalho da conversa some (atributo proprio + CSS, so no modo "so o chat") e o
+    //      clique nele morre na fase de captura, mesmo quando o React o recria sem a marca; o X e
+    //      reconhecido pelo rotulo/classe de fechar, pelo glifo, ou por ser o ultimo botao a direita
+    //      da linha do cabecalho (a linha e a da seta de voltar, que fica livre);
+    //  (b) a vigia de 2 s: a gaveta que some sem o operador ter saido do chat (sem o Gestor inteiro
+    //      pedido) e reaberta pelo mesmo caminho do aquecimento (pdvAquecerLista), no maximo uma vez
+    //      por 10 s, e a tela e avisada (painelfechou) para o diag.
+    // Separado do ScriptPainel para rodar no node contra um DOM falso (TestesScriptFechar).
+    private const string ScriptFechar = """
+    (function () {
+      if (window.__pdvFechar) return; window.__pdvFechar = true;
+      function envia(o){ try { window.chrome.webview.postMessage(JSON.stringify(o)); } catch (e) {} }
+      function gaveta(){ try { return window.pdvGaveta ? window.pdvGaveta() : null; } catch (e) { return null; } }
+      function attr(el, n){ try { return String(el.getAttribute(n) || '').toLowerCase(); } catch (e) { return ''; } }
+      function classe(el){ try { return (typeof el.className === 'string' ? el.className : (el.getAttribute('class') || '')).toLowerCase(); } catch (e) { return ''; } }
+      function rotulo(el){ return attr(el, 'aria-label') + ' ' + attr(el, 'title') + ' ' + attr(el, 'data-testid'); }
+      function visivel(el){ try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; } }
+      function clicavel(el){ try { return (el.closest && el.closest('button,[role="button"],a')) || el; } catch (e) { return el; } }
+      function estilo(){
+        try {
+          if (document.getElementById('pdv-css-fechar')) return;
+          var s = document.createElement('style'); s.id = 'pdv-css-fechar';
+          s.textContent = 'body.pdv-so-chat [data-pdv-fechar-painel]{display:none!important;pointer-events:none!important}';
+          (document.head || document.documentElement).appendChild(s);
+        } catch (e) {}
+      }
+      // a SETA DE VOLTAR: rotulo/classe de voltar, o icone de seta dentro, ou o glifo
+      function ehVoltar(el){
+        try {
+          if (!el) return false;
+          var c = classe(el) + ' ' + rotulo(el);
+          if (/voltar|\bback\b|arrow-left|arrowleft|chevron-left|chevronleft|arrow_back|icon-back/.test(c)) return true;
+          if (el.querySelector && el.querySelector('[class*="arrow-left"],[class*="chevron-left"],[class*="icon-back"],[aria-label*="oltar"],[aria-label*="ack"]')) return true;
+          var t = (el.textContent || '').trim();
+          return /^[←‹❮<]$/.test(t);
+        } catch (e) { return false; }
+      }
+      // o X: rotulo/classe de fechar, o icone de fechar dentro, ou o glifo
+      function ehFechar(el){
+        try {
+          if (!el) return false;
+          var c = classe(el) + ' ' + rotulo(el);
+          if (/icon-close|close-icon|\bclose\b|fechar/.test(c)) return true;
+          if (el.querySelector && el.querySelector('[class*="icon-close"],[class*="close-icon"],[aria-label*="echar"],[aria-label*="lose"]')) return true;
+          var t = (el.textContent || '').trim();
+          return /^[×✕✖xX]$/.test(t);
+        } catch (e) { return false; }
+      }
+      // a LINHA DO CABECALHO da conversa: o ancestral baixo e largo da seta de voltar
+      function linhaDoCabecalho(g){
+        try {
+          var cands = g.querySelectorAll('button,[role="button"],a,svg,span');
+          for (var i = 0; i < cands.length; i++) {
+            if (!ehVoltar(cands[i]) || !visivel(cands[i])) continue;
+            var no = clicavel(cands[i]).parentElement;
+            while (no && no !== g && no !== document.body) {
+              var r = no.getBoundingClientRect();
+              if (r.width >= 200 && r.height <= 96) {
+                var p = no.parentElement;
+                if (!p || p === g || p.getBoundingClientRect().height > 96) return no;
+              }
+              no = no.parentElement;
+            }
+          }
+        } catch (e) {}
+        return null;
+      }
+      function marcar(el){
+        if (el.hasAttribute('data-pdv-fechar-painel')) return false;
+        el.setAttribute('data-pdv-fechar-painel', '');
+        return true;
+      }
+      // (a) marca o X do painel da conversa; devolve quantos marcou agora
+      window.pdvBlindarFechar = function () {
+        var n = 0;
+        try {
+          var g = gaveta(); if (!g) return 0;
+          estilo();
+          var linha = linhaDoCabecalho(g);
+          var rt = linha ? linha.getBoundingClientRect() : null;
+          var cands = g.querySelectorAll('button,[role="button"],a,svg');
+          var direita = null, dx = -1;
+          for (var i = 0; i < cands.length; i++) {
+            var el = cands[i], alvo = clicavel(el);
+            if (ehVoltar(el) || ehVoltar(alvo)) { alvo.removeAttribute('data-pdv-fechar-painel'); continue; }
+            if (ehFechar(el) || ehFechar(alvo)) { if (marcar(alvo)) n++; continue; }
+            if (!rt || !visivel(el)) continue;
+            var r = el.getBoundingClientRect();
+            if (r.top < rt.bottom && r.bottom > rt.top && r.width <= 80 && r.height <= 80 && r.left > dx && !/input|textarea|select/i.test(alvo.tagName)) { dx = r.left; direita = alvo; }
+          }
+          if (direita && !ehVoltar(direita) && marcar(direita)) n++;
+        } catch (e) {}
+        return n;
+      };
+      // o clique no X morre na captura, antes de o Gestor ouvir (so no modo "so o chat")
+      document.addEventListener('click', function (ev) {
+        try {
+          if (!document.body || !document.body.classList.contains('pdv-so-chat')) return;
+          var t = ev.target;
+          if (!t || !t.closest) return;
+          if (t.closest('[data-pdv-fechar-painel]')) { ev.stopImmediatePropagation(); ev.preventDefault(); return; }
+          var g = gaveta(); if (!g || !g.contains(t)) return;
+          var el = t.closest('button,[role="button"],a,svg'); if (!el) return;
+          var b = clicavel(el);
+          if (ehVoltar(el) || ehVoltar(b)) return;
+          if (ehFechar(el) || ehFechar(b)) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+        } catch (e) {}
+      }, true);
+      // (b) a vigia: a gaveta que some sem o operador ter saido e reaberta, no maximo uma vez por 10 s
+      var viuGaveta = false, ultimoReabrir = 0, reaberturas = 0;
+      window.pdvVigiarPainel = function (agoraMs) {
+        try {
+          var agora = typeof agoraMs === 'number' ? agoraMs : Date.now();
+          if (gaveta()) { viuGaveta = true; window.pdvBlindarFechar(); return 'aberta'; }
+          if (!viuGaveta) return 'nunca_viu';
+          if (window.__pdvSemHolofote) return 'gestor_inteiro';
+          if (!document.body || !document.body.classList.contains('pdv-so-chat')) return 'fora_do_chat';
+          if (agora - ultimoReabrir < 10000) return 'esperando';
+          ultimoReabrir = agora; reaberturas++;
+          var r = window.pdvAquecerLista ? window.pdvAquecerLista() : 'sem_funcao';
+          envia({ tipo: 'painelfechou', resultado: String(r), vez: reaberturas });
+          return 'reabriu:' + r;
+        } catch (e) { return 'erro'; }
+      };
+      var pend = null;
+      function agenda(){ if (pend) return; pend = setTimeout(function () { pend = null; window.pdvBlindarFechar(); }, 300); }
+      function liga(){
+        estilo();
+        try { new MutationObserver(agenda).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+        setInterval(function () { window.pdvVigiarPainel(); }, 2000);
+        agenda();
+      }
+      if (document.body) liga(); else document.addEventListener('DOMContentLoaded', liga);
+    })();
+    """;
 
     // ── o script do SDK do Sendbird (07/10/2026, resgate pelo chat) ──────────
     // Roda a cada carga, separado do painel. Duas funcoes e nada mais:

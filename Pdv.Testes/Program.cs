@@ -819,6 +819,20 @@ if (args.Length >= 1 && args[0] == "--so-conta")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (16/10/2026, 1.0.41): so as suites da recuperacao do chat pelo historico do
+// Sendbird, do sinal preso, do relogio do PC e do X do painel da conversa. NAO e o gate.
+//   Pdv.Testes.exe --so-1041
+if (args.Length >= 1 && args[0] == "--so-1041")
+{
+    await TestesRecuperacaoSendbird.RodarAsync((cond, nome) => Check("recuperacao: " + nome, cond));
+    await TestesSinalPreso.RodarAsync((cond, nome) => Check("sinal-preso: " + nome, cond));
+    TestesRelogioDoWindows.Rodar((cond, nome) => Check("relogio: " + nome, cond));
+    TestesScriptFechar.Rodar((cond, nome) => Check("script-fechar: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so 1041) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 // MODO DE DESENVOLVIMENTO (15/10/2026): so o banco de conversas (arquivo) e a observacao do cartao.
 // NAO e o gate.
 //   Pdv.Testes.exe --so-arquivo
@@ -2162,6 +2176,38 @@ await TestesChatArquivo.RodarAsync((cond, nome) => Check("chat-arquivo: " + nome
 Console.WriteLine();
 Console.WriteLine("--- Resgate manual da raspadinha: a chave da loja, a tela, o servico e os textos ---");
 await TestesResgateManual.RodarAsync((cond, nome) => Check("resgate-manual: " + nome, cond));
+
+// -- 16/10/2026: A RECUPERACAO DO CHAT PELO HISTORICO DO SENDBIRD (caixa 1.0.41, Savassi, pedido 2029) --
+// O robo so via o que chegava pelo WebSocket com o Gestor aberto. Com o chat morto de 12:32 a 13:22 o
+// cliente mandou 3 codigos e nada foi capturado. Agora o caixa busca sozinho o historico recente (REST
+// do Sendbird com a sessao do proprio Gestor), a cada 10 s e quando a sessao chega, e entrega ao mesmo
+// funil uma vez so. GET apenas; a chave nunca sai da memoria.
+Console.WriteLine();
+Console.WriteLine("--- Recuperacao pelo historico: a sessao, o quadro, a janela, o servico e o pedido 2029 ---");
+await TestesRecuperacaoSendbird.RodarAsync((cond, nome) => Check("recuperacao: " + nome, cond));
+
+// -- 16/10/2026: O SINAL DE 60 s QUE MORREU EM SILENCIO (caixa 1.0.41, Savassi) ----------------
+// A rodada presa num await sem prazo segurava a guarda e todas as seguintes voltavam caladas; o ERP
+// alarmou "chat caiu" e a equipe recriou o chat 6 vezes a toa. Guarda com dono e hora, prazo em todo
+// await, e o Reabrir com a pagina viva so manda o sinal.
+Console.WriteLine();
+Console.WriteLine("--- Sinal preso: a guarda com dono e hora, os prazos e o Reabrir com a pagina viva ---");
+await TestesSinalPreso.RodarAsync((cond, nome) => Check("sinal-preso: " + nome, cond));
+
+// -- 16/10/2026: O RELOGIO DO PC ACERTADO SOZINHO (caixa 1.0.41, pedido do dono) ----------------
+// O PC da Savassi estava 566 s atrasado. O instalador configura o w32time com os servidores do NTP.br e
+// registra a tarefa PdvNativo-Relogio; o caixa so mede, avisa na Configuracao e, numa instalacao antiga,
+// pede ao Windows pelo botao.
+Console.WriteLine();
+Console.WriteLine("--- Relogio do PC: as linhas de comando, o instalador, a regra do aviso e os textos ---");
+TestesRelogioDoWindows.Rodar((cond, nome) => Check("relogio: " + nome, cond));
+
+// -- 16/10/2026: O X DO PAINEL DA CONVERSA (caixa 1.0.41, pedido do dono com fotos) -------------
+// O X do painel "#5041 Maluma Lopes" fechava o chat inteiro e a equipe recriava o WebView2. O script
+// esconde o X (a seta de voltar segue) e a gaveta que some e reaberta sozinha.
+Console.WriteLine();
+Console.WriteLine("--- O X do painel da conversa: o script no node contra um DOM falso ---");
+TestesScriptFechar.Rodar((cond, nome) => Check("script-fechar: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

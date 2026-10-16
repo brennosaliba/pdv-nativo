@@ -1097,7 +1097,8 @@ public static class ConversaRaspadinha
     /// </summary>
     public static string EstadoDoSinal(string gestor, bool wsVivo, DateTime? ultimoQuadro, int fila,
         JsonObject? quadros, JsonObject? sdkDaPagina, IReadOnlyDictionary<string, int>? canaisPorMerchant,
-        SaudeDoChat? saude = null, ContagemDoEnvio? envio = null, ContagemDeCartoes? solicitacao = null)
+        SaudeDoChat? saude = null, ContagemDoEnvio? envio = null, ContagemDeCartoes? solicitacao = null,
+        EstadoDaRecuperacao? recuperacao = null, int? relogioSeg = null)
     {
         var sdk = new JsonObject();
         if (sdkDaPagina is not null)
@@ -1205,6 +1206,25 @@ public static class ConversaRaspadinha
                 // 1.0.38: quantos cartões traziam a observação do cliente
                 ["obs_lidas"] = Math.Clamp(so.ObsLidas, 0, 100_000),
             };
+        // 1.0.41: a recuperação pelo histórico do Sendbird, só por lista branca (fonte e erro são enums;
+        // o resto é contagem e hora). Nunca chave, URL, id de canal nem texto.
+        if (recuperacao is { } rc)
+            o["recuperacao"] = new JsonObject
+            {
+                ["fonte"] = SessaoSendbird.Fontes.Contains(rc.Fonte) ? rc.Fonte : SessaoSendbird.FonteNenhuma,
+                ["ultima_em"] = rc.UltimaEm?.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture),
+                ["ultima_ok_em"] = rc.UltimaOkEm?.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture),
+                ["canais"] = Math.Clamp(rc.Canais, 0, 100_000),
+                ["canais_lidos"] = Math.Clamp(rc.CanaisLidos, 0, 1_000_000),
+                ["mensagens_novas"] = Math.Clamp(rc.MensagensNovas, 0, 10_000_000),
+                ["erro"] = rc.Erro is { } er && RecuperacaoSendbird.Erros.Contains(er) ? er : null,
+                ["recuo_s"] = Math.Clamp(rc.RecuoS, 0, 3600),
+                ["varreduras"] = Math.Clamp(rc.Varreduras, 0, 10_000_000),
+                ["rest_recebidas"] = Math.Clamp(rc.RestRecebidas, 0, 10_000_000),
+                ["rest_entregues"] = Math.Clamp(rc.RestEntregues, 0, 10_000_000),
+            };
+        // 1.0.41: o desvio do relógio do PC em segundos (positivo = adiantado), medido contra o painel
+        if (relogioSeg is { } rs) o["relogio_seg"] = Math.Clamp(rs, -86_400 * 366, 86_400 * 366);
         return o.ToJsonString(Json);
     }
 

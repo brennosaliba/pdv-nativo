@@ -97,7 +97,20 @@ public static class QuadroSendbird
     ///
     /// ⚠️ Fica só em memória, para comparar autor. Nunca é gravado, logado nem enviado.
     /// </summary>
-    public static string? UserIdDaUrl(string? url)
+    public static string? UserIdDaUrl(string? url) => ParametroDaUrl(url, "user_id");
+
+    /// <summary>1.0.41: o <c>ai</c> da URL do WebSocket do Sendbird (o app id, que não é segredo). Mesma mecânica do user_id.</summary>
+    public static string? AppIdDaUrl(string? url) => ParametroDaUrl(url, "ai");
+
+    /// <summary>
+    /// 1.0.41: o <c>key</c> da URL do WebSocket do Sendbird (a chave da sessão, que o SDK põe na query das
+    /// reconexões). SÓ o parâmetro de nome exato "key": o access_token nunca vira chave de sessão.
+    /// ⚠️ Segredo: fica só em memória, nunca em log, diag, sinal ou exceção.
+    /// </summary>
+    public static string? ChaveDaSessaoDaUrl(string? url) => ParametroDaUrl(url, "key");
+
+    /// <summary>O valor de UM parâmetro da query (nome exato), decodificado; null quando não há.</summary>
+    public static string? ParametroDaUrl(string? url, string nome)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
         var q = url.IndexOf('?');
@@ -107,7 +120,7 @@ public static class QuadroSendbird
         foreach (var par in query.Split('&'))
         {
             var eq = par.IndexOf('=');
-            if (eq <= 0 || !par[..eq].Equals("user_id", StringComparison.Ordinal)) continue;
+            if (eq <= 0 || !par[..eq].Equals(nome, StringComparison.Ordinal)) continue;
             try
             {
                 var v = Uri.UnescapeDataString(par[(eq + 1)..].Replace('+', ' ')).Trim();

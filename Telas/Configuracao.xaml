@@ -671,6 +671,20 @@
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                     </StackPanel>
 
+                    <!-- 1.0.41 (16/10/2026, pedido do dono): o relogio do PC acertado sozinho. So aparece com
+                         duas leituras seguidas acima de 60 s (AtualizarCaixa.VigiaDoRelogio). O botao so numa
+                         instalacao antiga, sem a tarefa PdvNativo-Relogio (Quiosque.AcertarRelogio). -->
+                    <StackPanel x:Name="BlocoRelogio" Visibility="Collapsed">
+                        <TextBlock Text="RELÓGIO DO PC" Foreground="{DynamicResource Marca}"
+                                   FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
+                        <TextBlock x:Name="TxtRelogio" Text="" Foreground="{DynamicResource Texto}" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtRelogioTarefa" Text="" Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed"/>
+                        <Button x:Name="BtnAcertarRelogio" Click="AcertarRelogio" Style="{StaticResource BotaoBase}" HorizontalAlignment="Left"
+                                MinHeight="44" Padding="16,0" Margin="0,0,0,8" Visibility="Collapsed">
+                            <TextBlock x:Name="TxtBtnAcertarRelogio" Text="Acertar o relógio agora"/>
+                        </Button>
+                    </StackPanel>
+
                     <StackPanel x:Name="BlocoQuiosque">
                         <!-- SO O PDV NO WINDOWS (12/09/2026, pedido do dono): o Windows abre direto no
                              PDV, sem area de trabalho, barra ou outros programas. E o Shell do usuario

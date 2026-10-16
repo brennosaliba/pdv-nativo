@@ -97,7 +97,7 @@ public static class TestesScriptSendbird
         return sb.ToString();
     }
 
-    private static (int Exit, string Saida, string Erro) Node(string pasta, params string[] args)
+    internal static (int Exit, string Saida, string Erro) Node(string pasta, params string[] args)
     {
         try
         {
@@ -123,9 +123,9 @@ public static class TestesScriptSendbird
 
     private static string Corta(string s) => s.Length <= 300 ? s.Trim() : s[..300].Trim();
 
-    private static string LerSeExiste(string p) => File.Exists(p) ? File.ReadAllText(p) : "";
+    internal static string LerSeExiste(string p) => File.Exists(p) ? File.ReadAllText(p) : "";
 
-    private static string? Raiz()
+    internal static string? Raiz()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)

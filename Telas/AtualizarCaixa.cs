@@ -739,6 +739,7 @@ public static class AtualizarCaixa
             var estado = EstadoSemTela();
             var leitura = await ConsultarAsync(estado, DesvioAgora()).ConfigureAwait(false);
             _relogio = Atualizacao.RelogioDaLoja.Ancorar(leitura.Ok?.AgoraNaLoja) ?? _relogio;
+            if (leitura.Ok?.AgoraNaLoja is not null) VigiaDoRelogio.Registrar(DesvioAgora());   // 1.0.41: uma leitura do relógio do PC
 
             var v = Atualizacao.DecidirSozinho(
                 estado, Atualizacao.VersaoInstalada(), leitura.Ok, _relogio?.HoraDaLoja);
@@ -785,6 +786,7 @@ public static class AtualizarCaixa
             var estado2 = EstadoSemTela();
             var leitura2 = await ConsultarAsync(estado2, DesvioAgora()).ConfigureAwait(false);
             _relogio = Atualizacao.RelogioDaLoja.Ancorar(leitura2.Ok?.AgoraNaLoja) ?? _relogio;
+            if (leitura2.Ok?.AgoraNaLoja is not null) VigiaDoRelogio.Registrar(DesvioAgora());
 
             var v2 = Atualizacao.DecidirSozinho(
                 estado2, Atualizacao.VersaoInstalada(), leitura2.Ok, _relogio?.HoraDaLoja);
@@ -892,6 +894,16 @@ public static class AtualizarCaixa
     /// </summary>
     private static TimeSpan? DesvioAgora()
         => Atualizacao.DesvioDoRelogio(_relogio?.AgoraNaLoja, DateTimeOffset.Now);
+
+    /// <summary>
+    /// 1.0.41 (pedido do dono, 16/10/2026): o vigia do relógio do PC. Cada pergunta ao painel (a cada 15
+    /// min) é uma leitura; com duas seguidas acima de 60 s a Configuração mostra a linha do relógio e o
+    /// sinal do chat leva <c>relogio_seg</c>. Quem acerta é o Windows (w32time, posto pelo instalador).
+    /// </summary>
+    public static readonly RelogioDoWindows.VigiaDoDesvio VigiaDoRelogio = new();
+
+    /// <summary>O último desvio medido (positivo = o PC adiantado), ou null quando o painel ainda não disse a hora.</summary>
+    public static TimeSpan? DesvioDoRelogio => VigiaDoRelogio.UltimoDesvio ?? DesvioAgora();
 
     /// <summary>
     /// Avisa e deixa vetar, com contagem regressiva. true = pode seguir.

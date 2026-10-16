@@ -121,6 +121,8 @@ public partial class Configuracao : UserControl
         BlocoRespostasChat.Visibility = Se(_jaConfigurado);
         // Modo quiosque: o que está no Windows agora (não no banco: o registro é a verdade).
         BlocoQuiosque.Visibility = Se(_jaConfigurado);
+        // 1.0.41: o relógio do PC torto (duas leituras seguidas acima de 60 s): a linha e, sem a tarefa, o botão
+        MostrarRelogio();
         ChkQuiosque.IsChecked = Quiosque.Ligado;
         ChkTravarAtalhos.IsChecked = Quiosque.Travado;
         BtnSairWindows.Visibility = Se(Quiosque.Ligado);
@@ -312,6 +314,57 @@ public partial class Configuracao : UserControl
     private RadioButton[] Abas => new[] { AbaLoja, AbaFiscal, AbaImpressora, AbaMaquininha, AbaPareamento };
 
     /// <summary>Mostra um passo e só ele. Recalcula trilha, rodapé e o que bloqueia.</summary>
+    // ── 1.0.41: O RELÓGIO DO PC (pedido do dono, 16/10/2026) ─────────────────────────────
+
+    /// <summary>
+    /// A linha do relógio só com o vigia avisando (duas leituras seguidas acima de 60 s); o botão só
+    /// quando a tarefa PdvNativo-Relogio não existe (instalação antiga). A consulta ao schtasks sai da
+    /// thread da tela.
+    /// </summary>
+    private void MostrarRelogio()
+    {
+        try
+        {
+            var vigia = AtualizarCaixa.VigiaDoRelogio;
+            if (!_jaConfigurado || !vigia.Avisar || vigia.UltimoDesvio is not { } desvio) { BlocoRelogio.Visibility = Visibility.Collapsed; return; }
+            TxtRelogio.Text = RelogioDoWindows.Frase(desvio);
+            BlocoRelogio.Visibility = Visibility.Visible;
+            TxtBtnAcertarRelogio.Text = RelogioDoWindows.TextoDoBotao;
+            _ = Task.Run(Quiosque.TarefaDoRelogioExiste).ContinueWith(t => Dispatcher.BeginInvoke(() =>
+            {
+                var existe = t.Status == TaskStatus.RanToCompletion && t.Result;
+                TxtRelogioTarefa.Text = existe ? "" : RelogioDoWindows.FraseSemTarefa;
+                TxtRelogioTarefa.Visibility = Se(!existe);
+                BtnAcertarRelogio.Visibility = Se(!existe);
+            }));
+        }
+        catch { BlocoRelogio.Visibility = Visibility.Collapsed; }
+    }
+
+    /// <summary>"Acertar o relógio agora": o Windows pede a permissão de administrador e registra a tarefa.</summary>
+    private void AcertarRelogio(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            BtnAcertarRelogio.IsEnabled = false;
+            var (resultado, detalhe) = Quiosque.AcertarRelogio(new System.Windows.Interop.WindowInteropHelper(Window.GetWindow(this)!).Handle);
+            try { using var cx = Banco.Abrir(); Caixa.Auditar(cx, null, resultado == ResultadoDaTrava.Ok ? "relogio_acertado" : "relogio_falhou", null, null, detalhe); }
+            catch { }
+            TxtRelogioTarefa.Text = resultado switch
+            {
+                ResultadoDaTrava.Ok => RelogioDoWindows.FraseAcertou,
+                ResultadoDaTrava.Cancelou => RelogioDoWindows.FraseRecusou,
+                _ => RelogioDoWindows.FraseFalhou,
+            };
+            TxtRelogioTarefa.Visibility = Visibility.Visible;
+            BtnAcertarRelogio.Visibility = Se(resultado != ResultadoDaTrava.Ok);
+        }
+        catch (Exception ex) { TxtRelogioTarefa.Text = RelogioDoWindows.FraseFalhou; TxtRelogioTarefa.Visibility = Visibility.Visible; Diag(ex); }
+        finally { BtnAcertarRelogio.IsEnabled = true; }
+    }
+
+    private static void Diag(Exception ex) { try { HospedeWebView2.Anotar("configuracao.txt", "relogio: " + ex.GetType().Name + " " + ex.Message, TimeSpan.Zero); } catch { } }
+
     private void IrPara(PassoConfig p)
     {
         _passo = p;

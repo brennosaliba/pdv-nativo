@@ -232,6 +232,48 @@ public static class Quiosque
         return p is not null && p.WaitForExit(20000);
     }
 
+    // ── 1.0.41: O RELÓGIO DO PC ACERTADO SOZINHO (pedido do dono, 16/10/2026) ───────────
+    // O instalador deixa o w32time configurado e a tarefa PdvNativo-Relogio registrada em toda
+    // instalação. Numa instalação ANTIGA (sem a tarefa) a Configuração mostra o botão, que pede ao
+    // Windows (um aviso do UAC) para rodar o cmd.exe de System32 com as mesmas seis etapas do
+    // instalador. A regra pura e as linhas moram em Nucleo/RelogioDoWindows.cs.
+
+    /// <summary>A tarefa PdvNativo-Relogio existe neste PC? (schtasks /query, sem administrador). Nunca lança.</summary>
+    public static bool TarefaDoRelogioExiste()
+    {
+        try
+        {
+            var sistema = Environment.SystemDirectory;
+            if (!TravaDoCtrlAltDel.PastaDoSistema(sistema)) return false;
+            using var p = Process.Start(new ProcessStartInfo(sistema + @"\" + RelogioDoWindows.ProgramaSchtasks, RelogioDoWindows.ArgumentosConsultarTarefa)
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = sistema,
+            });
+            if (p is null) return false;
+            p.StandardOutput.ReadToEndAsync(); p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(10_000)) { try { p.Kill(); } catch { } return false; }
+            return RelogioDoWindows.TarefaExiste(p.ExitCode);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// O botão "Acertar o relógio agora": pede ao Windows para rodar como administrador o cmd.exe de
+    /// System32 com as seis etapas (só constantes). O resultado é a tarefa relida. Nunca lança.
+    /// </summary>
+    public static (ResultadoDaTrava Resultado, string Detalhe) AcertarRelogio(IntPtr janela)
+    {
+        var sistema = Environment.SystemDirectory;
+        if (!TravaDoCtrlAltDel.PastaDoSistema(sistema)) return (ResultadoDaTrava.Falhou, "pasta do sistema fora do esperado");
+        if (!File.Exists(TravaDoCtrlAltDel.CaminhoDoCmd(sistema))) return (ResultadoDaTrava.Falhou, "cmd.exe não está em " + sistema);
+        bool terminou;
+        try { terminou = PedirAoWindows(RelogioDoWindows.MontarComandoDoCaixa(sistema), sistema, janela); }
+        catch (Exception ex) when (TravaDoCtrlAltDel.Cancelado(ex)) { return (ResultadoDaTrava.Cancelou, "o aviso do Windows foi respondido com Não"); }
+        catch (Exception ex) { return (ResultadoDaTrava.Falhou, "pedido ao Windows: " + TravaDoCtrlAltDel.Tecnico(ex)); }
+        var detalhe = "cmd como administrador: " + (terminou ? "terminou" : "não terminou em 20 s");
+        return (TarefaDoRelogioExiste() ? ResultadoDaTrava.Ok : ResultadoDaTrava.Falhou, detalhe);
+    }
+
     /// <summary>O SID da conta deste processo (S-1-5-21-...), ou null.</summary>
     private static string? SidDoProcesso()
     {

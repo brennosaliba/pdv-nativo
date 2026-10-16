@@ -214,6 +214,18 @@ public sealed class VigiaChatIfood
 
     // ── textos de tela (curtos, sem travessão; a bateria vigia) ────────────────
 
+    /// <summary>
+    /// 1.0.41 (16/10/2026, Savassi): o Reabrir pelo aviso NÃO recria o WebView2 com a página viva (vigia
+    /// "ok" e a página falou há menos de 2 min): o sinal de 60 s tinha morrido em silêncio, o ERP alarmou
+    /// "chat caiu" e a equipe recriou o chat 6 vezes à toa (30 s parado cada). Com a página viva, só o
+    /// sinal sai na hora; recria só com a página morta.
+    /// </summary>
+    public static bool ReabrirRecria(string fase, DateTime? paginaFalouEm, DateTime agora)
+        => !(fase == "ok" && paginaFalouEm is { } f && agora - f < Silencio);
+
+    /// <summary>O texto curto quando o Reabrir encontra a página viva.</summary>
+    public const string TextoChatVivo = "O chat está vivo. Mandei o sinal agora.";
+
     /// <summary>Linha do aviso na venda: o que aconteceu e, na segunda, o que fazer.</summary>
     public static (string Titulo, string Acao) Aviso(EstadoChatIfood? motivo) => motivo switch
     {

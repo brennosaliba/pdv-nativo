@@ -125,7 +125,6 @@ public static class ServicoConversaChat
     private static readonly Channel<(SaidaConversa Saida, DateTime Recebida)> FilaDeEnvio =
         Channel.CreateUnbounded<(SaidaConversa, DateTime)>(new UnboundedChannelOptions { SingleReader = true });
     private static readonly SemaphoreSlim UmaChamadaPorVez = new(1, 1);
-    private static readonly SemaphoreSlim UmSinalPorVez = new(1, 1);
 
     private static readonly object TravaVistas = new();
     private static readonly HashSet<string> Vistas = new(StringComparer.Ordinal);
@@ -230,6 +229,57 @@ public static class ServicoConversaChat
             _ = Task.Run(() => Guardar(canal, fala, agora));
         }
         catch (Exception ex) { Diag("quadro: " + ex.GetType().Name); }
+    }
+
+    // ── 1.0.41: O QUADRO RECUPERADO PELO HISTÓRICO (ServicoRecuperacaoChat, origem "rest") ──
+    private static int _restRecebidas, _restEntregues;
+
+    /// <summary>
+    /// SÓ A BATERIA (1.0.41): liga o funil do quadro (triagem, memória, banco) com o sinal dado, SEM os
+    /// relógios, o laço de envio nem a leitura do sinal gravado. O <see cref="Ligar"/> de verdade sobe o
+    /// sinal de 60 s, que fala com a nuvem: a bateria nunca pode fazer isso.
+    /// </summary>
+    public static void LigarSoOFunil(SinalConversa sinal)
+    {
+        _ultimo = new UltimoSinal(sinal, DateTime.Now);
+        Interlocked.Exchange(ref _iniciado, 1);
+    }
+
+    /// <summary>Quantos quadros a recuperação entregou e quantos viraram fala nova (para o sinal).</summary>
+    public static (int Recebidas, int Entregues) Rest => (Volatile.Read(ref _restRecebidas), Volatile.Read(ref _restEntregues));
+
+    /// <summary>
+    /// Um quadro RECUPERADO pelo histórico REST (já no formato do WebSocket), igual a <see cref="Quadro"/>
+    /// recebido a partir da leitura: a observação do cartão (BRDM/AEDI), a fala, a confirmação, a triagem,
+    /// a memória e o banco. SEM <c>Contadores.Registrar</c> (não pode dizer ws_vivo: não veio pelo socket) e
+    /// SEM aprender o usuário da loja (o histórico não diz de que conexão é). Nunca lança.
+    /// </summary>
+    public static void QuadroRecuperado(string? payload, string? wsUserId)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(payload) || _iniciado == 0) return;
+            var agora = DateTime.Now;
+            Interlocked.Increment(ref _restRecebidas);
+            var cmd = QuadroSendbird.Comando(payload);
+            if (cmd != QuadroSendbird.ComandoMensagem)
+            {
+                if (cmd is "BRDM" or "AEDI") Observacao(payload!, wsUserId, agora);
+                return;
+            }
+            var m = QuadroSendbird.Ler(payload);
+            if (m is null) return;
+            if (Confirmacoes.Ver(m, false) is { } conf)
+                _ = RelatarAsync(conf.SaidaId, "enviada", null, conf.MsgId, null);
+            var t = ConversaRaspadinha.Triagem(m, _ultimo.Sinal, Canais, Eco, wsUserId ?? _wsUserId, _sdkUserId, agora);
+            if (!t.Entra) { Diag($"rest fora: {t.Motivo}"); return; }
+            if (t.Fala!.Lado == LadoFala.Cliente) FalasCliente.Registrar(t.Canal!.Canal, t.Fala.Texto, agora);
+            if (!Nova(t.Fala!.Chave)) return;
+            Interlocked.Increment(ref _restEntregues);
+            var canal = t.Canal!; var fala = t.Fala!;
+            _ = Task.Run(() => Guardar(canal, fala, agora));
+        }
+        catch (Exception ex) { Diag("quadro rest: " + ex.GetType().Name); }
     }
 
     // ── 1.0.38 (caso #0434): a observação do cartão vira fala sintética do cliente ──
@@ -895,10 +945,43 @@ public static class ServicoConversaChat
 
     // ── 5. O SINAL (60 s) ────────────────────────────────────────────────────
 
+    /// <summary>
+    /// 1.0.41 (16/10/2026, Savassi): a guarda do sinal tem DONO E HORA. Antes era um SemaphoreSlim: quando
+    /// uma rodada ficava presa num await sem prazo, todas as seguintes voltavam em silêncio no WaitAsync(0),
+    /// o sinal morria, o ERP alarmava "chat caiu" e a equipe recriava o chat à toa. Agora a rodada presa há
+    /// 90 s é abandonada (com uma linha de diag dizendo a etapa) e a nova segue; cada await tem prazo.
+    /// </summary>
+    private static readonly GuardaDaRodada GuardaDoSinal = new();
+
+    /// <summary>1.0.41: o sinal agora (o Reabrir com a página viva). Nunca lança.</summary>
+    public static void SinalAgora()
+    {
+        try { _relogioSinal?.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan); } catch { }
+    }
+
+    /// <summary>A rodada em curso: a etapa e desde quando (só diagnóstico), ou null.</summary>
+    public static (string Etapa, DateTime Desde)? SinalEmCurso => GuardaDoSinal.EmCurso;
+
     private static async Task SinalAsync()
     {
         var proximo = TimeSpan.FromSeconds(60);
-        if (!await UmSinalPorVez.WaitAsync(0).ConfigureAwait(false)) return;
+        var entrada = GuardaDoSinal.Entrar(DateTime.Now);
+        if (entrada is null)
+        {
+            // a rodada anterior ainda corre (menos de 90 s): esta espera a próxima, e o relógio NÃO morre
+            var ec = GuardaDoSinal.EmCurso;
+            Diag($"sinal: rodada em curso ha {(ec is { } c ? (int)(DateTime.Now - c.Desde).TotalSeconds : 0)} s em {ec?.Etapa ?? "?"}; esta espera");
+            try { _relogioSinal?.Change(proximo, Timeout.InfiniteTimeSpan); } catch { }
+            return;
+        }
+        var g = entrada.Geracao;
+        if (entrada.EtapaAbandonada is not null)
+            Diag($"sinal: a rodada anterior ficou presa ha {(int)entrada.PresaHa.TotalSeconds} s em {entrada.EtapaAbandonada}; seguindo com uma nova");
+        void Etapa(string nome)
+        {
+            if (GuardaDoSinal.Etapa(g, nome, DateTime.Now) is { } ant && ant.Levou > GuardaDaRodada.EtapaLenta)
+                Diag($"sinal: etapa {ant.Etapa} levou {(int)ant.Levou.TotalSeconds} s");
+        }
         try
         {
             if (!Servicos.TemContaDeNuvem()) return;
@@ -907,6 +990,7 @@ public static class ServicoConversaChat
             JsonObject? sdk = null;
             if (_ponte is { } p)
             {
+                Etapa("diag_sdk");
                 try
                 {
                     sdk = await p.DiagSdk(CanaisParaConferir(), _wsUserId)
@@ -920,36 +1004,50 @@ public static class ServicoConversaChat
                 // abre a lista de conversas no Gestor escondido, no maximo a cada 2 min
                 if (SdkFrio(sdk, CanaisParaConferir().Count, p.Gestor() == "logado") && DateTime.Now - _ultimoAquecimento > IntervaloDoAquecimento)
                 {
+                    Etapa("aquecer");
                     _ultimoAquecimento = DateTime.Now;
                     var aqueceu = await AquecerAsync(p, null, null).ConfigureAwait(false);
                     Diag($"sinal: sdk frio, aquecimento pela lista de conversas={aqueceu}");
                 }
             }
 
-            int fila;
-            using (var cx = Banco.Abrir())
+            Etapa("banco");
+            // 1.0.41: o banco fora da thread desta rodada e com prazo (o SQLite ocupado prendia o sinal)
+            var fila = await Task.Run(() =>
             {
-                fila = ConversaRaspadinha.Pendentes(cx);
+                using var cx = Banco.Abrir();
+                var f = ConversaRaspadinha.Pendentes(cx);
                 if (agora >= _proximaFaxina)
                 {
                     _proximaFaxina = agora.AddHours(1);
                     try { ConversaRaspadinha.Faxina(cx, agora); } catch { }
                 }
-            }
+                return f;
+            }).WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
             var ultimo = Contadores.UltimoQuadro;
+            Etapa("cartoes");
             ConversaRaspadinha.ContagemDeCartoes? cartoes = null;
-            try { cartoes = Cartoes?.Invoke(); } catch { }
+            try { cartoes = await Task.Run(() => Cartoes?.Invoke()).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); } catch { }
+            Etapa("estado");
+            // 1.0.41: a recuperação pelo histórico e o relógio do PC entram no estado
+            var recuperacao = ServicoRecuperacaoChat.Estado();
+            if (recuperacao is not null) recuperacao = recuperacao with { RestRecebidas = Rest.Recebidas, RestEntregues = Rest.Entregues };
+            int? relogioSeg = null;
+            try { relogioSeg = RelogioDoWindows.Segundos(Telas.AtualizarCaixa.DesvioDoRelogio); } catch { }
             var estado = ConversaRaspadinha.EstadoDoSinal(_ponte?.Gestor() ?? "ausente",
                 ultimo is { } uq && uq > agora - TimeSpan.FromMinutes(2), ultimo, fila,
                 Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant(), _ponte?.Saude?.Invoke(),
-                ContagemDoEnvio(agora), cartoes);
+                ContagemDoEnvio(agora), cartoes, recuperacao, relogioSeg);
             var corpo = ConversaRaspadinha.CorpoSinal(Terminal, Versao, estado);
+            Etapa("rede");
             var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
-                .ConfigureAwait(false);
+                .WaitAsync(ConversaRaspadinha.Prazo + TimeSpan.FromSeconds(5)).ConfigureAwait(false);
             if (st is >= 200 and < 300)
             {
+                Etapa("gravar_sinal");
                 var s = ConversaRaspadinha.LerSinal(resp, DateTime.Now);
-                using (var cx = Banco.Abrir()) ConversaRaspadinha.GravarSinal(cx, resp, DateTime.Now);
+                await Task.Run(() => { using var cx = Banco.Abrir(); ConversaRaspadinha.GravarSinal(cx, resp, DateTime.Now); })
+                    .WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
                 var antes = _ultimo.Sinal.Modo;
                 var aprovacaoAntes = _ultimo.Sinal.Aprovacao;
                 _ultimo = new UltimoSinal(s, DateTime.Now);
@@ -957,23 +1055,31 @@ public static class ServicoConversaChat
                 if (antes != s.Modo) Diag($"modo {antes} -> {s.Modo} envio={s.Envio} comanda={s.ComandaOnde}");
                 if (aprovacaoAntes != s.Aprovacao) Diag($"aprovacao {aprovacaoAntes} -> {s.Aprovacao} mudo={s.CaixaMudo}");
 
+                Etapa("avisos");
                 foreach (var a in s.Avisos) Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero) { Resgatavel = a.Resgatavel });
                 foreach (var sd in s.Saidas) TratarSaida(sd, DateTime.Now, null);
                 if (s.Comandas.Count > 0)
                 {
-                    using (var cx = Banco.Abrir())
+                    Etapa("gravar_bonus");
+                    await Task.Run(() =>
+                    {
+                        using var cx = Banco.Abrir();
                         foreach (var c in s.Comandas) ConversaRaspadinha.GravarBonus(cx, c.Bonus, c.Cabecalho, DateTime.Now);
+                    }).WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
                     _ = ServicoRaspadinhaChat.ImprimirPendentesAsync();
                 }
             }
             else Diag($"sinal http={st}");
-            await ServicoRaspadinhaChat.RepetirImpressosAsync().ConfigureAwait(false);
+            Etapa("repetir_impressos");
+            await ServicoRaspadinhaChat.RepetirImpressosAsync().WaitAsync(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
         }
+        catch (TimeoutException) { Diag($"sinal: prazo estourado em {GuardaDoSinal.EmCurso?.Etapa ?? "?"}"); }
         catch (Exception ex) { Diag("sinal: " + ex.GetType().Name); }
         finally
         {
-            UmSinalPorVez.Release();
-            try { _relogioSinal?.Change(proximo, Timeout.InfiniteTimeSpan); } catch { }
+            // a rodada abandonada (geração velha) não solta a guarda nem mexe no relógio da nova
+            if (GuardaDoSinal.Sair(g))
+                try { _relogioSinal?.Change(proximo, Timeout.InfiniteTimeSpan); } catch { }
         }
     }
 

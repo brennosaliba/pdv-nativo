@@ -74,5 +74,11 @@
   <ItemGroup>
     <Compile Include="..\Pdv.Nucleo\ReabrirOCaixa.cs" Link="Nucleo\ReabrirOCaixa.cs" />
   </ItemGroup>
+  <!-- 1.0.41 (16/10/2026, pedido do dono): toda instalacao e atualizacao deixa o relogio do PC acertando
+       sozinho pelo servico de hora do Windows (NTP.br). As linhas de comando sao as MESMAS do caixa, que
+       as repete pelo botao da Configuracao numa instalacao antiga. -->
+  <ItemGroup>
+    <Compile Include="..\Pdv.Nucleo\RelogioDoWindows.cs" Link="Nucleo\RelogioDoWindows.cs" />
+  </ItemGroup>
 
 </Project>
