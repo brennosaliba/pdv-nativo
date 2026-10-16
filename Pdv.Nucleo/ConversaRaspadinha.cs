@@ -1156,8 +1156,23 @@ public static class ConversaRaspadinha
                       .Append(' ').Append(Retangulo(c, "r")).Append(']');
                 }
             }
+            // 1.0.43: a caixa proibida (o canto do painel) e o que foi achado nela
+            if (r.TryGetProperty("caixa", out var cx) && cx.ValueKind == JsonValueKind.Array)
+            {
+                sb.Append(" caixa=").Append(Retangulo(r, "caixa")).Append(" canto:");
+                var m = 0;
+                if (r.TryGetProperty("canto", out var ct) && ct.ValueKind == JsonValueKind.Array)
+                    foreach (var c in ct.EnumerateArray())
+                    {
+                        if (c.ValueKind != JsonValueKind.Object || m++ >= 8) continue;
+                        sb.Append(" [").Append(Limpo(Texto(c, "tag"), 8)).Append(" cls=").Append(Limpo(Texto(c, "cls"), 40))
+                          .Append(" aria=").Append(Limpo(Texto(c, "aria"), 20)).Append(" txt=").Append(Limpo(Texto(c, "txt"), 12))
+                          .Append(' ').Append(Retangulo(c, "r")).Append(']');
+                    }
+                if (m == 0) sb.Append(" nenhum");
+            }
             var linha = sb.ToString();
-            return linha.Length <= 600 ? linha : linha[..600];
+            return linha.Length <= 900 ? linha : linha[..900];
         }
         catch { return "?"; }
 

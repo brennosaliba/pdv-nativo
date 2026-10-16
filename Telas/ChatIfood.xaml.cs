@@ -152,6 +152,21 @@ public partial class ChatIfood : UserControl
     /// <summary>A última leitura da página: a tela de login do Gestor está aberta?</summary>
     private bool _gestorPedeLogin;
 
+    /// <summary>
+    /// 1.0.43: a página fica sabendo se o operador está na tela do chat (IsHitTestVisible). A vigia do painel do
+    /// ScriptFechar não reabre nada enquanto ele está lá (a mesma regra do "aquecer: operador na tela do chat, nao
+    /// mexo"). Chamado na troca da tela e depois de cada navegação (a página nova nasce sem a marca).
+    /// </summary>
+    private async Task AvisarOperadorNoChatAsync()
+    {
+        try
+        {
+            if (!_pronto || Web?.CoreWebView2 is not { } core) return;
+            await core.ExecuteScriptAsync("window.__pdvOperadorNoChat = " + (IsHitTestVisible ? "true" : "false") + ";");
+        }
+        catch { }
+    }
+
     public ChatIfood()
     {
         InitializeComponent();
@@ -168,6 +183,8 @@ public partial class ChatIfood : UserControl
             ArgumentosAnteriores = ChatIfood.ArgumentosAnteriores,
         };
         Hospede.Quebrou += AoQuebrar;
+        // 1.0.43: a página sabe quando o operador está na tela do chat (a vigia do painel não mexe nessa hora)
+        IsHitTestVisibleChanged += (_, _) => _ = AvisarOperadorNoChatAsync();
         // 1.0.33: a vigia bate desde já, com ou sem o Gestor pronto (o caso de 13/10 era justamente
         // a página que nunca dizia nada). A venda fala com ela pelo ServicoVigiaChat.
         _relogioVigia.Tick += (_, _) => BaterVigia();
@@ -300,6 +317,7 @@ public partial class ChatIfood : UserControl
                 _proximaContagemSockets = DateTime.MinValue;
                 _sockets = null;
                 _socketEscolhido = null;
+                if (e.IsSuccess) _ = AvisarOperadorNoChatAsync();   // 1.0.43: a página nova nasce sem saber do operador
                 Diag(e.IsSuccess ? "navegou: ok" : $"navegou: falhou {e.WebErrorStatus}");
                 TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: tentando de novo sozinho";
                 // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
@@ -721,7 +739,14 @@ public partial class ChatIfood : UserControl
                 // fora) e o ScriptFechar a reabriu pelo caminho do aquecimento. Só o diag: nada de recriar.
                 var resultado = doc.RootElement.TryGetProperty("resultado", out var rs) && rs.ValueKind == JsonValueKind.String
                     ? ConversaRaspadinha.NomeSeguroDoDiag(rs.GetString()) ?? "?" : "?";
-                Diag("painel do chat fechou: reaberto (" + resultado + ")");
+                // 1.0.43: quantas reaberturas na ultima hora (o laco da Savassi dava 300)
+                var naHora = doc.RootElement.TryGetProperty("hora", out var hv) && hv.ValueKind == JsonValueKind.Number && hv.TryGetInt32(out var hi) ? hi : 0;
+                Diag("painel do chat fechou: reaberto (" + resultado + "), " + naHora + " na ultima hora");
+            }
+            else if (tipo == "vigiadesligada")
+            {
+                // 1.0.43: duas reaberturas seguidas que nao pegaram: a vigia se desliga ate a proxima navegacao
+                Diag("vigia do painel: desligada (laco)");
             }
             else if (tipo == "ajuda")
             {
@@ -2793,6 +2818,10 @@ public partial class ChatIfood : UserControl
     //      pedido) e reaberta pelo mesmo caminho do aquecimento (pdvAquecerLista), no maximo uma vez
     //      por 10 s, e a tela e avisada (painelfechou) para o diag.
     // Separado do ScriptPainel para rodar no node contra um DOM falso (TestesScriptFechar).
+    // 1.0.43 (diag REAL da Savassi na 1.0.42, 19:24): o X e IRMAO do cabecalho, no canto do painel; a caixa proibida e o
+    // canto superior direito do PAINEL (64 x 64 px): some por visibility, o toque por coordenada morre na captura. E a vigia
+    // reescrita contra o laco (reabria a cada 10 s): conversa aberta = painel aberto, toque do operador, teto de 5 min,
+    // desliga depois de 2 reaberturas que nao pegam, conta por hora. Ver TestesScriptFechar.
     private const string ScriptFechar = """
     (function () {
       if (window.__pdvFechar) return; window.__pdvFechar = true;
@@ -2809,8 +2838,10 @@ public partial class ChatIfood : UserControl
         try {
           if (document.getElementById('pdv-css-fechar')) return;
           var s = document.createElement('style'); s.id = 'pdv-css-fechar';
-          // 1.0.42: vale nos dois modos (so o chat e Gestor inteiro)
-          s.textContent = '[data-pdv-fechar-painel]{display:none!important;pointer-events:none!important}';
+          // 1.0.42: vale nos dois modos (so o chat e Gestor inteiro). 1.0.43: o canto do painel some por visibility
+          // (o Gestor nao perde o lugar do elemento) e fica sem ponteiro.
+          s.textContent = '[data-pdv-fechar-painel]{display:none!important;pointer-events:none!important}' +
+            '[data-pdv-fechar-canto]{visibility:hidden!important;pointer-events:none!important}';
           (document.head || document.documentElement).appendChild(s);
         } catch (e) {}
       }
@@ -2870,22 +2901,101 @@ public partial class ChatIfood : UserControl
         el.setAttribute('data-pdv-fechar-painel', '');
         return true;
       }
-      // (d) uma linha de diag por carga: os clicaveis do cabecalho (tag, classes, aria-label, texto curto, retangulo), mascarados
-      var diagFeito = false;
+      // 1.0.43 (diag REAL da Savassi na 1.0.42, 19:24: a linha do cabecalho vai de x=510 a 1016 e o UNICO clicavel nela e o
+      // botao do titulo; o X da foto esta no canto do painel, IRMAO do cabecalho, um div/svg fora da faixa da linha).
+      // A CAIXA PROIBIDA e o canto superior direito do PAINEL da conversa: 64 px da direita x 64 px de cima. Tudo cujo
+      // centro cai nela some (visibility hidden + sem ponteiro); o toque por coordenada dentro dela morre na captura.
+      var CANTO = 64, TETO_CANTO = 96;
+      function pequeno(el){ try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.width <= TETO_CANTO && r.height <= TETO_CANTO; } catch (e) { return false; } }
+      // o que e NOSSO (a ajuda, as respostas prontas, o botao Abrir conversas: ids pdv-...) nunca some nem e barrado
+      function nosso(el){
+        try { var n = el, k = 0; while (n && k++ < 12) { if (n.id && String(n.id).indexOf('pdv-') === 0) return true; n = n.parentElement; } } catch (e) {}
+        return false;
+      }
+      function parecePainel(r){ return r.width >= 250 && r.width <= 900 && r.height > 400; }
+      // o PAINEL da conversa: a gaveta (modo so o chat) ou, sem ela (a conversa aberta tira o titulo "Conversas"; o Gestor
+      // inteiro), o ancestral do cabecalho com cara de painel lateral
+      function painelDaConversa(linha){
+        try {
+          var g = gaveta(); if (g) return g;
+          if (!linha) return null;
+          var no = linha.parentElement;
+          while (no && no !== document.body) { if (parecePainel(no.getBoundingClientRect())) return no; no = no.parentElement; }
+        } catch (e) {}
+        return null;
+      }
+      function caixaProibida(painel){
+        try {
+          if (!painel) return null;
+          var r = painel.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) return null;
+          return { left: r.right - CANTO, top: r.top, right: r.right, bottom: r.top + CANTO };
+        } catch (e) { return null; }
+      }
+      function dentro(x, y, c){ return !!c && typeof x === 'number' && typeof y === 'number' && x >= c.left && x <= c.right && y >= c.top && y <= c.bottom; }
+      function centroNaCaixa(el, c){
+        try {
+          if (!pequeno(el)) return false;
+          var r = el.getBoundingClientRect();
+          return dentro(r.left + r.width / 2, r.top + r.height / 2, c);
+        } catch (e) { return false; }
+      }
+      // o que nunca some pelo canto: o body, o que e nosso, os campos, a seta de voltar, a propria linha do cabecalho e seus pais
+      function poupado(el, linha){
+        try {
+          if (!el || el === document.body || el === document.documentElement) return true;
+          if (nosso(el)) return true;
+          if (/^(input|textarea|select)$/i.test(el.tagName || '')) return true;
+          if (ehVoltar(el) || ehVoltar(clicavel(el))) return true;
+          if (linha && (el === linha || (el.contains && el.contains(linha)))) return true;
+          if (el.querySelector && el.querySelector('input,textarea,select')) return true;
+        } catch (e) {}
+        return false;
+      }
+      function marcarCanto(el){
+        if (el.hasAttribute('data-pdv-fechar-canto')) return false;
+        el.setAttribute('data-pdv-fechar-canto', '');
+        return true;
+      }
+      function pontosDaCaixa(c){
+        var m = 4;
+        return [[(c.left + c.right) / 2, (c.top + c.bottom) / 2], [c.left + m, c.top + m], [c.right - m, c.top + m], [c.left + m, c.bottom - m], [c.right - m, c.bottom - m]];
+      }
+      // os elementos do canto: pela pilha debaixo de cada ponto (elementsFromPoint) e pela varredura do painel (svg, path e div inclusive)
+      function noCanto(painel, c, linha){
+        var achados = [], vistos = [];
+        function junta(el){
+          if (!el || vistos.indexOf(el) >= 0) return; vistos.push(el);
+          if (poupado(el, linha) || !centroNaCaixa(el, c)) return;
+          achados.push(el);
+        }
+        try {
+          if (document.elementsFromPoint) {
+            var pts = pontosDaCaixa(c);
+            for (var i = 0; i < pts.length; i++) { var pilha = document.elementsFromPoint(pts[i][0], pts[i][1]) || []; for (var j = 0; j < pilha.length; j++) junta(pilha[j]); }
+          }
+        } catch (e) {}
+        try { var cands = painel.querySelectorAll('button,[role="button"],a,svg,path,div,span,i,img'); for (var k = 0; k < cands.length; k++) junta(cands[k]); } catch (e) {}
+        return achados;
+      }
+      // (d) a linha de diag: uma por carga com os clicaveis do cabecalho (tag, classes, aria-label, texto curto, retangulo)
+      // e a caixa proibida; mais uma, a primeira vez que o canto tem algo (1.0.43). Tudo mascarado.
+      var diagFeito = false, diagCantoFeito = false;
       function mascara(s, n){ try { return String(s || '').replace(/[0-9]{3,}/g, '#').replace(/[^A-Za-z0-9_ .#-]/g, '_').slice(0, n); } catch (e) { return ''; } }
-      function descrever(linha){
+      function descreverLista(els, teto){
         var out = [];
         try {
-          var cands = linha.querySelectorAll('button,[role="button"],a,svg');
-          for (var i = 0; i < cands.length && out.length < 12; i++) {
-            var el = cands[i], r = el.getBoundingClientRect();
+          for (var i = 0; i < els.length && out.length < teto; i++) {
+            var el = els[i], r = el.getBoundingClientRect();
             out.push({ tag: mascara(el.tagName, 8), cls: mascara(classe(el), 40), aria: mascara(attr(el, 'aria-label'), 20), txt: mascara((el.textContent || '').trim(), 12),
               r: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] });
           }
         } catch (e) {}
         return out;
       }
-      // (a) marca o X do painel da conversa; devolve quantos marcou agora. Reavaliado a cada mutacao e a cada 1 s.
+      function descrever(linha){ try { return descreverLista(linha.querySelectorAll('button,[role="button"],a,svg'), 12); } catch (e) { return []; } }
+      // (a) marca o X do painel da conversa e o que mora no canto do painel; devolve quantos marcou agora.
+      // Reavaliado a cada mutacao e a cada 1 s.
       window.pdvBlindarFechar = function () {
         var n = 0;
         try {
@@ -2896,28 +3006,78 @@ public partial class ChatIfood : UserControl
           var cands = g.querySelectorAll('button,[role="button"],a,svg');
           for (var i = 0; i < cands.length; i++) {
             var el = cands[i], alvo = clicavel(el);
+            if (nosso(el)) continue;
             if (ehVoltar(el) || ehVoltar(alvo)) { alvo.removeAttribute('data-pdv-fechar-painel'); continue; }
             if (ehFechar(el) || ehFechar(alvo)) { if (marcar(alvo)) n++; continue; }
             if (!rt || !visivel(el)) continue;
             var r = el.getBoundingClientRect();
             if (naFaixaDaDireita(r, rt) && !/input|textarea|select/i.test(alvo.tagName)) { if (marcar(alvo)) n++; }
           }
-          if (linha && !diagFeito) {
+          // 1.0.43: o canto do painel
+          var painel = painelDaConversa(linha);
+          var caixa = caixaProibida(painel);
+          var achados = [];
+          if (painel && caixa) {
+            achados = noCanto(painel, caixa, linha);
+            for (var k = 0; k < achados.length; k++) { if (marcarCanto(achados[k])) n++; }
+          }
+          if (linha && (!diagFeito || (!diagCantoFeito && achados.length > 0))) {
             diagFeito = true;
+            if (achados.length > 0) diagCantoFeito = true;
             var lr = linha.getBoundingClientRect();
             envia({ tipo: 'cabecalho', modo: (document.body && document.body.classList.contains('pdv-so-chat')) ? 'so_chat' : 'gestor_inteiro',
-              r: [Math.round(lr.left), Math.round(lr.top), Math.round(lr.width), Math.round(lr.height)], clicaveis: descrever(linha) });
+              r: [Math.round(lr.left), Math.round(lr.top), Math.round(lr.width), Math.round(lr.height)], clicaveis: descrever(linha),
+              caixa: caixa ? [Math.round(caixa.left), Math.round(caixa.top), CANTO, CANTO] : null, canto: descreverLista(achados, 8) });
           }
         } catch (e) {}
         return n;
       };
-      // (b) o clique morre na CAPTURA, antes de o Gestor ouvir, nos dois modos: o alvo (ate 4 niveis acima) marcado,
-      // ou na faixa da direita do cabecalho, ou com cara de fechar. A seta de voltar passa sempre.
+      // (b) o toque morre na CAPTURA, antes de o Gestor ouvir, nos dois modos.
+      //  1.0.43: primeiro a COORDENADA: click, pointerdown, mousedown e touchstart com o ponto dentro da caixa proibida
+      //  morrem, seja qual for o alvo (o X e um div/svg sem botao). A seta (pequena, com cara de voltar) e o que e nosso
+      //  passam sempre. Depois, para o click, a regra da 1.0.42: o alvo (ate 4 niveis acima) marcado, na faixa da direita
+      //  do cabecalho, ou com cara de fechar.
       function bloquear(ev){ try { ev.stopImmediatePropagation(); } catch (e) {} try { ev.preventDefault(); } catch (e) {} }
+      function pontoDo(ev){
+        try {
+          if (typeof ev.clientX === 'number' && typeof ev.clientY === 'number') return [ev.clientX, ev.clientY];
+          var t = ev.touches && ev.touches[0];
+          if (t && typeof t.clientX === 'number') return [t.clientX, t.clientY];
+        } catch (e) {}
+        return null;
+      }
+      function alvoPoupado(t){
+        var el = t, nivel = 0;
+        while (el && nivel <= 4) {
+          if (nosso(el)) return true;
+          if (ehVoltar(el) && pequeno(el)) return true;
+          el = el.parentElement; nivel++;
+        }
+        return false;
+      }
+      function caixaAgora(){
+        try { var g = raiz(); if (!g) return null; var linha = linhaDoCabecalho(g); return caixaProibida(painelDaConversa(linha)); } catch (e) { return null; }
+      }
+      function barrarPeloCanto(ev){
+        try {
+          var p = pontoDo(ev); if (!p) return false;
+          if (ev.target && alvoPoupado(ev.target)) return false;
+          var c = caixaAgora(); if (!c) return false;
+          if (dentro(p[0], p[1], c)) { bloquear(ev); return true; }
+        } catch (e) {}
+        return false;
+      }
+      // o ultimo toque do OPERADOR (a vigia nao reabre o que ele fechou de proposito). O .click() do aquecimento nao passa por aqui.
+      var ultimoToque = 0;
+      ['pointerdown', 'mousedown', 'touchstart'].forEach(function (tp) {
+        document.addEventListener(tp, function (ev) { try { ultimoToque = Date.now(); } catch (e) {} barrarPeloCanto(ev); }, true);
+      });
       document.addEventListener('click', function (ev) {
         try {
           var t = ev.target;
           if (!t) return;
+          if (barrarPeloCanto(ev)) return;
+          if (nosso(t)) return;
           var el = t, nivel = 0;
           while (el && nivel <= 4) {
             if (el.hasAttribute && el.hasAttribute('data-pdv-fechar-painel')) { bloquear(ev); return; }
@@ -2939,19 +3099,53 @@ public partial class ChatIfood : UserControl
           if (ehFechar(b) || ehFechar(c)) bloquear(ev);
         } catch (e) {}
       }, true);
-      // (c) a vigia: a gaveta que some sem o operador ter saido e reaberta, no maximo uma vez por 10 s
-      var viuGaveta = false, ultimoReabrir = 0, reaberturas = 0;
+      // (c) a VIGIA de 2 s (1.0.43, reescrita: na Savassi a 1.0.42 reabria a lista a cada 10 s sem parar, porque a conversa
+      // aberta tira o titulo "Conversas" da tela e a gaveta "sumia"). Regras:
+      //  . a conversa aberta (o cabecalho na tela) e painel ABERTO;
+      //  . so reabre se o painel estava na tela ha menos de 10 s e sumiu sem toque do operador (15 s);
+      //  . com o operador na tela do chat (window.__pdvOperadorNoChat, o IsHitTestVisible da tela) nao mexe;
+      //  . no maximo 1 reabertura a cada 5 min; 2 seguidas que nao pegam (some de novo em menos de 30 s, ou nunca volta)
+      //    desligam a vigia ate a proxima navegacao (aviso vigiadesligada);
+      //  . o aviso painelfechou leva as reaberturas da ultima hora.
+      var V = { viuEm: 0, ultimoReabrir: 0, reaberturas: 0, horas: [], falhas: 0, desligada: false, avaliado: true, vistoDepois: false };
+      var ESPERA_TOQUE = 15000, VISTO_HA = 10000, TETO = 300000, PEGOU = 30000, SEM_VOLTAR = 10000, HORA = 3600000;
+      function painelVisivel(){
+        try {
+          if (gaveta()) return 'aberta';
+          var l = linhaDoCabecalho(document.body);
+          if (l && visivel(l)) return 'conversa_aberta';
+        } catch (e) {}
+        return '';
+      }
+      function avaliarReabertura(agora, vis){
+        if (!V.ultimoReabrir || V.avaliado) return;
+        var ha = agora - V.ultimoReabrir;
+        if (vis) { if (ha >= PEGOU) { V.falhas = 0; V.avaliado = true; } else V.vistoDepois = true; return; }
+        if (V.vistoDepois || ha >= SEM_VOLTAR) {
+          V.falhas++; V.avaliado = true;
+          if (V.falhas >= 2) { V.desligada = true; envia({ tipo: 'vigiadesligada', falhas: V.falhas, vez: V.reaberturas }); }
+        }
+      }
       window.pdvVigiarPainel = function (agoraMs) {
         try {
           var agora = typeof agoraMs === 'number' ? agoraMs : Date.now();
-          if (gaveta()) { viuGaveta = true; window.pdvBlindarFechar(); return 'aberta'; }
-          if (!viuGaveta) return 'nunca_viu';
+          if (V.desligada) return 'desligada';
+          var vis = painelVisivel();
+          avaliarReabertura(agora, !!vis);
+          if (V.desligada) return 'desligada';
+          if (vis) { V.viuEm = agora; window.pdvBlindarFechar(); return vis; }
+          if (!V.viuEm) return 'nunca_viu';
+          if (window.__pdvOperadorNoChat) return 'operador_na_tela';
           if (window.__pdvSemHolofote) return 'gestor_inteiro';
           if (!document.body || !document.body.classList.contains('pdv-so-chat')) return 'fora_do_chat';
-          if (agora - ultimoReabrir < 10000) return 'esperando';
-          ultimoReabrir = agora; reaberturas++;
+          if (agora - ultimoToque < ESPERA_TOQUE) return 'operador_clicou';
+          if (agora - V.viuEm > VISTO_HA) return 'sumiu_ha_muito';
+          if (agora - V.ultimoReabrir < TETO) return 'esperando';
+          V.ultimoReabrir = agora; V.reaberturas++; V.avaliado = false; V.vistoDepois = false;
+          V.horas.push(agora);
+          while (V.horas.length && agora - V.horas[0] > HORA) V.horas.shift();
           var r = window.pdvAquecerLista ? window.pdvAquecerLista() : 'sem_funcao';
-          envia({ tipo: 'painelfechou', resultado: String(r), vez: reaberturas });
+          envia({ tipo: 'painelfechou', resultado: String(r), vez: V.reaberturas, hora: V.horas.length });
           return 'reabriu:' + r;
         } catch (e) { return 'erro'; }
       };

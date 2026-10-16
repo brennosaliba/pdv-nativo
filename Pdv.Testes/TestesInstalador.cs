@@ -354,6 +354,17 @@ public static class TestesInstalador
                 checar(false, "atualiza com o programa aberto — a cobaia não ficou rodando");
                 return;
             }
+            // 16/10/2026 (1.0.43): a troca só começa com a cobaia CARREGADA. Renomear a imagem enquanto o
+            // processo ainda está inicializando (o ping leva ~100 ms para carregar) o derruba em silêncio
+            // (saída 0, sem imprimir nada), e a suíte acusava "o caixa que estava aberto" morto por uma
+            // corrida que a loja nunca vive: o caixa de verdade está aberto há horas quando a troca chega.
+            // Medido em 3 rodadas seguidas: a troca a 1 ms do Start mata a cobaia; a 400 ms, não.
+            Thread.Sleep(500);
+            if (rodando.HasExited)
+            {
+                checar(false, "atualiza com o programa aberto — a cobaia morreu antes da troca começar");
+                return;
+            }
 
             // Versão 2 já pode ser conteúdo qualquer: o que se testa daqui para a
             // frente é a TROCA, não o programa.
