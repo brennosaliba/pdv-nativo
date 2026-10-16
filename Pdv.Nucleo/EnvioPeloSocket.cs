@@ -44,9 +44,125 @@ public sealed record ResumoDosSockets(int Abertos, string Escolha, int Usuarios,
 /// "erro_envio" (EROR do servidor: falha certa), "sem_eco" (incerta: nunca reenviar), "sdk_ausente"
 /// (nenhum socket, ou ambíguo: nada saiu) ou "canal_errado". O detalhe já vem pela lista branca.
 /// 1.0.40: <paramref name="Sockets"/> é o resumo dos sockets vistos neste envio (para o sinal).
+/// Revisão: <paramref name="UrlEscolhida"/> é a URL do socket que recebeu o quadro, SÓ em memória (a tela
+/// recalcula a atividade dele a cada sinal); nunca vai ao detalhe, ao rastro nem ao diagnóstico.
 /// </summary>
 public sealed record ResultadoDoSocket(bool Ok, string? Erro, string? MsgId, JsonObject Detalhe, string Escolha, int Abertos,
-    ResumoDosSockets? Sockets = null);
+    ResumoDosSockets? Sockets = null, string? UrlEscolhida = null);
+
+/// <summary>
+/// 1.0.40 (revisão, 16/10/2026): O LIVRO DAS CONEXÕES do Sendbird vistas pelo CDP, por requestId: a URL (só
+/// dos sockets do Sendbird), o user_id da URL (de qualquer WebSocket, como sempre) e a hora do último quadro
+/// RECEBIDO. Antes a tela tinha três dicionários irmãos que só cresciam (o fechamento só tirava a atividade) e
+/// eram apagados INTEIROS ao passar de 200 criações: numa rede instável o Gestor reconecta o dia todo, o socket
+/// 201 zerava tudo e os sockets VIVOS criados antes ficavam sem URL (fora da pista do canal), sem atividade (a
+/// escolha do mais ativo virava a ordem da heap, o caso do socket meio-morto que o 1.0.40 quis evitar) e sem
+/// user_id (a loja parava de ser aprendida até reiniciar o caixa). Agora o fechamento tira a conexão dos três
+/// e o teto é só de emergência, nunca atingido em operação normal. Só memória: nada daqui vai a log,
+/// diagnóstico ou rede. Seguro entre threads (os eventos do CDP chegam de qualquer uma).
+/// </summary>
+public sealed class ConexoesDoSocket
+{
+    /// <summary>O teto de emergência (só quando o fechamento nunca chega).</summary>
+    public const int Teto = 200;
+
+    private readonly object _trava = new();
+    private readonly Dictionary<string, string> _url = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string?> _usuario = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTime> _atividade = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Network.webSocketCreated: guarda o user_id de qualquer WebSocket e a URL só se for do Sendbird.
+    /// Devolve true quando o socket é do Sendbird.
+    /// </summary>
+    public bool Abriu(string? req, string? url)
+    {
+        if (string.IsNullOrEmpty(req)) return false;
+        var doSendbird = QuadroSendbird.EhSocketDoSendbird(url);
+        lock (_trava)
+        {
+            if (_usuario.Count >= Teto && !_usuario.ContainsKey(req)) _usuario.Clear();
+            _usuario[req] = QuadroSendbird.UserIdDaUrl(url);
+            if (doSendbird)
+            {
+                if (_url.Count >= Teto && !_url.ContainsKey(req)) { _url.Clear(); _atividade.Clear(); }
+                _url[req] = url!;
+                _atividade.Remove(req);
+            }
+        }
+        return doSendbird;
+    }
+
+    /// <summary>Network.webSocketClosed: a conexão sai dos três (URL, usuário e atividade).</summary>
+    public void Fechou(string? req)
+    {
+        if (string.IsNullOrEmpty(req)) return;
+        lock (_trava)
+        {
+            _url.Remove(req);
+            _usuario.Remove(req);
+            _atividade.Remove(req);
+        }
+    }
+
+    /// <summary>
+    /// Network.webSocketFrameReceived (qualquer comando, PONG e binário inclusive): atividade daquela conexão.
+    /// Devolve true quando é uma conexão do Sendbird conhecida; uma que já fechou não ressuscita.
+    /// </summary>
+    public bool Recebeu(string? req, DateTime agora)
+    {
+        if (string.IsNullOrEmpty(req)) return false;
+        lock (_trava)
+        {
+            if (!_url.ContainsKey(req)) return false;
+            _atividade[req] = agora;
+            return true;
+        }
+    }
+
+    /// <summary>A URL da conexão (só sockets do Sendbird vivos). Só memória.</summary>
+    public string? Url(string? req)
+    {
+        if (string.IsNullOrEmpty(req)) return null;
+        lock (_trava) return _url.TryGetValue(req, out var u) ? u : null;
+    }
+
+    /// <summary>O user_id da URL daquela conexão (qualquer WebSocket vivo), ou null.</summary>
+    public string? Usuario(string? req)
+    {
+        if (string.IsNullOrEmpty(req)) return null;
+        lock (_trava) return _usuario.TryGetValue(req, out var u) ? u : null;
+    }
+
+    /// <summary>Quantas conexões do Sendbird estão no livro (abertas e ainda não fechadas).</summary>
+    public int Vivas { get { lock (_trava) return _url.Count; } }
+
+    /// <summary>A URL e a hora do último quadro recebido de cada conexão do Sendbird que já recebeu algo.</summary>
+    public IReadOnlyList<(string Url, DateTime Em)> Ativas()
+    {
+        lock (_trava)
+        {
+            var lista = new List<(string, DateTime)>(_atividade.Count);
+            foreach (var kv in _url)
+                if (_atividade.TryGetValue(kv.Key, out var em)) lista.Add((kv.Value, em));
+            return lista;
+        }
+    }
+
+    /// <summary>A atividade de UM socket achado pela heap, pela URL (ws.url casa com a do CDP pela chave de sempre); null: desconhecida.</summary>
+    public DateTime? AtividadePorUrl(string? url) => url is null ? null : EnvioPeloSocket.AtividadeDosAbertos(new[] { url }, Ativas())[0];
+
+    /// <summary>A navegação: página nova, livro novo.</summary>
+    public void Limpar()
+    {
+        lock (_trava)
+        {
+            _url.Clear();
+            _usuario.Clear();
+            _atividade.Clear();
+        }
+    }
+}
 
 /// <summary>
 /// 1.0.39: as esperas pelo eco, por req_id. O quadro RECEBIDO (MESG ou EROR) com o req_id de um envio do
@@ -269,6 +385,15 @@ public static class EnvioPeloSocket
     }
 
     /// <summary>
+    /// 1.0.40 (revisão): o resumo com a atividade do escolhido NA HORA do sinal. A contagem (a cada 2 min) e o
+    /// envio congelavam AtivoEm, e socket_ativo_s só crescia entre eles mesmo com PONG chegando no socket
+    /// escolhido (o eco do envio chegava e o sinal dizia por 2 min que o socket estava parado). Sem atividade ao
+    /// vivo (a conexão fechou) ou mais velha, fica a da contagem: nunca anda para trás.
+    /// </summary>
+    public static ResumoDosSockets AoVivo(ResumoDosSockets r, DateTime? atividadeAgora)
+        => atividadeAgora is { } em && (r.AtivoEm is null || em > r.AtivoEm) ? r with { AtivoEm = em } : r;
+
+    /// <summary>
     /// 1.0.40: escreve no diagnóstico do SDK (estado.sdk) sockets_sb_abertos, socket_escolha, sockets_usuarios,
     /// sockets_sem_usuario e socket_ativo_s (segundos desde o último quadro do socket escolhido, ou null).
     /// </summary>
@@ -393,8 +518,9 @@ public static class EnvioPeloSocket
         var escolha = Nenhum;
         var esperando = false;
         ResumoDosSockets? resumo = null;
+        string? urlEscolhida = null;
         ResultadoDoSocket Fim(bool ok, string? erro, string? msgId, string? etapa, int? codigo = null, string? msg = null)
-            => new(ok, erro, msgId, Detalhe(etapa, escolha, abertos, codigo, msg, (int)Math.Min(60_000, relogio.ElapsedMilliseconds), p), escolha, abertos, resumo);
+            => new(ok, erro, msgId, Detalhe(etapa, escolha, abertos, codigo, msg, (int)Math.Min(60_000, relogio.ElapsedMilliseconds), p), escolha, abertos, resumo, urlEscolhida);
 
         if (CanalIfood.Ler(p.Canal) is not { } ids || !string.Equals(ids.OrderId, p.OrderUuid, StringComparison.OrdinalIgnoreCase))
             return Fim(false, "canal_errado", null, "canal_errado");
@@ -416,6 +542,7 @@ public static class EnvioPeloSocket
             escolha = esc;
             resumo = Resumir(urls, indice, esc, atividade);
             if (indice < 0) return Fim(false, "sdk_ausente", null, esc == Ambiguo ? "socket_ambiguo" : "sem_socket");
+            urlEscolhida = urls[indice];   // só memória: a tela recalcula a atividade deste socket a cada sinal
 
             var quadro = QuadroMesg(p.Canal, p.Texto, p.ReqId);
             var eco = ecos.Aguardar(p.ReqId);

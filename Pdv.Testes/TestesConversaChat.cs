@@ -1021,7 +1021,9 @@ public static class TestesConversaChat
                && tela.Contains("ServicoConversaChat.Quadro(p, enviado: true, conexao, WsUser(conexao))", StringComparison.Ordinal)
                && servico.Contains("if (enviado) return;", StringComparison.Ordinal),
             "FN-11 o quadro que sai da página só confirma envio; nunca vira fala");
-        checar(tela.Contains("QuadroSendbird.UserIdDaUrl(u.GetString())", StringComparison.Ordinal),
+        // 1.0.40 (revisão): a tela entrega a URL ao livro das conexões, e é o livro (no núcleo) quem lê o user_id
+        checar(tela.Contains("_conexoes.Abriu(req, u.GetString())", StringComparison.Ordinal)
+               && Ler("Pdv.Nucleo", "EnvioPeloSocket.cs").Contains("_usuario[req] = QuadroSendbird.UserIdDaUrl(url);", StringComparison.Ordinal),
             "FN-12 o id da loja vem do user_id da URL do WebSocket, por conexão");
         checar(Regex.IsMatch(venda, @"ServicoConversaChat\.Avisou\s*\+=") && venda.Contains("Abrir", StringComparison.Ordinal)
                && venda.Contains("Clipboard.SetText", StringComparison.Ordinal),

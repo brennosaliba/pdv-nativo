@@ -381,7 +381,8 @@ public static class TestesAprovacaoDono
                && telaToda.Contains("DiagRaspadinha(v.Linha);", StringComparison.Ordinal),
             "AF-18 o caixa varre a heap pelo CDP (queryObjects, callFunctionOn, releaseObjectGroup), entrega ao berço, deixa rastro sempre; o teto zera na navegação");
         checar(telaToda.Contains("\"Network.webSocketClosed\"", StringComparison.Ordinal)
-               && telaToda.Contains("QuadroSendbird.EhSocketDoSendbird(u.GetString())", StringComparison.Ordinal)
+               && telaToda.Contains("if (_conexoes.Abriu(req, u.GetString()))", StringComparison.Ordinal)
+               && Ler("Pdv.Nucleo", "EnvioPeloSocket.cs").Contains("var doSendbird = QuadroSendbird.EhSocketDoSendbird(url);", StringComparison.Ordinal)
                && telaToda.Contains("r[\"ws_sb_cdp_vivos\"] = _wsSbVivos.Count;", StringComparison.Ordinal),
             "AF-19 os sockets do Sendbird são contados pelo CDP (criado e fechado) e vão no diag");
 

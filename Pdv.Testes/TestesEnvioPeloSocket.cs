@@ -49,6 +49,8 @@ public static class TestesEnvioPeloSocket
         AEscolhaPelaAtividade(checar);
         OAprendizadoDaLoja(checar);
         ODiagnosticoDosSockets(checar);
+        OLivroDasConexoes(checar);
+        ODiagAoVivo(checar);
         OEco(checar);
         await OEnvio(checar);
         await OGrupoLiberado(checar);
@@ -211,6 +213,66 @@ public static class TestesEnvioPeloSocket
             "SK-80 texto no lugar de contagem cai; negativo vira 0");
     }
 
+    // ── 1.0.40 (revisão): o livro das conexões vive do tamanho dos sockets vivos ──
+    private static void OLivroDasConexoes(Action<bool, string> checar)
+    {
+        // o Gestor numa rede instável reconecta o dia todo: 205 sockets abertos e fechados com DUAS conexões vivas o tempo
+        // todo. Antes, o socket 201 apagava os dicionários inteiros e as duas vivas ficavam sem URL, sem atividade e sem user_id.
+        var livro = new ConexoesDoSocket();
+        checar(livro.Abriu("A", UrlLojaCdp) && livro.Abriu("B", UrlLoja2Cdp), "SK-85 abrir um socket do Sendbird devolve true");
+        checar(livro.Recebeu("A", T0.AddSeconds(1)) && livro.Recebeu("B", T0.AddSeconds(2)), "SK-86 um quadro numa conexão conhecida é atividade");
+        for (var i = 0; i < 205; i++)
+        {
+            var r = "x" + i;
+            livro.Abriu(r, UrlEntregador);
+            livro.Recebeu(r, T0.AddSeconds(3));
+            livro.Fechou(r);
+        }
+        checar(livro.Vivas == 2 && livro.Url("A") == UrlLojaCdp && livro.Url("B") == UrlLoja2Cdp && livro.Usuario("A") == Loja && livro.Usuario("B") == Loja
+               && livro.AtividadePorUrl(UrlLoja) == T0.AddSeconds(1) && livro.AtividadePorUrl(UrlLoja2) == T0.AddSeconds(2) && livro.Ativas().Count == 2,
+            "SK-87 205 sockets criados e fechados com 2 vivos: a URL, o user_id e a atividade dos 2 vivos continuam conhecidos (o fechamento limpa, não o teto)");
+        livro.Fechou("A");
+        checar(livro.Vivas == 1 && livro.Url("A") is null && livro.Usuario("A") is null && livro.AtividadePorUrl(UrlLoja) is null
+               && !livro.Recebeu("A", T0.AddSeconds(9)) && livro.AtividadePorUrl(UrlLoja) is null && livro.Url("B") == UrlLoja2Cdp,
+            "SK-88 o fechamento tira a conexão dos três (URL, usuário, atividade) e um quadro atrasado não a ressuscita");
+        checar(!livro.Abriu("C", UrlOutro) && livro.Vivas == 1 && livro.Url("C") is null && !livro.Recebeu("C", T0)
+               && livro.Abriu("D", UrlSemUsuario) && livro.Usuario("D") is null && livro.Recebeu("D", T0.AddSeconds(4)) && livro.AtividadePorUrl(UrlSemUsuario) == T0.AddSeconds(4)
+               && !livro.Abriu(null, UrlLojaCdp) && !livro.Abriu("", UrlLojaCdp) && !livro.Recebeu(null, T0) && livro.Url(null) is null && livro.Usuario(null) is null,
+            "SK-89 WebSocket de outro host não entra no livro nem tem atividade; socket do Sendbird sem user_id entra (usuário nulo); nulo e vazio passam reto");
+        livro.Fechou(null);
+        livro.Limpar();
+        checar(livro.Vivas == 0 && livro.Url("B") is null && livro.Ativas().Count == 0, "SK-90 limpar (a navegação) esvazia o livro");
+        // o teto de emergência: só quando o fechamento nunca chega (nunca em operação normal)
+        var semFechar = new ConexoesDoSocket();
+        for (var i = 0; i < 250; i++) semFechar.Abriu("s" + i, UrlLojaCdp);
+        checar(semFechar.Vivas <= ConexoesDoSocket.Teto && semFechar.Vivas >= 1 && semFechar.Url("s249") == UrlLojaCdp && ConexoesDoSocket.Teto == 200,
+            "SK-91 250 sockets sem nenhum fechamento: o teto de 200 segura a memória e o último aberto continua conhecido");
+    }
+
+    // ── 1.0.40 (revisão): socket_ativo_s é desde o ÚLTIMO quadro do escolhido, na hora do sinal ──
+    private static void ODiagAoVivo(Action<bool, string> checar)
+    {
+        // a contagem congelou AtivoEm em T; o socket escolhido recebeu PONG em T+100; o sinal sai em T+110: 10 s, não 110
+        var resumo = new ResumoDosSockets(2, "unico", 1, 0, T0);
+        var vivo = EnvioPeloSocket.AoVivo(resumo, T0.AddSeconds(100));
+        var o = new JsonObject();
+        EnvioPeloSocket.DiagDosSockets(o, vivo, T0.AddSeconds(110));
+        checar((int?)o["socket_ativo_s"] == 10 && vivo.AtivoEm == T0.AddSeconds(100) && vivo.Abertos == 2 && vivo.Escolha == "unico",
+            "SK-92 o diag recalcula a atividade do escolhido na hora: 10 s, e não os 110 desde a contagem");
+        checar(EnvioPeloSocket.AoVivo(resumo, null) == resumo && EnvioPeloSocket.AoVivo(resumo, T0.AddSeconds(-5)) == resumo,
+            "SK-93 sem atividade ao vivo (a conexão fechou) ou mais velha que a da contagem: fica a da contagem (nunca anda para trás)");
+        var semEscolha = new ResumoDosSockets(2, "ambiguo", 2, 0, null);
+        checar(EnvioPeloSocket.AoVivo(semEscolha, null) == semEscolha && EnvioPeloSocket.AoVivo(semEscolha, T0.AddSeconds(100)).AtivoEm == T0.AddSeconds(100),
+            "SK-94 sem escolhido o null continua null; com atividade ao vivo ela entra");
+        // o livro + o resumo, como a tela faz no sinal: a URL escolhida do envio casa com a conexão do CDP (barra a mais ou a menos)
+        var livro = new ConexoesDoSocket();
+        livro.Abriu("A", UrlLojaCdp);
+        livro.Recebeu("A", T0.AddSeconds(100));
+        var o2 = new JsonObject();
+        EnvioPeloSocket.DiagDosSockets(o2, EnvioPeloSocket.AoVivo(resumo, livro.AtividadePorUrl(UrlLoja)), T0.AddSeconds(110));
+        checar((int?)o2["socket_ativo_s"] == 10 && Limpo(o2.ToJsonString()), "SK-95 pelo livro: a URL do escolhido (ws.url, com a barra) acha a conexão do CDP (sem a barra) e o diag sai certo, sem URL");
+    }
+
     // ── o eco ────────────────────────────────────────────────────────────────
     private static string Eco(string reqId, long msgId = 9911223344)
         => "MESG{\"msg_id\":" + msgId + ",\"req_id\":\"" + reqId + "\",\"message\":" + JsonSerializer.Serialize(Texto)
@@ -311,6 +373,9 @@ public static class TestesEnvioPeloSocket
         checar(rA.Ok && pA.Enviados.Count == 1 && pA.Enviados[0].Indice == 1 && rA.Escolha == "usuario"
                && rA.Sockets is { Abertos: 3, Usuarios: 2, SemUsuario: 0 } && rA.Sockets.AtivoEm == T0.AddSeconds(40),
             "SK-81 o envio escolhe o socket mais ativo do usuário da loja e o resultado resume os sockets (abertos, usuários, sem usuário, atividade)");
+        // 1.0.40 (revisão): o resultado leva a URL do socket escolhido SÓ em memória (a tela recalcula a atividade dele no sinal); nunca no detalhe nem na linha
+        checar(rA.UrlEscolhida == UrlLoja2 && r.UrlEscolhida == UrlLoja && Limpo(rA.Detalhe.ToJsonString()) && Limpo(EnvioPeloSocket.Linha(rA)),
+            "SK-96 o resultado diz qual URL foi a escolhida (só memória) e ela não aparece no detalhe nem no rastro");
 
         // EROR: falha certa, com o código e a mensagem limpa
         var ecos2 = new EcosDoSocket();
@@ -343,8 +408,8 @@ public static class TestesEnvioPeloSocket
         var p5 = new Portas { Urls = { UrlEntregador, UrlLoja }, Ecos = ecos5, Responder = req => Eco(req) };
         var r5 = await Rodar(p5, ecos5, Pedir(urlDoCanal: null));
         checar(!r5.Ok && r5.Erro == "sdk_ausente" && Etapa(r5.Detalhe) == "socket_ambiguo" && (string?)r5.Detalhe["escolha"] == "ambiguo"
-               && p5.Enviados.Count == 0 && p5.Liberacoes == 1,
-            "SK-26 socket ambíguo: falha socket_ambiguo e NADA sai");
+               && p5.Enviados.Count == 0 && p5.Liberacoes == 1 && r5.UrlEscolhida is null,
+            "SK-26 socket ambíguo: falha socket_ambiguo e NADA sai (e nenhuma URL escolhida)");
 
         // nenhum socket do Sendbird aberto
         var p6 = new Portas { Urls = { UrlOutro } };
@@ -631,18 +696,32 @@ public static class TestesEnvioPeloSocket
             "SK-58 o laço conhece o sem_eco (incerta) e o falhou_socket (falha certa)");
         // 1.0.40: a atividade por conexão (qualquer quadro recebido, antes de ler o payload), limpa com os irmãos; a loja
         // aprendida por qualquer quadro recebido; o diag dos sockets pelo núcleo
+        // revisão: o livro das conexões (ConexoesDoSocket) no lugar dos três dicionários irmãos; o fechamento limpa os três
         var recebido = tela.IndexOf("\"Network.webSocketFrameReceived\"", StringComparison.Ordinal);
-        var ativ = recebido < 0 ? -1 : tela.IndexOf("_wsAtividadePorConexao[", recebido, StringComparison.Ordinal);
+        var ativ = recebido < 0 ? -1 : tela.IndexOf("_conexoes.Recebeu(conexao, DateTime.Now)", recebido, StringComparison.Ordinal);
         var payloadNulo = recebido < 0 ? -1 : tela.IndexOf("if (p is null) return;", recebido, StringComparison.Ordinal);
-        checar(ativ > recebido && payloadNulo > ativ && tela.Contains("_wsAtividadePorConexao.TryRemove(", StringComparison.Ordinal)
-               && tela.Contains("if (_wsAtividadePorConexao.Count > 200) _wsAtividadePorConexao.Clear();", StringComparison.Ordinal),
-            "SK-82 a tela guarda a hora do último quadro recebido por conexão (qualquer comando, antes de ler o payload), com teto 200 e limpeza no fechamento");
+        var fechado = tela.IndexOf("\"Network.webSocketClosed\"", StringComparison.Ordinal);
+        var fechou = fechado < 0 ? -1 : tela.IndexOf("_conexoes.Fechou(req);", fechado, StringComparison.Ordinal);
+        checar(ativ > recebido && payloadNulo > ativ && fechou > fechado && fechou < recebido
+               && tela.Contains("private readonly ConexoesDoSocket _conexoes = new();", StringComparison.Ordinal)
+               && tela.Contains("if (_conexoes.Abriu(req, u.GetString()))", StringComparison.Ordinal)
+               && !tela.Contains("_wsAtividadePorConexao", StringComparison.Ordinal) && !tela.Contains("_wsUrlPorConexao", StringComparison.Ordinal)
+               && !tela.Contains("_wsUserPorConexao", StringComparison.Ordinal),
+            "SK-82 a tela marca a atividade de cada conexão no livro (qualquer comando, antes de ler o payload) e o fechamento tira a conexão do livro inteiro (URL, usuário, atividade)");
         checar(tela.Contains("ServicoConversaChat.Quadro(p, enviado: false, conexao, WsUser(conexao));", StringComparison.Ordinal)
-               && servico.Contains("if (!enviado && UsuarioDaLojaNoQuadro(payload, wsUserId) is { } aprendido) _wsUserId = aprendido;", StringComparison.Ordinal),
-            "SK-83 a tela entrega todo quadro recebido ao serviço, e o serviço aprende a loja por qualquer um de canal de cliente (só os recebidos)");
-        checar(tela.Contains("EnvioPeloSocket.AtividadeDosAbertos(", StringComparison.Ordinal) && tela.Contains("EnvioPeloSocket.DiagDosSockets(", StringComparison.Ordinal)
-               && tela.Contains("Atividade: AtividadeDoSocket", StringComparison.Ordinal),
-            "SK-84 a tela casa a atividade com as URLs da heap pelo núcleo, manda a atividade no pedido e escreve o diag dos sockets pelo núcleo");
+               && servico.Contains("if (!enviado && UsuarioDaLojaNoQuadro(payload, wsUserId) is { } aprendido) _wsUserId = aprendido;", StringComparison.Ordinal)
+               && tela.Contains("var u = _conexoes.Usuario(conexao);", StringComparison.Ordinal),
+            "SK-83 a tela entrega todo quadro recebido ao serviço com o user_id do livro, e o serviço aprende a loja por qualquer um de canal de cliente (só os recebidos)");
+        checar(tela.Contains("EnvioPeloSocket.AtividadeDosAbertos(urls, _conexoes.Ativas())", StringComparison.Ordinal)
+               && tela.Contains("Atividade: _conexoes.AtividadePorUrl", StringComparison.Ordinal),
+            "SK-84 a tela casa a atividade com as URLs da heap pelo livro e manda a atividade no pedido");
+        // revisão: socket_ativo_s é desde o último quadro do escolhido NA HORA do sinal (não desde a contagem)
+        checar(tela.Contains("EnvioPeloSocket.DiagDosSockets(r, EnvioPeloSocket.AoVivo(sk, _conexoes.AtividadePorUrl(_socketEscolhido)), DateTime.Now);", StringComparison.Ordinal)
+               && tela.Contains("_socketEscolhido = r.UrlEscolhida;", StringComparison.Ordinal)
+               && tela.Contains("_socketEscolhido = indice >= 0 ? urls[indice] : null;", StringComparison.Ordinal)
+               && tela.IndexOf("_sockets = null;", StringComparison.Ordinal) is var zera && zera > 0
+               && tela.IndexOf("_socketEscolhido = null;", zera, StringComparison.Ordinal) is var zeraEscolhido && zeraEscolhido > zera && zeraEscolhido - zera < 80,
+            "SK-97 o diag recalcula a atividade do socket escolhido pelo livro na hora do sinal; o escolhido vem do envio e da contagem; a navegação zera");
         checar(Ler("Pdv.csproj").Contains("<Version>1.0.40</Version>", StringComparison.Ordinal), "SK-59 a versão do caixa é 1.0.40 (a escolha do socket pela atividade)");
         var novos = new[] { nucleo, Ler("Pdv.Testes", "TestesEnvioPeloSocket.cs") };
         checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),
