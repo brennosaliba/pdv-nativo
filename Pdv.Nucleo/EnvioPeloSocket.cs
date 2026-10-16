@@ -28,14 +28,25 @@ public interface IPortasDoSocket
 /// <summary>O que a camada C precisa para UM envio. As URLs ficam só em memória: nunca saem em log nem diagnóstico.</summary>
 /// <param name="UrlDoCanal">A URL do requestId do CDP que recebeu o último quadro daquele canal (pista a).</param>
 /// <param name="UsuarioDaLoja">O user_id da loja já aprendido na conexão do chat de clientes (pista b).</param>
-public sealed record PedidoPeloSocket(string Canal, string OrderUuid, string Texto, string ReqId, string? UrlDoCanal, string? UsuarioDaLoja);
+/// <param name="Atividade">1.0.40: a hora do último quadro RECEBIDO na conexão com aquela URL (null: desconhecida). Desempata entre sockets do mesmo usuário.</param>
+public sealed record PedidoPeloSocket(string Canal, string OrderUuid, string Texto, string ReqId, string? UrlDoCanal, string? UsuarioDaLoja,
+    Func<string?, DateTime?>? Atividade = null);
+
+/// <summary>
+/// 1.0.40: o resumo dos sockets abertos do Sendbird para o sinal: quantos, a escolha, quantos user_id
+/// DISTINTOS, quantos SEM user_id na URL e a hora do último quadro do socket escolhido. Só contagens e uma hora:
+/// nunca id, URL nem token.
+/// </summary>
+public sealed record ResumoDosSockets(int Abertos, string Escolha, int Usuarios, int SemUsuario, DateTime? AtivoEm);
 
 /// <summary>
 /// O resultado da camada C no vocabulário do envio de hoje: Ok com o msg_id do eco; ou Erro
 /// "erro_envio" (EROR do servidor: falha certa), "sem_eco" (incerta: nunca reenviar), "sdk_ausente"
 /// (nenhum socket, ou ambíguo: nada saiu) ou "canal_errado". O detalhe já vem pela lista branca.
+/// 1.0.40: <paramref name="Sockets"/> é o resumo dos sockets vistos neste envio (para o sinal).
 /// </summary>
-public sealed record ResultadoDoSocket(bool Ok, string? Erro, string? MsgId, JsonObject Detalhe, string Escolha, int Abertos);
+public sealed record ResultadoDoSocket(bool Ok, string? Erro, string? MsgId, JsonObject Detalhe, string Escolha, int Abertos,
+    ResumoDosSockets? Sockets = null);
 
 /// <summary>
 /// 1.0.39: as esperas pelo eco, por req_id. O quadro RECEBIDO (MESG ou EROR) com o req_id de um envio do
@@ -170,35 +181,108 @@ public static class EnvioPeloSocket
     }
 
     /// <summary>
-    /// Escolhe UM socket entre os abertos, sem chute: (a) o da URL do canal; (b) o do usuário da loja; (c)
-    /// o único (URLs iguais são o mesmo usuário), desde que não seja de OUTRO usuário quando o da loja é
-    /// conhecido; (d) senão nenhum (ambíguo). Devolve o índice (-1 quando não há) e a escolha.
+    /// Escolhe UM socket entre os abertos, sem chute. Devolve o índice (-1 quando não há) e a escolha.
+    ///  (a) o da URL do canal (o requestId que recebeu o último quadro daquele canal), como sempre;
+    ///  (b) com o usuário da loja conhecido (aprendido, ou o user_id da URL do canal): entre os sockets cujo
+    ///      user_id é o da loja, o MAIS RECENTEMENTE ATIVO;
+    ///  (c) "único": todos os sockets abertos COM user_id têm o MESMO user_id (e a loja, se conhecida, é esse
+    ///      usuário): o mais ativo deles. Sockets SEM user_id na URL só entram pela pista (a); se só existem
+    ///      sockets sem user_id, a loja é desconhecida e há exatamente um aberto, é o único (como sempre);
+    ///  (d) qualquer outra combinação: ambíguo. Nunca mandar como outro usuário (falha fechada), também quando
+    ///      a loja é conhecida e o socket não tem user_id.
+    /// 1.0.40 (16/10/2026, Savassi): o SDK JS do Sendbird abre cada conexão com a query DIFERENTE
+    /// (Request-Sent-Timestamp, key da sessão, token renovado), então "URLs iguais" nunca acontecia com as
+    /// duas conexões vivas do Gestor (singleton_conexao=OUTRO) e tudo caía em ambíguo. Agora o que iguala é
+    /// o user_id, e a atividade (o último quadro recebido naquela conexão) desempata. Empate ou atividade
+    /// desconhecida: a ordem da heap.
     /// </summary>
-    public static (int Indice, string Escolha) Escolher(IReadOnlyList<string?> abertos, string? urlDoCanal, string? usuarioDaLoja)
+    public static (int Indice, string Escolha) Escolher(IReadOnlyList<string?> abertos, string? urlDoCanal, string? usuarioDaLoja,
+        IReadOnlyList<DateTime?>? atividade = null)
     {
         var validos = new List<int>();
         for (var i = 0; i < abertos.Count; i++)
             if (QuadroSendbird.EhSocketDoSendbird(abertos[i])) validos.Add(i);
         if (validos.Count == 0) return (-1, Nenhum);
-        if (Chave(urlDoCanal) is { } kc)
+        if (ChaveDaUrl(urlDoCanal) is { } kc)
             foreach (var i in validos)
-                if (Chave(abertos[i]) == kc) return (i, PorCanal);
-        if (!string.IsNullOrWhiteSpace(usuarioDaLoja))
-            foreach (var i in validos)
-                if (QuadroSendbird.UserIdDaUrl(abertos[i]) == usuarioDaLoja) return (i, PorUsuario);
-        if (validos.Select(i => Chave(abertos[i])).Distinct(StringComparer.Ordinal).Count() == 1)
+                if (ChaveDaUrl(abertos[i]) == kc) return (i, PorCanal);
+
+        var daLoja = !string.IsNullOrWhiteSpace(usuarioDaLoja) ? usuarioDaLoja.Trim() : QuadroSendbird.UserIdDaUrl(urlDoCanal);
+        var comUsuario = validos.Select(i => (Indice: i, Usuario: QuadroSendbird.UserIdDaUrl(abertos[i]))).Where(x => x.Usuario is not null).ToList();
+        if (daLoja is not null)
         {
-            // o único socket é de outro usuário (o da loja é conhecido pelo canal ou pelo aprendizado): não manda como ele
-            var dele = QuadroSendbird.UserIdDaUrl(abertos[validos[0]]);
-            var daLoja = !string.IsNullOrWhiteSpace(usuarioDaLoja) ? usuarioDaLoja : QuadroSendbird.UserIdDaUrl(urlDoCanal);
-            if (dele is not null && !string.IsNullOrWhiteSpace(daLoja) && dele != daLoja) return (-1, Ambiguo);
-            return (validos[0], Unico);
+            var dela = comUsuario.Where(x => x.Usuario == daLoja).Select(x => x.Indice).ToList();
+            if (dela.Count > 0) return (MaisAtivo(dela, atividade), PorUsuario);
         }
+        if (comUsuario.Count > 0)
+        {
+            var usuarios = comUsuario.Select(x => x.Usuario!).Distinct(StringComparer.Ordinal).ToList();
+            if (usuarios.Count == 1 && (daLoja is null || daLoja == usuarios[0]))
+                return (MaisAtivo(comUsuario.Select(x => x.Indice).ToList(), atividade), Unico);
+            return (-1, Ambiguo);
+        }
+        // só sockets sem user_id na URL: um só, com a loja desconhecida, é o único; o resto é ambíguo
+        if (daLoja is null && validos.Count == 1) return (validos[0], Unico);
         return (-1, Ambiguo);
     }
 
+    /// <summary>O índice de atividade mais recente entre os candidatos; desconhecida perde; empate: o primeiro (ordem da heap).</summary>
+    private static int MaisAtivo(IReadOnlyList<int> candidatos, IReadOnlyList<DateTime?>? atividade)
+    {
+        var melhor = candidatos[0];
+        var melhorEm = Atividade(atividade, melhor);
+        for (var k = 1; k < candidatos.Count; k++)
+        {
+            var em = Atividade(atividade, candidatos[k]);
+            if (em > melhorEm) { melhor = candidatos[k]; melhorEm = em; }
+        }
+        return melhor;
+    }
+
+    private static DateTime Atividade(IReadOnlyList<DateTime?>? atividade, int i)
+        => atividade is not null && i < atividade.Count && atividade[i] is { } d ? d : DateTime.MinValue;
+
+    /// <summary>
+    /// 1.0.40: a atividade de cada socket aberto (mesma ordem de <paramref name="abertos"/>), casando a URL da heap
+    /// (ws.url) com a URL de cada conexão do CDP pela mesma chave de sempre (<see cref="ChaveDaUrl"/>). Duas conexões
+    /// com a mesma URL: vale a mais recente. Sem conexão com aquela URL: desconhecida (null).
+    /// </summary>
+    public static IReadOnlyList<DateTime?> AtividadeDosAbertos(IReadOnlyList<string?> abertos, IEnumerable<(string Url, DateTime Em)> conexoes)
+    {
+        var porChave = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        foreach (var (url, em) in conexoes)
+            if (ChaveDaUrl(url) is { } k && (!porChave.TryGetValue(k, out var ja) || em > ja)) porChave[k] = em;
+        var lista = new DateTime?[abertos.Count];
+        for (var i = 0; i < abertos.Count; i++)
+            lista[i] = ChaveDaUrl(abertos[i]) is { } k && porChave.TryGetValue(k, out var em) ? em : null;
+        return lista;
+    }
+
+    /// <summary>1.0.40: o resumo dos sockets abertos para o sinal (contagens e a atividade do escolhido; nunca id ou URL).</summary>
+    public static ResumoDosSockets Resumir(IReadOnlyList<string?> abertos, int indice, string escolha, IReadOnlyList<DateTime?>? atividade)
+    {
+        var validos = abertos.Where(QuadroSendbird.EhSocketDoSendbird).ToList();
+        var usuarios = validos.Select(QuadroSendbird.UserIdDaUrl).Where(u => u is not null).Distinct(StringComparer.Ordinal).Count();
+        var semUsuario = validos.Count(u => QuadroSendbird.UserIdDaUrl(u) is null);
+        DateTime? ativoEm = indice >= 0 && atividade is not null && indice < atividade.Count ? atividade[indice] : null;
+        return new ResumoDosSockets(validos.Count, Escolhas.Contains(escolha) ? escolha : Ambiguo, usuarios, semUsuario, ativoEm);
+    }
+
+    /// <summary>
+    /// 1.0.40: escreve no diagnóstico do SDK (estado.sdk) sockets_sb_abertos, socket_escolha, sockets_usuarios,
+    /// sockets_sem_usuario e socket_ativo_s (segundos desde o último quadro do socket escolhido, ou null).
+    /// </summary>
+    public static void DiagDosSockets(JsonObject alvo, ResumoDosSockets r, DateTime agora)
+    {
+        alvo["sockets_sb_abertos"] = Math.Clamp(r.Abertos, 0, 100_000);
+        alvo["socket_escolha"] = r.Escolha;
+        alvo["sockets_usuarios"] = Math.Clamp(r.Usuarios, 0, 100_000);
+        alvo["sockets_sem_usuario"] = Math.Clamp(r.SemUsuario, 0, 100_000);
+        alvo["socket_ativo_s"] = r.AtivoEm is { } em ? (JsonNode?)(int)Math.Clamp((agora - em).TotalSeconds, 0, 100_000) : null;
+    }
+
     /// <summary>A URL normalizada para comparar a do CDP com a do ws.url (a barra do caminho, maiúsculas do host).</summary>
-    private static string? Chave(string? url)
+    public static string? ChaveDaUrl(string? url)
     {
         if (string.IsNullOrWhiteSpace(url)) return null;
         try { return Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u) ? u.AbsoluteUri : url.Trim(); }
@@ -308,8 +392,9 @@ public static class EnvioPeloSocket
         var abertos = 0;
         var escolha = Nenhum;
         var esperando = false;
+        ResumoDosSockets? resumo = null;
         ResultadoDoSocket Fim(bool ok, string? erro, string? msgId, string? etapa, int? codigo = null, string? msg = null)
-            => new(ok, erro, msgId, Detalhe(etapa, escolha, abertos, codigo, msg, (int)Math.Min(60_000, relogio.ElapsedMilliseconds), p), escolha, abertos);
+            => new(ok, erro, msgId, Detalhe(etapa, escolha, abertos, codigo, msg, (int)Math.Min(60_000, relogio.ElapsedMilliseconds), p), escolha, abertos, resumo);
 
         if (CanalIfood.Ler(p.Canal) is not { } ids || !string.Equals(ids.OrderId, p.OrderUuid, StringComparison.OrdinalIgnoreCase))
             return Fim(false, "canal_errado", null, "canal_errado");
@@ -319,8 +404,17 @@ public static class EnvioPeloSocket
             try { urls = await portas.AbertosAsync().ConfigureAwait(false) ?? Array.Empty<string?>(); }
             catch { return Fim(false, "sdk_ausente", null, "sem_socket"); }
             abertos = urls.Count(QuadroSendbird.EhSocketDoSendbird);
-            var (indice, esc) = Escolher(urls, p.UrlDoCanal, p.UsuarioDaLoja);
+            // 1.0.40: a atividade de cada socket (o último quadro recebido na conexão com aquela URL) desempata
+            IReadOnlyList<DateTime?>? atividade = null;
+            if (p.Atividade is { } ativ)
+            {
+                var lista = new DateTime?[urls.Count];
+                for (var i = 0; i < urls.Count; i++) { try { lista[i] = ativ(urls[i]); } catch { lista[i] = null; } }
+                atividade = lista;
+            }
+            var (indice, esc) = Escolher(urls, p.UrlDoCanal, p.UsuarioDaLoja, atividade);
             escolha = esc;
+            resumo = Resumir(urls, indice, esc, atividade);
             if (indice < 0) return Fim(false, "sdk_ausente", null, esc == Ambiguo ? "socket_ambiguo" : "sem_socket");
 
             var quadro = QuadroMesg(p.Canal, p.Texto, p.ReqId);

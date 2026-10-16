@@ -124,6 +124,12 @@ public partial class ChatIfood : UserControl
     private readonly ConcurrentDictionary<string, string> _wsUrlPorConexao = new(StringComparer.Ordinal);
     /// <summary>O requestId da conexão que recebeu o último quadro de cada canal (a pista "canal" da escolha).</summary>
     private readonly ConcurrentDictionary<string, string> _conexaoPorCanal = new(StringComparer.Ordinal);
+    /// <summary>
+    /// 1.0.40: a hora do último quadro RECEBIDO em cada WebSocket do Sendbird, pelo requestId do CDP (qualquer
+    /// comando, PONG inclusive). Desempata entre dois sockets do mesmo usuário (o Gestor mantém dois, com a query
+    /// diferente). Limpa com os irmãos: teto 200 e o fechamento do socket.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, DateTime> _wsAtividadePorConexao = new(StringComparer.Ordinal);
     /// <summary>As esperas pelo eco do servidor, por req_id (o quadro recebido resolve).</summary>
     private readonly EcosDoSocket _ecosSocket = new();
     /// <summary>A tentativa pelo socket de cada saída (o req_id muda a cada uma).</summary>
@@ -132,8 +138,8 @@ public partial class ChatIfood : UserControl
     private volatile IReadOnlyList<string>? _mesgCamposGestor;
     /// <summary>O último envio pela camada C deu (o eco voltou)? null: nenhum envio pelo socket nesta página.</summary>
     private bool? _viaSocketDeu;
-    /// <summary>A última contagem dos sockets abertos do Sendbird e a escolha que ela daria (para o sinal).</summary>
-    private (int Abertos, string Escolha)? _sockets;
+    /// <summary>A última contagem dos sockets abertos do Sendbird e a escolha que ela daria (para o sinal). 1.0.40: o resumo do núcleo.</summary>
+    private ResumoDosSockets? _sockets;
     private DateTime _proximaContagemSockets = DateTime.MinValue;
 
     /// <summary>
@@ -916,13 +922,23 @@ public partial class ChatIfood : UserControl
             _wsClosed.DevToolsProtocolEventReceived += (_, e) => Seguro(() =>
             {
                 using var d = JsonDocument.Parse(e.ParameterObjectAsJson);
-                if (d.RootElement.TryGetProperty("requestId", out var rq) && rq.GetString() is { } req) _wsSbVivos.TryRemove(req, out byte _);
+                if (d.RootElement.TryGetProperty("requestId", out var rq) && rq.GetString() is { } req)
+                {
+                    _wsSbVivos.TryRemove(req, out byte _);
+                    _wsAtividadePorConexao.TryRemove(req, out DateTime _);   // 1.0.40: a atividade morre com o socket
+                }
             });
 
             _wsRecv = core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameReceived");
             _wsRecv.DevToolsProtocolEventReceived += (_, e) => Seguro(() =>
             {
                 var (p, conexao) = PayloadEConexao(e.ParameterObjectAsJson);
+                // 1.0.40: qualquer quadro recebido num socket do Sendbird (PONG, binário, o que for) é atividade daquela conexão
+                if (conexao is not null && _wsUrlPorConexao.ContainsKey(conexao))
+                {
+                    if (_wsAtividadePorConexao.Count > 200) _wsAtividadePorConexao.Clear();
+                    _wsAtividadePorConexao[conexao] = DateTime.Now;
+                }
                 if (p is null) return;
                 // 1.0.39 (camada C): o eco (MESG ou EROR com o req_id do caixa) resolve a espera do envio pelo
                 // socket; e a conexão que recebeu o quadro daquele canal é a pista "canal" da escolha
@@ -1116,14 +1132,16 @@ public partial class ChatIfood : UserControl
         var tentativa = _tentativasSocket.AddOrUpdate(saidaId, 1, (_, n) => n + 1);
         var reqId = EnvioPeloSocket.ReqId(saidaId, tentativa, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         var urlDoCanal = _conexaoPorCanal.TryGetValue(permissao.Canal, out var cx) && _wsUrlPorConexao.TryGetValue(cx, out var u) ? u : null;
-        var pedido = new PedidoPeloSocket(permissao.Canal, permissao.OrderUuid, permissao.Texto, reqId, urlDoCanal, ServicoConversaChat.UsuarioDaLoja);
+        // 1.0.40: a atividade por URL (o último quadro recebido na conexão do CDP com aquela URL) desempata a escolha
+        var pedido = new PedidoPeloSocket(permissao.Canal, permissao.OrderUuid, permissao.Texto, reqId, urlDoCanal, ServicoConversaChat.UsuarioDaLoja,
+            Atividade: AtividadeDoSocket);
         var r = await EnvioPeloSocket.EnviarAsync(new PortasDoSocketCdp(this, core), _ecosSocket, pedido,
             antesDeEnviar: () => ServicoConversaChat.PeloSocket(saidaId));
         // o quadro saiu (deu, EROR ou sem eco): o diagnóstico diz se o último envio pelo socket deu
         if (r.Ok || r.Erro is "erro_envio" or "sem_eco") _viaSocketDeu = r.Ok;
         // o eco pelo req_id é a prova: confirma a saída mesmo se o texto do eco não casar com o enviado
         if (r.Ok) ServicoConversaChat.ConfirmadaPeloSocket(saidaId, r.MsgId);
-        _sockets = (r.Abertos, r.Escolha);
+        _sockets = r.Sockets ?? new ResumoDosSockets(r.Abertos, r.Escolha, 0, 0, null);
         DiagRaspadinha($"saida={saidaId} tentativa={tentativa} {EnvioPeloSocket.Linha(r)}");
         return r;
     }
@@ -1227,12 +1245,24 @@ public partial class ChatIfood : UserControl
             var urls = await portas.AbertosAsync();
             var canal = canais.FirstOrDefault();
             var urlDoCanal = canal is not null && _conexaoPorCanal.TryGetValue(canal, out var cx) && _wsUrlPorConexao.TryGetValue(cx, out var u) ? u : null;
-            var (_, escolha) = EnvioPeloSocket.Escolher(urls, urlDoCanal, ServicoConversaChat.UsuarioDaLoja);
-            _sockets = (urls.Count(QuadroSendbird.EhSocketDoSendbird), escolha);
+            // 1.0.40: a mesma escolha do envio, com a atividade de cada socket, e o resumo (usuários, sem usuário, ativo há)
+            var atividade = EnvioPeloSocket.AtividadeDosAbertos(urls, ConexoesAtivas());
+            var (indice, escolha) = EnvioPeloSocket.Escolher(urls, urlDoCanal, ServicoConversaChat.UsuarioDaLoja, atividade);
+            _sockets = EnvioPeloSocket.Resumir(urls, indice, escolha, atividade);
         }
         catch (Exception ex) { DiagRaspadinha("sockets: " + ex.GetType().Name); }
         finally { try { await portas.LiberarAsync(); } catch { } }
     }
+
+    /// <summary>1.0.40: a URL e a hora do último quadro recebido de cada conexão do Sendbird que já recebeu algo (só em memória).</summary>
+    private IEnumerable<(string Url, DateTime Em)> ConexoesAtivas()
+    {
+        foreach (var kv in _wsUrlPorConexao)
+            if (_wsAtividadePorConexao.TryGetValue(kv.Key, out var em)) yield return (kv.Value, em);
+    }
+
+    /// <summary>1.0.40: a atividade de UM socket achado pela heap, pela URL (null: nenhuma conexão do CDP com essa URL recebeu quadro).</summary>
+    private DateTime? AtividadeDoSocket(string? url) => EnvioPeloSocket.AtividadeDosAbertos(new[] { url }, ConexoesAtivas())[0];
 
     /// <summary>
     /// O diagnóstico do SDK para o sinal: só contagens e verdadeiro/falso (o <c>uid</c> fica em
@@ -1271,11 +1301,8 @@ public partial class ChatIfood : UserControl
             // envio (a contagem passa pela heap: no máximo a cada 2 min); se o último envio pelo socket deu; e os
             // NOMES dos campos do MESG do Gestor. Nada de URL nem valor.
             if (NaoAchouSdk(r) && DateTime.Now >= _proximaContagemSockets) await ContarSocketsAsync(core, canais).ConfigureAwait(true);
-            if (_sockets is { } sk)
-            {
-                r["sockets_sb_abertos"] = sk.Abertos;
-                r["socket_escolha"] = sk.Escolha;
-            }
+            // 1.0.40: mais quantos usuários distintos, quantos sem user_id e há quantos segundos o escolhido recebeu quadro
+            if (_sockets is { } sk) EnvioPeloSocket.DiagDosSockets(r, sk, DateTime.Now);
             if (_viaSocketDeu is { } vs) r["via_socket"] = vs;
             if (_mesgCamposGestor is { Count: > 0 } mc) r["mesg_campos_gestor"] = new JsonArray(mc.Select(x => (JsonNode?)x).ToArray());
         }

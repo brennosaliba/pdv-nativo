@@ -597,16 +597,16 @@ public static class TestesConversaChat
         var hoje = ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "falhou", "erro_envio", null);
         checar(hoje == """{"acao":"chat_saida","terminal":"CAIXA-01","saida_id":84,"resultado":"falhou","erro":"erro_envio"}""",
             $"ED-7 sem detalhe o corpo é byte a byte o de hoje ({hoje})");
-        var det = ConversaRaspadinha.MontarDetalhe(d, 3, 3, new int?[] { 900100, null, 900100 }, true, "na_frente", null, "1.0.39");
+        var det = ConversaRaspadinha.MontarDetalhe(d, 3, 3, new int?[] { 900100, null, 900100 }, true, "na_frente", null, "1.0.40");
         var falhou = JsonNode.Parse(ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "falhou", "erro_envio", null, det))!.AsObject();
         var incerta = JsonNode.Parse(ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "incerta", "erro_envio", null, det))!.AsObject();
         var enviada = JsonNode.Parse(ConversaRaspadinha.CorpoSaida("CAIXA-01", 84, "enviada", null, "991", det))!.AsObject();
         checar(falhou["erro_detalhe"] is JsonObject fd && (string?)fd["etapa"] == "falhou_sdk" && (int?)fd["tentativa"] == 3 && (int?)fd["tentativas"] == 3
                && fd["codigos"] is JsonArray ca && ca.Count == 3 && ca[1] is null && (int?)ca[2] == 900100
-               && (bool?)fd["aqueceu"] == true && (string?)fd["plano_b"] == "na_frente" && (string?)fd["versao"] == "1.0.39"
+               && (bool?)fd["aqueceu"] == true && (string?)fd["plano_b"] == "na_frente" && (string?)fd["versao"] == "1.0.40"
                && (string?)falhou["erro"] == "erro_envio" && incerta.ContainsKey("erro_detalhe") && !enviada.ContainsKey("erro_detalhe"),
             $"ED-8 o corpo leva erro_detalhe (última tentativa + tentativas, códigos, aqueceu, plano B, versão) só em falhou e incerta ({falhou.ToJsonString()})");
-        checar(ConversaRaspadinha.MontarDetalhe(null, 0, 0, null, false, null, null, "1.0.39") is null
+        checar(ConversaRaspadinha.MontarDetalhe(null, 0, 0, null, false, null, null, "1.0.40") is null
                && ConversaRaspadinha.MontarDetalhe(null, 1, 1, new int?[] { null }, false, "inventado", "outro", "versao ruim") is { } m0
                && !m0.ContainsKey("plano_b") && !m0.ContainsKey("erro_script") && !m0.ContainsKey("versao"),
             "ED-9 sem tentativa nenhuma não há detalhe; plano B, erro do script e versão fora do contrato caem");
@@ -618,7 +618,7 @@ public static class TestesConversaChat
             ["nome"] = new string('N', 40), ["conexao"] = "CONNECTING", ["instancia"] = 20, ["instancias"] = 20, ["uid_igual_ws"] = false, ["ms"] = 60000,
         };
         var cinco = new int?[] { int.MinValue, int.MinValue, int.MinValue, int.MinValue, int.MinValue };
-        var cheio = ConversaRaspadinha.MontarDetalhe(gordo, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.39")!;
+        var cheio = ConversaRaspadinha.MontarDetalhe(gordo, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.40")!;
         var bytes = System.Text.Encoding.UTF8.GetByteCount(cheio.ToJsonString(new System.Text.Json.JsonSerializerOptions
             { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         var msgCortada = (string?)cheio["msg"];
@@ -627,7 +627,7 @@ public static class TestesConversaChat
             $"ED-10 o detalhe cabe em 600 bytes: a mensagem encolhe primeiro ({bytes} bytes, msg {msgCortada?.Length ?? 0})");
         var semMsg = (JsonObject)gordo.DeepClone(); semMsg.Remove("msg");
         semMsg["nome"] = new string('N', 40);
-        var codigosCortados = ConversaRaspadinha.MontarDetalhe(semMsg, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.39")!;
+        var codigosCortados = ConversaRaspadinha.MontarDetalhe(semMsg, 5, 5, cinco, true, "sem_tempo", "sem_resposta", "1.0.40")!;
         checar(System.Text.Encoding.UTF8.GetByteCount(codigosCortados.ToJsonString()) <= ConversaRaspadinha.TetoDetalheBytes,
             "ED-11 sem mensagem para cortar, quem encolhe são os códigos (e o detalhe continua dentro do teto)");
 
@@ -1060,7 +1060,7 @@ public static class TestesConversaChat
         // git não separa as duas, então a prova é pelo conteúdo)
         checar(impressao.Length > 0 && !Regex.IsMatch(impressao, @"ConversaRaspadinha|ServicoConversaChat|comanda_onde|RESGATE|ItemBonus"),
             "FN-17 Impressao.cs não tem nada desta entrega");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.39</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.39 (a camada C: o envio pelo socket do Sendbird)");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.40</Version>", StringComparison.Ordinal), "FN-18 a versão é 1.0.40 (a escolha do socket pela atividade)");
     }
 
     private static string? Raiz()

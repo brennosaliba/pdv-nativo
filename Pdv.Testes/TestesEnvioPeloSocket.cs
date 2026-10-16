@@ -34,6 +34,11 @@ public static class TestesEnvioPeloSocket
     private const string UrlLojaCdp = "wss://ws-6913ab.sendbird.com?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&access_token=" + Jwt;
     private const string UrlEntregador = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=entregador-77&key=" + Chave;
     private const string UrlOutro = "wss://chat.ifood.com.br/socket?token=" + Chave;
+    // 1.0.40: o SDK JS abre cada conexão com a query DIFERENTE (Request-Sent-Timestamp, key da sessão, token renovado)
+    private const string UrlLoja2 = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&key=" + Chave + "&Request-Sent-Timestamp=1760543650999";
+    private const string UrlLoja2Cdp = "wss://ws-6913ab.sendbird.com?p=JS&sv=4.19.9&ai=6913AB&user_id=" + Loja + "&key=" + Chave + "&Request-Sent-Timestamp=1760543650999";
+    private const string UrlSemUsuario = "wss://ws-6913ab.sendbird.com/?p=JS&sv=4.19.9&ai=6913AB&key=" + Chave;
+    private const string CanalEntregador = "sendbird_gc_" + Pedido + "_entregador-77";
     private static readonly DateTime T0 = new(2026, 10, 15, 12, 54, 10);
 
     public static async Task RodarAsync(Action<bool, string> checar)
@@ -41,6 +46,9 @@ public static class TestesEnvioPeloSocket
         OQuadro(checar);
         OReqId(checar);
         AEscolha(checar);
+        AEscolhaPelaAtividade(checar);
+        OAprendizadoDaLoja(checar);
+        ODiagnosticoDosSockets(checar);
         OEco(checar);
         await OEnvio(checar);
         await OGrupoLiberado(checar);
@@ -106,6 +114,101 @@ public static class TestesEnvioPeloSocket
         checar(EnvioPeloSocket.Escolher(Array.Empty<string?>(), UrlLoja, Loja) == (-1, "nenhum")
                && EnvioPeloSocket.Escolher(new string?[] { UrlOutro, null, "" }, null, null) == (-1, "nenhum"),
             "SK-13 sem socket aberto do Sendbird: nenhum");
+    }
+
+    // ── 1.0.40: a escolha pela ATIVIDADE (duas conexões do mesmo usuário, query diferente) ──
+    private static DateTime?[] Ativ(params int?[] s) => s.Select(x => x is int v ? (DateTime?)T0.AddSeconds(v) : null).ToArray();
+
+    private static void AEscolhaPelaAtividade(Action<bool, string> checar)
+    {
+        var duasDaLoja = new string?[] { UrlLoja, UrlLoja2 };
+        checar(EnvioPeloSocket.Escolher(duasDaLoja, null, null) == (0, "unico")
+               && EnvioPeloSocket.Escolher(duasDaLoja, null, null, Ativ(10, 50)) == (1, "unico")
+               && EnvioPeloSocket.Escolher(duasDaLoja, null, null, Ativ(50, 10)) == (0, "unico"),
+            "SK-61 duas URLs do MESMO usuário com a query diferente são um só usuário: único, o mais recentemente ativo (sem atividade, a ordem da heap)");
+        checar(EnvioPeloSocket.Escolher(duasDaLoja, null, null, Ativ(null, 10)) == (1, "unico")
+               && EnvioPeloSocket.Escolher(duasDaLoja, null, null, Ativ(10, 10)) == (0, "unico")
+               && EnvioPeloSocket.Escolher(duasDaLoja, null, null, Ativ(null, null)) == (0, "unico"),
+            "SK-62 atividade desconhecida perde para a conhecida; empate ou tudo desconhecido: a ordem da heap");
+        var tres = new string?[] { UrlEntregador, UrlLoja, UrlLoja2 };
+        checar(EnvioPeloSocket.Escolher(tres, null, Loja, Ativ(90, 10, 40)) == (2, "usuario")
+               && EnvioPeloSocket.Escolher(tres, null, Loja, Ativ(90, 40, 10)) == (1, "usuario")
+               && EnvioPeloSocket.Escolher(tres, null, Loja) == (1, "usuario"),
+            "SK-63 (b) com o usuário da loja conhecido, o mais ativo ENTRE os sockets da loja (o do entregador mais ativo não conta)");
+        checar(EnvioPeloSocket.Escolher(tres, UrlLojaCdp, Loja, Ativ(90, 10, 40)) == (1, "canal"),
+            "SK-64 (a) o canal vem antes da atividade");
+        checar(EnvioPeloSocket.Escolher(new string?[] { UrlSemUsuario }, null, Loja) == (-1, "ambiguo")
+               && EnvioPeloSocket.Escolher(new string?[] { UrlSemUsuario, UrlLoja }, null, Loja) == (1, "usuario")
+               && EnvioPeloSocket.Escolher(new string?[] { UrlSemUsuario }, UrlSemUsuario, Loja) == (0, "canal"),
+            "SK-65 socket SEM user_id na URL com a loja conhecida: só entra pela pista (a); sozinho é ambíguo (nunca mandar como outro usuário)");
+        checar(EnvioPeloSocket.Escolher(new string?[] { UrlSemUsuario }, null, null) == (0, "unico")
+               && EnvioPeloSocket.Escolher(new string?[] { UrlSemUsuario, UrlSemUsuario }, null, null) == (-1, "ambiguo")
+               && EnvioPeloSocket.Escolher(new string?[] { UrlSemUsuario, UrlLoja }, null, null) == (1, "unico"),
+            "SK-66 sem user_id em nenhum, loja desconhecida e exatamente um aberto: único (como hoje); dois sem user_id: ambíguo; um com e um sem: o com user_id");
+        checar(EnvioPeloSocket.Escolher(new string?[] { UrlEntregador, UrlLoja2 }, null, null, Ativ(10, 90)) == (-1, "ambiguo")
+               && EnvioPeloSocket.Escolher(new string?[] { UrlLoja, UrlLoja2, UrlEntregador }, null, null, Ativ(10, 90, 95)) == (-1, "ambiguo"),
+            "SK-67 usuários diferentes sem a loja conhecida: ambíguo, por mais ativo que um seja");
+        checar(EnvioPeloSocket.Escolher(new string?[] { UrlLoja, UrlLoja2 }, null, "entregador-77", Ativ(10, 90)) == (-1, "ambiguo"),
+            "SK-68 todos do mesmo usuário mas a loja é OUTRO: ambíguo (falha fechada)");
+
+        // a atividade por URL: a URL da heap (ws.url, com a barra) casa com a do CDP (sem a barra) pela mesma chave
+        var conexoes = new[] { (UrlLojaCdp, T0.AddSeconds(5)), (UrlLoja2Cdp, T0.AddSeconds(30)), (UrlEntregador, T0.AddSeconds(1)) };
+        var a = EnvioPeloSocket.AtividadeDosAbertos(new string?[] { UrlLoja2, UrlLoja, UrlOutro, null }, conexoes);
+        checar(a.Count == 4 && a[0] == T0.AddSeconds(30) && a[1] == T0.AddSeconds(5) && a[2] is null && a[3] is null,
+            "SK-69 a atividade de cada socket aberto vem da conexão do CDP com a mesma URL (barra e maiúsculas não separam); sem conexão, desconhecida");
+        var repetida = EnvioPeloSocket.AtividadeDosAbertos(new string?[] { UrlLoja }, new[] { (UrlLojaCdp, T0.AddSeconds(5)), (UrlLoja, T0.AddSeconds(9)) });
+        checar(repetida[0] == T0.AddSeconds(9), "SK-70 duas conexões com a mesma URL: vale a mais recente");
+    }
+
+    // ── 1.0.40: a loja aprendida por qualquer quadro RECEBIDO de canal de cliente ──
+    private static void OAprendizadoDaLoja(Action<bool, string> checar)
+    {
+        var read = "READ{\"channel_url\":\"" + Canal + "\",\"user\":{\"user_id\":\"" + Loja + "\"},\"ts\":1760543650100}";
+        var brdm = "BRDM{\"channel_url\":\"" + Canal + "\",\"cat\":10000,\"ts\":1760543650100}";
+        var dlvr = "DLVR{\"channel_url\":\"" + Canal + "\",\"updated\":{}}";
+        checar(ServicoConversaChat.UsuarioDaLojaNoQuadro(read, Loja) == Loja && ServicoConversaChat.UsuarioDaLojaNoQuadro(brdm, Loja) == Loja
+               && ServicoConversaChat.UsuarioDaLojaNoQuadro(dlvr, Loja) == Loja
+               && ServicoConversaChat.UsuarioDaLojaNoQuadro(TestesQuadroSendbird.Mesg("oi", "cliente-1", "CUSTOMER", 1, 1, Canal), Loja) == Loja,
+            "SK-71 READ, BRDM, DLVR ou MESG de canal de CLIENTE numa conexão com user_id ensinam o usuário da loja");
+        var readEntregador = "READ{\"channel_url\":\"" + CanalEntregador + "\",\"ts\":1760543650100}";
+        checar(ServicoConversaChat.UsuarioDaLojaNoQuadro(readEntregador, "entregador-77") is null
+               && ServicoConversaChat.UsuarioDaLojaNoQuadro(TestesQuadroSendbird.Mesg("oi", "entregador-77", "DRIVER", 1, 1, CanalEntregador), "entregador-77") is null,
+            "SK-72 o canal do entregador (sem sendbird_gc_cm_) NUNCA ensina a loja (regra do 1.0.26)");
+        checar(ServicoConversaChat.UsuarioDaLojaNoQuadro(read, null) is null && ServicoConversaChat.UsuarioDaLojaNoQuadro(read, " ") is null
+               && ServicoConversaChat.UsuarioDaLojaNoQuadro("PONG{}", Loja) is null && ServicoConversaChat.UsuarioDaLojaNoQuadro("LOGI{\"key\":\"x\"}", Loja) is null
+               && ServicoConversaChat.UsuarioDaLojaNoQuadro(null, Loja) is null && ServicoConversaChat.UsuarioDaLojaNoQuadro("lixo", Loja) is null,
+            "SK-73 conexão sem user_id, quadro sem canal (PONG, LOGI), lixo ou nulo: continua desconhecido");
+    }
+
+    // ── 1.0.40: o diagnóstico dos sockets no sinal, sem id, URL ou token ──
+    private static void ODiagnosticoDosSockets(Action<bool, string> checar)
+    {
+        var abertos = new string?[] { UrlEntregador, UrlLoja, UrlLoja2, UrlSemUsuario, UrlOutro };
+        var resumo = EnvioPeloSocket.Resumir(abertos, 2, "usuario", Ativ(1, 2, 40, null, null));
+        checar(resumo.Abertos == 4 && resumo.Escolha == "usuario" && resumo.Usuarios == 2 && resumo.SemUsuario == 1 && resumo.AtivoEm == T0.AddSeconds(40),
+            "SK-74 o resumo: 4 abertos do Sendbird, 2 usuários distintos, 1 sem user_id, a atividade do escolhido");
+        var semEscolha = EnvioPeloSocket.Resumir(abertos, -1, "ambiguo", Ativ(1, 2, 40, null, null));
+        checar(semEscolha.AtivoEm is null && semEscolha.Usuarios == 2, "SK-75 sem socket escolhido não há atividade do escolhido");
+        var o = new JsonObject();
+        EnvioPeloSocket.DiagDosSockets(o, resumo, T0.AddSeconds(77));
+        checar((int?)o["sockets_sb_abertos"] == 4 && (string?)o["socket_escolha"] == "usuario" && (int?)o["sockets_usuarios"] == 2
+               && (int?)o["sockets_sem_usuario"] == 1 && (int?)o["socket_ativo_s"] == 37 && Limpo(o.ToJsonString()),
+            $"SK-76 o diag leva as contagens e os segundos desde o último quadro do escolhido, nunca id, URL ou token ({o.ToJsonString()})");
+        var o2 = new JsonObject();
+        EnvioPeloSocket.DiagDosSockets(o2, semEscolha, T0.AddSeconds(77));
+        checar(o2.ContainsKey("socket_ativo_s") && o2["socket_ativo_s"] is null && (string?)o2["socket_escolha"] == "ambiguo",
+            "SK-77 sem atividade do escolhido, socket_ativo_s é null");
+        o["achou"] = false;
+        var e = JsonNode.Parse(ConversaRaspadinha.EstadoDoSinal("logado", true, T0, 0, null, o, null))!["sdk"]!.AsObject();
+        checar((int?)e["sockets_usuarios"] == 2 && (int?)e["sockets_sem_usuario"] == 1 && (int?)e["socket_ativo_s"] == 37 && Limpo(e.ToJsonString()),
+            "SK-78 a lista branca do sinal deixa passar sockets_usuarios, sockets_sem_usuario e socket_ativo_s");
+        o2["achou"] = false;
+        var e2 = JsonNode.Parse(ConversaRaspadinha.EstadoDoSinal("logado", true, T0, 0, null, o2, null))!["sdk"]!.AsObject();
+        checar(e2.ContainsKey("socket_ativo_s") && e2["socket_ativo_s"] is null, "SK-79 o null do socket_ativo_s passa como null");
+        var sujo = new JsonObject { ["sockets_usuarios"] = "dois", ["sockets_sem_usuario"] = -4, ["socket_ativo_s"] = UrlLoja };
+        var e3 = JsonNode.Parse(ConversaRaspadinha.EstadoDoSinal("logado", true, T0, 0, null, sujo, null))!["sdk"]!.AsObject();
+        checar(!e3.ContainsKey("sockets_usuarios") && (int?)e3["sockets_sem_usuario"] == 0 && !e3.ContainsKey("socket_ativo_s"),
+            "SK-80 texto no lugar de contagem cai; negativo vira 0");
     }
 
     // ── o eco ────────────────────────────────────────────────────────────────
@@ -199,6 +302,15 @@ public static class TestesEnvioPeloSocket
         checar(r.Escolha == "canal" && r.Abertos == 2 && (string?)r.Detalhe["via"] == "socket" && (string?)r.Detalhe["escolha"] == "canal"
                && (int?)r.Detalhe["abertos"] == 2 && p.Liberacoes == 1 && ecos.Esperando == 0,
             "SK-20 o resultado diz a via (socket), a escolha e quantos sockets abertos; o grupo foi liberado");
+
+        // 1.0.40: o pedido traz a atividade por URL; o envio vai no socket mais ativo do usuário e o resultado resume os sockets
+        var ecosA = new EcosDoSocket();
+        var pA = new Portas { Urls = { UrlLoja, UrlLoja2, UrlEntregador }, Ecos = ecosA, Responder = req => Eco(req, 77) };
+        var pedA = Pedir(urlDoCanal: null, usuario: Loja) with { Atividade = u => u == UrlLoja2 ? T0.AddSeconds(40) : u == UrlLoja ? T0.AddSeconds(2) : null };
+        var rA = await Rodar(pA, ecosA, pedA);
+        checar(rA.Ok && pA.Enviados.Count == 1 && pA.Enviados[0].Indice == 1 && rA.Escolha == "usuario"
+               && rA.Sockets is { Abertos: 3, Usuarios: 2, SemUsuario: 0 } && rA.Sockets.AtivoEm == T0.AddSeconds(40),
+            "SK-81 o envio escolhe o socket mais ativo do usuário da loja e o resultado resume os sockets (abertos, usuários, sem usuário, atividade)");
 
         // EROR: falha certa, com o código e a mensagem limpa
         var ecos2 = new EcosDoSocket();
@@ -380,7 +492,7 @@ public static class TestesEnvioPeloSocket
                 Relatar = (_, resultado, erro, _, detalhe) => { Relatos.Add((resultado, erro, detalhe)); return Task.CompletedTask; },
                 Esperar = t => { Agora += t; return Task.CompletedTask; },
                 Agora = () => Agora,
-                Versao = "1.0.39",
+                Versao = "1.0.40",
             };
             return ServicoConversaChat.EnviarComTentativasAsync(Saida, T0, laco);
         }
@@ -517,7 +629,21 @@ public static class TestesEnvioPeloSocket
             "SK-57 o quadro recebido alimenta o eco; o envio marca a confirmação pelo socket; o eco pelo req_id confirma (uma vez só); o MESG do Gestor só dá os nomes; o canal aprende o socket");
         checar(servico.Contains("\"sem_eco\"", StringComparison.Ordinal) && servico.Contains("\"falhou_socket\"", StringComparison.Ordinal),
             "SK-58 o laço conhece o sem_eco (incerta) e o falhou_socket (falha certa)");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.39</Version>", StringComparison.Ordinal), "SK-59 a versão do caixa é 1.0.39 (a camada C, pelo socket)");
+        // 1.0.40: a atividade por conexão (qualquer quadro recebido, antes de ler o payload), limpa com os irmãos; a loja
+        // aprendida por qualquer quadro recebido; o diag dos sockets pelo núcleo
+        var recebido = tela.IndexOf("\"Network.webSocketFrameReceived\"", StringComparison.Ordinal);
+        var ativ = recebido < 0 ? -1 : tela.IndexOf("_wsAtividadePorConexao[", recebido, StringComparison.Ordinal);
+        var payloadNulo = recebido < 0 ? -1 : tela.IndexOf("if (p is null) return;", recebido, StringComparison.Ordinal);
+        checar(ativ > recebido && payloadNulo > ativ && tela.Contains("_wsAtividadePorConexao.TryRemove(", StringComparison.Ordinal)
+               && tela.Contains("if (_wsAtividadePorConexao.Count > 200) _wsAtividadePorConexao.Clear();", StringComparison.Ordinal),
+            "SK-82 a tela guarda a hora do último quadro recebido por conexão (qualquer comando, antes de ler o payload), com teto 200 e limpeza no fechamento");
+        checar(tela.Contains("ServicoConversaChat.Quadro(p, enviado: false, conexao, WsUser(conexao));", StringComparison.Ordinal)
+               && servico.Contains("if (!enviado && UsuarioDaLojaNoQuadro(payload, wsUserId) is { } aprendido) _wsUserId = aprendido;", StringComparison.Ordinal),
+            "SK-83 a tela entrega todo quadro recebido ao serviço, e o serviço aprende a loja por qualquer um de canal de cliente (só os recebidos)");
+        checar(tela.Contains("EnvioPeloSocket.AtividadeDosAbertos(", StringComparison.Ordinal) && tela.Contains("EnvioPeloSocket.DiagDosSockets(", StringComparison.Ordinal)
+               && tela.Contains("Atividade: AtividadeDoSocket", StringComparison.Ordinal),
+            "SK-84 a tela casa a atividade com as URLs da heap pelo núcleo, manda a atividade no pedido e escreve o diag dos sockets pelo núcleo");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.40</Version>", StringComparison.Ordinal), "SK-59 a versão do caixa é 1.0.40 (a escolha do socket pela atividade)");
         var novos = new[] { nucleo, Ler("Pdv.Testes", "TestesEnvioPeloSocket.cs") };
         checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),
             "SK-60 nada com travessão nos arquivos novos");

@@ -200,6 +200,9 @@ public static class ServicoConversaChat
             if (string.IsNullOrEmpty(payload) || _iniciado == 0) return;
             var agora = DateTime.Now;
             if (!enviado) Contadores.Registrar(payload, wsUserId, agora);
+            // 1.0.40: qualquer quadro RECEBIDO de canal de cliente (READ, DLVR, BRDM, MESG...) ensina o usuário da
+            // loja, antes de qualquer MESG. Na Savassi, desde a recarga não chegava MESG e a loja ficava desconhecida.
+            if (!enviado && UsuarioDaLojaNoQuadro(payload, wsUserId) is { } aprendido) _wsUserId = aprendido;
             var cmd = QuadroSendbird.Comando(payload);
             if (cmd != QuadroSendbird.ComandoMensagem)
             {
@@ -477,6 +480,23 @@ public static class ServicoConversaChat
     /// memória, para a tela escolher o socket do usuário da loja. Nunca logado nem enviado.
     /// </summary>
     public static string? UsuarioDaLoja => _wsUserId;
+
+    /// <summary>
+    /// 1.0.40: o usuário da loja que um quadro RECEBIDO ensina, ou null. Regra do 1.0.26: só um quadro cujo
+    /// channel_url é canal de CLIENTE (sendbird_gc_cm_, <see cref="CanalIfood.Ler"/>) numa conexão cuja URL tem
+    /// user_id; a conexão do entregador (canal sem _cm_) nunca ensina. Qualquer comando vale (READ, DLVR, BRDM,
+    /// MESG...); quadro sem canal (PONG, LOGI), lixo ou nulo não ensina nada. Puro, para a bateria.
+    /// </summary>
+    public static string? UsuarioDaLojaNoQuadro(string? payload, string? wsUserId)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(wsUserId)) return null;
+            var canal = EnvioPeloSocket.CanalDoQuadro(payload);
+            return canal is not null && CanalIfood.Ler(canal) is not null ? wsUserId.Trim() : null;
+        }
+        catch { return null; }
+    }
 
     /// <summary>
     /// 1.0.39 (camada C): a tela vai mandar esta saída pelo SOCKET. A confirmação pelo quadro passa a exigir o

@@ -1116,9 +1116,12 @@ public static class ConversaRaspadinha
             // heap_protos e heap_objetos são as contagens brutas da última varredura
             foreach (var k in new[] { "instancias", "congeladas", "conferidos", "modulos", "runtimes",
                 "heap_inst", "heap_validas", "heap_abertas", "heap_protos", "heap_objetos", "ws_sb_cdp", "ws_sb_cdp_vivos",
-                "fabricas", "fab_sendbird", "dom_sendbird", "dom_fibras", "iframes", "iframes_outros", "esm", "sockets_sb_abertos" })
+                "fabricas", "fab_sendbird", "dom_sendbird", "dom_fibras", "iframes", "iframes_outros", "esm", "sockets_sb_abertos",
+                "sockets_usuarios", "sockets_sem_usuario", "socket_ativo_s" })
                 if (sdkDaPagina.TryGetPropertyValue(k, out var v) && v is JsonValue jv && jv.TryGetValue<int>(out var n))
                     sdk[k] = Math.Clamp(n, 0, 100_000);
+            // 1.0.40: socket_ativo_s é null quando o socket escolhido nunca recebeu quadro (ou não há escolhido); o null passa
+            if (sdkDaPagina.TryGetPropertyValue("socket_ativo_s", out var sa) && sa is null) sdk["socket_ativo_s"] = null;
             // 1.0.35: o estado da conexão do SDK, só como enum (OPEN, CONNECTING, CLOSED, OUTRO)
             if (sdkDaPagina.TryGetPropertyValue("conexao", out var cv) && cv is JsonValue cjv && cjv.TryGetValue<string>(out var cs)
                 && ConexoesDoSdk.Contains(cs))
