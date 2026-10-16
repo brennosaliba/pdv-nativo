@@ -57,6 +57,8 @@ public static class RecuperacaoSendbird
     public const string ErroTimeout = "timeout";
     public const string ErroJson = "json";
     public const string ErroSemSessao = "sem_sessao";
+    /// <summary>Revisão 1.0.41: há credencial, mas nenhum dos usuários dela listou canal de cliente (a loja segue desconhecida).</summary>
+    public const string ErroSemLoja = "sem_loja";
     public const string ErroRede = "rede";
     /// <summary>Não é erro: o prazo da varredura inteira (30 s) parou a rodada; o resto fica para a próxima.</summary>
     public const string Prazo = "prazo";
@@ -64,8 +66,11 @@ public static class RecuperacaoSendbird
     /// <summary>Os erros que o sinal aceita (lista branca).</summary>
     public static readonly IReadOnlySet<string> Erros = new HashSet<string>(StringComparer.Ordinal)
     {
-        ErroSessaoInvalida, ErroHttp429, ErroHttp5xx, ErroHttp4xx, ErroTimeout, ErroJson, ErroSemSessao, ErroRede,
+        ErroSessaoInvalida, ErroHttp429, ErroHttp5xx, ErroHttp4xx, ErroTimeout, ErroJson, ErroSemSessao, ErroSemLoja, ErroRede,
     };
+
+    /// <summary>Quantos usuários a varredura experimenta quando a loja é desconhecida (a loja e o entregador; sobra um).</summary>
+    public const int TetoDeCandidatas = 3;
 
     /// <summary>Os comandos do histórico que viram quadro.</summary>
     public static readonly IReadOnlySet<string> Comandos = new HashSet<string>(StringComparer.Ordinal) { "MESG", "FILE", "ADMM", "BRDM", "AEDI" };
@@ -74,12 +79,15 @@ public static class RecuperacaoSendbird
 
     // ── as URLs (A3) ─────────────────────────────────────────────────────────
 
-    /// <summary>L: a lista dos canais do usuário, da conversa com mensagem mais nova para a mais velha.</summary>
-    public static string UrlLista(string appId, string userId, bool unreadFilter, string? next = null)
+    /// <summary>
+    /// L: a lista dos canais do usuário, da conversa com mensagem mais nova para a mais velha. SEM unread_filter
+    /// (revisão 1.0.41): o não lido é por usuário e some quando alguém abre a conversa no celular; a janela de
+    /// 12 h e a marca d'água já deixam a lista leve.
+    /// </summary>
+    public static string UrlLista(string appId, string userId, string? next = null)
     {
         var u = $"https://api-{appId.ToLowerInvariant()}.sendbird.com/v3/users/{Uri.EscapeDataString(userId)}/my_group_channels"
                 + $"?limit={LimiteDaLista}&order=latest_last_message&show_member=false&show_empty=false";
-        if (unreadFilter) u += "&unread_filter=unread_message";
         if (!string.IsNullOrEmpty(next)) u += "&token=" + Uri.EscapeDataString(next);
         return u;
     }
@@ -161,10 +169,12 @@ public static class RecuperacaoSendbird
     // ── o planejamento (A6) ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Da lista L, os canais que valem uma leitura: só canal de pedido de cliente (<see cref="CanalIfood.Ler"/>);
-    /// last_message (created_at, message_id) além da marca do canal (ou da janela de 12 h, na primeira vez); e
-    /// last_message.user não é a loja OU unread_message_count &gt; 0. Até 20 (os primeiros da lista, que vem da
-    /// conversa mais recente). Nunca lança.
+    /// Da lista L, os canais que valem uma leitura: só canal de pedido de cliente (<see cref="CanalIfood.Ler"/>)
+    /// cuja last_message (created_at, message_id) está além da marca do canal (ou da janela de 12 h, na primeira
+    /// vez). Só a marca decide (revisão 1.0.41): nem o autor da última fala nem o não lido entram, porque a loja
+    /// respondendo pelo celular ("já vou ver") escondia os códigos que o cliente mandou antes. Quem tira a fala da
+    /// loja é <see cref="FiltrarEOrdenar"/>. Até 20 (os primeiros da lista, que vem da conversa mais recente).
+    /// Nunca lança.
     /// </summary>
     public static IReadOnlyList<CanalPlanejado> Planejar(JsonElement lista, MarcasDAgua marcas, string? usuarioLoja, DateTime agora)
     {
@@ -184,17 +194,33 @@ public static class RecuperacaoSendbird
                 var criado = Numero(ult, "created_at");
                 if (criado is not { } ms) continue;
                 var msgId = NumeroOuTexto(ult, "message_id") ?? NumeroOuTexto(ult, "msg_id");
-                var unread = Numero(c, "unread_message_count") ?? 0;
                 var marca = marcas.Marca(canal!);
                 var desde = marca?.Ms ?? inicio;
                 if (ms < desde) continue;
                 if (ms == desde && (marca is null ? false : marca.Value.MsgId is null || marca.Value.MsgId == msgId)) continue;
-                if (!EhDaLoja(ult, usuarioLoja) || unread > 0)
-                    saida.Add(new CanalPlanejado(canal!, desde, ms, msgId));
+                saida.Add(new CanalPlanejado(canal!, desde, ms, msgId));
             }
         }
         catch { }
         return saida;
+    }
+
+    /// <summary>
+    /// Revisão 1.0.41: a lista L traz algum canal de pedido de CLIENTE (sendbird_gc_cm_...)? É assim que a
+    /// varredura elege a loja quando o caixa sobe sem saber qual dos dois usuários do Gestor (a loja e o
+    /// entregador) é ela: a lista do entregador só tem canais sem _cm_. Nunca lança.
+    /// </summary>
+    public static bool TemCanalDeCliente(JsonElement lista)
+    {
+        try
+        {
+            var canais = Canais(lista);
+            if (canais.ValueKind != JsonValueKind.Array) return false;
+            foreach (var c in canais.EnumerateArray())
+                if (c.ValueKind == JsonValueKind.Object && CanalIfood.Ler(Texto(c, "channel_url")) is not null) return true;
+            return false;
+        }
+        catch { return false; }
     }
 
     /// <summary>O array de canais: a raiz "channels", ou a própria raiz quando já é um array.</summary>
@@ -467,11 +493,20 @@ public sealed class Varredura
     public required Action<string> Entregar { get; init; }
     /// <summary>Uma linha de diag (já sem segredo; o serviço ainda a mascara).</summary>
     public Action<string> Diag { get; init; } = _ => { };
-    /// <summary>A melhor credencial de agora (null: sem sessão).</summary>
+    /// <summary>A melhor credencial de agora para a loja (null: sem sessão). Usada quando a loja é conhecida.</summary>
     public required Func<CredencialSendbird?> Credencial { get; init; }
+    /// <summary>
+    /// Revisão 1.0.41: com a loja desconhecida, a melhor credencial de cada usuário (a loja e o entregador). A
+    /// varredura lista os canais de cada um e elege a loja pelo canal de cliente na lista.
+    /// </summary>
+    public Func<IReadOnlyList<CredencialSendbird>> Candidatas { get; init; } = () => Array.Empty<CredencialSendbird>();
+    /// <summary>O user_id da loja, quando já se sabe (ServicoConversaChat.UsuarioDaLoja); null na primeira hora depois de subir.</summary>
+    public Func<string?> UsuarioDaLoja { get; init; } = () => null;
+    /// <summary>A loja foi eleita pela lista de canais: o user_id dela, para o resto do caixa aprender.</summary>
+    public Action<string> LojaDescoberta { get; init; } = _ => { };
     public Func<CabecalhosDoSdk?> Cabecalhos { get; init; } = () => null;
-    /// <summary>A sessão não vale (401/403, 4003xx).</summary>
-    public Action<string> Invalidar { get; init; } = _ => { };
+    /// <summary>A chave que a chamada levou não vale (401/403, 4003xx): (motivo, chave). Só ela é condenada.</summary>
+    public Action<string, string> Invalidar { get; init; } = (_, _) => { };
     /// <summary>O portão: fora dele a varredura não chama a rede.</summary>
     public Func<bool> Portao { get; init; } = () => true;
     public TimeSpan PrazoDaChamada { get; init; } = RecuperacaoSendbird.PrazoDaChamada;
@@ -482,7 +517,6 @@ public sealed class Varredura
     public Recuo Recuo { get; } = new();
 
     private readonly object _trava = new();
-    private bool _unreadFilterAceito = true;
     private bool _shapeAnotado;
     private string _fonte = SessaoSendbird.FonteNenhuma;
     private DateTime? _ultimaEm, _ultimaOkEm;
@@ -523,9 +557,17 @@ public sealed class Varredura
             try { portao = Portao(); } catch { portao = false; }
             if (!portao) return Fim("portao");
             var agora = Agora();
-            var cred = Credencial();
-            lock (_trava) _fonte = cred?.Fonte ?? SessaoSendbird.FonteNenhuma;
-            if (cred is null || string.IsNullOrWhiteSpace(cred.UserId))
+            var lojaConhecida = UsuarioDaLoja();
+            if (string.IsNullOrWhiteSpace(lojaConhecida)) lojaConhecida = null;
+            var cred = lojaConhecida is not null ? Credencial() : null;
+            IReadOnlyList<CredencialSendbird> candidatas = Array.Empty<CredencialSendbird>();
+            if (lojaConhecida is null)
+            {
+                try { candidatas = Candidatas().Where(c => !string.IsNullOrWhiteSpace(c.UserId)).Take(RecuperacaoSendbird.TetoDeCandidatas).ToList(); }
+                catch { candidatas = Array.Empty<CredencialSendbird>(); }
+            }
+            lock (_trava) _fonte = (cred ?? candidatas.FirstOrDefault())?.Fonte ?? SessaoSendbird.FonteNenhuma;
+            if ((cred is null || string.IsNullOrWhiteSpace(cred.UserId)) && candidatas.Count == 0)
             {
                 Erro(RecuperacaoSendbird.ErroSemSessao);
                 return Fim(RecuperacaoSendbird.ErroSemSessao);
@@ -534,6 +576,47 @@ public sealed class Varredura
             lock (_trava) { _varreduras++; _ultimaEm = agora; }
             var cab = Cabecalhos();
             using var prazo = new CancellationTokenSource(PrazoDaVarredura);
+
+            // Revisão 1.0.41: a loja desconhecida (o caixa acabou de subir, nada chegou pelo socket que a ensine).
+            // Cada usuário candidato lista os canais; a lista com canal de CLIENTE (_cm_) diz quem é a loja. A
+            // sessão de quem falhar com 401/403 é condenada sozinha; 429/5xx param a rodada inteira (recuo).
+            string? corpoPronto = null;
+            if (cred is null)
+            {
+                string? ultimoErroDaEleicao = null;
+                var algumaListou = false;
+                foreach (var cand in candidatas)
+                {
+                    if (prazo.IsCancellationRequested) return Fim(null, completa: false);
+                    var (st, corpo, erro) = await ChamarAsync(RecuperacaoSendbird.UrlLista(cand.AppId, cand.UserId!), cand, cab, prazo.Token).ConfigureAwait(false);
+                    chamou = true;
+                    if (erro == RecuperacaoSendbird.Prazo) return Fim(null, completa: false);
+                    if (erro is not null) return Fim(erro);
+                    var e = Classificar(st, corpo, agora, cand);
+                    if (e is RecuperacaoSendbird.ErroHttp429 or RecuperacaoSendbird.ErroHttp5xx or RecuperacaoSendbird.ErroRede) return Fim(e);
+                    if (e is not null) { ultimoErroDaEleicao = e; continue; }
+                    Recuo.Deu();
+                    bool deCliente;
+                    try { using var d = JsonDocument.Parse(corpo ?? ""); deCliente = RecuperacaoSendbird.TemCanalDeCliente(d.RootElement); }
+                    catch { Erro(RecuperacaoSendbird.ErroJson); return Fim(RecuperacaoSendbird.ErroJson); }
+                    algumaListou = true;
+                    if (!deCliente) continue;
+                    cred = cand;
+                    corpoPronto = corpo;
+                    lock (_trava) _fonte = cand.Fonte;
+                    Diag($"recuperacao loja eleita pela lista de canais (fonte={cand.Fonte}, candidatas={candidatas.Count})");
+                    try { LojaDescoberta(cand.UserId!); } catch (Exception ex) { Diag("recuperacao loja descoberta: " + ex.GetType().Name); }
+                    break;
+                }
+                if (cred is null)
+                {
+                    // ninguém listou canal de cliente: sem_loja; se ninguém sequer listou, vale o erro da última chamada
+                    var e = algumaListou || ultimoErroDaEleicao is null ? RecuperacaoSendbird.ErroSemLoja : ultimoErroDaEleicao;
+                    Erro(e);
+                    if (e == RecuperacaoSendbird.ErroSemLoja) Diag($"recuperacao erro=sem_loja candidatas={candidatas.Count}");
+                    return Fim(e);
+                }
+            }
             var loja = cred.UserId!;
 
             // L: a lista dos canais com novidade
@@ -541,19 +624,18 @@ public sealed class Varredura
             string? next = null;
             for (var pagina = 0; pagina < RecuperacaoSendbird.PaginasDaLista; pagina++)
             {
-                var (st, corpo, erro) = await ChamarAsync(RecuperacaoSendbird.UrlLista(cred.AppId, loja, _unreadFilterAceito, next), cred, cab, prazo.Token).ConfigureAwait(false);
-                chamou = true;
-                if (erro == RecuperacaoSendbird.Prazo) return Fim(null, completa: false);
-                if (erro is not null) return Fim(erro);
-                if (st == 400 && _unreadFilterAceito && !RecuperacaoSendbird.CodigoDeSessaoInvalida(RecuperacaoSendbird.CodigoDoCorpo(corpo)))
+                int st; string? corpo;
+                if (corpoPronto is not null) { st = 200; corpo = corpoPronto; corpoPronto = null; }
+                else
                 {
-                    _unreadFilterAceito = false;
-                    Diag("recuperacao lista sem unread_filter (400)");
-                    pagina--;
-                    continue;
+                    string? erro;
+                    (st, corpo, erro) = await ChamarAsync(RecuperacaoSendbird.UrlLista(cred.AppId, loja, next), cred, cab, prazo.Token).ConfigureAwait(false);
+                    chamou = true;
+                    if (erro == RecuperacaoSendbird.Prazo) return Fim(null, completa: false);
+                    if (erro is not null) return Fim(erro);
+                    if (Classificar(st, corpo, agora, cred) is { } e) return Fim(e);
+                    Recuo.Deu();
                 }
-                if (Classificar(st, corpo, agora) is { } e) return Fim(e);
-                Recuo.Deu();
                 JsonDocument doc;
                 try { doc = JsonDocument.Parse(corpo ?? ""); }
                 catch { Erro(RecuperacaoSendbird.ErroJson); return Fim(RecuperacaoSendbird.ErroJson); }
@@ -578,7 +660,7 @@ public sealed class Varredura
                 var (st, corpo, erro) = await ChamarAsync(RecuperacaoSendbird.UrlMensagens(cred.AppId, p.Canal, p.MessageTs), cred, cab, prazo.Token).ConfigureAwait(false);
                 if (erro == RecuperacaoSendbird.Prazo) return Fim(null, completa: false);
                 if (erro is not null) return Fim(erro);
-                if (Classificar(st, corpo, agora) is { } e) return Fim(e);
+                if (Classificar(st, corpo, agora, cred) is { } e) return Fim(e);
                 Recuo.Deu();
                 IReadOnlyList<string> quadros;
                 try
@@ -615,13 +697,13 @@ public sealed class Varredura
         }
     }
 
-    /// <summary>401/403 ou 4003xx: sessão inválida; 429 e 5xx: recuo; outro 4xx: http_4xx; 2xx: null.</summary>
-    private string? Classificar(int st, string? corpo, DateTime agora)
+    /// <summary>401/403 ou 4003xx: só a chave que a chamada levou é invalidada; 429 e 5xx: recuo; outro 4xx: http_4xx; 2xx: null.</summary>
+    private string? Classificar(int st, string? corpo, DateTime agora, CredencialSendbird cred)
     {
         var codigo = RecuperacaoSendbird.CodigoDoCorpo(corpo);
         if (st is 401 or 403 || RecuperacaoSendbird.CodigoDeSessaoInvalida(codigo))
         {
-            try { Invalidar(st is 401 or 403 ? "http_" + st : "codigo_" + codigo); } catch { }
+            try { Invalidar(st is 401 or 403 ? "http_" + st : "codigo_" + codigo, cred.SessionKey); } catch { }
             Erro(RecuperacaoSendbird.ErroSessaoInvalida);
             Diag($"recuperacao erro=sessao_invalida http={st} codigo={codigo?.ToString(CultureInfo.InvariantCulture) ?? "-"}");
             return RecuperacaoSendbird.ErroSessaoInvalida;

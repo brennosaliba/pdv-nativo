@@ -95,6 +95,8 @@ public partial class ChatIfood : UserControl
     private readonly ChatCaptura.Acumulador _captura = new();
     private DateTime _ultimoDiag = DateTime.MinValue;
     private string? _authRequestId;
+    /// <summary>Revisão 1.0.41: a Session-Key que cada chamada do SDK levou (pelo requestId), para o 401 condenar só ela.</summary>
+    private readonly ChavesPorPedido _chavesPorPedido = new();
 
     // guarda os receivers para não serem coletados
     private CoreWebView2DevToolsProtocolEventReceiver? _wsCreated, _wsRecv, _wsSent, _reqWill, _respRecv, _loadFin, _wsClosed;
@@ -808,7 +810,8 @@ public partial class ChatIfood : UserControl
                     + $"autor_conhecido={(meu is not null && m.Autor is not null)})");
                 return;
             }
-            if (!ChatRaspadinha.Recente(m, DateTime.Now))
+            // revisão 1.0.41: o quadro recuperado pelo histórico (origem rest) vale pela janela da recuperação (12 h)
+            if (!ChatRaspadinha.Recente(m, DateTime.Now, origem == "rest" ? ConversaRaspadinha.RecenciaRecuperada : null))
             {
                 DiagRaspadinha($"origem={origem} descartada (fala antiga ou sem hora) "
                     + $"quando={(m.Quando?.ToString("dd/MM HH:mm:ss") ?? "?")}");
@@ -1050,6 +1053,8 @@ public partial class ChatIfood : UserControl
                 {
                     ServicoRecuperacaoChat.OferecerCabecalhos(sessao.Cabecalhos);
                     ServicoRecuperacaoChat.OferecerCredencial(sessao.Credencial);
+                    // revisão 1.0.41: a chave que ESTE pedido levou, pelo requestId, para o 401 condenar só ela
+                    _chavesPorPedido.Anotar(d.RootElement.TryGetProperty("requestId", out var rid) ? rid.GetString() : null, sessao.Credencial.SessionKey);
                 }
             });
 
@@ -1059,11 +1064,15 @@ public partial class ChatIfood : UserControl
                 using var d = JsonDocument.Parse(e.ParameterObjectAsJson);
                 var id = d.RootElement.TryGetProperty("requestId", out var ri) ? ri.GetString() : null;
                 if (id is not null && id == _authRequestId) _authRequestId = id; // marca para o loadingFinished
-                // 1.0.41: 401/403 numa chamada do próprio SDK = a sessão não vale mais (espera o próximo LOGI)
+                // 1.0.41: 401/403 numa chamada do próprio SDK = a chave que AQUELA chamada levou não vale mais
+                // (revisão: só ela; o Gestor tem o SDK do entregador no mesmo app id, e o 401 dele não é da loja)
                 if (d.RootElement.TryGetProperty("response", out var rs) && rs.ValueKind == JsonValueKind.Object
-                    && rs.TryGetProperty("url", out var ru) && SessaoSendbird.EhApiDoSendbird(ru.GetString())
-                    && rs.TryGetProperty("status", out var rst) && rst.TryGetInt32(out var status) && status is 401 or 403)
-                    ServicoRecuperacaoChat.Invalidar("sdk_" + status);
+                    && rs.TryGetProperty("url", out var ru) && SessaoSendbird.EhApiDoSendbird(ru.GetString()))
+                {
+                    var chave = _chavesPorPedido.Tirar(id);
+                    if (rs.TryGetProperty("status", out var rst) && rst.TryGetInt32(out var status) && status is 401 or 403)
+                        ServicoRecuperacaoChat.Invalidar("sdk_" + status, chave);
+                }
             });
 
             _loadFin = core.GetDevToolsProtocolEventReceiver("Network.loadingFinished");

@@ -107,13 +107,17 @@ public static class TestesRecuperacaoSendbird
         }
     }
 
+    /// <summary>A loja eleita pela lista (LojaDescoberta) na última montagem: quem foi, e, com aprender=true, o serviço passa a conhecê-la.</summary>
+    private static readonly List<string> LojasDescobertas = new();
+
     private static (ServicoDeRecuperacao Servico, HttpFalso Http, List<string> Entregues, List<string> Diag, Func<DateTime> Relogio, Action<DateTime> Acertar)
-        Montar(bool portao = true, string? usuarioDaLoja = null, TimeSpan? prazoChamada = null, TimeSpan? prazoVarredura = null)
+        Montar(bool portao = true, string? usuarioDaLoja = null, TimeSpan? prazoChamada = null, TimeSpan? prazoVarredura = null, bool aprender = false)
     {
         var http = new HttpFalso();
         var entregues = new List<string>();
         var diag = new List<string>();
         var relogio = T0;
+        var loja = usuarioDaLoja;
         var s = new ServicoDeRecuperacao
         {
             Http = http.Enviar,
@@ -121,7 +125,8 @@ public static class TestesRecuperacaoSendbird
             Entregar = q => { lock (entregues) entregues.Add(q); },
             Diag = l => { lock (diag) diag.Add(l); },
             Portao = () => portao,
-            UsuarioDaLoja = () => usuarioDaLoja,
+            UsuarioDaLoja = () => loja,
+            LojaDescoberta = u => { lock (LojasDescobertas) LojasDescobertas.Add(u); if (aprender) loja = u; },
             ComRelogios = false,
             PrazoDaChamada = prazoChamada ?? RecuperacaoSendbird.PrazoDaChamada,
             PrazoDaVarredura = prazoVarredura ?? RecuperacaoSendbird.PrazoDaVarredura,
@@ -129,6 +134,10 @@ public static class TestesRecuperacaoSendbird
         s.Ligar();
         return (s, http, entregues, diag, () => relogio, t => relogio = t);
     }
+
+    private const string ChaveEntregador = "chave-entregador-0001";
+    private static CredencialSendbird LogiLoja(DateTime em, string chave = Chave) => new(AppId, Loja, chave, "logi", em);
+    private static CredencialSendbird LogiEntregador(DateTime em) => new(AppId, "entregador-77", ChaveEntregador, "logi", em);
 
     private static CredencialSendbird CredUrl(DateTime em) => SessaoSendbird.DaUrlDoSocket(TestesEnvioPeloSocket.UrlLoja2, em)!;
 
@@ -164,9 +173,15 @@ public static class TestesRecuperacaoSendbird
 
         var cab = J("{\"session-key\":\"" + Chave + "\",\"app-id\":\"" + AppId + "\",\"sb-user-agent\":\"JS/c4.19.9//\",\"SendBird\":\"JS,4.19.9," + AppId + "\",\"SB-SDK-User-Agent\":\"main_sdk_info=chat/js/4.19.9\",\"Accept\":\"application/json\",\"Cookie\":\"a=b\"}");
         var dc = SessaoSendbird.DosCabecalhos(UrlApi, cab, T0);
-        checar(dc is { Credencial: { SessionKey: Chave, AppId: AppId, Fonte: "cabecalho", UserId: null } }
+        checar(dc is { Credencial: { SessionKey: Chave, AppId: AppId, Fonte: "cabecalho", UserId: Loja } }
                && dc.Value.Cabecalhos is { SbUserAgent: "JS/c4.19.9//", SendBird: "JS,4.19.9," + AppId, SbSdkUserAgent: "main_sdk_info=chat/js/4.19.9", Accept: "application/json" },
-            "RS-4 a chamada do SDK a api-<appid>.sendbird.com dá Session-Key e App-Id (nomes sem distinguir caixa) e guarda SB-User-Agent/SendBird/SB-SDK-User-Agent");
+            "RS-4 a chamada do SDK a api-<appid>.sendbird.com dá Session-Key, App-Id (nomes sem distinguir caixa) e o user_id do caminho /v3/users/{id}/, e guarda SB-User-Agent/SendBird/SB-SDK-User-Agent");
+        checar(SessaoSendbird.UserIdDoCaminho("https://api-6913ab.sendbird.com/v3/users/entregador-77/my_group_channels?limit=1") == "entregador-77"
+               && SessaoSendbird.UserIdDoCaminho("https://api-6913ab.sendbird.com/v3/users/loja%2F1%202/push") == "loja/1 2"
+               && SessaoSendbird.UserIdDoCaminho("https://api-6913ab.sendbird.com/v3/group_channels/x/messages?message_ts=1") is null
+               && SessaoSendbird.UserIdDoCaminho("https://api-6913ab.sendbird.com/v3/users") is null && SessaoSendbird.UserIdDoCaminho(null) is null
+               && SessaoSendbird.DosCabecalhos("https://api-6913ab.sendbird.com/v3/group_channels/x/messages", cab, T0) is { Credencial.UserId: null },
+            "RS-4e o user_id do caminho sai decodificado; chamada sem /v3/users/{id}/ fica sem usuário (e a instância só a aceita pela chave já vista)");
         checar(SessaoSendbird.DosCabecalhos("https://api-x.sendbird.com.evil/v3/x", cab, T0) is null
                && SessaoSendbird.DosCabecalhos("https://apix.sendbird.com/v3/x", cab, T0) is null
                && SessaoSendbird.DosCabecalhos("https://api-6913ab.sendbird.com.evil.example/v3/x", cab, T0) is null
@@ -182,31 +197,38 @@ public static class TestesRecuperacaoSendbird
         var lg = new CredencialSendbird(AppId, Loja, "chave-logi-0000001", "logi", T0.AddSeconds(1));
         var cb = new CredencialSendbird(AppId, null, "chave-cab-00000001", "cabecalho", T0.AddSeconds(2));
         var cbVelho = new CredencialSendbird(AppId, null, "chave-cab-velha-001", "cabecalho", T0.AddSeconds(-5));
+        var cbLoja = new CredencialSendbird(AppId, Loja, "chave-cab-00000001", "cabecalho", T0.AddSeconds(2));
         var entregador = new CredencialSendbird(AppId, "entregador-77", "chave-entreg-00001", "logi", T0.AddSeconds(9));
-        var m = SessaoSendbird.Melhor(new[] { url, lg, cb, cbVelho, entregador }, Loja);
+        var m = SessaoSendbird.Melhor(new[] { url, lg, cbLoja, cbVelho, entregador }, Loja);
         checar(m is { SessionKey: "chave-cab-00000001", UserId: Loja, Fonte: "cabecalho" },
-            "RS-5 prioridade cabeçalho > logi > url; na mesma fonte a mais recente; o cabeçalho ganha o user_id da loja");
+            "RS-5 prioridade cabeçalho > logi > url entre as credenciais da loja; na mesma fonte a mais recente");
+        checar(SessaoSendbird.Melhor(new[] { url, lg, cb, cbVelho }, Loja) is { SessionKey: "chave-logi-0000001" },
+            "RS-5a (revisão) o cabeçalho SEM user_id não entra na escolha: pode ser o SDK do entregador (o LOGI da loja vence)");
         checar(SessaoSendbird.Melhor(new[] { url, lg, entregador }, Loja) is { SessionKey: "chave-logi-0000001" }
                && SessaoSendbird.Melhor(new[] { entregador }, Loja) is null,
             "RS-5b a sessão de OUTRO usuário (o entregador) é ignorada, mesmo sendo a mais nova");
         checar(SessaoSendbird.Melhor(new[] { cb }, null) is null && SessaoSendbird.Melhor(new[] { url }, null) is { UserId: Loja },
-            "RS-5c sem a loja conhecida, só credencial que diz o user_id serve (o cabeçalho sozinho não)");
+            "RS-5c sem a loja conhecida, só credencial que diz o user_id serve (o cabeçalho sem usuário não)");
         checar(SessaoSendbird.Melhor(new CredencialSendbird?[] { null, new(AppId, Loja, "x", "url", T0), new("", Loja, Chave, "url", T0) }, Loja) is null,
             "RS-5d nulo, chave curta e app id vazio não entram, sem exceção");
 
         var sessao = new SessaoSendbird();
         checar(sessao.Oferecer(url) && sessao.Atual(Loja) is { Fonte: "url" } && !sessao.Oferecer(url),
             "RS-6 oferecer a primeira credencial muda a melhor; a mesma de novo não muda");
-        checar(sessao.Oferecer(cb) && sessao.Atual(Loja) is { Fonte: "cabecalho" } && sessao.Fonte(Loja) == "cabecalho", "RS-6b o cabeçalho que chega depois passa a valer");
-        sessao.Invalidar("http_401");
+        var cbMesmaChave = new CredencialSendbird(AppId, null, "chave-url-00000001", "cabecalho", T0.AddSeconds(2));
+        checar(!sessao.Oferecer(cb) && sessao.Atual(Loja) is { Fonte: "url" }
+               && !sessao.Oferecer(cbMesmaChave) && sessao.Atual(Loja) is { Fonte: "cabecalho", UserId: Loja } && sessao.Fonte(Loja) == "cabecalho",
+            "RS-6b (revisão) o cabeçalho sem usuário com chave desconhecida NÃO vira credencial; com a chave já vista na URL da loja ele ganha a loja e passa a valer");
+        sessao.Invalidar("http_401", "chave-url-00000001");
         checar(sessao.Atual(Loja) is null && sessao.Fonte(Loja) == "nenhuma" && sessao.MotivoDaInvalidacao == "http_401",
-            "RS-6c Invalidar zera a sessão e guarda só o motivo curto");
-        checar(!sessao.Oferecer(cb) && !sessao.Oferecer(url) && sessao.Atual(Loja) is null,
+            "RS-6c Invalidar com a chave que falhou zera a sessão dela e guarda só o motivo curto");
+        checar(!sessao.Oferecer(cbMesmaChave) && !sessao.Oferecer(url) && sessao.Atual(Loja) is null,
             "RS-6d a chave invalidada não volta a entrar (nem pelo cabeçalho, nem pela URL)");
         var nova = new CredencialSendbird(AppId, Loja, "chave-nova-00000001", "url", T0.AddMinutes(1));
         checar(sessao.Oferecer(nova) && sessao.Atual(Loja) is { SessionKey: "chave-nova-00000001" }, "RS-6e uma chave de valor diferente reabre");
-        sessao.Invalidar("<script>" + Chave);
-        checar(sessao.MotivoDaInvalidacao == "invalidada", "RS-6f motivo fora do formato vira 'invalidada' (nunca carrega a chave)");
+        sessao.Invalidar("<script>" + Chave, null);
+        checar(sessao.MotivoDaInvalidacao == "invalidada" && sessao.Atual(Loja) is { SessionKey: "chave-nova-00000001" },
+            "RS-6f motivo fora do formato vira 'invalidada' (nunca carrega a chave); sem a chave nada é condenado");
         var s2 = new SessaoSendbird();
         s2.Oferecer(url);
         var entregadorUrl = new CredencialSendbird(AppId, "entregador-77", "chave-entreg-url-01", "url", T0.AddSeconds(5));
@@ -214,6 +236,52 @@ public static class TestesRecuperacaoSendbird
             "RS-6g a URL do socket do entregador (outro usuário, mesma fonte) não sobrescreve a credencial da loja");
         checar(!s2.Oferecer(new CredencialSendbird(AppId, Loja, "chave-url-00000001", "logi", T0.AddSeconds(6))) && s2.Atual(Loja) is { Fonte: "logi" },
             "RS-6h a mesma chave vinda por outra fonte (o LOGI depois da URL) não é mudança, mas passa a valer pela fonte de mais prioridade");
+
+        // ── revisão 1.0.41, achado 1: Invalidar condena SÓ a chave que falhou ──
+        var s8 = new SessaoSendbird();
+        s8.Oferecer(LogiLoja(T0));
+        s8.Oferecer(LogiEntregador(T0.AddSeconds(2)));
+        s8.Invalidar("http_401", ChaveEntregador);
+        checar(s8.Atual(Loja) is { SessionKey: Chave, Fonte: "logi" } && s8.Atual("entregador-77") is null && s8.Candidatas().Count == 1,
+            "RS-8 (achado 1) duas chaves em memória, 401 com a do entregador: a da loja continua valendo; só a do entregador sai");
+        checar(!s8.Oferecer(LogiEntregador(T0.AddSeconds(3))) && !s8.Oferecer(LogiLoja(T0.AddSeconds(4))) && s8.Atual(Loja) is { SessionKey: Chave },
+            "RS-8b a chave condenada não volta; o LOGI da loja com a MESMA chave de antes, depois do 401 do entregador, continua valendo");
+        s8.Invalidar("http_403", null);
+        s8.Invalidar("http_403", "curta");
+        checar(s8.Atual(Loja) is { SessionKey: Chave }, "RS-8c Invalidar sem chave (ou com chave fora do formato) não condena ninguém");
+        var s8b = new SessaoSendbird();
+        s8b.Oferecer(LogiLoja(T0));
+        s8b.Oferecer(new CredencialSendbird(AppId, null, Chave, "cabecalho", T0.AddSeconds(1)));
+        checar(s8b.Atual(Loja) is { Fonte: "cabecalho", SessionKey: Chave }, "RS-8d o cabeçalho com a chave do LOGI da loja vale como cabeçalho da loja");
+        checar(s8b.Oferecer(LogiLoja(T0.AddSeconds(30), "chave-logi-nova-k2x")) && s8b.Atual(Loja) is { SessionKey: "chave-logi-nova-k2x", Fonte: "logi" },
+            "RS-8e (achado 1, cenário b) a loja re-autentica com chave nova: o cabeçalho velho sai, a nova vale (a velha não vence por prioridade)");
+
+        // ── revisão 1.0.41, achados 2 e 4: o cabeçalho do SDK do ENTREGADOR nunca vira credencial da loja ──
+        var s9 = new SessaoSendbird();
+        s9.Oferecer(LogiLoja(T0));
+        var cabEntregadorSemUsuario = new CredencialSendbird(AppId, null, "chave-k9-entregador", "cabecalho", T0.AddSeconds(5));
+        checar(!s9.Oferecer(cabEntregadorSemUsuario) && s9.Atual(Loja) is { SessionKey: Chave, Fonte: "logi" } && s9.Candidatas().Count == 1,
+            "RS-9 (achados 2/4) LOGI da loja com K1 e a última chamada REST com K9 (o entregador, sem usuário): Atual(loja) é K1 e K9 não é credencial de ninguém");
+        var cabEntregadorPeloCaminho = SessaoSendbird.DosCabecalhos("https://api-6913ab.sendbird.com/v3/users/entregador-77/my_group_channels?limit=100",
+            J("{\"Session-Key\":\"chave-k9-entregador\",\"App-Id\":\"" + AppId + "\"}"), T0.AddSeconds(6))!.Value.Credencial;
+        checar(cabEntregadorPeloCaminho.UserId == "entregador-77" && s9.Oferecer(cabEntregadorPeloCaminho)
+               && s9.Atual(Loja) is { SessionKey: Chave } && s9.Atual("entregador-77") is { SessionKey: "chave-k9-entregador", Fonte: "cabecalho" } && s9.Candidatas().Count == 2,
+            "RS-9b o cabeçalho cuja URL diz /v3/users/<entregador>/ é credencial do ENTREGADOR, nunca da loja");
+        s9.Invalidar("http_403", "chave-k9-entregador");
+        checar(s9.Atual(Loja) is { SessionKey: Chave } && s9.Atual("entregador-77") is null,
+            "RS-9c o 403 com a chave do entregador condena só ela: a loja segue com K1");
+        checar(s9.Oferecer(new CredencialSendbird(AppId, "entregador-77", "chave-entreg-logi-2", "logi", T0.AddSeconds(8)))
+               && !s9.Oferecer(new CredencialSendbird(AppId, null, "chave-entreg-logi-2", "cabecalho", T0.AddSeconds(9)))
+               && s9.Atual(Loja) is { SessionKey: Chave, Fonte: "logi" } && s9.Atual("entregador-77") is { Fonte: "cabecalho" },
+            "RS-9d o cabeçalho sem usuário com a chave do LOGI do entregador vai para o entregador, não para a loja");
+
+        // ── revisão 1.0.41: a chave de cada pedido do SDK (para o 401 do responseReceived) ──
+        var cp = new ChavesPorPedido();
+        cp.Anotar("req-1", Chave); cp.Anotar("req-2", ChaveEntregador); cp.Anotar(null, Chave); cp.Anotar("req-3", "curta"); cp.Anotar("req-4", Jwt);
+        checar(cp.Quantos == 2 && cp.Tirar("req-2") == ChaveEntregador && cp.Tirar("req-2") is null && cp.Tirar("req-9") is null && cp.Tirar(null) is null && cp.Tirar("req-1") == Chave,
+            "RS-10 ChavesPorPedido guarda a chave pelo requestId e devolve uma vez só; sem id, chave curta ou JWT não entram");
+        for (var i = 0; i < ChavesPorPedido.Teto + 5; i++) cp.Anotar("r" + i, "chave-" + i.ToString("D8"));
+        checar(cp.Quantos == ChavesPorPedido.Teto && cp.Tirar("r0") is null && cp.Tirar("r" + (ChavesPorPedido.Teto + 4)) is not null, "RS-10b teto de 500 pedidos (os mais velhos saem)");
 
         var str = CredUrl(T0).ToString();
         checar(!str.Contains(Chave) && str.Contains("fonte=url") && str.Contains("appid=" + AppId), "RS-7 o ToString da credencial não mostra a chave");
@@ -226,7 +294,7 @@ public static class TestesRecuperacaoSendbird
         try
         {
             var sz = new SessaoSendbird();
-            sz.Oferecer(null); sz.Oferecer(new CredencialSendbird("", "", "", "zzz", T0)); sz.Invalidar(null); sz.OferecerCabecalhos(null); _ = sz.Atual(null);
+            sz.Oferecer(null); sz.Oferecer(new CredencialSendbird("", "", "", "zzz", T0)); sz.Invalidar(null, null); sz.OferecerCabecalhos(null); _ = sz.Atual(null); _ = sz.Candidatas();
             _ = SessaoSendbird.DosCabecalhos(UrlApi, default, T0); _ = SessaoSendbird.AppIdDaUrl("::nada::"); _ = SessaoSendbird.EhApiDoSendbird("::nada::");
         }
         catch (Exception ex) { excecao = ex.ToString(); }
@@ -308,21 +376,35 @@ public static class TestesRecuperacaoSendbird
             CanalDaLista("sendbird_gc_cm_" + Pedido2.Replace('4', '5') + "_" + Savassi, Ms(agora.AddHours(-13)), 104, "cli-9", "CUSTOMER", 1),
             "{\"channel_url\":\"" + Canal2.Replace('4', '6') + "\",\"unread_message_count\":1}"));
         var plano = RecuperacaoSendbird.Planejar(lista, marcas, Loja, agora);
-        checar(plano.Count == 1 && plano[0].Canal == Canal && plano[0].UltimoMsgId == "101",
-            $"RJ-1 só o canal de pedido com last_message de cliente dentro da janela entra; entregador, loja sem não lidas, fora da janela e sem last_message ficam ({plano.Count})");
+        checar(plano.Count == 2 && plano[0].Canal == Canal && plano[0].UltimoMsgId == "101" && plano[1].Canal == Canal2 && plano[1].UltimoMsgId == "103",
+            $"RJ-1 (revisão, achados 3/7) todo canal de pedido com last_message dentro da janela e além da marca entra, INCLUSIVE o que a loja respondeu por último sem não lidas; entregador, fora da janela e sem last_message ficam ({plano.Count})");
         checar(plano[0].MessageTs == Ms(agora) - 12 * 3600 * 1000L, "RJ-2 na primeira vez (sem marca) a leitura começa em agora - 12 h");
         var listaLojaNaoLida = J(Lista("", CanalDaLista(Canal2, Ms(agora.AddMinutes(-2)), 103, Loja, "MERCHANT", 2)));
         checar(RecuperacaoSendbird.Planejar(listaLojaNaoLida, marcas, Loja, agora).Count == 1,
-            "RJ-1b a conversa cuja última fala é da loja mas tem não lidas também entra");
+            "RJ-1b a conversa cuja última fala é da loja com não lidas entra (o não lido não decide nada)");
 
         marcas.Avancar(Canal, Ms(agora.AddMinutes(-5)), "101", agora);
-        checar(RecuperacaoSendbird.Planejar(lista, marcas, Loja, agora).Count == 0, "RJ-1c com a marca na última mensagem, nada a ler");
+        marcas.Avancar(Canal2, Ms(agora.AddMinutes(-2)), "103", agora);
+        checar(RecuperacaoSendbird.Planejar(lista, marcas, Loja, agora).Count == 0, "RJ-1c com a marca na última mensagem de cada canal, nada a ler");
         marcas.Avancar(Canal, Ms(agora.AddMinutes(-9)), "90", agora);
         checar(marcas.Marca(Canal) is { MsgId: "101" }, "RJ-1d a marca nunca anda para trás");
         var marcasVelhas = new MarcasDAgua();
         marcasVelhas.Avancar(Canal, Ms(agora.AddMinutes(-9)), "90", agora);
+        marcasVelhas.Avancar(Canal2, Ms(agora.AddMinutes(-2)), "103", agora);
         var p2 = RecuperacaoSendbird.Planejar(lista, marcasVelhas, Loja, agora);
-        checar(p2.Count == 1 && p2[0].MessageTs == Ms(agora.AddMinutes(-9)), "RJ-1e com marca anterior, a leitura começa na marca (e o include=true cobre a própria)");
+        checar(p2.Count == 1 && p2[0].Canal == Canal && p2[0].MessageTs == Ms(agora.AddMinutes(-9)), "RJ-1e com marca anterior, a leitura começa na marca (e o include=true cobre a própria)");
+
+        // achado 3 (a prova pedida pela revisão): last_message da loja, unread 0, marca ausente, MESG do cliente 20 min antes no histórico
+        var lojaRespondeu = J(Lista("", CanalDaLista(Canal2, Ms(agora.AddMinutes(-2)), 103, Loja, "MERCHANT", 0)));
+        var planoLoja = RecuperacaoSendbird.Planejar(lojaRespondeu, new MarcasDAgua(), Loja, agora);
+        var historico = J(Mensagens(
+            Rest("MESG", "ganhei na raspadinha AD-7KQ2MX", id: 102, criadoMs: Ms(agora.AddMinutes(-20)), canal: Canal2),
+            Rest("MESG", "ja vou ver", autor: Loja, userType: "MERCHANT", id: 103, criadoMs: Ms(agora.AddMinutes(-2)), canal: Canal2)));
+        var entregues = planoLoja.Count == 1 ? RecuperacaoSendbird.FiltrarEOrdenar(historico, Loja, planoLoja[0].MessageTs) : Array.Empty<string>();
+        checar(planoLoja.Count == 1 && entregues.Count == 1 && QuadroSendbird.Ler(entregues[0]) is { MsgId: "102", AutorId: "cli-77" },
+            "RJ-8 (achado 3) a loja respondeu 'ja vou ver' pelo celular e zerou o não lido: o canal é lido mesmo assim e o código do cliente de 20 min antes é entregue");
+        checar(!RecuperacaoSendbird.UrlLista(AppId, Loja).Contains("unread") && !RecuperacaoSendbird.UrlLista(AppId, Loja, "t").Contains("unread"),
+            "RJ-8b (achado 7) a lista nunca pede unread_filter: a conversa lida no celular do gerente não some da varredura");
 
         var msgs = J(Mensagens(
             Rest("MESG", "terceira", id: 203, criadoMs: Ms(agora.AddSeconds(-20))),
@@ -351,7 +433,7 @@ public static class TestesRecuperacaoSendbird
         };
         v.Viu(TestesQuadroSendbird.Mesg("vi pelo ws", msgId: 101, criadoMs: Ms(agora.AddMinutes(-5))));
         checar(v.Marcas.Marca(Canal) is { MsgId: "101" } && v.Dedup.Conhece("sb:101"), "RJ-5 o quadro do WebSocket avança a marca do canal e ensina o dedup");
-        checar(RecuperacaoSendbird.Planejar(lista, v.Marcas, Loja, agora).Count == 0, "RJ-5b e a varredura seguinte não pede nada daquele canal");
+        checar(RecuperacaoSendbird.Planejar(lista, v.Marcas, Loja, agora).All(p => p.Canal != Canal), "RJ-5b e a varredura seguinte não pede nada daquele canal");
         v.Viu("PING"); v.Viu(null); v.Viu("MESG{lixo");
         checar(v.Marcas.Quantas == 1, "RJ-5c quadro que não é mensagem (ou lixo) não cria marca nem lança");
 
@@ -419,26 +501,24 @@ public static class TestesRecuperacaoSendbird
             http.Responder = Padrao;
             await s.VarrerAsync();
             var urls = http.Urls;
-            var l = "https://api-6913ab.sendbird.com/v3/users/" + Loja + "/my_group_channels?limit=100&order=latest_last_message&show_member=false&show_empty=false&unread_filter=unread_message";
+            var l = "https://api-6913ab.sendbird.com/v3/users/" + Loja + "/my_group_channels?limit=100&order=latest_last_message&show_member=false&show_empty=false";
             var m = "https://api-6913ab.sendbird.com/v3/group_channels/" + Uri.EscapeDataString(Canal) + "/messages?message_ts=" + (Ms(T0) - 12 * 3600 * 1000L) + "&prev_limit=0&next_limit=100&include=true&reverse=false";
-            checar(urls.Count == 2 && urls[0] == l && urls[1] == m, $"RH-2 L e M com a URL e os parâmetros exatos (L depois M) [{string.Join(" | ", urls.Select(ChatCaptura.MascararUrl))}]");
-            checar(RecuperacaoSendbird.UrlLista(AppId, "loja/1 2", false).Contains("/users/loja%2F1%202/my_group_channels?") && !RecuperacaoSendbird.UrlLista(AppId, Loja, false).Contains("unread_filter")
-                   && RecuperacaoSendbird.UrlLista(AppId, Loja, true, "tok/1").EndsWith("&token=tok%2F1"),
-                "RH-2b user_id, channel_url e o token da página vão codificados; sem o unread_filter quando o servidor o recusou");
+            checar(urls.Count == 2 && urls[0] == l && urls[1] == m, $"RH-2 L e M com a URL e os parâmetros exatos (L depois M), sem unread_filter [{string.Join(" | ", urls.Select(ChatCaptura.MascararUrl))}]");
+            checar(RecuperacaoSendbird.UrlLista(AppId, "loja/1 2").Contains("/users/loja%2F1%202/my_group_channels?")
+                   && RecuperacaoSendbird.UrlLista(AppId, Loja, "tok/1").EndsWith("&token=tok%2F1"),
+                "RH-2b user_id, channel_url e o token da página vão codificados");
             checar(entregues.Count == 3 && entregues.Select(q => QuadroSendbird.Ler(q)!.MsgId).SequenceEqual(new[] { "301", "302", "303" }),
                 "RH-3 lista + mensagens: Entregar é chamado 3 vezes, na ordem");
             var antes = http.Quantos;
             await s.VarrerAsync();
             checar(http.Quantos == antes + 1 && entregues.Count == 3 && http.Urls.Last() == l, "RH-3b a varredura seguinte só lista (a marca avançou): nada a ler, nada entregue");
-            // o unread_filter recusado com 400: repete sem ele e lembra
-            var (s3, http3, _, diag3, _, _) = Montar();
+            // um 400 na lista é http_4xx e nada mais (não há mais o unread_filter para tirar)
+            var (s3, http3, _, _, _, _) = Montar();
             s3.OferecerCredencial(CredUrl(T0));
-            http3.Responder = u => u.Contains("unread_filter") ? (400, "{\"message\":\"bad\",\"code\":400108}", null) : Padrao(u);
+            http3.Responder = u => u.Contains("/my_group_channels") ? (400, "{\"message\":\"bad\",\"code\":400108}", null) : Padrao(u);
             var r3 = await s3.VarrerAsync();
-            checar(r3 is { Erro: null } && http3.Urls.Count == 3 && http3.Urls[0].Contains("unread_filter") && !http3.Urls[1].Contains("unread_filter") && diag3.Any(d => d.Contains("sem unread_filter")),
-                "RH-3c 400 no unread_filter: repete a lista sem ele na hora e anota");
-            await s3.VarrerAsync();
-            checar(!http3.Urls.Last().Contains("unread_filter"), "RH-3d e lembra na sessão que ele não é aceito");
+            checar(r3 is { Erro: "http_4xx" } && http3.Urls.Count == 1 && http3.Urls.All(u => !u.Contains("unread")),
+                "RH-3c um 400 na lista é http_4xx, sem repetir; nenhuma URL leva unread_filter");
             s.Dispose(); s3.Dispose();
         }
 
@@ -491,7 +571,18 @@ public static class TestesRecuperacaoSendbird
             var r5 = await s5.VarrerAsync();
             checar(r5 is { Erro: "sessao_invalida" } && s5.Sessao.Atual(null) is null, "RH-5d 2xx com corpo {code:4003xx} também invalida a sessão");
             checar(diag.All(d => !d.Contains(Chave)), "RH-5e nenhuma linha de diag do 401 leva a chave");
-            s.Dispose(); s5.Dispose();
+            // revisão (achado 1): o 401 numa chave não condena a outra
+            var (s6, http6, entregues6, _, _, _) = Montar(usuarioDaLoja: Loja);
+            s6.OferecerCredencial(LogiLoja(T0));
+            s6.OferecerCredencial(LogiEntregador(T0.AddSeconds(1)));
+            http6.Responder = Padrao;
+            s6.Invalidar("sdk_401", ChaveEntregador);
+            var r6 = await s6.VarrerAsync();
+            checar(r6 is { Erro: null, Novas: 3 } && http6.Pedidos.All(p => p.Cabecalhos["Session-Key"] == Chave) && entregues6.Count == 3 && s6.Sessao.Atual(Loja) is { SessionKey: Chave },
+                "RH-5f (achado 1) o 401 do SDK do ENTREGADOR (a chave dele) não derruba a sessão da loja: a varredura sai com a chave da loja e entrega");
+            s6.Invalidar("sdk_401", null);
+            checar(s6.Sessao.Atual(Loja) is { SessionKey: Chave }, "RH-5g o 401 de um pedido cuja chave não se sabe não condena ninguém");
+            s.Dispose(); s5.Dispose(); s6.Dispose();
         }
 
         // RH-6 timeout por chamada
@@ -556,13 +647,52 @@ public static class TestesRecuperacaoSendbird
                 "RH-10 sem credencial: zero chamadas e erro sem_sessao no estado");
             s.OferecerCredencial(new CredencialSendbird(AppId, null, Chave, "cabecalho", T0));
             var r2 = await s.VarrerAsync();
-            checar(r2 is { Erro: "sem_sessao", Chamou: false }, "RH-10b só o cabeçalho (sem o user_id da loja conhecido) ainda não dá para listar");
+            checar(r2 is { Erro: "sem_sessao", Chamou: false }, "RH-10b só o cabeçalho sem usuário (chave que nenhum LOGI/URL trouxe) não é credencial: nada a listar");
             var (s2, http2, _, _, _, _) = Montar(usuarioDaLoja: Loja);
             s2.OferecerCredencial(new CredencialSendbird(AppId, null, Chave, "cabecalho", T0));
+            var r3a = await s2.VarrerAsync();
+            s2.OferecerCredencial(SessaoSendbird.DosCabecalhos(UrlApi, J("{\"Session-Key\":\"" + Chave + "\",\"App-Id\":\"" + AppId + "\"}"), T0)!.Value.Credencial);
             http2.Responder = Padrao;
             var r3 = await s2.VarrerAsync();
-            checar(r3 is { Erro: null, Chamou: true } && http2.Urls[0].Contains("/users/" + Loja + "/"), "RH-10c com a loja aprendida pelo canal de cliente, o cabeçalho sozinho basta");
+            checar(r3a is { Erro: "sem_sessao", Chamou: false } && r3 is { Erro: null, Chamou: true } && http2.Urls[0].Contains("/users/" + Loja + "/") && s2.Sessao.Fonte(Loja) == "cabecalho",
+                "RH-10c (revisão) mesmo com a loja conhecida o cabeçalho sem usuário não basta; o cabeçalho cuja URL diz /v3/users/<loja>/ basta");
             s.Dispose(); s2.Dispose();
+        }
+
+        // RH-12 (achado 5): a loja desconhecida depois do reinício, com o LOGI do entregador chegando DEPOIS do da loja
+        {
+            lock (LojasDescobertas) LojasDescobertas.Clear();
+            var (s, http, entregues, diag, _, _) = Montar(aprender: true);
+            s.OferecerCredencial(LogiLoja(T0.AddSeconds(5)));
+            s.OferecerCredencial(LogiEntregador(T0.AddSeconds(7)));
+            var listaEntregador = Lista("", CanalDaLista(CanalEntregador, Ms(T0.AddMinutes(-1)), 900, "entregador-77", null, 1));
+            http.Responder = u => u.Contains("/messages?") ? (200, Trio(), null)
+                : u.Contains("/users/entregador-77/") ? (200, listaEntregador, null)
+                : (200, canalPlanejado, null);
+            var r = await s.VarrerAsync();
+            var urls = http.Urls;
+            checar(r is { Erro: null, Novas: 3, Lidos: 1 } && urls.Count == 3 && urls[0].Contains("/users/entregador-77/") && urls[1].Contains("/users/" + Loja + "/") && urls[2].Contains("/messages?")
+                   && http.Pedidos[0].Cabecalhos["Session-Key"] == ChaveEntregador && http.Pedidos[1].Cabecalhos["Session-Key"] == Chave && entregues.Count == 3,
+                $"RH-12 (achado 5) sem a loja conhecida a varredura lista cada usuário (o LOGI mais novo, do entregador, primeiro), elege a loja pela lista com canal _cm_ e lê o canal dela ({urls.Count} chamadas, erro={r?.Erro})");
+            checar(LojasDescobertas.SequenceEqual(new[] { Loja }) && diag.Any(d => d.Contains("loja eleita pela lista de canais")) && s.Estado().Fonte == "logi",
+                "RH-12b LojaDescoberta recebe o user_id da loja uma vez, o diag anota (sem id) e a fonte do sinal é a da loja");
+            var antes = http.Quantos;
+            await s.VarrerAsync();
+            checar(http.Quantos == antes + 1 && http.Urls.Last().Contains("/users/" + Loja + "/"), "RH-12c com a loja aprendida, a varredura seguinte lista só a dela");
+            var (s2, http2, _, _, _, _) = Montar();
+            s2.OferecerCredencial(LogiEntregador(T0));
+            http2.Responder = u => (200, listaEntregador, null);
+            var r2 = await s2.VarrerAsync();
+            checar(r2 is { Erro: "sem_loja" } && s2.Estado() is { Erro: "sem_loja" } && http2.Quantos == 1,
+                "RH-12d só o entregador conhecido: a lista dele não tem canal de cliente, erro sem_loja no estado e nada é lido");
+            var (s3, http3, _, _, _, _) = Montar();
+            s3.OferecerCredencial(LogiLoja(T0));
+            s3.OferecerCredencial(LogiEntregador(T0.AddSeconds(1)));
+            http3.Responder = u => u.Contains("/users/entregador-77/") ? (403, "{\"message\":\"nao\",\"code\":400108}", null) : Padrao(u);
+            var r3 = await s3.VarrerAsync();
+            checar(r3 is { Erro: null, Novas: 3 } && s3.Sessao.Atual(Loja) is { SessionKey: Chave } && s3.Sessao.Atual("entregador-77") is null,
+                "RH-12e o 403 na lista do entregador condena só a chave dele; a loja é eleita em seguida e lida");
+            s.Dispose(); s2.Dispose(); s3.Dispose();
         }
 
         // o estado do sinal (lista branca)
@@ -706,6 +836,81 @@ public static class TestesRecuperacaoSendbird
                 "R5-12 nenhuma linha de diag leva a chave, o texto do cliente, o pedido ou a URL com query; o shape sai uma vez só");
             checar(ChatCaptura.MascararTexto(texto) == texto, "R5-13 as linhas já saem limpas: a rede de segurança não precisa apagar nada");
             s.Dispose();
+
+            // ── R6 (revisão 1.0.41, achados 5 e 6): o reinício de verdade. A loja é DESCONHECIDA (nada chegou pelo
+            // socket), os dois LOGIs chegam (o do entregador por último) e o código do cliente é de 50 min atrás.
+            var lojaAntes = ServicoConversaChat.UsuarioDaLoja;
+            try
+            {
+                ServicoConversaChat.EsquecerUsuarioDaLoja();
+                const long Id6 = 20290006;
+                var m50 = agoraReal.AddMinutes(-50);
+                var listaEntregador = Lista("", CanalDaLista(CanalEntregador, Ms(h1322.AddMinutes(-1)), 900, "entregador-77", null, 1));
+                var listaLoja = Lista("", CanalDaLista(Canal2, Ms(m50), Id6, "cli-2030", "CUSTOMER", 0));
+                var corpoM6 = Mensagens(Rest("MESG", "ganhei na raspadinha AD-9ZZ111", autor: "cli-2030", id: Id6, criadoMs: Ms(m50), canal: Canal2));
+                var http6 = new HttpFalso();
+                var entregues6 = new List<string>();
+                var diag6 = new List<string>();
+                var relogio6 = h1322.AddSeconds(5);
+                var s6 = new ServicoDeRecuperacao
+                {
+                    Http = http6.Enviar, Agora = () => relogio6, ComRelogios = false,
+                    Entregar = q =>
+                    {
+                        lock (entregues6) entregues6.Add(q);
+                        ServicoConversaChat.QuadroRecuperado(q, ServicoConversaChat.UsuarioDaLoja);
+                        ServicoArquivoChat.Quadro(q, enviado: false, conexao: "rest", ServicoConversaChat.UsuarioDaLoja);
+                    },
+                    Diag = l => { lock (diag6) diag6.Add(l); },
+                    Portao = () => true,
+                    UsuarioDaLoja = () => ServicoConversaChat.UsuarioDaLoja,
+                    LojaDescoberta = u => ServicoConversaChat.AprenderUsuarioDaLoja(u, "lista de canais"),
+                };
+                s6.Ligar();
+                http6.Responder = u => u.Contains("/messages?") ? (200, corpoM6, null) : u.Contains("/users/entregador-77/") ? (200, listaEntregador, null) : (200, listaLoja, null);
+                s6.OferecerCredencial(SessaoSendbird.DoLogi("LOGI{\"key\":\"" + Chave + "\",\"user_id\":\"" + Loja + "\"}", Loja, AppId, h1322.AddSeconds(5)));
+                s6.OferecerCredencial(SessaoSendbird.DoLogi("LOGI{\"key\":\"" + ChaveEntregador + "\",\"user_id\":\"entregador-77\"}", "entregador-77", AppId, h1322.AddSeconds(7)));
+                checar(ServicoConversaChat.UsuarioDaLoja is null && s6.Sessao.Candidatas().Count == 2,
+                    "R6-1 o caixa subiu sem saber a loja; os dois LOGIs (loja 13:22:05, entregador 13:22:07) são candidatos");
+                relogio6 = h1322.AddSeconds(9);
+                var r61 = await s6.VarrerAsync("gatilho");
+                var urls6 = http6.Urls;
+                checar(r61 is { Erro: null, Novas: 1, Lidos: 1 } && urls6.Count == 3 && urls6[0].Contains("/users/entregador-77/") && urls6[1].Contains("/users/" + Loja + "/") && urls6[2].Contains("/messages?"),
+                    $"R6-2 (achado 5) a varredura experimenta o entregador (LOGI mais novo), não acha canal _cm_, experimenta a loja e lê o canal dela (erro={r61?.Erro}, novas={r61?.Novas}, chamadas={urls6.Count})");
+                checar(ServicoConversaChat.UsuarioDaLoja == Loja, "R6-2b a loja eleita pela lista ensina o ServicoConversaChat (antes só um quadro do socket ensinava)");
+                long Falas6() => cx.ExecuteScalar<long>("SELECT COUNT(*) FROM raspadinha_conversa_fala WHERE chave = 'sb:" + Id6 + "'");
+                var fim6 = DateTime.Now.AddSeconds(15);
+                while (Falas6() < 1 && DateTime.Now < fim6) await Task.Delay(50);
+                checar(Falas6() == 1 && entregues6.Count == 1,
+                    $"R6-3 (achado 6) o código mandado 50 min atrás, com o chat morto, entra em raspadinha_conversa_fala pelo QuadroRecuperado: a fala recuperada vale pela janela de 12 h ({Falas6()})");
+                var m6 = QuadroSendbird.Ler(entregues6[0]);
+                var sinalSombra = ConversaRaspadinha.LerSinal(SinalJson("sombra"));
+                var pelaJanelaDoSocket = ConversaRaspadinha.Triagem(m6, sinalSombra, new CacheDeCanais(), new MemoriaDeEco(), Loja, null, agoraReal);
+                var pelaJanelaDaRecuperacao = ConversaRaspadinha.Triagem(m6, sinalSombra, new CacheDeCanais(), new MemoriaDeEco(), Loja, null, agoraReal, ConversaRaspadinha.RecenciaRecuperada);
+                checar(!pelaJanelaDoSocket.Entra && pelaJanelaDoSocket.Motivo == "antiga" && pelaJanelaDaRecuperacao.Entra && ConversaRaspadinha.RecenciaRecuperada == TimeSpan.FromHours(12),
+                    "R6-3b pela janela do socket (30 min) ela morreria como 'antiga'; pela da recuperação (12 h) entra; quem decide se ainda responde é o banco");
+                var legado = ChatCaptura.NormalizarFrame(entregues6[0]);
+                checar(legado is not null && !ChatRaspadinha.Recente(legado, agoraReal) && ChatRaspadinha.Recente(legado, agoraReal, ConversaRaspadinha.RecenciaRecuperada),
+                    "R6-3c o fluxo legado (OuvirMensagem) também: Recente com a janela da recuperação aceita a fala de 50 min");
+                relogio6 = h1322.AddSeconds(19);
+                var r62 = await s6.VarrerAsync("relogio");
+                checar(r62 is { Erro: null, Novas: 0 } && http6.Urls.Count == 4 && http6.Urls.Last().Contains("/users/" + Loja + "/"),
+                    "R6-4 na varredura seguinte a loja já é conhecida: lista só a dela, nada novo");
+                s6.Invalidar("sdk_401", ChaveEntregador);
+                relogio6 = h1322.AddSeconds(29);
+                var r63 = await s6.VarrerAsync("relogio");
+                checar(s6.Sessao.Atual(Loja) is { SessionKey: Chave } && r63 is { Erro: null, Chamou: true } && http6.Pedidos.Last().Cabecalhos["Session-Key"] == Chave,
+                    "R6-5 (achado 1) o 401 do SDK do entregador não derruba a sessão da loja: a varredura seguinte sai com a chave da loja");
+                var texto6 = string.Join("\n", diag6);
+                checar(!texto6.Contains(Chave) && !texto6.Contains(ChaveEntregador) && !texto6.Contains("9ZZ111") && !texto6.Contains(Loja) && !texto6.Contains("entregador-77") && ChatCaptura.MascararTexto(texto6) == texto6,
+                    "R6-6 nenhuma linha de diag da eleição leva chave, user_id, texto ou pedido");
+                s6.Dispose();
+            }
+            finally
+            {
+                if (lojaAntes is null) ServicoConversaChat.EsquecerUsuarioDaLoja();
+                else ServicoConversaChat.AprenderUsuarioDaLoja(lojaAntes, "bateria");
+            }
         }
         finally
         {
@@ -726,9 +931,10 @@ public static class TestesRecuperacaoSendbird
                && tela.IndexOf("ServicoConversaChat.Ligar(", StringComparison.Ordinal) < tela.IndexOf("ServicoRecuperacaoChat.Ligar(", StringComparison.Ordinal),
             "FT-1 a tela liga a recuperação logo depois do ServicoConversaChat.Ligar");
         checar(tela.Contains("SessaoSendbird.DaUrlDoSocket(u.GetString(), DateTime.Now)") && tela.Contains("SessaoSendbird.DoLogi(p, WsUser(conexao)")
-               && tela.Contains("SessaoSendbird.DosCabecalhos(url, hs, DateTime.Now)") && tela.Contains("ServicoRecuperacaoChat.Invalidar(\"sdk_\" + status)")
+               && tela.Contains("SessaoSendbird.DosCabecalhos(url, hs, DateTime.Now)") && tela.Contains("ServicoRecuperacaoChat.Invalidar(\"sdk_\" + status, chave)")
+               && tela.Contains("_chavesPorPedido.Anotar(") && tela.Contains("var chave = _chavesPorPedido.Tirar(id);") && !tela.Contains("Invalidar(\"sdk_\" + status);")
                && tela.Contains("if (doSendbird) ServicoRecuperacaoChat.Viu(p);") && tela.Contains("if (e.IsSuccess) ServicoRecuperacaoChat.GestorRecarregou();"),
-            "FT-2 as três fontes da credencial (URL, LOGI, cabeçalho), o 401 do SDK, a marca d'água por todo quadro e a recarga do Gestor estão ligados na captura");
+            "FT-2 as três fontes da credencial (URL, LOGI, cabeçalho), o 401 do SDK (só a chave daquele pedido, pelo requestId), a marca d'água por todo quadro e a recarga do Gestor estão ligados na captura");
         var i = tela.IndexOf("private void EntregarRecuperado(string payload)", StringComparison.Ordinal);
         var corpo = i < 0 ? "" : tela[i..Math.Min(tela.Length, i + 900)];
         checar(corpo.Contains("ServicoConversaChat.QuadroRecuperado(payload, loja)") && corpo.Contains("ServicoArquivoChat.Quadro(payload, enviado: false, conexao: \"rest\", loja)")
@@ -738,8 +944,12 @@ public static class TestesRecuperacaoSendbird
         var q = conversa.IndexOf("public static void QuadroRecuperado(", StringComparison.Ordinal);
         var fimQ = conversa.IndexOf("// ── 1.0.38 (caso #0434)", StringComparison.Ordinal);
         var corpoQ = q < 0 || fimQ < q ? "" : conversa[q..fimQ];
-        checar(corpoQ.Length > 0 && !corpoQ.Contains("Contadores.") && !corpoQ.Contains("_wsUserId =") && corpoQ.Contains("Triagem(") && corpoQ.Contains("Nova(t.Fala!.Chave)"),
-            "FT-4 QuadroRecuperado passa pela triagem e pela memória, SEM Contadores.Registrar (ws_vivo) e SEM aprender o usuário da loja");
+        checar(corpoQ.Length > 0 && !corpoQ.Contains("Contadores.") && !corpoQ.Contains("_wsUserId =") && corpoQ.Contains("Triagem(") && corpoQ.Contains("Nova(t.Fala!.Chave)")
+               && corpoQ.Contains("ConversaRaspadinha.RecenciaRecuperada)"),
+            "FT-4 QuadroRecuperado passa pela triagem (com a janela da recuperação) e pela memória, SEM Contadores.Registrar (ws_vivo) e SEM aprender o usuário da loja pelo quadro");
+        checar(tela.Contains("ChatRaspadinha.Recente(m, DateTime.Now, origem == \"rest\" ? ConversaRaspadinha.RecenciaRecuperada : null)")
+               && servico.Contains("LojaDescoberta = u => ServicoConversaChat.AprenderUsuarioDaLoja(u, \"lista de canais\")"),
+            "FT-4b (revisão) o fluxo legado usa a janela da recuperação para a origem rest, e a loja eleita pela lista ensina o ServicoConversaChat");
         checar(servico.Contains("ServicoRaspadinhaChat.Ligado()") && servico.Contains("ServicoConversaChat.Sinal.Ativo") && servico.Contains("!ChatArquivo.EmSilencio(agora)")
                && servico.Contains("_portaoAte = agora.AddSeconds(30)"),
             "FT-5 o portão é Ligado() OU o sinal ativo OU o arquivo fora do silêncio, em cache de 30 s (só o Ligado() desligaria a recuperação na Savassi)");
@@ -756,6 +966,8 @@ public static class TestesRecuperacaoSendbird
         var codigo = nucleo.Split('\n').Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)).ToList();
         checar(!codigo.Any(l => l.Contains("HttpMethod.Post") || l.Contains("HttpMethod.Put") || l.Contains("mark_as_read")) && codigo.Any(l => l.Contains("HttpMethod.Get")),
             "FT-9 GET apenas: nunca POST/PUT, nunca mark_as_read (fora dos comentários)");
+        checar(!codigo.Any(l => l.Contains("unread_filter") || l.Contains("unread_message_count")),
+            "FT-9b (achado 7) o núcleo não pede unread_filter nem olha o não lido (fora dos comentários)");
     }
 
     private static string Ler(string relativo)

@@ -30,6 +30,11 @@ public sealed class ServicoDeRecuperacao : IDisposable
     public Func<bool> Portao { get; init; } = () => true;
     /// <summary>O user_id da loja aprendido pelo canal de cliente (ServicoConversaChat.UsuarioDaLoja), ou null.</summary>
     public Func<string?> UsuarioDaLoja { get; init; } = () => null;
+    /// <summary>
+    /// Revisão 1.0.41: a loja foi eleita pela lista de canais (o usuário cuja lista traz canal de cliente), para o
+    /// resto do caixa aprender (ServicoConversaChat.AprenderUsuarioDaLoja). Nunca lança.
+    /// </summary>
+    public Action<string> LojaDescoberta { get; init; } = _ => { };
     /// <summary>false na bateria: nenhum relógio de verdade; os gatilhos só ficam anotados em <see cref="Agendada"/>.</summary>
     public bool ComRelogios { get; init; } = true;
     public TimeSpan PrazoDaChamada { get; init; } = RecuperacaoSendbird.PrazoDaChamada;
@@ -64,8 +69,11 @@ public sealed class ServicoDeRecuperacao : IDisposable
         {
             Http = Http, Agora = Agora, Entregar = Entregar, Diag = Diag, Portao = Portao,
             Credencial = () => Sessao.Atual(UsuarioDaLoja()),
+            Candidatas = () => Sessao.Candidatas(),
+            UsuarioDaLoja = UsuarioDaLoja,
+            LojaDescoberta = u => { try { LojaDescoberta(u); } catch { } },
             Cabecalhos = () => Sessao.Cabecalhos,
-            Invalidar = m => Sessao.Invalidar(m),
+            Invalidar = (m, chave) => Sessao.Invalidar(m, chave),
             PrazoDaChamada = PrazoDaChamada, PrazoDaVarredura = PrazoDaVarredura,
         };
         if (ComRelogios)
@@ -109,10 +117,18 @@ public sealed class ServicoDeRecuperacao : IDisposable
         try { Sessao.OferecerCabecalhos(cab); } catch { }
     }
 
-    /// <summary>A sessão não vale (401/403 do próprio SDK, ou da varredura).</summary>
-    public void Invalidar(string? motivo)
+    /// <summary>
+    /// A chave <paramref name="chave"/> não vale (401/403 numa chamada do próprio SDK que a levou, ou da varredura).
+    /// Só ela é condenada; sem a chave, nada é condenado (revisão 1.0.41: o 401 do entregador não derruba a loja).
+    /// </summary>
+    public void Invalidar(string? motivo, string? chave)
     {
-        try { Sessao.Invalidar(motivo); Diag("recuperacao sessao invalidada (" + (ConversaRaspadinha.NomeSeguroDoDiag(motivo) ?? "?") + ")"); } catch { }
+        try
+        {
+            Sessao.Invalidar(motivo, chave);
+            Diag("recuperacao sessao invalidada (" + (ConversaRaspadinha.NomeSeguroDoDiag(motivo) ?? "?") + (SessaoSendbird.ChaveValida(chave) ? "" : ", sem chave: nada condenado") + ")");
+        }
+        catch { }
     }
 
     /// <summary>

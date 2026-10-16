@@ -193,6 +193,12 @@ public static class ConversaRaspadinha
 
     /// <summary>Fala mais velha que isto não entra (seção 1.1).</summary>
     public static readonly TimeSpan Recencia = TimeSpan.FromMinutes(30);
+    /// <summary>
+    /// Revisão 1.0.41: a fala RECUPERADA pelo histórico (origem rest) vale pela janela da recuperação (12 h): com
+    /// o chat morto por uma hora, o código mandado às 12:40 chega às 13:25 e não pode morrer como "antiga".
+    /// Quem decide se ainda responde é o banco (176/185).
+    /// </summary>
+    public static readonly TimeSpan RecenciaRecuperada = RecuperacaoSendbird.JanelaInicial;
     public static readonly TimeSpan ToleranciaDeRelogio = TimeSpan.FromMinutes(2);
 
     /// <summary>Quanto a fila espera antes de mexer numa fala que a tela ainda está juntando.</summary>
@@ -269,8 +275,9 @@ public static class ConversaRaspadinha
     /// cliente igual ao que este caixa mandou é eco.
     /// </summary>
     public static FalaTriada Triagem(MensagemSendbird? m, SinalConversa sinal, CacheDeCanais canais, MemoriaDeEco eco,
-        string? wsUserId, string? sdkUserId, DateTime agora)
+        string? wsUserId, string? sdkUserId, DateTime agora, TimeSpan? recencia = null)
     {
+        var janela = recencia ?? Recencia;
         if (m is null || m.Comando != QuadroSendbird.ComandoMensagem) return Fora("nao_e_fala");
         if (!sinal.Ativo) return Fora("desligado");
         if (m.Whisper) return Fora("sussurro");
@@ -290,7 +297,7 @@ public static class ConversaRaspadinha
         try { quando = DateTimeOffset.FromUnixTimeMilliseconds(ms); }
         catch { return Fora("sem_hora"); }
         var local = quando.LocalDateTime;
-        if (local < agora - Recencia || local > agora + ToleranciaDeRelogio) return Fora("antiga");
+        if (local < agora - janela || local > agora + ToleranciaDeRelogio) return Fora("antiga");
         var lado = Lado(m, wsUserId, sdkUserId);
         if (lado == LadoFala.Desconhecido) return Fora("autor_desconhecido");
         if (lado == LadoFala.Loja && !canais.EmConversa(canal.Canal, agora)) return Fora("loja_fora_de_conversa");

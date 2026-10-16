@@ -224,11 +224,11 @@ public sealed class ChatRaspadinha
     /// Regra conservadora, a mesma da autoria: instante DESCONHECIDO não entra. Instante no futuro
     /// além da folga de relógio também não: é sinal de hora de outro dia ancorada em hoje.
     /// </summary>
-    public static bool Recente(MensagemChat? m, DateTime agora)
+    public static bool Recente(MensagemChat? m, DateTime agora, TimeSpan? janela = null)
     {
         if (m?.Quando is not { } q) return false;
         var quando = q.LocalDateTime;
-        return quando <= agora + ToleranciaDeRelogio && quando >= agora - JanelaDeRecencia;
+        return quando <= agora + ToleranciaDeRelogio && quando >= agora - (janela ?? JanelaDeRecencia);
     }
 
     // ── O QUE VAI (puro) ─────────────────────────────────────────────────────

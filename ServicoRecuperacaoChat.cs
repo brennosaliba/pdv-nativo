@@ -51,6 +51,8 @@ public static class ServicoRecuperacaoChat
                 Diag = Diag,
                 Portao = PortaoAberto,
                 UsuarioDaLoja = () => ServicoConversaChat.UsuarioDaLoja,
+                // revisão 1.0.41: a loja eleita pela lista de canais ensina o resto do caixa
+                LojaDescoberta = u => ServicoConversaChat.AprenderUsuarioDaLoja(u, "lista de canais"),
             };
             _servico.Ligar();
         }
@@ -82,7 +84,8 @@ public static class ServicoRecuperacaoChat
 
     public static void OferecerCredencial(CredencialSendbird? c) => _servico?.OferecerCredencial(c);
     public static void OferecerCabecalhos(CabecalhosDoSdk? cab) => _servico?.OferecerCabecalhos(cab);
-    public static void Invalidar(string? motivo) => _servico?.Invalidar(motivo);
+    /// <summary>Só a chave que a chamada levou é condenada (revisão 1.0.41); sem chave, nada.</summary>
+    public static void Invalidar(string? motivo, string? chave) => _servico?.Invalidar(motivo, chave);
     public static void GestorRecarregou() => _servico?.GestorRecarregou();
     public static void LogiVisto() => _servico?.LogiVisto();
 

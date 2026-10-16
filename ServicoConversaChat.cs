@@ -271,7 +271,10 @@ public static class ServicoConversaChat
             if (m is null) return;
             if (Confirmacoes.Ver(m, false) is { } conf)
                 _ = RelatarAsync(conf.SaidaId, "enviada", null, conf.MsgId, null);
-            var t = ConversaRaspadinha.Triagem(m, _ultimo.Sinal, Canais, Eco, wsUserId ?? _wsUserId, _sdkUserId, agora);
+            // revisão 1.0.41: a fala recuperada vale pela janela da recuperação (12 h), não pelos 30 min do socket:
+            // com o chat morto por uma hora, o código das 12:40 chegava às 13:25 e morria como "antiga". Quem
+            // decide se ainda responde é o banco (176/185), que já impede resposta em dobro.
+            var t = ConversaRaspadinha.Triagem(m, _ultimo.Sinal, Canais, Eco, wsUserId ?? _wsUserId, _sdkUserId, agora, ConversaRaspadinha.RecenciaRecuperada);
             if (!t.Entra) { Diag($"rest fora: {t.Motivo}"); return; }
             if (t.Fala!.Lado == LadoFala.Cliente) FalasCliente.Registrar(t.Canal!.Canal, t.Fala.Texto, agora);
             if (!Nova(t.Fala!.Chave)) return;
@@ -530,6 +533,28 @@ public static class ServicoConversaChat
     /// memória, para a tela escolher o socket do usuário da loja. Nunca logado nem enviado.
     /// </summary>
     public static string? UsuarioDaLoja => _wsUserId;
+
+    /// <summary>
+    /// Revisão 1.0.41: a recuperação elegeu a loja pela lista de canais do Sendbird (o usuário cuja lista traz
+    /// canal de cliente sendbird_gc_cm_). Depois de um reinício nada chega pelo socket que ensine a loja até o
+    /// próximo evento de pedido, e sem ela a varredura listava os canais do entregador. Só memória; o diag leva
+    /// só a origem, nunca o id.
+    /// </summary>
+    /// <summary>SÓ A BATERIA (revisão 1.0.41): esquece o usuário da loja, como num reinício do caixa.</summary>
+    public static void EsquecerUsuarioDaLoja() => _wsUserId = null;
+
+    public static void AprenderUsuarioDaLoja(string? usuario, string origem)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(usuario)) return;
+            var u = usuario.Trim();
+            if (string.Equals(_wsUserId, u, StringComparison.Ordinal)) return;
+            _wsUserId = u;
+            Diag("usuario da loja aprendido pela " + ConversaRaspadinha.NomeSeguroDoDiag(origem.Replace(' ', '_')));
+        }
+        catch { }
+    }
 
     /// <summary>
     /// 1.0.40: o usuário da loja que um quadro RECEBIDO ensina, ou null. Regra do 1.0.26: só um quadro cujo
