@@ -197,7 +197,8 @@ public static class ServicoConversaChat
         try
         {
             if (string.IsNullOrEmpty(payload) || _iniciado == 0) return;
-            var agora = DateTime.Now;
+            // 1.0.42: o relógio corrigido pelo servidor (o PC da Savassi 566 s atrasado descartava toda fala como "antiga")
+            var agora = RelogioCorrigido.AgoraCorrigido;
             if (!enviado) Contadores.Registrar(payload, wsUserId, agora);
             // 1.0.40: qualquer quadro RECEBIDO de canal de cliente (READ, DLVR, BRDM, MESG...) ensina o usuário da
             // loja, antes de qualquer MESG. Na Savassi, desde a recarga não chegava MESG e a loja ficava desconhecida.
@@ -259,7 +260,7 @@ public static class ServicoConversaChat
         try
         {
             if (string.IsNullOrEmpty(payload) || _iniciado == 0) return;
-            var agora = DateTime.Now;
+            var agora = RelogioCorrigido.AgoraCorrigido;
             Interlocked.Increment(ref _restRecebidas);
             var cmd = QuadroSendbird.Comando(payload);
             if (cmd != QuadroSendbird.ComandoMensagem)
@@ -358,7 +359,7 @@ public static class ServicoConversaChat
         if (Interlocked.Exchange(ref _noTique, 1) == 1) return;
         try
         {
-            var agora = DateTime.Now;
+            var agora = RelogioCorrigido.AgoraCorrigido;
             foreach (var (id, vistoSaindo) in Confirmacoes.Vencidas(agora))
                 _ = RelatarAsync(id, vistoSaindo ? "enviada" : "incerta", vistoSaindo ? null : "sem_confirmacao", null, null);
             _ = DescarregarAsync();
@@ -371,7 +372,7 @@ public static class ServicoConversaChat
     {
         try
         {
-            foreach (var (canal, chaves) in Lotes.Prontos(DateTime.Now))
+            foreach (var (canal, chaves) in Lotes.Prontos(RelogioCorrigido.AgoraCorrigido))
                 await EnviarLoteAsync(canal, chaves).ConfigureAwait(false);
         }
         catch (Exception ex) { Diag("descarregar: " + ex.GetType().Name); }
@@ -393,7 +394,7 @@ public static class ServicoConversaChat
             }
             var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
                 .ConfigureAwait(false);
-            var agora = DateTime.Now;
+            var agora = RelogioCorrigido.AgoraCorrigido;
             var r = ConversaRaspadinha.LerResposta(st, resp, agora);
             using (var cx = Banco.Abrir()) ConversaRaspadinha.Aplicar(cx, incluidas.ToList(), r, agora);
             Diag($"lote {incluidas.Count} fala(s) canal={Curta(canal)} http={st} status={r.Status} modo={r.Modo} "
@@ -413,7 +414,7 @@ public static class ServicoConversaChat
     /// </summary>
     private static void Processar(RespostaConversa r, string? canal)
     {
-        var agora = DateTime.Now;
+        var agora = RelogioCorrigido.AgoraCorrigido;
         canal ??= r.Saidas.Select(s => s.Canal).FirstOrDefault(c => c is not null);
         if (canal is not null && r.Conversa?.Estado is { } est && est is not ("sombra" or "aberta" or "expirada" or "desfeito"))
             Canais.MarcarEmConversa(canal, agora);
@@ -450,6 +451,7 @@ public static class ServicoConversaChat
         {
             case DestinoDaSaida.Enviar:
                 if (s.PeloDono) LembrarDoDono(s.Id, agora);
+                LembrarTextoDoRobo(s.Texto);   // 1.0.42: a recuperação não toma este texto por resposta humana
                 FilaDeEnvio.Writer.TryWrite((s, agora));
                 return false;
             case DestinoDaSaida.Colar:
@@ -478,6 +480,41 @@ public static class ServicoConversaChat
     }
 
     private static bool EraDoDono(long id) => SaidasDoDono.ContainsKey(id);
+
+    // ── 1.0.42: os textos que o robô mandou por este caixa (a recuperação não os toma por resposta humana) ──
+    private static readonly object TravaDoRobo = new();
+    private static readonly HashSet<string> HashesDoRobo = new(StringComparer.Ordinal);
+    private static readonly Queue<string> OrdemDoRobo = new();
+    private const int TetoDoRobo = 500;
+
+    /// <summary>Lembra o texto de uma saída que este caixa pôs na fila de envio (hash do texto normalizado). Nunca lança.</summary>
+    public static void LembrarTextoDoRobo(string? texto)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(texto)) return;
+            var h = ConversaRaspadinha.HashTexto(texto);
+            lock (TravaDoRobo)
+            {
+                if (!HashesDoRobo.Add(h)) return;
+                OrdemDoRobo.Enqueue(h);
+                while (OrdemDoRobo.Count > TetoDoRobo) HashesDoRobo.Remove(OrdemDoRobo.Dequeue());
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>O texto é de uma saída que este caixa mandou (então uma mensagem da loja com ele NÃO é resposta humana)? Nunca lança.</summary>
+    public static bool TextoDoRobo(string? texto)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(texto)) return false;
+            var h = ConversaRaspadinha.HashTexto(texto);
+            lock (TravaDoRobo) return HashesDoRobo.Contains(h);
+        }
+        catch { return false; }
+    }
 
     private static void Emitir(AvisoDoChat a, bool doErp = false)
     {
@@ -579,7 +616,7 @@ public static class ServicoConversaChat
     /// </summary>
     public static void PeloSocket(long saidaId)
     {
-        try { Confirmacoes.PeloSocket(saidaId, DateTime.Now); } catch { }
+        try { Confirmacoes.PeloSocket(saidaId, RelogioCorrigido.AgoraCorrigido); } catch { }
     }
 
     /// <summary>
@@ -602,7 +639,9 @@ public static class ServicoConversaChat
             Relatar = (id, resultado, erro, saida, detalhe) => RelatarAsync(id, resultado, erro, null, saida, detalhe),
             Diag = Diag,
             Versao = Versao,
-            Recarregou = () => ContarRecarga(DateTime.Now),
+            // 1.0.42: o laço (eco, incerta, reserva) corre no relógio corrigido, o mesmo das falas e do sinal
+            Agora = () => RelogioCorrigido.AgoraCorrigido,
+            Recarregou = () => ContarRecarga(RelogioCorrigido.AgoraCorrigido),
         });
 
     /// <summary>
@@ -681,6 +720,15 @@ public static class ServicoConversaChat
                 return;
             }
             var vez = await TentarAsync(s, permissao, ponte, tentativa, rastro, l).ConfigureAwait(false);
+            // 1.0.42 (Savassi 16/10, saídas 1000000000349/350): EROR 900500 "Channel not found" pelo socket numa mensagem do
+            // pedido. O canal só existe depois que o chat do pedido é aberto: falha definitiva desta saída, sem nova
+            // tentativa, fora das falhas seguidas (antes: 3 tentativas, erro_envio, e o ERP pausava as mensagens do pedido)
+            if (vez.Desfecho == DesfechoDaTentativa.Falhou && ConversaRaspadinha.CanalInexistente(s, vez.Erro, vez.Detalhe))
+            {
+                l.Diag($"saida={s.Id} canal inexistente (o chat do pedido ainda nao foi aberto): falha definitiva, sem nova tentativa");
+                await l.Relatar(s.Id, "falhou", "canal_inexistente", s, rastro.Detalhe()).ConfigureAwait(false);
+                return;
+            }
             if (tentativa == depoisDaRecarga)
                 l.Diag($"saida={s.Id} plano b=recarregou em {segDaRecarga:0} s, tentativa {tentativa}: "
                     + (vez.Desfecho == DesfechoDaTentativa.Saiu ? "ok" : vez.Erro ?? vez.Desfecho.ToString().ToLowerInvariant()));
@@ -931,7 +979,7 @@ public static class ServicoConversaChat
         {
             // 1.0.35: as falhas seguidas do envio deste caixa, para o sinal (os mesmos códigos que o alarme do ERP conta)
             if (resultado == "enviada") Interlocked.Exchange(ref _falhasSeguidas, 0);
-            else if (resultado == "falhou" && erro is "erro_envio" or "sdk_ausente" or "canal_errado") Interlocked.Increment(ref _falhasSeguidas);
+            else if (ConversaRaspadinha.ContaComoFalha(resultado, erro)) Interlocked.Increment(ref _falhasSeguidas);
             var doDono = s?.PeloDono == true || EraDoDono(saidaId);
             // 1.0.35: o detalhe do erro só vai com falhou/incerta (CorpoSaida confere); o ERP sem o SQL 176 ignora
             var corpo = ConversaRaspadinha.CorpoSaida(Terminal, saidaId, resultado, erro, msgId, detalhe);
@@ -1057,12 +1105,25 @@ public static class ServicoConversaChat
             // 1.0.41: a recuperação pelo histórico e o relógio do PC entram no estado
             var recuperacao = ServicoRecuperacaoChat.Estado();
             if (recuperacao is not null) recuperacao = recuperacao with { RestRecebidas = Rest.Recebidas, RestEntregues = Rest.Entregues };
-            int? relogioSeg = null;
-            try { relogioSeg = RelogioDoWindows.Segundos(Telas.AtualizarCaixa.DesvioDoRelogio); } catch { }
-            var estado = ConversaRaspadinha.EstadoDoSinal(_ponte?.Gestor() ?? "ausente",
-                ultimo is { } uq && uq > agora - TimeSpan.FromMinutes(2), ultimo, fila,
-                Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant(), _ponte?.Saude?.Invoke(),
-                ContagemDoEnvio(agora), cartoes, recuperacao, relogioSeg);
+            // 1.0.42: o desvio medido contra o 'agora' do próprio sinal; o do painel (a cada 15 min) é a reserva
+            int? relogioSeg = RelogioCorrigido.Segundos(RelogioCorrigido.Desvio);
+            if (relogioSeg is null) try { relogioSeg = RelogioDoWindows.Segundos(Telas.AtualizarCaixa.DesvioDoRelogio); } catch { }
+            var gestorAgora = _ponte?.Gestor() ?? "ausente";
+            var wsVivo = ultimo is { } uq && uq > agora - TimeSpan.FromMinutes(2);
+            string estado;
+            try
+            {
+                estado = ConversaRaspadinha.EstadoDoSinal(gestorAgora, wsVivo, ultimo, fila,
+                    Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant(), _ponte?.Saude?.Invoke(),
+                    ContagemDoEnvio(agora), cartoes, recuperacao, relogioSeg);
+            }
+            catch (Exception ex)
+            {
+                // 1.0.42 (Savassi 12:23 a 15:20): a montagem do estado lançava a cada minuto e o sinal morria antes da
+                // rede. Agora o sinal sai assim mesmo, mínimo, com o erro anotado, e o diag diz o tipo e a mensagem
+                Diag("sinal: a montagem do estado falhou (" + ConversaRaspadinha.ResumoDaExcecao(ex) + "); manda o sinal minimo");
+                estado = ConversaRaspadinha.EstadoMinimo(gestorAgora, wsVivo, ultimo, fila, ex.GetType().Name, "estado");
+            }
             var corpo = ConversaRaspadinha.CorpoSinal(Terminal, Versao, estado);
             Etapa("rede");
             var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
@@ -1070,19 +1131,23 @@ public static class ServicoConversaChat
             if (st is >= 200 and < 300)
             {
                 Etapa("gravar_sinal");
-                var s = ConversaRaspadinha.LerSinal(resp, DateTime.Now);
+                // 1.0.42: o 'agora' do servidor na resposta mede o desvio do relógio do PC (a latência fica por conta
+                // da folga de 2 min); cada sinal é uma leitura do vigia da Configuração
+                var desvio = RelogioCorrigido.AprenderDoSinal(resp, DateTimeOffset.Now);
+                try { Telas.AtualizarCaixa.VigiaDoRelogio.Registrar(desvio); } catch { }
+                var s = ConversaRaspadinha.LerSinal(resp, RelogioCorrigido.AgoraCorrigido);
                 await Task.Run(() => { using var cx = Banco.Abrir(); ConversaRaspadinha.GravarSinal(cx, resp, DateTime.Now); })
                     .WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
                 var antes = _ultimo.Sinal.Modo;
                 var aprovacaoAntes = _ultimo.Sinal.Aprovacao;
-                _ultimo = new UltimoSinal(s, DateTime.Now);
+                _ultimo = new UltimoSinal(s, RelogioCorrigido.AgoraCorrigido);
                 proximo = TimeSpan.FromSeconds(ConversaRaspadinha.IntervaloDoSinal(s));
                 if (antes != s.Modo) Diag($"modo {antes} -> {s.Modo} envio={s.Envio} comanda={s.ComandaOnde}");
                 if (aprovacaoAntes != s.Aprovacao) Diag($"aprovacao {aprovacaoAntes} -> {s.Aprovacao} mudo={s.CaixaMudo}");
 
                 Etapa("avisos");
                 foreach (var a in s.Avisos) Emitir(new AvisoDoChat(a.Tipo, a.Texto, null, a.IfoodOrderId, a.PedidoNumero) { Resgatavel = a.Resgatavel });
-                foreach (var sd in s.Saidas) TratarSaida(sd, DateTime.Now, null);
+                foreach (var sd in s.Saidas) TratarSaida(sd, RelogioCorrigido.AgoraCorrigido, null);
                 if (s.Comandas.Count > 0)
                 {
                     Etapa("gravar_bonus");
@@ -1099,7 +1164,8 @@ public static class ServicoConversaChat
             await ServicoRaspadinhaChat.RepetirImpressosAsync().WaitAsync(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
         }
         catch (TimeoutException) { Diag($"sinal: prazo estourado em {GuardaDoSinal.EmCurso?.Etapa ?? "?"}"); }
-        catch (Exception ex) { Diag("sinal: " + ex.GetType().Name); }
+        // 1.0.42: com a etapa, o tipo e a mensagem limpa (só o tipo escondeu por 3 h onde o sinal morria)
+        catch (Exception ex) { Diag("sinal: " + ConversaRaspadinha.ResumoDaExcecao(ex) + " em " + (GuardaDoSinal.EmCurso?.Etapa ?? "?")); }
         finally
         {
             // a rodada abandonada (geração velha) não solta a guarda nem mexe no relógio da nova
@@ -1135,7 +1201,7 @@ public static class ServicoConversaChat
     /// </summary>
     public static async Task<(RespostaConversa Resposta, bool ComandaSaiu, bool TemTextoParaColar)> ExecutarRespostaManualAsync(int st, string? corpo)
     {
-        var agora = DateTime.Now;
+        var agora = RelogioCorrigido.AgoraCorrigido;
         var r = ConversaRaspadinha.LerResposta(st, corpo, agora);
         if (r.Status != StatusConversa.Ok || r.Bonus is null) return (r, false, false);
         var comandaSaiu = false;

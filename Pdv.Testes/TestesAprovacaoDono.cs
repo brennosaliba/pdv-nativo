@@ -314,7 +314,7 @@ public static class TestesAprovacaoDono
         checar(tratar.Contains("switch (ConversaRaspadinha.Destino(s, _ultimo.Sinal))", StringComparison.Ordinal)
                && !Regex.IsMatch(tratar, @"s\.Como == ConversaRaspadinha\.ComoOperador\)\s*\{"),
             "AF-3 o serviço decide cada saída pela regra pura do núcleo (Destino), sem regra própria");
-        checar(Regex.IsMatch(tratar, @"case DestinoDaSaida\.Enviar:\s*if \(s\.PeloDono\) LembrarDoDono\(s\.Id, agora\);\s*FilaDeEnvio\.Writer\.TryWrite"),
+        checar(Regex.IsMatch(tratar, @"case DestinoDaSaida\.Enviar:\s*if \(s\.PeloDono\) LembrarDoDono\(s\.Id, agora\);\s*LembrarTextoDoRobo\(s\.Texto\);[^\n]*\s*FilaDeEnvio\.Writer\.TryWrite"),
             "AF-4 a aprovada vai para a MESMA fila de envio (portão e eco de hoje), lembrada como do dono");
         checar(Regex.Matches(servico, @"FilaDeEnvio\.Writer\.TryWrite\(").Count == 1,
             "AF-5 e essa é a única porta da fila de envio");
@@ -387,7 +387,7 @@ public static class TestesAprovacaoDono
             "AF-19 os sockets do Sendbird são contados pelo CDP (criado e fechado) e vão no diag");
 
         var csproj = Ler("Pdv.csproj");
-        checar(csproj.Contains("<Version>1.0.41</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.41 (a recuperação pelo histórico e o relógio do PC)");
+        checar(csproj.Contains("<Version>1.0.42</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.42 (o relógio corrigido, o sinal que parava e a escolha da conexão)");
         var testes = new[] { Ler("Pdv.Testes", "TestesAprovacaoDono.cs"), Ler("Pdv.Testes", "TestesScriptSendbird.cs") };
         var novos = new[] { servico, js }.Concat(testes).ToArray();
         checar(testes.All(t => t.Length > 0) && novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),

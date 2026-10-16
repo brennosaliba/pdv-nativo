@@ -29,8 +29,9 @@ public interface IPortasDoSocket
 /// <param name="UrlDoCanal">A URL do requestId do CDP que recebeu o último quadro daquele canal (pista a).</param>
 /// <param name="UsuarioDaLoja">O user_id da loja já aprendido na conexão do chat de clientes (pista b).</param>
 /// <param name="Atividade">1.0.40: a hora do último quadro RECEBIDO na conexão com aquela URL (null: desconhecida). Desempata entre sockets do mesmo usuário.</param>
+/// <param name="Usuario">1.0.42: o usuário que o livro das conexões aprendeu para aquela URL (pelo LOGI ou pelo canal de cliente), quando a URL não diz.</param>
 public sealed record PedidoPeloSocket(string Canal, string OrderUuid, string Texto, string ReqId, string? UrlDoCanal, string? UsuarioDaLoja,
-    Func<string?, DateTime?>? Atividade = null);
+    Func<string?, DateTime?>? Atividade = null, Func<string?, string?>? Usuario = null);
 
 /// <summary>
 /// 1.0.40: o resumo dos sockets abertos do Sendbird para o sinal: quantos, a escolha, quantos user_id
@@ -132,6 +133,41 @@ public sealed class ConexoesDoSocket
     {
         if (string.IsNullOrEmpty(req)) return null;
         lock (_trava) return _usuario.TryGetValue(req, out var u) ? u : null;
+    }
+
+    /// <summary>
+    /// 1.0.42 (TV da Savassi 16/10, 2 sockets sem user_id depois das reconexões do Gestor: a reconexão do SDK vai com
+    /// ...&amp;key=&lt;sessão&gt; sem user_id, e a escolha caía em "ambiguo"): o livro aprende o usuário de uma conexão
+    /// VIVA do Sendbird também pelo que chega nela: o user_id do LOGI recebido (a verdade do servidor, vale por cima
+    /// da URL) e, por qualquer quadro de canal de cliente, o usuário da loja (só quando a conexão ainda não tem
+    /// usuário). Conexão desconhecida ou já fechada não aprende. Devolve true quando gravou.
+    /// </summary>
+    public bool Aprendeu(string? req, string? usuario, bool porCima = false)
+    {
+        if (string.IsNullOrEmpty(req) || string.IsNullOrWhiteSpace(usuario)) return false;
+        var u = usuario.Trim();
+        lock (_trava)
+        {
+            if (!_url.ContainsKey(req)) return false;
+            if (!porCima && _usuario.TryGetValue(req, out var ja) && ja is not null) return false;
+            _usuario[req] = u;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// 1.0.42: o usuário conhecido para a URL de um socket achado pela heap (ws.url casa com a do CDP pela chave de
+    /// sempre): o da URL, ou o aprendido pelo LOGI/canal. Duas conexões com a mesma URL: a que tem usuário. Null: desconhecido.
+    /// </summary>
+    public string? UsuarioPorUrl(string? url)
+    {
+        if (EnvioPeloSocket.ChaveDaUrl(url) is not { } k) return null;
+        lock (_trava)
+        {
+            foreach (var (req, u) in _url)
+                if (EnvioPeloSocket.ChaveDaUrl(u) == k && _usuario.TryGetValue(req, out var usuario) && usuario is not null) return usuario;
+        }
+        return null;
     }
 
     /// <summary>Quantas conexões do Sendbird estão no livro (abertas e ainda não fechadas).</summary>
@@ -312,8 +348,13 @@ public static class EnvioPeloSocket
     /// o user_id, e a atividade (o último quadro recebido naquela conexão) desempata. Empate ou atividade
     /// desconhecida: a ordem da heap.
     /// </summary>
+    /// <param name="usuarios">
+    /// 1.0.42: o usuário de cada socket aberto (mesma ordem), aprendido pelo livro das conexões (LOGI recebido, canal
+    /// de cliente), para o socket cuja URL não diz o user_id (a reconexão do SDK vai só com key=). Null ou faltando:
+    /// vale só a URL, como antes.
+    /// </param>
     public static (int Indice, string Escolha) Escolher(IReadOnlyList<string?> abertos, string? urlDoCanal, string? usuarioDaLoja,
-        IReadOnlyList<DateTime?>? atividade = null)
+        IReadOnlyList<DateTime?>? atividade = null, IReadOnlyList<string?>? usuarios = null)
     {
         var validos = new List<int>();
         for (var i = 0; i < abertos.Count; i++)
@@ -324,7 +365,7 @@ public static class EnvioPeloSocket
                 if (ChaveDaUrl(abertos[i]) == kc) return (i, PorCanal);
 
         var daLoja = !string.IsNullOrWhiteSpace(usuarioDaLoja) ? usuarioDaLoja.Trim() : QuadroSendbird.UserIdDaUrl(urlDoCanal);
-        var comUsuario = validos.Select(i => (Indice: i, Usuario: QuadroSendbird.UserIdDaUrl(abertos[i]))).Where(x => x.Usuario is not null).ToList();
+        var comUsuario = validos.Select(i => (Indice: i, Usuario: UsuarioDoSocket(abertos, usuarios, i))).Where(x => x.Usuario is not null).ToList();
         if (daLoja is not null)
         {
             var dela = comUsuario.Where(x => x.Usuario == daLoja).Select(x => x.Indice).ToList();
@@ -332,14 +373,36 @@ public static class EnvioPeloSocket
         }
         if (comUsuario.Count > 0)
         {
-            var usuarios = comUsuario.Select(x => x.Usuario!).Distinct(StringComparer.Ordinal).ToList();
-            if (usuarios.Count == 1 && (daLoja is null || daLoja == usuarios[0]))
+            var distintos = comUsuario.Select(x => x.Usuario!).Distinct(StringComparer.Ordinal).ToList();
+            if (distintos.Count == 1 && (daLoja is null || daLoja == distintos[0]))
                 return (MaisAtivo(comUsuario.Select(x => x.Indice).ToList(), atividade), Unico);
             return (-1, Ambiguo);
         }
         // só sockets sem user_id na URL: um só, com a loja desconhecida, é o único; o resto é ambíguo
         if (daLoja is null && validos.Count == 1) return (validos[0], Unico);
         return (-1, Ambiguo);
+    }
+
+    /// <summary>1.0.42: o usuário do socket i: o da URL; senão o que o livro aprendeu (LOGI, canal de cliente); senão null.</summary>
+    public static string? UsuarioDoSocket(IReadOnlyList<string?> abertos, IReadOnlyList<string?>? usuarios, int i)
+    {
+        if (i < 0 || i >= abertos.Count) return null;
+        var daUrl = QuadroSendbird.UserIdDaUrl(abertos[i]);
+        if (!string.IsNullOrWhiteSpace(daUrl)) return daUrl.Trim();
+        var aprendido = usuarios is not null && i < usuarios.Count ? usuarios[i] : null;
+        return string.IsNullOrWhiteSpace(aprendido) ? null : aprendido.Trim();
+    }
+
+    /// <summary>1.0.42: os usuários dos sockets abertos pelo livro das conexões (mesma ordem de <paramref name="abertos"/>). Nunca lança.</summary>
+    public static IReadOnlyList<string?> UsuariosDosAbertos(IReadOnlyList<string?> abertos, Func<string?, string?>? usuarioPorUrl)
+    {
+        var lista = new string?[abertos.Count];
+        if (usuarioPorUrl is null) return lista;
+        for (var i = 0; i < abertos.Count; i++)
+        {
+            try { lista[i] = usuarioPorUrl(abertos[i]); } catch { lista[i] = null; }
+        }
+        return lista;
     }
 
     /// <summary>O índice de atividade mais recente entre os candidatos; desconhecida perde; empate: o primeiro (ordem da heap).</summary>
@@ -375,11 +438,14 @@ public static class EnvioPeloSocket
     }
 
     /// <summary>1.0.40: o resumo dos sockets abertos para o sinal (contagens e a atividade do escolhido; nunca id ou URL).</summary>
-    public static ResumoDosSockets Resumir(IReadOnlyList<string?> abertos, int indice, string escolha, IReadOnlyList<DateTime?>? atividade)
+    public static ResumoDosSockets Resumir(IReadOnlyList<string?> abertos, int indice, string escolha, IReadOnlyList<DateTime?>? atividade,
+        IReadOnlyList<string?>? usuariosAprendidos = null)
     {
-        var validos = abertos.Where(QuadroSendbird.EhSocketDoSendbird).ToList();
-        var usuarios = validos.Select(QuadroSendbird.UserIdDaUrl).Where(u => u is not null).Distinct(StringComparer.Ordinal).Count();
-        var semUsuario = validos.Count(u => QuadroSendbird.UserIdDaUrl(u) is null);
+        // 1.0.42: o usuário de cada socket pela URL ou pelo livro (sockets_sem_usuario só conta o que ninguém sabe de quem é)
+        var validos = Enumerable.Range(0, abertos.Count).Where(i => QuadroSendbird.EhSocketDoSendbird(abertos[i])).ToList();
+        var dosValidos = validos.Select(i => UsuarioDoSocket(abertos, usuariosAprendidos, i)).ToList();
+        var usuarios = dosValidos.Where(u => u is not null).Distinct(StringComparer.Ordinal).Count();
+        var semUsuario = dosValidos.Count(u => u is null);
         DateTime? ativoEm = indice >= 0 && atividade is not null && indice < atividade.Count ? atividade[indice] : null;
         return new ResumoDosSockets(validos.Count, Escolhas.Contains(escolha) ? escolha : Ambiguo, usuarios, semUsuario, ativoEm);
     }
@@ -538,9 +604,11 @@ public static class EnvioPeloSocket
                 for (var i = 0; i < urls.Count; i++) { try { lista[i] = ativ(urls[i]); } catch { lista[i] = null; } }
                 atividade = lista;
             }
-            var (indice, esc) = Escolher(urls, p.UrlDoCanal, p.UsuarioDaLoja, atividade);
+            // 1.0.42: o usuário aprendido pelo livro para o socket cuja URL não diz (a reconexão com key=)
+            var usuarios = UsuariosDosAbertos(urls, p.Usuario);
+            var (indice, esc) = Escolher(urls, p.UrlDoCanal, p.UsuarioDaLoja, atividade, usuarios);
             escolha = esc;
-            resumo = Resumir(urls, indice, esc, atividade);
+            resumo = Resumir(urls, indice, esc, atividade, usuarios);
             if (indice < 0) return Fim(false, "sdk_ausente", null, esc == Ambiguo ? "socket_ambiguo" : "sem_socket");
             urlEscolhida = urls[indice];   // só memória: a tela recalcula a atividade deste socket a cada sinal
 

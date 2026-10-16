@@ -369,7 +369,7 @@ public partial class ChatIfood : UserControl
             });
             // 1.0.41 (pedido 2029): a recuperação pelo histórico do Sendbird. Cada quadro recuperado entra
             // no MESMO funil do webSocketFrameReceived, menos o que é da conexão (ver EntregarRecuperado).
-            ServicoRecuperacaoChat.Ligar(new PonteDaRecuperacao { Entregar = EntregarRecuperado });
+            ServicoRecuperacaoChat.Ligar(new PonteDaRecuperacao { Entregar = EntregarRecuperado, EntregarSoArquivo = EntregarRecuperadoSoArquivo });
             // 1.0.25: e aquece uma vez sozinho, logo depois de o Gestor carregar, para o primeiro
             // pedido do dia nao cair em canal_errado
             _ = AquecerDepoisDoInicioAsync(minha);
@@ -589,6 +589,19 @@ public partial class ChatIfood : UserControl
         }));
     }
 
+    /// <summary>
+    /// 1.0.42 (Savassi 16/10 17:47, pedido 0002): a fala de cliente recuperada que a equipe JÁ respondeu à mão depois
+    /// dela vai SÓ para o arquivo (ifood-chat-arquivo). Nem o robô (chat_mensagens) nem o leitor antigo (OuvirMensagem)
+    /// a veem: o robô respondia 45 min depois contradizendo a equipe. Na thread da tela.
+    /// </summary>
+    private void EntregarRecuperadoSoArquivo(string payload)
+    {
+        _ = Dispatcher.BeginInvoke(() => Seguro(() =>
+        {
+            ServicoArquivoChat.Quadro(payload, enviado: false, conexao: "rest", ServicoConversaChat.UsuarioDaLoja);
+        }));
+    }
+
     /// <summary>A navegação falhou (sem rede, DNS): tenta de novo em 30, 60 e 120 s, sem recriar nada.</summary>
     private async Task NavegarDeNovoAsync(int minha)
     {
@@ -696,6 +709,11 @@ public partial class ChatIfood : UserControl
                 var id = r.TryGetProperty("id", out var iv) ? iv.GetString() : null;
                 if (id is not null && _colagens.TryRemove(id, out var tcs))
                     tcs.TrySetResult(r.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True);
+            }
+            else if (tipo == "cabecalho")
+            {
+                // 1.0.42: os clicaveis do cabecalho da conversa (uma vez por carga), mascarados na pagina e de novo aqui
+                Diag("cabecalho da conversa: " + ConversaRaspadinha.LinhaDoCabecalho(txt));
             }
             else if (tipo == "painelfechou")
             {
@@ -811,7 +829,7 @@ public partial class ChatIfood : UserControl
                 return;
             }
             // revisão 1.0.41: o quadro recuperado pelo histórico (origem rest) vale pela janela da recuperação (12 h)
-            if (!ChatRaspadinha.Recente(m, DateTime.Now, origem == "rest" ? ConversaRaspadinha.RecenciaRecuperada : null))
+            if (!ChatRaspadinha.Recente(m, RelogioCorrigido.AgoraCorrigido, origem == "rest" ? ConversaRaspadinha.RecenciaRecuperada : null))
             {
                 DiagRaspadinha($"origem={origem} descartada (fala antiga ou sem hora) "
                     + $"quando={(m.Quando?.ToString("dd/MM HH:mm:ss") ?? "?")}");
@@ -988,6 +1006,8 @@ public partial class ChatIfood : UserControl
                 // 1.0.41: o LOGI traz a chave da sessão (campo key): lida ANTES de qualquer log, só em memória
                 if (doSendbird && QuadroSendbird.Comando(p) == "LOGI")
                 {
+                    // 1.0.42: o user_id do LOGI é o usuário desta conexão (a reconexão do SDK vai sem user_id na URL)
+                    _conexoes.Aprendeu(conexao, QuadroSendbird.UsuarioDoLogi(p), porCima: true);
                     ServicoRecuperacaoChat.OferecerCredencial(SessaoSendbird.DoLogi(p, WsUser(conexao),
                         SessaoSendbird.AppIdDaUrl(_conexoes.Url(conexao)), DateTime.Now));
                     ServicoRecuperacaoChat.LogiVisto();
@@ -1001,6 +1021,9 @@ public partial class ChatIfood : UserControl
                 {
                     if (_conexaoPorCanal.Count > 500) _conexaoPorCanal.Clear();
                     _conexaoPorCanal[canalDoQuadro] = conexao;
+                    // 1.0.42: a conexão que recebe quadro de canal de CLIENTE é a da loja: aprende o usuário dela
+                    // (só quando a URL não disse; o entregador nunca recebe canal de cliente)
+                    if (CanalIfood.Ler(canalDoQuadro) is not null) _conexoes.Aprendeu(conexao, ServicoConversaChat.UsuarioDaLoja);
                 }
                 _captura.RegistrarFrame(p, enviado: false, conexao);
                 // RESGATE PELO CHAT (07/10/2026): o quadro vai para o serviço novo, que só faz algo
@@ -1207,7 +1230,7 @@ public partial class ChatIfood : UserControl
         var urlDoCanal = _conexaoPorCanal.TryGetValue(permissao.Canal, out var cx) ? _conexoes.Url(cx) : null;
         // 1.0.40: a atividade por URL (o último quadro recebido na conexão do CDP com aquela URL) desempata a escolha
         var pedido = new PedidoPeloSocket(permissao.Canal, permissao.OrderUuid, permissao.Texto, reqId, urlDoCanal, ServicoConversaChat.UsuarioDaLoja,
-            Atividade: _conexoes.AtividadePorUrl);
+            Atividade: _conexoes.AtividadePorUrl, Usuario: _conexoes.UsuarioPorUrl);   // 1.0.42: o usuário aprendido pelo LOGI/canal
         var r = await EnvioPeloSocket.EnviarAsync(new PortasDoSocketCdp(this, core), _ecosSocket, pedido,
             antesDeEnviar: () => ServicoConversaChat.PeloSocket(saidaId));
         // o quadro saiu (deu, EROR ou sem eco): o diagnóstico diz se o último envio pelo socket deu
@@ -1321,8 +1344,10 @@ public partial class ChatIfood : UserControl
             var urlDoCanal = canal is not null && _conexaoPorCanal.TryGetValue(canal, out var cx) ? _conexoes.Url(cx) : null;
             // 1.0.40: a mesma escolha do envio, com a atividade de cada socket, e o resumo (usuários, sem usuário, ativo há)
             var atividade = EnvioPeloSocket.AtividadeDosAbertos(urls, _conexoes.Ativas());
-            var (indice, escolha) = EnvioPeloSocket.Escolher(urls, urlDoCanal, ServicoConversaChat.UsuarioDaLoja, atividade);
-            _sockets = EnvioPeloSocket.Resumir(urls, indice, escolha, atividade);
+            // 1.0.42: o usuário aprendido pelo livro (LOGI, canal de cliente) para o socket cuja URL não diz
+            var usuarios = EnvioPeloSocket.UsuariosDosAbertos(urls, _conexoes.UsuarioPorUrl);
+            var (indice, escolha) = EnvioPeloSocket.Escolher(urls, urlDoCanal, ServicoConversaChat.UsuarioDaLoja, atividade, usuarios);
+            _sockets = EnvioPeloSocket.Resumir(urls, indice, escolha, atividade, usuarios);
             _socketEscolhido = indice >= 0 ? urls[indice] : null;
         }
         catch (Exception ex) { DiagRaspadinha("sockets: " + ex.GetType().Name); }
@@ -2747,7 +2772,14 @@ public partial class ChatIfood : UserControl
     })();
     """;
 
-    // ── O X DO PAINEL DA CONVERSA (1.0.41, 16/10/2026, pedido do dono com fotos) ─────────
+    // ── O X DO PAINEL DA CONVERSA (1.0.41, 16/10/2026, pedido do dono com fotos; 1.0.42: pela geometria) ─────────
+    // 1.0.42 (foto do dono as 17:55 com a 1.0.41 na Savassi): o X continuava visivel e clicavel no modo em que o
+    // Gestor inteiro aparece atras; o seletor por classe/rotulo nao casou o DOM de producao, que nunca vimos. Agora,
+    // sem depender de classe ou rotulo: (a) todo clicavel nos 72 px da DIREITA da linha do cabecalho da conversa
+    // (a linha da seta de voltar e do titulo "#NNNN Nome") que nao e a seta some (display:none + pointer-events:none),
+    // reavaliado a cada mutacao e a cada 1 s; (b) o clique cujo alvo (ate 4 niveis acima) esta nessa faixa morre na
+    // captura; (c) a vigia de 2 s continua; (d) uma linha de diag por carga descreve os clicaveis do cabecalho (tag,
+    // classes, aria-label, texto curto, retangulo), mascarada, para aprendermos o DOM real; (e) vale nos dois modos.
     // O X da gaveta (na linha do titulo "Conversas") ja some desde 04/09. Mas o painel da CONVERSA
     // ("#5041 Maluma Lopes") tem o proprio cabecalho, com a seta de voltar a esquerda e um X a
     // direita, e esse X fecha a gaveta INTEIRA: a tela ficava so com "AJUDA iFOOD" e "Respostas
@@ -2766,6 +2798,8 @@ public partial class ChatIfood : UserControl
       if (window.__pdvFechar) return; window.__pdvFechar = true;
       function envia(o){ try { window.chrome.webview.postMessage(JSON.stringify(o)); } catch (e) {} }
       function gaveta(){ try { return window.pdvGaveta ? window.pdvGaveta() : null; } catch (e) { return null; } }
+      // 1.0.42: a raiz da busca e a gaveta, ou o documento inteiro no modo "Gestor inteiro" (o da foto do dono, 17:55)
+      function raiz(){ return gaveta() || document.body; }
       function attr(el, n){ try { return String(el.getAttribute(n) || '').toLowerCase(); } catch (e) { return ''; } }
       function classe(el){ try { return (typeof el.className === 'string' ? el.className : (el.getAttribute('class') || '')).toLowerCase(); } catch (e) { return ''; } }
       function rotulo(el){ return attr(el, 'aria-label') + ' ' + attr(el, 'title') + ' ' + attr(el, 'data-testid'); }
@@ -2775,7 +2809,8 @@ public partial class ChatIfood : UserControl
         try {
           if (document.getElementById('pdv-css-fechar')) return;
           var s = document.createElement('style'); s.id = 'pdv-css-fechar';
-          s.textContent = 'body.pdv-so-chat [data-pdv-fechar-painel]{display:none!important;pointer-events:none!important}';
+          // 1.0.42: vale nos dois modos (so o chat e Gestor inteiro)
+          s.textContent = '[data-pdv-fechar-painel]{display:none!important;pointer-events:none!important}';
           (document.head || document.documentElement).appendChild(s);
         } catch (e) {}
       }
@@ -2790,7 +2825,7 @@ public partial class ChatIfood : UserControl
           return /^[←‹❮<]$/.test(t);
         } catch (e) { return false; }
       }
-      // o X: rotulo/classe de fechar, o icone de fechar dentro, ou o glifo
+      // o X: rotulo/classe de fechar, o icone de fechar dentro, ou o glifo (a segunda via; a primeira e a geometria)
       function ehFechar(el){
         try {
           if (!el) return false;
@@ -2820,48 +2855,91 @@ public partial class ChatIfood : UserControl
         } catch (e) {}
         return null;
       }
+      // 1.0.42 (foto do dono as 17:55: o X continuava la com a 1.0.41, o seletor por classe/rotulo nao casou o DOM real).
+      // A regra agora e GEOMETRICA, sem depender de classe nem rotulo: tudo que e clicavel nos 72 px da DIREITA da linha
+      // do cabecalho (na mesma faixa vertical dela) e nao e a seta de voltar (que fica a esquerda do titulo) some.
+      var FAIXA = 72;
+      function naFaixaDaDireita(r, rt){
+        if (!rt || !r) return false;
+        if (!(r.width > 0 && r.height > 0)) return false;
+        if (!(r.top < rt.bottom && r.bottom > rt.top)) return false;
+        return r.right > rt.right - FAIXA && r.left >= rt.left + rt.width / 2;
+      }
       function marcar(el){
         if (el.hasAttribute('data-pdv-fechar-painel')) return false;
         el.setAttribute('data-pdv-fechar-painel', '');
         return true;
       }
-      // (a) marca o X do painel da conversa; devolve quantos marcou agora
+      // (d) uma linha de diag por carga: os clicaveis do cabecalho (tag, classes, aria-label, texto curto, retangulo), mascarados
+      var diagFeito = false;
+      function mascara(s, n){ try { return String(s || '').replace(/[0-9]{3,}/g, '#').replace(/[^A-Za-z0-9_ .#-]/g, '_').slice(0, n); } catch (e) { return ''; } }
+      function descrever(linha){
+        var out = [];
+        try {
+          var cands = linha.querySelectorAll('button,[role="button"],a,svg');
+          for (var i = 0; i < cands.length && out.length < 12; i++) {
+            var el = cands[i], r = el.getBoundingClientRect();
+            out.push({ tag: mascara(el.tagName, 8), cls: mascara(classe(el), 40), aria: mascara(attr(el, 'aria-label'), 20), txt: mascara((el.textContent || '').trim(), 12),
+              r: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] });
+          }
+        } catch (e) {}
+        return out;
+      }
+      // (a) marca o X do painel da conversa; devolve quantos marcou agora. Reavaliado a cada mutacao e a cada 1 s.
       window.pdvBlindarFechar = function () {
         var n = 0;
         try {
-          var g = gaveta(); if (!g) return 0;
+          var g = raiz(); if (!g) return 0;
           estilo();
           var linha = linhaDoCabecalho(g);
           var rt = linha ? linha.getBoundingClientRect() : null;
           var cands = g.querySelectorAll('button,[role="button"],a,svg');
-          var direita = null, dx = -1;
           for (var i = 0; i < cands.length; i++) {
             var el = cands[i], alvo = clicavel(el);
             if (ehVoltar(el) || ehVoltar(alvo)) { alvo.removeAttribute('data-pdv-fechar-painel'); continue; }
             if (ehFechar(el) || ehFechar(alvo)) { if (marcar(alvo)) n++; continue; }
             if (!rt || !visivel(el)) continue;
             var r = el.getBoundingClientRect();
-            if (r.top < rt.bottom && r.bottom > rt.top && r.width <= 80 && r.height <= 80 && r.left > dx && !/input|textarea|select/i.test(alvo.tagName)) { dx = r.left; direita = alvo; }
+            if (naFaixaDaDireita(r, rt) && !/input|textarea|select/i.test(alvo.tagName)) { if (marcar(alvo)) n++; }
           }
-          if (direita && !ehVoltar(direita) && marcar(direita)) n++;
+          if (linha && !diagFeito) {
+            diagFeito = true;
+            var lr = linha.getBoundingClientRect();
+            envia({ tipo: 'cabecalho', modo: (document.body && document.body.classList.contains('pdv-so-chat')) ? 'so_chat' : 'gestor_inteiro',
+              r: [Math.round(lr.left), Math.round(lr.top), Math.round(lr.width), Math.round(lr.height)], clicaveis: descrever(linha) });
+          }
         } catch (e) {}
         return n;
       };
-      // o clique no X morre na captura, antes de o Gestor ouvir (so no modo "so o chat")
+      // (b) o clique morre na CAPTURA, antes de o Gestor ouvir, nos dois modos: o alvo (ate 4 niveis acima) marcado,
+      // ou na faixa da direita do cabecalho, ou com cara de fechar. A seta de voltar passa sempre.
+      function bloquear(ev){ try { ev.stopImmediatePropagation(); } catch (e) {} try { ev.preventDefault(); } catch (e) {} }
       document.addEventListener('click', function (ev) {
         try {
-          if (!document.body || !document.body.classList.contains('pdv-so-chat')) return;
           var t = ev.target;
-          if (!t || !t.closest) return;
-          if (t.closest('[data-pdv-fechar-painel]')) { ev.stopImmediatePropagation(); ev.preventDefault(); return; }
-          var g = gaveta(); if (!g || !g.contains(t)) return;
-          var el = t.closest('button,[role="button"],a,svg'); if (!el) return;
-          var b = clicavel(el);
-          if (ehVoltar(el) || ehVoltar(b)) return;
-          if (ehFechar(el) || ehFechar(b)) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+          if (!t) return;
+          var el = t, nivel = 0;
+          while (el && nivel <= 4) {
+            if (el.hasAttribute && el.hasAttribute('data-pdv-fechar-painel')) { bloquear(ev); return; }
+            el = el.parentElement; nivel++;
+          }
+          var g = raiz(); if (!g) return;
+          var linha = linhaDoCabecalho(g);
+          var rt = linha ? linha.getBoundingClientRect() : null;
+          el = t; nivel = 0;
+          while (el && nivel <= 4 && rt) {
+            if (ehVoltar(el)) return;
+            if (el.getBoundingClientRect && naFaixaDaDireita(el.getBoundingClientRect(), rt)) { bloquear(ev); return; }
+            el = el.parentElement; nivel++;
+          }
+          if (!t.closest) return;
+          var b = t.closest('button,[role="button"],a,svg'); if (!b) return;
+          var c = clicavel(b);
+          if (ehVoltar(b) || ehVoltar(c)) return;
+          if (ehFechar(b) || ehFechar(c)) bloquear(ev);
         } catch (e) {}
       }, true);
-      // (b) a vigia: a gaveta que some sem o operador ter saido e reaberta, no maximo uma vez por 10 s
+      // (c) a vigia: a gaveta que some sem o operador ter saido e reaberta, no maximo uma vez por 10 s
       var viuGaveta = false, ultimoReabrir = 0, reaberturas = 0;
       window.pdvVigiarPainel = function (agoraMs) {
         try {
@@ -2883,6 +2961,7 @@ public partial class ChatIfood : UserControl
         estilo();
         try { new MutationObserver(agenda).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
         setInterval(function () { window.pdvVigiarPainel(); }, 2000);
+        setInterval(function () { window.pdvBlindarFechar(); }, 1000);
         agenda();
       }
       if (document.body) liga(); else document.addEventListener('DOMContentLoaded', liga);

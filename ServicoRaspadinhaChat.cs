@@ -136,7 +136,7 @@ public static class ServicoRaspadinhaChat
             if (m is null || !ChatRaspadinha.DoCliente(m, meuUserId)) return null;
             // A FALA VELHA NÃO RESGATA. O leitor de DOM manda a rolagem visível inteira, e abrir
             // hoje uma conversa de três dias atrás queimaria um código que ninguém tratou na época.
-            if (!ChatRaspadinha.Recente(m, DateTime.Now)) return null;
+            if (!ChatRaspadinha.Recente(m, RelogioCorrigido.AgoraCorrigido)) return null;
             if (!Ligado()) return null;
 
             var pedida = new MensagemDoChat(ChatRaspadinha.Chave(m), m.Texto, Loja(),

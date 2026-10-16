@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Dapper;
 using Microsoft.Data.Sqlite;
@@ -210,9 +211,16 @@ public static class ConversaRaspadinha
     /// <summary>A fala local some inteira depois disto (o texto já sai no desfecho).</summary>
     public static readonly TimeSpan GuardaDaFala = TimeSpan.FromDays(2);
 
+    /// <summary>
+    /// 1.0.42 (16/10/2026, Savassi 12:23 a 15:20): com o TypeInfoResolver declarado. Sem ele, um JsonValue
+    /// customizado (o que <c>JsonArray.Add(string)</c> cria no .NET 8) marca as opções como somente leitura ao
+    /// serializar e lança InvalidOperationException ("must specify a TypeInfoResolver"): foi o que matou o sinal
+    /// a cada minuto a partir do primeiro MESG do próprio Gestor (ver TestesSinalMorto).
+    /// </summary>
     private static readonly JsonSerializerOptions Json = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
     };
 
     // ── QUEM FALOU (puro) ────────────────────────────────────────────────────
@@ -1092,6 +1100,88 @@ public static class ConversaRaspadinha
         return d.Length == 0 ? "O pedido" : "#" + d;
     }
 
+    /// <summary>
+    /// 1.0.42 (Savassi 16/10, saídas 1000000000349/350): o EROR 900500 "Channel not found" pelo socket numa mensagem
+    /// PROATIVA do pedido (id &gt;= 1e12, etapa msg_pedido_*). O canal da conversa só existe depois que o chat do
+    /// pedido é aberto: a recusa é definitiva para aquela saída, não é o SDK frio nem a conexão. Antes virava
+    /// erro_envio com 3 tentativas, 4 seguidas e o ERP pausava as mensagens do pedido (msg_pedido_pausado). Puro.
+    /// </summary>
+    public const long PrimeiroIdDeMensagemDoPedido = 1_000_000_000_000;
+    public const int CodigoCanalInexistente = 900500;
+
+    public static bool CanalInexistente(SaidaConversa? s, string? erro, JsonObject? detalhe)
+    {
+        try
+        {
+            if (s is null || s.Id < PrimeiroIdDeMensagemDoPedido || !(s.Etapa ?? "").StartsWith("msg_pedido", StringComparison.Ordinal)) return false;
+            if (erro != "erro_envio" || detalhe is null) return false;
+            if (detalhe["etapa"] is not JsonValue ev || !ev.TryGetValue<string>(out var etapa) || etapa != "falhou_socket") return false;
+            return detalhe["codigo"] is JsonValue cv && cv.TryGetValue<int>(out var codigo) && codigo == CodigoCanalInexistente;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 1.0.42: o relato conta nas falhas seguidas deste caixa (as do alarme do ERP)? Só "falhou" por erro_envio,
+    /// sdk_ausente ou canal_errado. canal_inexistente (o canal do pedido ainda não existe) não é falha do envio.
+    /// </summary>
+    public static bool ContaComoFalha(string? resultado, string? erro)
+        => resultado == "falhou" && erro is "erro_envio" or "sdk_ausente" or "canal_errado";
+
+    /// <summary>
+    /// 1.0.42: a linha de diag com os clicáveis do cabeçalho da conversa que a página descreveu (tipo "cabecalho").
+    /// A página é dado não confiável: só o modo, o retângulo da linha e, por clicável, tag, classes, aria-label,
+    /// texto curto e retângulo, tudo só com letra, número e pontuação simples; números longos viram #. Até 600
+    /// caracteres. Nunca lança.
+    /// </summary>
+    public static string LinhaDoCabecalho(string? json)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(json)) return "?";
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object) return "?";
+            var sb = new StringBuilder();
+            sb.Append("modo=").Append(Limpo(r.TryGetProperty("modo", out var mo) ? mo.GetString() : null, 16));
+            sb.Append(" linha=").Append(Retangulo(r, "r"));
+            if (r.TryGetProperty("clicaveis", out var cs) && cs.ValueKind == JsonValueKind.Array)
+            {
+                var n = 0;
+                foreach (var c in cs.EnumerateArray())
+                {
+                    if (c.ValueKind != JsonValueKind.Object || n++ >= 12) continue;
+                    sb.Append(" [").Append(Limpo(Texto(c, "tag"), 8)).Append(" cls=").Append(Limpo(Texto(c, "cls"), 40))
+                      .Append(" aria=").Append(Limpo(Texto(c, "aria"), 20)).Append(" txt=").Append(Limpo(Texto(c, "txt"), 12))
+                      .Append(' ').Append(Retangulo(c, "r")).Append(']');
+                }
+            }
+            var linha = sb.ToString();
+            return linha.Length <= 600 ? linha : linha[..600];
+        }
+        catch { return "?"; }
+
+        static string Limpo(string? s, int teto)
+        {
+            var t = Regex.Replace(s ?? "", "[0-9]{3,}", "#");
+            t = Regex.Replace(t, "[^A-Za-z0-9_ .#-]", "_");
+            t = t.Length == 0 ? "-" : t;
+            return t.Length <= teto ? t : t[..teto];
+        }
+
+        static string Retangulo(JsonElement o, string k)
+        {
+            if (!o.TryGetProperty(k, out var a) || a.ValueKind != JsonValueKind.Array) return "-";
+            var v = new List<string>();
+            foreach (var x in a.EnumerateArray())
+            {
+                if (v.Count >= 4) break;
+                v.Add(x.ValueKind == JsonValueKind.Number && x.TryGetInt32(out var i) ? Math.Clamp(i, -99_999, 99_999).ToString(CultureInfo.InvariantCulture) : "?");
+            }
+            return string.Join(',', v);
+        }
+    }
+
     /// <summary>Texto que pode ir para a tela ou para o cliente: uma linha, sem travessão.</summary>
     public static bool TextoLimpo(string? t, int teto)
         => !string.IsNullOrWhiteSpace(t) && t.Length <= teto && !t.Contains('—') && !t.Contains('–');
@@ -1154,7 +1244,9 @@ public static class ConversaRaspadinha
             {
                 var nomes = new JsonArray();
                 foreach (var n in mca.Take(30))
-                    if (n is JsonValue nv && nv.TryGetValue<string>(out var nome) && Regex.IsMatch(nome, "^[a-z][a-z0-9_]{0,39}$")) nomes.Add(nome);
+                    // 1.0.42: como JsonValue PRIMITIVO ((JsonNode?)texto). O Add(string) genérico do .NET 8 cria um nó
+                    // customizado que, serializado com estas opções, lançava InvalidOperationException e matava o sinal
+                    if (n is JsonValue nv && nv.TryGetValue<string>(out var nome) && Regex.IsMatch(nome, "^[a-z][a-z0-9_]{0,39}$")) nomes.Add((JsonNode?)nome);
                 sdk["mesg_campos_gestor"] = nomes;
             }
             foreach (var k in new[] { "bundle", "globais_wp", "ws_sb_iniciador" })
@@ -1231,8 +1323,61 @@ public static class ConversaRaspadinha
                 ["rest_entregues"] = Math.Clamp(rc.RestEntregues, 0, 10_000_000),
             };
         // 1.0.41: o desvio do relógio do PC em segundos (positivo = adiantado), medido contra o painel
+        // 1.0.42: medido contra o 'agora' do próprio sinal (RelogioCorrigido); o do painel é a reserva
         if (relogioSeg is { } rs) o["relogio_seg"] = Math.Clamp(rs, -86_400 * 366, 86_400 * 366);
         return o.ToJsonString(Json);
+    }
+
+    /// <summary>
+    /// 1.0.42: O SINAL MÍNIMO, quando a montagem do estado de verdade lança (Savassi 16/10: InvalidOperationException
+    /// a cada minuto por 3 h, e o ERP sem sinal nenhum). Só o que não pode falhar: gestor, ws_vivo, último quadro,
+    /// fila, sdk e quadros vazios, e o erro anotado (tipo e etapa, só letra e número). O ERP vê o caixa vivo e vê
+    /// que o estado está quebrado. Nunca lança.
+    /// </summary>
+    public static string EstadoMinimo(string gestor, bool wsVivo, DateTime? ultimoQuadro, int fila, string? tipoDoErro, string? etapa)
+    {
+        try
+        {
+            var o = new JsonObject
+            {
+                ["gestor"] = gestor is "logado" or "login" or "ausente" ? gestor : "ausente",
+                ["ws_vivo"] = wsVivo,
+                ["ultimo_quadro_em"] = ultimoQuadro?.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
+                ["fila"] = Math.Max(0, fila),
+                ["quadros"] = new JsonObject(),
+                ["sdk"] = new JsonObject(),
+                ["estado_erro"] = SoLetraENumero(tipoDoErro) ?? "erro",
+                ["estado_etapa"] = SoLetraENumero(etapa) ?? "?",
+            };
+            return o.ToJsonString(Json);
+        }
+        catch
+        {
+            return "{\"gestor\":\"ausente\",\"ws_vivo\":false,\"fila\":0,\"quadros\":{},\"sdk\":{},\"estado_erro\":\"erro\",\"estado_etapa\":\"?\"}";
+        }
+    }
+
+    private static string? SoLetraENumero(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var t = Regex.Replace(s, "[^A-Za-z0-9_]", "");
+        return t.Length == 0 ? null : t.Length <= 60 ? t : t[..60];
+    }
+
+    /// <summary>
+    /// 1.0.42: o resumo de uma exceção para o diag: o tipo e a mensagem pela limpeza de sempre (sem token, e-mail,
+    /// URL, canal, número longo nem quebra de linha). Antes só o tipo saía, e "InvalidOperationException" sozinho
+    /// escondeu por 3 h onde o sinal morria. Nunca lança.
+    /// </summary>
+    public static string ResumoDaExcecao(Exception? ex)
+    {
+        if (ex is null) return "?";
+        try
+        {
+            var msg = MsgDoErroLimpa(EnvioPeloSocket.Mascarar(ex.Message), 160);
+            return msg is null ? ex.GetType().Name : ex.GetType().Name + ": " + msg;
+        }
+        catch { return ex.GetType().Name; }
     }
 
     /// <summary>1.0.33: a saude da pagina do chat para o sinal (ver <see cref="VigiaChatIfood"/>).</summary>

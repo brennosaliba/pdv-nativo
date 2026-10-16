@@ -26,6 +26,10 @@ public sealed class ServicoDeRecuperacao : IDisposable
     public required Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Http { get; init; }
     public Func<DateTime> Agora { get; init; } = () => DateTime.Now;
     public required Action<string> Entregar { get; init; }
+    /// <summary>1.0.42: a fala já respondida pela equipe vai só para o arquivo (ver Varredura.EntregarSoArquivo).</summary>
+    public Action<string>? EntregarSoArquivo { get; init; }
+    /// <summary>1.0.42: o texto é de uma saída que esta ponta mandou pelo SDK? (ver Varredura.TextoDoRobo)</summary>
+    public Func<string?, bool>? TextoDoRobo { get; init; }
     public Action<string> Diag { get; init; } = _ => { };
     public Func<bool> Portao { get; init; } = () => true;
     /// <summary>O user_id da loja aprendido pelo canal de cliente (ServicoConversaChat.UsuarioDaLoja), ou null.</summary>
@@ -68,6 +72,7 @@ public sealed class ServicoDeRecuperacao : IDisposable
         _varredura = new Varredura
         {
             Http = Http, Agora = Agora, Entregar = Entregar, Diag = Diag, Portao = Portao,
+            EntregarSoArquivo = EntregarSoArquivo, TextoDoRobo = TextoDoRobo,
             Credencial = () => Sessao.Atual(UsuarioDaLoja()),
             Candidatas = () => Sessao.Candidatas(),
             UsuarioDaLoja = UsuarioDaLoja,

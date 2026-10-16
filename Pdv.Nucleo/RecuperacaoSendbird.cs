@@ -292,11 +292,105 @@ public static class RecuperacaoSendbird
     /// </summary>
     public static IReadOnlyList<string> FiltrarEOrdenar(JsonElement mensagens, string? usuarioLoja, long marcaMs)
     {
+        return Peneirar(mensagens, usuarioLoja, marcaMs).Select(x => x.Quadro).ToList();
+    }
+
+    /// <summary>
+    /// O id de uma mensagem do histórico para casar a fala do cliente com a resposta da loja: "msg_id" (ou
+    /// message_id); sem id, "ts:" + created_at. Null quando não dá para dizer. Nunca lança.
+    /// </summary>
+    public static string? IdDaMensagem(JsonElement m)
+    {
+        try
+        {
+            if (m.ValueKind != JsonValueKind.Object) return null;
+            var id = NumeroOuTexto(m, "msg_id") ?? NumeroOuTexto(m, "message_id");
+            if (id is { } s && s != "0") return s;
+            return (Numero(m, "created_at") ?? Numero(m, "ts")) is { } ms ? "ts:" + ms.ToString(CultureInfo.InvariantCulture) : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>O mesmo id para um quadro já montado ("CMD"+JSON): msg_id, senão "ts:" + created_at. Nunca lança.</summary>
+    public static string? IdDoQuadro(string? quadro)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(quadro) || quadro.Length < 5) return null;
+            using var d = JsonDocument.Parse(quadro.AsMemory(4).TrimEnd('\n').TrimEnd('\r'));
+            return IdDaMensagem(d.RootElement);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// A mensagem é da EQUIPE da loja, de verdade (um humano no Gestor ou no celular): é da loja
+    /// (<see cref="EhDaLoja"/>) e NÃO é do robô (req_id "pdv..." do envio pelo socket, ou texto igual a uma saída que
+    /// este caixa mandou pelo SDK). Nunca lança.
+    /// </summary>
+    public static bool EhDaEquipe(JsonElement m, string? usuarioLoja, Func<string?, bool>? textoDoRobo)
+    {
+        try
+        {
+            if (m.ValueKind != JsonValueKind.Object || !EhDaLoja(m, usuarioLoja)) return false;
+            if (EnvioPeloSocket.EhNosso(Texto(m, "req_id"))) return false;
+            if (textoDoRobo is not null && Texto(m, "message") is { } texto)
+            {
+                try { if (textoDoRobo(texto)) return false; } catch { }
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 1.0.42 (Savassi 16/10 17:47, pedido 0002): a recuperação entregou ao robô os códigos que a cliente mandou às
+    /// 17:02 e que a equipe JÁ TINHA ATENDIDO à mão às 17:05 ("um brownie nutella vai junto ao seu pedido"); o robô
+    /// respondeu 45 min depois contradizendo a equipe. Regra: a fala de cliente recuperada que tem, no MESMO canal,
+    /// uma mensagem da EQUIPE (humana, não do robô) DEPOIS dela vai só para o arquivo, nunca para o robô. O
+    /// histórico já traz as mensagens da loja, então a decisão é local. Devolve os ids (<see cref="IdDaMensagem"/>)
+    /// das falas de cliente já respondidas, acima da marca. Nunca lança.
+    /// </summary>
+    public static IReadOnlySet<string> RespondidasPelaEquipe(JsonElement mensagens, string? usuarioLoja, long marcaMs, Func<string?, bool>? textoDoRobo)
+    {
+        var respondidas = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            var arr = mensagens.ValueKind == JsonValueKind.Object && mensagens.TryGetProperty("messages", out var ms) ? ms : mensagens;
+            if (arr.ValueKind != JsonValueKind.Array) return respondidas;
+            var clientes = new List<(long Ms, long Id, string Chave)>();
+            var equipe = new List<(long Ms, long Id)>();
+            foreach (var m in arr.EnumerateArray())
+            {
+                if (m.ValueKind != JsonValueKind.Object) continue;
+                var tipo = Texto(m, "type");
+                if (tipo is not ("MESG" or "FILE")) continue;
+                var criado = Numero(m, "created_at") ?? Numero(m, "ts") ?? 0;
+                var idTxt = NumeroOuTexto(m, "message_id") ?? NumeroOuTexto(m, "msg_id");
+                var id = idTxt is not null && long.TryParse(idTxt, out var n) ? n : 0;
+                if (EhDaLoja(m, usuarioLoja))
+                {
+                    if (EhDaEquipe(m, usuarioLoja, textoDoRobo)) equipe.Add((criado, id));
+                    continue;
+                }
+                if (criado < marcaMs) continue;
+                if (IdDaMensagem(m) is { } chave) clientes.Add((criado, id, chave));
+            }
+            if (equipe.Count == 0) return respondidas;
+            foreach (var c in clientes)
+                if (equipe.Any(e => e.Ms > c.Ms || (e.Ms == c.Ms && e.Id > c.Id))) respondidas.Add(c.Chave);
+        }
+        catch { }
+        return respondidas;
+    }
+
+    private static List<(long Ms, long Id, string Quadro)> Peneirar(JsonElement mensagens, string? usuarioLoja, long marcaMs)
+    {
         var lista = new List<(long Ms, long Id, string Quadro)>();
         try
         {
             var arr = mensagens.ValueKind == JsonValueKind.Object && mensagens.TryGetProperty("messages", out var ms) ? ms : mensagens;
-            if (arr.ValueKind != JsonValueKind.Array) return Array.Empty<string>();
+            if (arr.ValueKind != JsonValueKind.Array) return lista;
             foreach (var m in arr.EnumerateArray())
             {
                 if (m.ValueKind != JsonValueKind.Object) continue;
@@ -312,7 +406,7 @@ public static class RecuperacaoSendbird
             }
         }
         catch { }
-        return lista.OrderBy(x => x.Ms).ThenBy(x => x.Id).Take(TetoMensagensPorCanal).Select(x => x.Quadro).ToList();
+        return lista.OrderBy(x => x.Ms).ThenBy(x => x.Id).Take(TetoMensagensPorCanal).ToList();
     }
 
     /// <summary>O canal, o created_at e o msg_id de um quadro (do WS ou reconstruído), para a marca d'água; null quando não é mensagem.</summary>
@@ -491,6 +585,13 @@ public sealed class Varredura
     public Func<DateTime> Agora { get; init; } = () => DateTime.Now;
     /// <summary>Cada quadro recuperado (no formato do WebSocket), na ordem.</summary>
     public required Action<string> Entregar { get; init; }
+    /// <summary>
+    /// 1.0.42: a fala de cliente que a equipe JÁ respondeu à mão depois dela (<see cref="RecuperacaoSendbird.RespondidasPelaEquipe"/>)
+    /// vai só por aqui (o arquivo), nunca por <see cref="Entregar"/> (o robô). Sem a porta, ela não vai a lugar nenhum.
+    /// </summary>
+    public Action<string>? EntregarSoArquivo { get; init; }
+    /// <summary>1.0.42: o texto é de uma saída que esta ponta mandou pelo SDK (então não é resposta humana)? Null: só o req_id decide.</summary>
+    public Func<string?, bool>? TextoDoRobo { get; init; }
     /// <summary>Uma linha de diag (já sem segredo; o serviço ainda a mascara).</summary>
     public Action<string> Diag { get; init; } = _ => { };
     /// <summary>A melhor credencial de agora para a loja (null: sem sessão). Usada quando a loja é conhecida.</summary>
@@ -548,7 +649,7 @@ public sealed class Varredura
     public async Task<ResultadoDaVarredura> ExecutarAsync()
     {
         var relogio = Stopwatch.StartNew();
-        var canais = 0; var mudados = 0; var lidos = 0; var novas = 0; var chamou = false;
+        var canais = 0; var mudados = 0; var lidos = 0; var novas = 0; var jaRespondidas = 0; var chamou = false;
         ResultadoDaVarredura Fim(string? erro, bool completa = true)
             => new(erro, canais, mudados, lidos, novas, (int)Math.Min(60_000, relogio.ElapsedMilliseconds), completa, chamou);
         try
@@ -663,11 +764,14 @@ public sealed class Varredura
                 if (Classificar(st, corpo, agora, cred) is { } e) return Fim(e);
                 Recuo.Deu();
                 IReadOnlyList<string> quadros;
+                IReadOnlySet<string> respondidas;
                 try
                 {
                     using var doc = JsonDocument.Parse(corpo ?? "");
                     AnotarShape(doc.RootElement);
                     quadros = RecuperacaoSendbird.FiltrarEOrdenar(doc.RootElement, loja, p.MessageTs);
+                    // 1.0.42: a fala de cliente que a equipe já respondeu depois dela vai só para o arquivo
+                    respondidas = RecuperacaoSendbird.RespondidasPelaEquipe(doc.RootElement, loja, p.MessageTs, TextoDoRobo);
                 }
                 catch { Erro(RecuperacaoSendbird.ErroJson); return Fim(RecuperacaoSendbird.ErroJson); }
                 lidos++;
@@ -677,6 +781,12 @@ public sealed class Varredura
                     var marca = Marcas.Viu(q, Agora());
                     var chave = RecuperacaoSendbird.ChaveDoQuadro(q, loja);
                     if (!Dedup.Nova(chave)) continue;
+                    if (respondidas.Count > 0 && RecuperacaoSendbird.IdDoQuadro(q) is { } idq && respondidas.Contains(idq))
+                    {
+                        jaRespondidas++;
+                        try { EntregarSoArquivo?.Invoke(q); } catch (Exception ex) { Diag("recuperacao entregar so arquivo: " + ex.GetType().Name); }
+                        continue;
+                    }
                     novas++;
                     lock (_trava) _novas++;
                     try { Entregar(q); } catch (Exception ex) { Diag("recuperacao entregar: " + ex.GetType().Name); }
@@ -686,6 +796,7 @@ public sealed class Varredura
                 if (quadros.Count < RecuperacaoSendbird.TetoMensagensPorCanal) Marcas.Avancar(p.Canal, p.UltimaMs, p.UltimoMsgId, Agora());
             }
             lock (_trava) { _ultimaOkEm = Agora(); _erro = null; }
+            if (jaRespondidas > 0) Diag($"recuperacao: {jaRespondidas} falas ja respondidas pela equipe (so arquivo)");
             Diag($"recuperacao fonte={cred.Fonte} canais={canais} mudados={mudados} lidos={lidos} novas={novas} ms={relogio.ElapsedMilliseconds}");
             return Fim(null);
         }

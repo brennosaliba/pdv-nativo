@@ -927,7 +927,7 @@ public static class TestesRecuperacaoSendbird
         var tela = Ler("Telas/ChatIfood.xaml.cs");
         var servico = Ler("ServicoRecuperacaoChat.cs");
         var conversa = Ler("ServicoConversaChat.cs");
-        checar(tela.Contains("ServicoRecuperacaoChat.Ligar(new PonteDaRecuperacao { Entregar = EntregarRecuperado })")
+        checar(tela.Contains("ServicoRecuperacaoChat.Ligar(new PonteDaRecuperacao { Entregar = EntregarRecuperado, EntregarSoArquivo = EntregarRecuperadoSoArquivo })")
                && tela.IndexOf("ServicoConversaChat.Ligar(", StringComparison.Ordinal) < tela.IndexOf("ServicoRecuperacaoChat.Ligar(", StringComparison.Ordinal),
             "FT-1 a tela liga a recuperação logo depois do ServicoConversaChat.Ligar");
         checar(tela.Contains("SessaoSendbird.DaUrlDoSocket(u.GetString(), DateTime.Now)") && tela.Contains("SessaoSendbird.DoLogi(p, WsUser(conexao)")
@@ -947,7 +947,7 @@ public static class TestesRecuperacaoSendbird
         checar(corpoQ.Length > 0 && !corpoQ.Contains("Contadores.") && !corpoQ.Contains("_wsUserId =") && corpoQ.Contains("Triagem(") && corpoQ.Contains("Nova(t.Fala!.Chave)")
                && corpoQ.Contains("ConversaRaspadinha.RecenciaRecuperada)"),
             "FT-4 QuadroRecuperado passa pela triagem (com a janela da recuperação) e pela memória, SEM Contadores.Registrar (ws_vivo) e SEM aprender o usuário da loja pelo quadro");
-        checar(tela.Contains("ChatRaspadinha.Recente(m, DateTime.Now, origem == \"rest\" ? ConversaRaspadinha.RecenciaRecuperada : null)")
+        checar(tela.Contains("ChatRaspadinha.Recente(m, RelogioCorrigido.AgoraCorrigido, origem == \"rest\" ? ConversaRaspadinha.RecenciaRecuperada : null)")
                && servico.Contains("LojaDescoberta = u => ServicoConversaChat.AprenderUsuarioDaLoja(u, \"lista de canais\")"),
             "FT-4b (revisão) o fluxo legado usa a janela da recuperação para a origem rest, e a loja eleita pela lista ensina o ServicoConversaChat");
         checar(servico.Contains("ServicoRaspadinhaChat.Ligado()") && servico.Contains("ServicoConversaChat.Sinal.Ativo") && servico.Contains("!ChatArquivo.EmSilencio(agora)")

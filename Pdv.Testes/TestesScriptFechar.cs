@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Pdv.Nucleo;
 
 namespace Pdv.Testes;
 
@@ -14,7 +15,10 @@ namespace Pdv.Testes;
 /// o cabeçalho da conversa, a seta de voltar e o X:
 ///  · o X some (atributo próprio + CSS) e o clique nele morre na captura; a seta continua funcionando;
 ///  · o X sem rótulo nenhum (só o último botão à direita da linha do cabeçalho) também é pego;
-///  · fora do modo "só o chat" o Gestor continua livre;
+///  · 1.0.42 (foto do dono às 17:55: o X continuava lá com a 1.0.41): a regra é GEOMÉTRICA, sem classe nem rótulo:
+///    todo clicável nos 72 px da direita da linha do cabeçalho some, nos DOIS modos (só o chat e Gestor inteiro);
+///    o clique cujo alvo está nessa faixa (até 4 níveis acima) morre; o cabeçalho que muda de lugar é reavaliado;
+///    uma linha de diag por carga descreve os clicáveis do cabeçalho, mascarada;
 ///  · a vigia de 2 s: a gaveta que some sem o operador ter saído é reaberta pelo mesmo caminho do
 ///    aquecimento (pdvAquecerLista), no máximo uma vez por 10 s, e a tela é avisada (painelfechou).
 /// Sem node na máquina a suíte FALHA (não pula).
@@ -35,6 +39,13 @@ public static class TestesScriptFechar
         checar(fonte.Contains("window.pdvGaveta = candidato;"), "SF-0d o ScriptPainel expõe a gaveta (window.pdvGaveta) para o ScriptFechar");
         checar(fonte.Contains("tipo == \"painelfechou\"") && fonte.Contains("painel do chat fechou: reaberto"),
             "SF-0e a tela recebe o aviso painelfechou e anota 'painel do chat fechou: reaberto' no diag");
+        checar(fonte.Contains("tipo == \"cabecalho\"") && fonte.Contains("Diag(\"cabecalho da conversa: \" + ConversaRaspadinha.LinhaDoCabecalho(txt));"),
+            "SF-0f (1.0.42) a tela recebe a descrição do cabeçalho e anota uma linha mascarada no diag");
+        var linha = ConversaRaspadinha.LinhaDoCabecalho("{\"tipo\":\"cabecalho\",\"modo\":\"gestor_inteiro\",\"r\":[600,50,420,56],\"clicaveis\":[{\"tag\":\"BUTTON\",\"cls\":\"ifdl-btn x9\",\"aria\":\"Voltar\",\"txt\":\"\",\"r\":[608,58,40,40]},{\"tag\":\"BUTTON\",\"cls\":\"\",\"aria\":\"\",\"txt\":\"Maluma 123456 <b>\",\"r\":[972,58,40,40]}]}");
+        checar(linha.StartsWith("modo=gestor_inteiro linha=600,50,420,56 [BUTTON cls=ifdl-btn x9 aria=Voltar txt=- 608,58,40,40] [BUTTON cls=- aria=- txt=Maluma # _b_ 972,58,40,40]", StringComparison.Ordinal),
+            "SF-0g a linha do cabeçalho sai só com letra, número e pontuação simples, números longos viram # (" + linha + ")");
+        checar(ConversaRaspadinha.LinhaDoCabecalho("lixo{") == "?" && ConversaRaspadinha.LinhaDoCabecalho(null) == "?" && ConversaRaspadinha.LinhaDoCabecalho("[1]") == "?",
+            "SF-0h lixo, nulo e array viram ? sem lançar");
 
         var pasta = Path.Combine(Path.GetTempPath(), "pdv-sf-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(pasta);
@@ -149,20 +160,22 @@ const document = {
 let gaveta, seta, x, xSemRotulo, titulo, cabecalho;
 function montarGaveta(opts) {
   opts = opts || {};
+  var dx = opts.dx || 0, dy = opts.dy || 0;   // 1.0.42: o cabecalho em outro lugar da tela
+  function R(l, t, w, h) { return { left: l + dx, top: t + dy, width: w, height: h }; }
   body.children = [];
-  gaveta = body.appendChild(new El('div', { className: 'drawer', rect: { left: 600, top: 0, width: 420, height: 768 } }));
-  titulo = gaveta.appendChild(new El('h1', { text: 'Conversas', rect: { left: 610, top: 10, width: 400, height: 30 } }));
-  cabecalho = gaveta.appendChild(new El('div', { className: 'chat-header', rect: { left: 600, top: 50, width: 420, height: 56 } }));
-  seta = cabecalho.appendChild(new El('button', { attrs: opts.setaSemRotulo ? {} : { 'aria-label': 'Voltar' }, rect: { left: 608, top: 58, width: 40, height: 40 } }));
-  seta.appendChild(new El('svg', { className: opts.setaSemRotulo ? 'ifdl-icon-arrow-left' : 'ifdl-icon', rect: { left: 616, top: 66, width: 24, height: 24 } }));
-  cabecalho.appendChild(new El('span', { text: '#5041 Maluma Lopes', rect: { left: 660, top: 62, width: 250, height: 30 } }));
+  gaveta = body.appendChild(new El('div', { className: 'drawer', rect: R(600, 0, 420, 768) }));
+  titulo = gaveta.appendChild(new El('h1', { text: 'Conversas', rect: R(610, 10, 400, 30) }));
+  cabecalho = gaveta.appendChild(new El('div', { className: 'chat-header', rect: R(600, 50, 420, 56) }));
+  seta = cabecalho.appendChild(new El('button', { attrs: opts.setaSemRotulo ? {} : { 'aria-label': 'Voltar' }, rect: R(608, 58, 40, 40) }));
+  seta.appendChild(new El('svg', { className: opts.setaSemRotulo ? 'ifdl-icon-arrow-left' : 'ifdl-icon', rect: R(616, 66, 24, 24) }));
+  cabecalho.appendChild(new El('span', { text: '#5041 Maluma Lopes', rect: R(660, 62, 250, 30) }));
   if (opts.xSemRotulo) {
-    xSemRotulo = cabecalho.appendChild(new El('button', { rect: { left: 972, top: 58, width: 40, height: 40 } }));
-    xSemRotulo.appendChild(new El('svg', { className: 'ifdl-icon', rect: { left: 980, top: 66, width: 24, height: 24 } }));
+    xSemRotulo = cabecalho.appendChild(new El('button', { rect: R(972, 58, 40, 40) }));
+    xSemRotulo.appendChild(new El('svg', { className: 'ifdl-icon', rect: R(980, 66, 24, 24) }));
     x = xSemRotulo;
   } else {
-    x = cabecalho.appendChild(new El('button', { attrs: { 'aria-label': 'Fechar' }, rect: { left: 972, top: 58, width: 40, height: 40 } }));
-    x.appendChild(new El('svg', { className: 'ifdl-icon-close', rect: { left: 980, top: 66, width: 24, height: 24 } }));
+    x = cabecalho.appendChild(new El('button', { attrs: { 'aria-label': 'Fechar' }, rect: R(972, 58, 40, 40) }));
+    x.appendChild(new El('svg', { className: 'ifdl-icon-close', rect: R(980, 66, 24, 24) }));
   }
   const baloes = gaveta.appendChild(new El('div', { className: 'messages', rect: { left: 600, top: 110, width: 420, height: 600 } }));
   baloes.appendChild(new El('div', { text: 'oi, ganhei na raspadinha', rect: { left: 610, top: 120, width: 200, height: 40 } }));
@@ -203,9 +216,10 @@ vm.runInContext(codigo, sb);
   // 10: o estilo e as funções existem
   checar(typeof sb.pdvBlindarFechar === 'function' && typeof sb.pdvVigiarPainel === 'function', '10 o script expõe pdvBlindarFechar e pdvVigiarPainel');
   const css = head.children.find(function (e) { return e.id === 'pdv-css-fechar'; });
-  checar(css && /data-pdv-fechar-painel\]\{display:none!important;pointer-events:none!important\}/.test(css.textContent) && /body\.pdv-so-chat/.test(css.textContent),
-    '11 o CSS esconde o X marcado (display none + pointer-events none) só no modo "só o chat"');
-  checar(intervalos.some(function (i) { return i.ms === 2000; }) && typeof sb.__observador === 'function', '12 a vigia roda a cada 2 s e o DOM é observado');
+  checar(css && /^\[data-pdv-fechar-painel\]\{display:none!important;pointer-events:none!important\}$/.test(css.textContent),
+    '11 o CSS esconde o X marcado (display none + pointer-events none) nos DOIS modos (1.0.42: sem o body.pdv-so-chat)');
+  checar(intervalos.some(function (i) { return i.ms === 2000; }) && intervalos.some(function (i) { return i.ms === 1000; }) && typeof sb.__observador === 'function',
+    '12 a vigia roda a cada 2 s, a blindagem a cada 1 s e o DOM é observado');
 
   // 20: o X com rótulo é marcado; a seta não
   const n = sb.pdvBlindarFechar();
@@ -220,10 +234,11 @@ vm.runInContext(codigo, sb);
   const cs = clique(seta.children[0]);
   checar(!cs.parou && !cs.prevenido, '31 o clique na seta de voltar passa');
 
-  // 32: fora do modo "só o chat" (Gestor inteiro), o X volta a funcionar
+  // 32: 1.0.42: fora do modo "só o chat" (o Gestor inteiro atrás, a foto do dono) o X continua barrado; a seta passa
   classes.delete('pdv-so-chat');
   const cx2 = clique(x);
-  checar(!cx2.parou, '32 fora do modo "só o chat" o clique no X passa (o Gestor inteiro continua livre)');
+  checar(cx2.parou && x.clicks === 0, '32 (1.0.42) no modo Gestor inteiro o clique no X também morre');
+  checar(!clique(seta.children[0]).parou, '32b e a seta de voltar segue passando no Gestor inteiro');
   classes.add('pdv-so-chat');
 
   // 33: o X que o React recriou sem a marca ainda morre pelo formato (icone close)
@@ -241,6 +256,51 @@ vm.runInContext(codigo, sb);
   checar(cx4.parou && xSemRotulo.clicks === 0, '41 e o clique nele morre');
   checar(!clique(seta).parou, '42 a seta segue passando');
 
+  // 43 (1.0.42): a GEOMETRIA. Um botão qualquer, sem rótulo, sem classe e sem glifo, nos 72 px da direita do cabeçalho some;
+  // o mesmo botão na esquerda do cabeçalho (ao lado da seta) e o botão de enviar (fora da faixa vertical) ficam
+  montarGaveta({ xSemRotulo: true, setaSemRotulo: true });
+  const estranhoDireita = cabecalho.appendChild(new El('button', { className: 'sc-1a2b3c', rect: { left: 950, top: 60, width: 20, height: 36 } }));
+  const estranhoEsquerda = cabecalho.appendChild(new El('button', { className: 'sc-9z8y7x', rect: { left: 650, top: 60, width: 20, height: 36 } }));
+  const n3 = sb.pdvBlindarFechar();
+  checar(n3 === 2 && xSemRotulo.hasAttribute('data-pdv-fechar-painel') && estranhoDireita.hasAttribute('data-pdv-fechar-painel'),
+    '43 todo clicável nos 72 px da direita do cabeçalho some, sem depender de classe ou rótulo (' + n3 + ')');
+  checar(!estranhoEsquerda.hasAttribute('data-pdv-fechar-painel') && !seta.hasAttribute('data-pdv-fechar-painel') && !gaveta.querySelector('[aria-label="Enviar"]').hasAttribute('data-pdv-fechar-painel'),
+    '43b o clicável à esquerda do cabeçalho, a seta e o botão de enviar (fora da faixa vertical) ficam');
+  checar(clique(estranhoDireita).parou && !clique(estranhoEsquerda).parou, '43c o clique no da direita morre; no da esquerda passa');
+
+  // 44: o clique num alvo fundo (4 níveis dentro do X) e num elemento solto da faixa (sem botão) morre; na faixa vertical errada passa
+  montarGaveta({ xSemRotulo: true, setaSemRotulo: true });
+  const d1 = x.appendChild(new El('span', { rect: { left: 976, top: 62, width: 32, height: 32 } }));
+  const d2 = d1.appendChild(new El('span', { rect: { left: 980, top: 66, width: 24, height: 24 } }));
+  const d4 = d2.appendChild(new El('i', { rect: { left: 984, top: 70, width: 16, height: 16 } }));
+  const c4 = clique(d4);
+  checar(c4.parou && c4.prevenido && x.clicks === 0, '44 o clique no quarto nível dentro do X morre na captura (sem a marca, pela geometria)');
+  const solto = cabecalho.appendChild(new El('span', { text: '', rect: { left: 990, top: 70, width: 16, height: 16 } }));
+  checar(clique(solto).parou, '44b um elemento solto (sem botão) na faixa da direita do cabeçalho também morre');
+  const foraDaFaixa = gaveta.appendChild(new El('span', { rect: { left: 990, top: 300, width: 16, height: 16 } }));
+  checar(!clique(foraDaFaixa).parou, '44c o mesmo canto, mas fora da faixa vertical do cabeçalho, passa');
+
+  // 45: o cabeçalho mudou de lugar (o Gestor inteiro atrás, a gaveta em outra coluna): reavaliado no lugar novo
+  montarGaveta({ xSemRotulo: true, setaSemRotulo: true, dx: -500, dy: 120 });
+  const n5 = sb.pdvBlindarFechar();
+  checar(n5 === 1 && xSemRotulo.hasAttribute('data-pdv-fechar-painel') && !seta.hasAttribute('data-pdv-fechar-painel'),
+    '45 com o cabeçalho em outra posição o X é achado de novo pela geometria da linha nova (' + n5 + ')');
+  checar(clique(xSemRotulo.children[0]).parou && !clique(seta.children[0]).parou, '45b e o clique nele morre; a seta passa');
+
+  // 46: sem a gaveta (pdvGaveta devolve nulo, o modo Gestor inteiro), o cabeçalho é procurado no documento inteiro
+  montarGaveta({ xSemRotulo: true, setaSemRotulo: true });
+  gavetaVisivel = false;
+  const n6 = sb.pdvBlindarFechar();
+  checar(n6 === 1 && xSemRotulo.hasAttribute('data-pdv-fechar-painel'), '46 sem a gaveta o X do cabeçalho some do mesmo jeito (o modo Gestor inteiro da foto) (' + n6 + ')');
+  checar(clique(xSemRotulo.children[0]).parou, '46b e o clique nele morre');
+  gavetaVisivel = true;
+
+  // 47: a descrição do cabeçalho vai para a tela UMA vez por carga, mascarada
+  const cab = msgs.filter(function (m) { return m.tipo === 'cabecalho'; });
+  checar(cab.length === 1 && Array.isArray(cab[0].clicaveis) && cab[0].clicaveis.length >= 2 && cab[0].clicaveis.every(function (c) { return c.tag && Array.isArray(c.r) && c.r.length === 4; }),
+    '47 uma mensagem "cabecalho" por carga, com os clicáveis (tag e retângulo) (' + cab.length + ')');
+  checar(cab.length === 1 && JSON.stringify(cab[0]).indexOf('Maluma') < 0 && JSON.stringify(cab[0]).indexOf('5041') < 0, '47b sem nome de cliente nem número do pedido');
+
   // 50: a mutação do DOM re-marca (o React re-renderiza)
   montarGaveta();
   sb.__observador([]);
@@ -252,7 +312,8 @@ vm.runInContext(codigo, sb);
     checar(v0 === 'aberta' && aquecimentos === 0, '60 com a gaveta na tela a vigia só re-blinda');
     gavetaVisivel = false;
     const v1 = sb.pdvVigiarPainel();
-    checar(v1 === 'reabriu:abriu' && aquecimentos === 1 && msgs.length === 1 && msgs[0].tipo === 'painelfechou' && msgs[0].resultado === 'abriu',
+    const pf = msgs.filter(function (m) { return m.tipo === 'painelfechou'; });
+    checar(v1 === 'reabriu:abriu' && aquecimentos === 1 && pf.length === 1 && pf[0].resultado === 'abriu',
       '61 a gaveta sumiu sem o operador sair: reabre pelo caminho do aquecimento e avisa a tela (painelfechou)');
     agora += 2000;
     const v2 = sb.pdvVigiarPainel();

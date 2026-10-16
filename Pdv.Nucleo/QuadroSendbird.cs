@@ -99,6 +99,29 @@ public static class QuadroSendbird
     /// </summary>
     public static string? UserIdDaUrl(string? url) => ParametroDaUrl(url, "user_id");
 
+    /// <summary>
+    /// 1.0.42: o user_id de um quadro LOGI recebido (texto ou número), ou null. É o usuário daquela conexão dito pelo
+    /// servidor, para o livro das conexões quando a URL da reconexão não o traz. Nunca lança.
+    /// </summary>
+    public static string? UsuarioDoLogi(string? payload)
+    {
+        try
+        {
+            if (Comando(payload) != "LOGI" || payload!.Length < 6) return null;
+            using var doc = JsonDocument.Parse(payload.AsMemory(4).TrimEnd('\n').TrimEnd('\r'));
+            var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object || !r.TryGetProperty("user_id", out var u)) return null;
+            var s = u.ValueKind switch
+            {
+                JsonValueKind.String => u.GetString(),
+                JsonValueKind.Number => u.GetRawText(),
+                _ => null,
+            };
+            return string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+        }
+        catch { return null; }
+    }
+
     /// <summary>1.0.41: o <c>ai</c> da URL do WebSocket do Sendbird (o app id, que não é segredo). Mesma mecânica do user_id.</summary>
     public static string? AppIdDaUrl(string? url) => ParametroDaUrl(url, "ai");
 

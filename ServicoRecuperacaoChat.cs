@@ -7,6 +7,8 @@ namespace Pdv;
 public sealed class PonteDaRecuperacao
 {
     public required Action<string> Entregar { get; init; }
+    /// <summary>1.0.42: a fala de cliente que a equipe já respondeu à mão: só o arquivo (ifood-chat-arquivo), nunca o robô.</summary>
+    public Action<string>? EntregarSoArquivo { get; init; }
 }
 
 /// <summary>
@@ -48,7 +50,12 @@ public static class ServicoRecuperacaoChat
             {
                 Http = (pedido, ct) => Http.SendAsync(pedido, HttpCompletionOption.ResponseContentRead, ct),
                 Entregar = q => { try { _ponte?.Entregar(q); } catch (Exception ex) { Diag("entregar: " + ex.GetType().Name); } },
+                // 1.0.42 (pedido 0002, 17:47): já respondida pela equipe vai só para o arquivo; o texto do robô não é resposta humana
+                EntregarSoArquivo = q => { try { _ponte?.EntregarSoArquivo?.Invoke(q); } catch (Exception ex) { Diag("entregar so arquivo: " + ex.GetType().Name); } },
+                TextoDoRobo = ServicoConversaChat.TextoDoRobo,
                 Diag = Diag,
+                // 1.0.42: a marca d'água e a janela de 12 h no relógio corrigido pelo servidor
+                Agora = () => RelogioCorrigido.AgoraCorrigido,
                 Portao = PortaoAberto,
                 UsuarioDaLoja = () => ServicoConversaChat.UsuarioDaLoja,
                 // revisão 1.0.41: a loja eleita pela lista de canais ensina o resto do caixa

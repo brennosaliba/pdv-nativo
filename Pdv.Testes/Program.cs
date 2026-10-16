@@ -2209,5 +2209,25 @@ Console.WriteLine();
 Console.WriteLine("--- O X do painel da conversa: o script no node contra um DOM falso ---");
 TestesScriptFechar.Rodar((cond, nome) => Check("script-fechar: " + nome, cond));
 
+// -- 16/10/2026: AS CAUSAS DE HOJE NA SAVASSI (caixa 1.0.42) ------------------------------------
+// (1) O relogio do PC 566 s atrasado descartava toda fala do cliente como "antiga": o relogio corrigido
+// pelo 'agora' do sinal. (2) O sinal morto por InvalidOperationException a cada minuto (JsonArray.Add(string)
+// + opcoes sem TypeInfoResolver): reproduzido e corrigido, com o sinal minimo e o diag com tipo+mensagem.
+// (3) O socket sem user_id depois das reconexoes: o livro aprende pelo LOGI e pelo canal de cliente.
+// (4) EROR 900500 numa mensagem do pedido: canal inexistente, falha definitiva sem pausar.
+// (6) A fala ja respondida pela equipe vai so para o arquivo.
+Console.WriteLine();
+Console.WriteLine("--- Relogio corrigido pelo servidor: a fala do futuro, o desvio e o sinal ---");
+TestesRelogioCorrigido.Rodar((cond, nome) => Check("relogio-corrigido: " + nome, cond));
+Console.WriteLine();
+Console.WriteLine("--- Sinal morto: a reproducao da InvalidOperationException, o sinal minimo e o canal inexistente ---");
+await TestesSinalMorto.RodarAsync((cond, nome) => Check("sinal-morto: " + nome, cond));
+Console.WriteLine();
+Console.WriteLine("--- Socket sem usuario: o livro aprende pelo LOGI e pelo canal de cliente ---");
+TestesSocketSemUsuario.Rodar((cond, nome) => Check("socket-usuario: " + nome, cond));
+Console.WriteLine();
+Console.WriteLine("--- Recuperacao: a fala ja respondida pela equipe vai so para o arquivo ---");
+await TestesRecuperacaoRespondida.RodarAsync((cond, nome) => Check("recuperacao-respondida: " + nome, cond));
+
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;
