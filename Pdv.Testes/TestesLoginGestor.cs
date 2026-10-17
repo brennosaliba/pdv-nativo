@@ -37,56 +37,72 @@ public static class TestesLoginGestor
     // ── 1. o contrato com a edge gestor-login ─────────────────────────────────
     private static void Contrato(Action<bool, string> checar)
     {
+        // o contrato REAL do ERP (main 95d776f, 17/10): corpo com acao; respostas {ok:true,...} | {ok:false, motivo}; o id e inteiro
         checar(LoginDoGestor.Edge == "gestor-login", "LG-1 a edge e gestor-login");
-        var c = JsonDocument.Parse(LoginDoGestor.CorpoCredenciais("CAIXA-01")).RootElement;
-        checar(c.GetProperty("acao").GetString() == "credenciais" && c.GetProperty("terminal").GetString() == "CAIXA-01",
-            "LG-1a o corpo de credenciais leva acao e terminal");
+        var c = JsonDocument.Parse(LoginDoGestor.CorpoCredenciais()).RootElement;
+        checar(c.GetProperty("acao").GetString() == "credenciais" && !c.TryGetProperty("terminal", out _), "LG-1a o corpo de credenciais e so {acao} (a loja vem do JWT)");
         var p = JsonDocument.Parse(LoginDoGestor.CorpoPedirCodigo("CAIXA-01")).RootElement;
         checar(p.GetProperty("acao").GetString() == "pedir_codigo" && p.GetProperty("terminal").GetString() == "CAIXA-01",
             "LG-1b o corpo de pedir_codigo leva acao e terminal");
-        var k = JsonDocument.Parse(LoginDoGestor.CorpoCodigo("CAIXA-01", "ped-7")).RootElement;
-        checar(k.GetProperty("acao").GetString() == "codigo" && k.GetProperty("id").GetString() == "ped-7",
-            "LG-1c o corpo de codigo leva o id do pedido");
-        var u = JsonDocument.Parse(LoginDoGestor.CorpoUsado("CAIXA-01", "ped-7", false, "codigo recusado", new DateTime(2026, 10, 17, 12, 0, 0))).RootElement;
-        checar(u.GetProperty("acao").GetString() == "usado" && u.GetProperty("id").GetString() == "ped-7"
+        var k = JsonDocument.Parse(LoginDoGestor.CorpoCodigo("7")).RootElement;
+        checar(k.GetProperty("acao").GetString() == "codigo" && k.GetProperty("id").ValueKind == JsonValueKind.Number && k.GetProperty("id").GetInt64() == 7,
+            "LG-1c o corpo de codigo leva o id do pedido como NUMERO (identity do ERP)");
+        checar(JsonDocument.Parse(LoginDoGestor.CorpoCodigo("ped-x")).RootElement.GetProperty("id").GetString() == "ped-x", "LG-1c2 um id que nao e numero vai como texto");
+        var u = JsonDocument.Parse(LoginDoGestor.CorpoUsado("CAIXA-01", "7", false, "codigo recusado", new DateTime(2026, 10, 17, 12, 0, 0))).RootElement;
+        checar(u.GetProperty("acao").GetString() == "usado" && u.GetProperty("id").GetInt64() == 7 && u.GetProperty("terminal").GetString() == "CAIXA-01"
                && u.GetProperty("ok").ValueKind == JsonValueKind.False && u.GetProperty("motivo").GetString() == "codigo recusado"
                && u.GetProperty("pausado_ate").GetString()!.StartsWith("2026-10-17T12:00:00", StringComparison.Ordinal),
-            "LG-1d o corpo de usado leva id, ok, motivo e pausado_ate (o ERP avisa o dono quando ha pausa)");
+            "LG-1d o corpo de usado leva id (numero), terminal, ok, motivo e pausado_ate (o ERP avisa o dono quando ha pausa)");
         var u2 = JsonDocument.Parse(LoginDoGestor.CorpoUsado("CAIXA-01", null, true, null, null)).RootElement;
         checar(u2.GetProperty("ok").ValueKind == JsonValueKind.True && u2.GetProperty("id").ValueKind == JsonValueKind.Null
                && u2.GetProperty("pausado_ate").ValueKind == JsonValueKind.Null,
             "LG-1e usado sem pedido de codigo (entrou sem codigo) leva id nulo e ok");
 
-        var cr = LoginDoGestor.LerCredenciais(200, "{\"email\":\"loja@americanday.com.br\",\"senha\":\"S3nh@!\"}");
-        checar(cr.Ok && cr.Email == "loja@americanday.com.br" && cr.Senha == "S3nh@!" && !cr.Desligado, "LG-2 credenciais 200 com email e senha");
-        var des = LoginDoGestor.LerCredenciais(200, "{\"ligado\":false}");
-        checar(!des.Ok && des.Desligado && des.Motivo == "desligado no ERP", "LG-2a {ligado:false} e desligado no ERP, nao e falha");
-        checar(!LoginDoGestor.LerCredenciais(200, "{\"erro\":\"sem_credenciais\"}").Ok
-               && LoginDoGestor.LerCredenciais(200, "{\"erro\":\"sem_credenciais\"}").Motivo == "sem_credenciais",
-            "LG-2b {erro} vira o motivo");
-        checar(LoginDoGestor.LerCredenciais(200, "{\"email\":\"\",\"senha\":\"x\"}").Motivo == "credenciais incompletas", "LG-2c e-mail vazio e credenciais incompletas");
-        checar(LoginDoGestor.LerCredenciais(404, "").Motivo == "a borda gestor-login ainda nao esta no ar" && LoginDoGestor.LerCredenciais(404, "").SemNuvem,
-            "LG-2d 404 e a borda fora do ar (sem nuvem: nao conta falha)");
+        var cr = LoginDoGestor.LerCredenciais(200, "{\"ok\":true,\"email\":\"loja@americanday.com.br\",\"senha\":\"S3nh@!\",\"codigo_via\":\"whatsapp\"}");
+        checar(cr.Ok && cr.Email == "loja@americanday.com.br" && cr.Senha == "S3nh@!" && !cr.Desligado && !cr.NaoConta, "LG-2 credenciais {ok:true, email, senha, codigo_via}");
+        var des = LoginDoGestor.LerCredenciais(200, "{\"ok\":false,\"motivo\":\"desligado\"}");
+        checar(!des.Ok && des.Desligado && des.Motivo == "desligado no ERP", "LG-2a {ok:false, motivo:desligado} e desligado no ERP, nao e falha");
+        checar(LoginDoGestor.LerCredenciais(200, "{\"ligado\":false}").Desligado, "LG-2a2 {ligado:false} (a forma antiga) tambem e desligado");
+        var semCad = LoginDoGestor.LerCredenciais(200, "{\"ok\":false,\"motivo\":\"sem_cadastro\"}");
+        checar(!semCad.Ok && semCad.NaoConta && !semCad.Desligado && semCad.Motivo == "sem cadastro no ERP", "LG-2b sem_cadastro = sem login automatico, nao conta falha");
+        var inc = LoginDoGestor.LerCredenciais(200, "{\"ok\":false,\"motivo\":\"incompleto\"}");
+        checar(!inc.Ok && inc.NaoConta && inc.Motivo == "cadastro incompleto no ERP", "LG-2b2 incompleto = sem login automatico, nao conta falha");
+        checar(LoginDoGestor.LerCredenciais(200, "{\"ok\":false,\"motivo\":\"outra_coisa\"}") is { Ok: false, NaoConta: false, Motivo: "outra_coisa" }, "LG-2b3 outro motivo conta como falha");
+        checar(LoginDoGestor.LerCredenciais(200, "{\"ok\":true,\"email\":\"\",\"senha\":\"x\"}").Motivo == "credenciais incompletas", "LG-2c e-mail vazio e credenciais incompletas");
+        checar(LoginDoGestor.LerCredenciais(404, "").Motivo == "a borda gestor-login ainda nao esta no ar" && LoginDoGestor.LerCredenciais(404, "").NaoConta,
+            "LG-2d 404 sem corpo e a borda fora do ar (nao conta falha)");
+        var sql = LoginDoGestor.LerCredenciais(404, "{\"ok\":false,\"motivo\":\"sem_sql_193\"}");
+        checar(sql.NaoConta && sql.Motivo == "sem login automatico (SQL 193 nao rodou)", "LG-2d2 404 sem_sql_193 = sem login automatico, nao conta falha (" + sql.Motivo + ")");
         checar(LoginDoGestor.LerCredenciais(-1, "").Motivo == "sem rede" && LoginDoGestor.LerCredenciais(-1, "").SemNuvem, "LG-2e -1 e sem rede");
         checar(LoginDoGestor.LerCredenciais(0, "").Motivo == "sem resposta da nuvem" && LoginDoGestor.LerCredenciais(0, "").SemNuvem, "LG-2f 0 e sem resposta");
-        checar(LoginDoGestor.LerCredenciais(401, "").Motivo == "sem sessao na nuvem" && LoginDoGestor.LerCredenciais(401, "").SemNuvem, "LG-2g 401 e sem sessao");
-        checar(LoginDoGestor.LerCredenciais(403, "{\"erro\":\"terminal sem loja\"}").Motivo == "terminal sem loja" && !LoginDoGestor.LerCredenciais(403, "").SemNuvem,
-            "LG-2h 403 e recusa da borda, com o erro dela");
+        checar(LoginDoGestor.LerCredenciais(401, "{\"ok\":false,\"motivo\":\"nao_autorizado\"}").Motivo == "sem sessao na nuvem" && LoginDoGestor.LerCredenciais(401, "").NaoConta, "LG-2g 401 nao_autorizado e sem sessao");
+        checar(LoginDoGestor.LerCredenciais(403, "{\"ok\":false,\"motivo\":\"so_o_caixa\"}").Motivo == "so_o_caixa" && !LoginDoGestor.LerCredenciais(403, "").NaoConta,
+            "LG-2h 403 e recusa da borda, com o motivo dela (conta falha)");
+        checar(LoginDoGestor.LerCredenciais(400, "{\"ok\":false,\"motivo\":\"corpo_invalido\"}").Motivo == "corpo_invalido", "LG-2h2 400 traz o motivo");
         checar(LoginDoGestor.LerCredenciais(200, "lixo{").Motivo == "resposta invalida", "LG-2i lixo e resposta invalida, sem lancar");
-        checar(LoginDoGestor.LerCredenciais(500, "").Motivo == "http 500", "LG-2j 5xx vira http N");
+        checar(LoginDoGestor.LerCredenciais(500, "{\"ok\":false,\"motivo\":\"erro_no_servidor\"}").Motivo == "erro_no_servidor" && LoginDoGestor.LerCredenciais(500, "").Motivo == "http 500", "LG-2j 5xx vira o motivo ou http N");
 
-        checar(LoginDoGestor.LerPedido(200, "{\"id\":\"ped-7\"}").Id == "ped-7", "LG-3 pedir_codigo devolve o id");
-        checar(LoginDoGestor.LerPedido(200, "{}").Id is null && LoginDoGestor.LerPedido(200, "{}").Motivo == "pedido sem id", "LG-3a pedido sem id e motivo");
-        checar(LoginDoGestor.LerPedido(-1, "").Motivo == "sem rede", "LG-3b pedido sem rede");
-        var cod = LoginDoGestor.LerCodigo(200, "{\"codigo\":\"482913\"}");
+        var ped = LoginDoGestor.LerPedido(200, "{\"ok\":true,\"id\":7,\"ja_aberto\":false,\"pedido_em\":\"2026-10-17T10:00:00Z\",\"expira_em\":\"2026-10-17T10:15:00Z\",\"aviso\":{\"enviado\":true,\"motivo\":null}}");
+        checar(ped.Id == "7" && ped.Motivo is null && !ped.JaAberto && ped.AvisoFalhou is null, "LG-3 pedir_codigo devolve o id inteiro e o aviso enviado");
+        checar(LoginDoGestor.LerPedido(200, "{\"ok\":true,\"id\":8,\"ja_aberto\":true,\"aviso\":{\"enviado\":true}}").JaAberto, "LG-3a2 ja_aberto e lido");
+        var semAviso = LoginDoGestor.LerPedido(200, "{\"ok\":true,\"id\":9,\"ja_aberto\":false,\"aviso\":{\"enviado\":false,\"motivo\":\"sem telefone do dono\"}}");
+        checar(semAviso.Id == "9" && semAviso.AvisoFalhou == "sem telefone do dono", "LG-3a3 aviso.enviado=false traz o motivo (o dono nao recebeu)");
+        checar(LoginDoGestor.LerPedido(200, "{\"ok\":true}").Id is null && LoginDoGestor.LerPedido(200, "{\"ok\":true}").Motivo == "pedido sem id", "LG-3a pedido sem id e motivo");
+        checar(LoginDoGestor.LerPedido(200, "{\"ok\":false,\"motivo\":\"desligado\"}").Desligado && LoginDoGestor.LerPedido(200, "{\"ok\":false,\"motivo\":\"sem_cadastro\"}").NaoConta,
+            "LG-3a4 pedir_codigo recusado por desligado/sem_cadastro nao conta falha");
+        checar(LoginDoGestor.LerPedido(-1, "").Motivo == "sem rede" && LoginDoGestor.LerPedido(-1, "").SemNuvem, "LG-3b pedido sem rede");
+        var cod = LoginDoGestor.LerCodigo(200, "{\"ok\":true,\"codigo\":\"482913\",\"id\":7,\"recebido_em\":\"x\",\"expira_em\":\"y\"}");
         checar(cod.Codigo == "482913" && !cod.Esperando && !cod.Expirado, "LG-4 codigo chegou");
-        checar(LoginDoGestor.LerCodigo(200, "{\"esperando\":true}").Esperando, "LG-4a esperando");
-        checar(LoginDoGestor.LerCodigo(200, "{\"expirado\":true}").Expirado, "LG-4b expirado");
-        var ruim = LoginDoGestor.LerCodigo(200, "{\"codigo\":\"ab\"}");
+        checar(LoginDoGestor.LerCodigo(200, "{\"ok\":true,\"esperando\":true,\"id\":7,\"expira_em\":\"y\"}").Esperando, "LG-4a esperando");
+        checar(LoginDoGestor.LerCodigo(200, "{\"ok\":true,\"expirado\":true,\"id\":7}").Expirado, "LG-4b expirado");
+        var semPed = LoginDoGestor.LerCodigo(200, "{\"ok\":false,\"motivo\":\"sem_pedido\"}");
+        checar(semPed.Codigo is null && !semPed.Esperando && !semPed.Expirado && semPed.Motivo == "sem_pedido", "LG-4b2 {ok:false, motivo:sem_pedido} e recusa (nao e esperar)");
+        checar(LoginDoGestor.LerCodigo(200, "{\"ok\":false,\"motivo\":\"usado\"}").Motivo == "usado", "LG-4b3 motivo usado");
+        var ruim = LoginDoGestor.LerCodigo(200, "{\"ok\":true,\"codigo\":\"ab\"}");
         checar(ruim.Codigo is null && ruim.Motivo == "codigo fora do formato", "LG-4c codigo que nao e de 4 a 8 digitos e recusado aqui");
         checar(LoginDoGestor.LerCodigo(0, "").Esperando && LoginDoGestor.LerCodigo(0, "").Motivo == "sem resposta da nuvem",
             "LG-4d sem resposta numa consulta e so esperar (a proxima consulta vem em 5 s)");
-        checar(LoginDoGestor.LerCodigo(200, "{\"esperando\":true,\"codigo\":\"123456\"}").Codigo == "123456", "LG-4e o codigo vale mesmo com esperando junto");
+        checar(LoginDoGestor.LerCodigo(200, "{\"ok\":true,\"esperando\":true,\"codigo\":\"123456\"}").Codigo == "123456", "LG-4e o codigo vale mesmo com esperando junto");
     }
 
     // ── 2. o mascaramento ─────────────────────────────────────────────────────
@@ -187,13 +203,13 @@ public static class TestesLoginGestor
                 var acao = JsonDocument.Parse(corpo).RootElement.GetProperty("acao").GetString();
                 switch (acao)
                 {
-                    case "credenciais": return (200, "{\"email\":\"loja@americanday.com.br\",\"senha\":\"S3nh@!xyz\"}");
-                    case "pedir_codigo": return (200, "{\"id\":\"ped-7\"}");
+                    case "credenciais": return (200, "{\"ok\":true,\"email\":\"loja@americanday.com.br\",\"senha\":\"S3nh@!xyz\",\"codigo_via\":\"whatsapp\"}");
+                    case "pedir_codigo": return (200, "{\"ok\":true,\"id\":7,\"ja_aberto\":false,\"pedido_em\":\"2026-10-17T13:00:00Z\",\"expira_em\":\"2026-10-17T13:15:00Z\",\"aviso\":{\"enviado\":true,\"motivo\":null}}");
                     case "codigo":
                         consultas++;
-                        if (AlguemEntrouNaEspera) { Tela = "logado"; return (200, "{\"esperando\":true}"); }
-                        return consultas > ConsultasAteOCodigo ? (200, "{\"codigo\":\"" + Codigo + "\"}") : (200, "{\"esperando\":true}");
-                    case "usado": return (200, "{\"ok\":true}");
+                        if (AlguemEntrouNaEspera) { Tela = "logado"; return (200, "{\"ok\":true,\"esperando\":true,\"id\":7}"); }
+                        return consultas > ConsultasAteOCodigo ? (200, "{\"ok\":true,\"codigo\":\"" + Codigo + "\",\"id\":7}") : (200, "{\"ok\":true,\"esperando\":true,\"id\":7}");
+                    case "usado": return (200, "{\"ok\":true,\"id\":7,\"tinha_pedido\":true}");
                 }
                 return (400, "");
             };
@@ -246,7 +262,8 @@ public static class TestesLoginGestor
         checar(!tudo.Contains("loja@", StringComparison.Ordinal) && !tudo.Contains("S3nh@", StringComparison.Ordinal) && !tudo.Contains("482913", StringComparison.Ordinal),
             "LG-10e nenhum segredo no diag");
         var usado = JsonDocument.Parse(m.Corpos.Last()).RootElement;
-        checar(usado.GetProperty("ok").ValueKind == JsonValueKind.True && usado.GetProperty("id").GetString() == "ped-7", "LG-10f usado com ok e o id do pedido");
+        checar(usado.GetProperty("ok").ValueKind == JsonValueKind.True && usado.GetProperty("id").GetInt64() == 7, "LG-10f usado com ok e o id (inteiro) do pedido");
+        checar(m.Corpos.Where(c => c.Contains("\"acao\":\"codigo\"", StringComparison.Ordinal)).All(c => c.Contains("\"id\":7", StringComparison.Ordinal)), "LG-10i cada consulta leva o id inteiro");
         checar(m.Esperado >= TimeSpan.FromSeconds(10) && m.Esperado < TimeSpan.FromMinutes(2), "LG-10g esperou os 5 s entre as consultas (" + m.Esperado + ")");
         checar(!m.Corpos.Any(c => c.Contains("S3nh@", StringComparison.Ordinal) || c.Contains("482913", StringComparison.Ordinal)), "LG-10h nenhum corpo mandado leva senha ou codigo");
 
@@ -269,10 +286,10 @@ public static class TestesLoginGestor
         var m4 = new Mundo();
         m4.Nuvem = corpo => JsonDocument.Parse(corpo).RootElement.GetProperty("acao").GetString() switch
         {
-            "credenciais" => (200, "{\"email\":\"a@b.c\",\"senha\":\"x\"}"),
-            "pedir_codigo" => (200, "{\"id\":\"ped-8\"}"),
-            "codigo" => (200, "{\"expirado\":true}"),
-            _ => (200, "{}"),
+            "credenciais" => (200, "{\"ok\":true,\"email\":\"a@b.c\",\"senha\":\"x\"}"),
+            "pedir_codigo" => (200, "{\"ok\":true,\"id\":8,\"aviso\":{\"enviado\":true}}"),
+            "codigo" => (200, "{\"ok\":true,\"expirado\":true,\"id\":8}"),
+            _ => (200, "{\"ok\":true}"),
         };
         checar(!await m4.Fluxo().TentarAsync(false, CancellationToken.None) && m4.Estado.Ultimo == "falhou 10:00 (codigo expirou no ERP)", "LG-13 expirado no ERP e falha (" + m4.Estado.Ultimo + ")");
 
@@ -312,10 +329,49 @@ public static class TestesLoginGestor
 
         // desligado no ERP: nao e falha, a linha diz desligado
         var m9 = new Mundo();
-        m9.Nuvem = _ => (200, "{\"ligado\":false}");
+        m9.Nuvem = _ => (200, "{\"ok\":false,\"motivo\":\"desligado\"}");
         checar(!await m9.Fluxo().TentarAsync(false, CancellationToken.None) && m9.Estado.DesligadoNoErp && m9.Estado.FalhasSeguidas == 0 && m9.Acoes.Count == 1
                && m9.Diag.Last() == "login do gestor: desligado no ERP",
             "LG-18 desligado no ERP: uma chamada, sem falha, diag diz (" + m9.Diag.Last() + ")");
+
+        // sem cadastro no ERP, e o 404 do SQL 193 nao rodado: sem login automatico, sem falha, sem usado, sem barulho
+        var m9b = new Mundo();
+        m9b.Nuvem = _ => (200, "{\"ok\":false,\"motivo\":\"sem_cadastro\"}");
+        checar(!await m9b.Fluxo().TentarAsync(false, CancellationToken.None) && m9b.Estado.FalhasSeguidas == 0 && !m9b.Estado.DesligadoNoErp && m9b.Acoes.Count == 1
+               && m9b.Estado.Fase == FaseLogin.Ocioso && m9b.Estado.Ultimo == "sem cadastro no ERP 10:00" && m9b.Diag.Last() == "login do gestor: sem cadastro no ERP",
+            "LG-18a sem cadastro no ERP: sem falha, sem usado, registro na linha (" + m9b.Estado.Ultimo + ")");
+        checar(m9b.Estado.PorQueNao(m9b.Agora.AddMinutes(3), false) is not null, "LG-18a2 e respeita o teto (nao pergunta ao ERP a cada 5 s)");
+        var m9c = new Mundo();
+        m9c.Nuvem = _ => (404, "{\"ok\":false,\"motivo\":\"sem_sql_193\"}");
+        checar(!await m9c.Fluxo().TentarAsync(false, CancellationToken.None) && m9c.Estado.FalhasSeguidas == 0 && m9c.Acoes.Count == 1
+               && m9c.Diag.Last() == "login do gestor: sem login automatico (SQL 193 nao rodou)",
+            "LG-18b 404 sem_sql_193: sem login automatico, sem falha (" + m9c.Diag.Last() + ")");
+
+        // o ERP nao conseguiu avisar o dono (aviso.enviado=false): nao espera 15 min, nao conta falha, o usado leva o motivo
+        var m9d = new Mundo();
+        var padrao9d = m9d.Nuvem;
+        m9d.Nuvem = corpo => JsonDocument.Parse(corpo).RootElement.GetProperty("acao").GetString() == "pedir_codigo"
+            ? (200, "{\"ok\":true,\"id\":9,\"ja_aberto\":false,\"aviso\":{\"enviado\":false,\"motivo\":\"sem telefone do dono\"}}")
+            : padrao9d(corpo);
+        checar(!await m9d.Fluxo().TentarAsync(false, CancellationToken.None) && m9d.Estado.FalhasSeguidas == 0 && m9d.Estado.Fase == FaseLogin.Ocioso
+               && !m9d.Acoes.Contains("codigo") && m9d.Acoes.Last() == "usado" && m9d.Esperado == TimeSpan.Zero
+               && m9d.Diag.Any(d => d == "login do gestor: dono nao avisado (sem telefone do dono)"),
+            "LG-18c dono nao avisado: desiste na hora, sem falha, usado com o motivo (" + string.Join("|", m9d.Diag) + ")");
+        var u9d = JsonDocument.Parse(m9d.Corpos.Last()).RootElement;
+        checar(u9d.GetProperty("ok").ValueKind == JsonValueKind.False && u9d.GetProperty("id").GetInt64() == 9 && u9d.GetProperty("motivo").GetString() == "dono nao avisado (sem telefone do dono)"
+               && u9d.GetProperty("pausado_ate").ValueKind == JsonValueKind.Null,
+            "LG-18d o usado do dono nao avisado leva id 9, ok=false, o motivo e sem pausa");
+        var m9e = new Mundo();
+        var padrao9e = m9e.Nuvem;
+        m9e.Nuvem = corpo => JsonDocument.Parse(corpo).RootElement.GetProperty("acao").GetString() == "pedir_codigo"
+            ? (200, "{\"ok\":true,\"id\":7,\"ja_aberto\":true,\"aviso\":{\"enviado\":true}}") : padrao9e(corpo);
+        checar(await m9e.Fluxo().TentarAsync(false, CancellationToken.None) && m9e.Diag.Any(d => d == "login do gestor: codigo pedido ao dono (pedido ja aberto)"),
+            "LG-18e pedido ja aberto: segue esperando o mesmo id, e o diag diz (" + string.Join("|", m9e.Diag) + ")");
+        var m9f = new Mundo();
+        var padrao9f = m9f.Nuvem;
+        m9f.Nuvem = corpo => JsonDocument.Parse(corpo).RootElement.GetProperty("acao").GetString() == "codigo" ? (200, "{\"ok\":false,\"motivo\":\"sem_pedido\"}") : padrao9f(corpo);
+        checar(!await m9f.Fluxo().TentarAsync(false, CancellationToken.None) && m9f.Estado.Ultimo == "falhou 10:00 (sem_pedido)" && m9f.Estado.FalhasSeguidas == 1,
+            "LG-18f consulta recusada (sem_pedido) e falha (" + m9f.Estado.Ultimo + ")");
 
         // sem rede: nao e falha, nem usado
         var m10 = new Mundo();

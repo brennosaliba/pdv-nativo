@@ -170,9 +170,12 @@ public sealed class LoginDoGestor
     // ── o contrato com a edge gestor-login ────────────────────────────────────
     private static readonly JsonSerializerOptions Json = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    public static string CorpoCredenciais(string terminal) => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "credenciais", ["terminal"] = terminal }, Json);
+    /// <summary>O id do pedido e um inteiro (identity) no ERP; vai como numero quando e um, senao como texto.</summary>
+    private static object? IdJson(string? id) => id is null ? null : (long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : id);
+
+    public static string CorpoCredenciais() => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "credenciais" }, Json);
     public static string CorpoPedirCodigo(string terminal) => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "pedir_codigo", ["terminal"] = terminal }, Json);
-    public static string CorpoCodigo(string terminal, string id) => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "codigo", ["terminal"] = terminal, ["id"] = id }, Json);
+    public static string CorpoCodigo(string id) => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "codigo", ["id"] = IdJson(id) }, Json);
 
     /// <summary>
     /// <c>usado</c>: o fim da tentativa, deu certo ou nao. <paramref name="pausadoAte"/> preenchido = 3 falhas seguidas,
@@ -183,25 +186,49 @@ public sealed class LoginDoGestor
         {
             ["acao"] = "usado",
             ["terminal"] = terminal,
-            ["id"] = id,
+            ["id"] = IdJson(id),
             ["ok"] = ok,
             ["motivo"] = motivo,
             ["pausado_ate"] = pausadoAte?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture),
         }, Json);
 
-    /// <summary>A resposta de <c>credenciais</c>. <c>SemNuvem</c> = a nuvem nao respondeu de verdade (nao conta falha).</summary>
-    public sealed record Credenciais(bool Ok, string? Email, string? Senha, string? Motivo, bool Desligado = false, bool SemNuvem = false);
+    /// <summary>
+    /// A resposta de <c>credenciais</c>. <c>Desligado</c> = ligado false no ERP. <c>NaoConta</c> = nao ha login automatico
+    /// (sem cadastro, cadastro incompleto, SQL 193 nao rodou, sem rede...): nao e falha, so registro e teto.
+    /// </summary>
+    public sealed record Credenciais(bool Ok, string? Email, string? Senha, string? Motivo, bool Desligado = false, bool NaoConta = false)
+    {
+        /// <summary>Nome antigo do mesmo conceito (a nuvem nao respondeu): nao conta falha.</summary>
+        public bool SemNuvem => NaoConta;
+    }
+
+    /// <summary>Os motivos do ERP que significam "sem login automatico", em frase curta para o diag e a Configuracao.</summary>
+    private static (string Frase, bool NaoConta)? MotivoDoErp(string? motivo) => motivo switch
+    {
+        "sem_cadastro" => ("sem cadastro no ERP", true),
+        "incompleto" => ("cadastro incompleto no ERP", true),
+        "sem_sql_193" => ("sem login automatico (SQL 193 nao rodou)", true),
+        "nao_autorizado" => ("sem sessao na nuvem", true),
+        _ => null,
+    };
 
     public static Credenciais LerCredenciais(int status, string corpo)
     {
-        if (MotivoDoStatus(status, corpo) is { } m) return new Credenciais(false, null, null, m.Motivo, SemNuvem: m.SemNuvem);
+        if (MotivoDoStatus(status, corpo) is { } m) return new Credenciais(false, null, null, m.Motivo, NaoConta: m.NaoConta);
         try
         {
             using var doc = JsonDocument.Parse(corpo);
             var r = doc.RootElement;
             if (r.ValueKind != JsonValueKind.Object) return new Credenciais(false, null, null, "resposta invalida");
+            // o contrato real (17/10): {ok:false, motivo:'desligado'|'sem_cadastro'|'incompleto'}; {ligado:false} e aceito tambem
             if (r.TryGetProperty("ligado", out var lg) && lg.ValueKind == JsonValueKind.False) return new Credenciais(false, null, null, "desligado no ERP", Desligado: true);
-            if (r.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String) return new Credenciais(false, null, null, er.GetString() ?? "erro");
+            var motivo = Motivo(r);
+            if (motivo is not null || (r.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.False))
+            {
+                if (motivo == "desligado") return new Credenciais(false, null, null, "desligado no ERP", Desligado: true);
+                if (MotivoDoErp(motivo) is { } me) return new Credenciais(false, null, null, me.Frase, NaoConta: me.NaoConta);
+                return new Credenciais(false, null, null, motivo ?? "recusado");
+            }
             var email = r.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
             var senha = r.TryGetProperty("senha", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
             if (string.IsNullOrWhiteSpace(email) || string.IsNullOrEmpty(senha)) return new Credenciais(false, null, null, "credenciais incompletas");
@@ -210,18 +237,40 @@ public sealed class LoginDoGestor
         catch (JsonException) { return new Credenciais(false, null, null, "resposta invalida"); }
     }
 
-    public static (string? Id, string? Motivo, bool SemNuvem) LerPedido(int status, string corpo)
+    /// <summary>
+    /// A resposta de <c>pedir_codigo</c>. <c>AvisoFalhou</c> = o ERP nao conseguiu avisar o dono (aviso.enviado false), com
+    /// o motivo dele: nao adianta esperar 15 min. <c>Desligado</c>/<c>NaoConta</c> como em <see cref="Credenciais"/>.
+    /// </summary>
+    public sealed record Pedido(string? Id, string? Motivo, bool NaoConta = false, bool Desligado = false, bool JaAberto = false, string? AvisoFalhou = null)
     {
-        if (MotivoDoStatus(status, corpo) is { } m) return (null, m.Motivo, m.SemNuvem);
+        public bool SemNuvem => NaoConta;
+    }
+
+    public static Pedido LerPedido(int status, string corpo)
+    {
+        if (MotivoDoStatus(status, corpo) is { } m) return new Pedido(null, m.Motivo, NaoConta: m.NaoConta);
         try
         {
             using var doc = JsonDocument.Parse(corpo);
             var r = doc.RootElement;
-            if (r.ValueKind == JsonValueKind.Object && r.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String) return (null, er.GetString() ?? "erro", false);
-            var id = r.ValueKind == JsonValueKind.Object && r.TryGetProperty("id", out var i) ? (i.ValueKind == JsonValueKind.String ? i.GetString() : i.ToString()) : null;
-            return string.IsNullOrWhiteSpace(id) ? (null, "pedido sem id", false) : (id, null, false);
+            if (r.ValueKind != JsonValueKind.Object) return new Pedido(null, "resposta invalida");
+            var motivo = Motivo(r);
+            if (motivo is not null || (r.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.False))
+            {
+                if (motivo == "desligado") return new Pedido(null, "desligado no ERP", Desligado: true);
+                if (MotivoDoErp(motivo) is { } me) return new Pedido(null, me.Frase, NaoConta: me.NaoConta);
+                return new Pedido(null, motivo ?? "recusado");
+            }
+            var id = r.TryGetProperty("id", out var i) ? (i.ValueKind == JsonValueKind.String ? i.GetString() : (i.ValueKind == JsonValueKind.Number ? i.GetRawText() : null)) : null;
+            if (string.IsNullOrWhiteSpace(id)) return new Pedido(null, "pedido sem id");
+            var jaAberto = r.TryGetProperty("ja_aberto", out var ja) && ja.ValueKind == JsonValueKind.True;
+            string? avisoFalhou = null;
+            if (r.TryGetProperty("aviso", out var av) && av.ValueKind == JsonValueKind.Object
+                && av.TryGetProperty("enviado", out var env) && env.ValueKind == JsonValueKind.False)
+                avisoFalhou = av.TryGetProperty("motivo", out var am) && am.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(am.GetString()) ? am.GetString() : "sem motivo";
+            return new Pedido(id, null, JaAberto: jaAberto, AvisoFalhou: avisoFalhou);
         }
-        catch (JsonException) { return (null, "resposta invalida", false); }
+        catch (JsonException) { return new Pedido(null, "resposta invalida"); }
     }
 
     public sealed record RespostaCodigo(string? Codigo, bool Esperando, bool Expirado, string? Motivo);
@@ -231,7 +280,7 @@ public sealed class LoginDoGestor
     /// <summary>Uma consulta do codigo. Sem resposta da nuvem = so esperar (a proxima consulta vem em 5 s).</summary>
     public static RespostaCodigo LerCodigo(int status, string corpo)
     {
-        if (MotivoDoStatus(status, corpo) is { } m) return new RespostaCodigo(null, m.SemNuvem, false, m.Motivo);
+        if (MotivoDoStatus(status, corpo) is { } m) return new RespostaCodigo(null, m.NaoConta, false, m.Motivo);
         try
         {
             using var doc = JsonDocument.Parse(corpo);
@@ -243,25 +292,38 @@ public sealed class LoginDoGestor
                 return FormatoDoCodigo.IsMatch(cod) ? new RespostaCodigo(cod, false, false, null) : new RespostaCodigo(null, false, false, "codigo fora do formato");
             }
             if (r.TryGetProperty("expirado", out var ex) && ex.ValueKind == JsonValueKind.True) return new RespostaCodigo(null, false, true, null);
-            if (r.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String) return new RespostaCodigo(null, false, false, er.GetString() ?? "erro");
+            var motivo = Motivo(r);
+            if (motivo is not null || (r.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.False)) return new RespostaCodigo(null, false, false, motivo ?? "recusado");
             if (r.TryGetProperty("esperando", out var es) && es.ValueKind == JsonValueKind.True) return new RespostaCodigo(null, true, false, null);
             return new RespostaCodigo(null, false, false, "resposta sem codigo");
         }
         catch (JsonException) { return new RespostaCodigo(null, false, false, "resposta invalida"); }
     }
 
-    private static (string Motivo, bool SemNuvem)? MotivoDoStatus(int status, string corpo)
+    /// <summary>O motivo da recusa no corpo: o ERP manda <c>motivo</c>; <c>erro</c> e aceito tambem.</summary>
+    private static string? Motivo(JsonElement r)
+    {
+        if (r.ValueKind != JsonValueKind.Object) return null;
+        if (r.TryGetProperty("motivo", out var m) && m.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(m.GetString())) return m.GetString();
+        if (r.TryGetProperty("erro", out var e) && e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString())) return e.GetString();
+        return null;
+    }
+
+    private static (string Motivo, bool NaoConta)? MotivoDoStatus(int status, string corpo)
     {
         switch (status)
         {
             case -1: return ("sem rede", true);
             case 0: return ("sem resposta da nuvem", true);
             case 401: return ("sem sessao na nuvem", true);
-            case 404: return ($"a borda {Edge} ainda nao esta no ar", true);
+            case 404:
+                // o ERP devolve 404 {ok:false, motivo:'sem_sql_193'} enquanto o SQL 193 nao rodou; sem corpo, a borda nao existe
+                var m404 = ErroDoCorpo(corpo);
+                return m404 is null ? ($"a borda {Edge} ainda nao esta no ar", true) : (MotivoDoErp(m404)?.Frase ?? $"sem login automatico ({m404})", true);
             case >= 200 and < 300: return null;
             default:
                 var erro = ErroDoCorpo(corpo);
-                return (erro ?? $"http {status}", false);
+                return (erro is null ? $"http {status}" : (MotivoDoErp(erro)?.Frase ?? erro), erro is not null && MotivoDoErp(erro)?.NaoConta == true);
         }
     }
 
@@ -271,8 +333,7 @@ public sealed class LoginDoGestor
         try
         {
             using var doc = JsonDocument.Parse(corpo);
-            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("erro", out var er) && er.ValueKind == JsonValueKind.String
-                ? er.GetString() : null;
+            return Motivo(doc.RootElement);
         }
         catch (JsonException) { return null; }
     }
@@ -354,10 +415,10 @@ public sealed class FluxoLoginGestor
             Diag("pedido");
             if (tela == "login")
             {
-                var (st, corpo) = await _nuvem(LoginDoGestor.CorpoCredenciais(_terminal)).ConfigureAwait(false);
+                var (st, corpo) = await _nuvem(LoginDoGestor.CorpoCredenciais()).ConfigureAwait(false);
                 var cr = LoginDoGestor.LerCredenciais(st, corpo);
                 if (cr.Desligado) { _estado.Desligado(_agora()); Diag("desligado no ERP"); return false; }
-                if (cr.SemNuvem) { _estado.SemNuvem(cr.Motivo!, _agora()); Diag(cr.Motivo!); return false; }
+                if (cr.NaoConta) { _estado.SemNuvem(cr.Motivo!, _agora()); Diag(cr.Motivo!); return false; }
                 if (!cr.Ok) return await FalharAsync(cr.Motivo ?? "sem credenciais", ct).ConfigureAwait(false);
                 _segredos.Add(cr.Email); _segredos.Add(cr.Senha);
                 var r = await _pagina("window.pdvLoginPreencher ? window.pdvLoginPreencher(" + JsonSerializer.Serialize(cr.Email) + ", " + JsonSerializer.Serialize(cr.Senha) + ") : 'sem_script'").ConfigureAwait(false);
@@ -378,21 +439,33 @@ public sealed class FluxoLoginGestor
 
             _estado.PedirCodigo();
             var (stP, corpoP) = await _nuvem(LoginDoGestor.CorpoPedirCodigo(_terminal)).ConfigureAwait(false);
-            var (id, motivoP, semNuvemP) = LoginDoGestor.LerPedido(stP, corpoP);
-            if (id is null)
+            var ped = LoginDoGestor.LerPedido(stP, corpoP);
+            if (ped.Id is null)
             {
-                if (semNuvemP) { _estado.SemNuvem(motivoP!, _agora()); Diag(motivoP!); return false; }
-                return await FalharAsync(motivoP ?? "pedido do codigo recusado", ct).ConfigureAwait(false);
+                if (ped.Desligado) { _estado.Desligado(_agora()); Diag("desligado no ERP"); return false; }
+                if (ped.NaoConta) { _estado.SemNuvem(ped.Motivo!, _agora()); Diag(ped.Motivo!); return false; }
+                return await FalharAsync(ped.Motivo ?? "pedido do codigo recusado", ct).ConfigureAwait(false);
             }
+            var id = ped.Id;
             _estado.EsperandoCodigo(id, _agora());
-            Diag("codigo pedido ao dono");
+            if (ped.AvisoFalhou is not null)
+            {
+                // o ERP nao conseguiu avisar o dono (sem telefone, avisos desligados): esperar 15 min nao adianta.
+                // Nao e falha de login (nao conta para a pausa); o usado registra o motivo no ERP.
+                var motivoAviso = "dono nao avisado (" + ped.AvisoFalhou + ")";
+                _estado.SemNuvem(motivoAviso, _agora());
+                Diag(motivoAviso);
+                await UsadoAsync(id, false, motivoAviso, null, ct).ConfigureAwait(false);
+                return false;
+            }
+            Diag(ped.JaAberto ? "codigo pedido ao dono (pedido ja aberto)" : "codigo pedido ao dono");
 
             string? codigo = null;
             while (codigo is null)
             {
                 await _esperar(LoginDoGestor.IntervaloConsulta, ct).ConfigureAwait(false);
                 if (_estado.CodigoExpirou(_agora())) return await FalharAsync("codigo nao chegou em 15 min", ct).ConfigureAwait(false);
-                var (stC, corpoC) = await _nuvem(LoginDoGestor.CorpoCodigo(_terminal, id)).ConfigureAwait(false);
+                var (stC, corpoC) = await _nuvem(LoginDoGestor.CorpoCodigo(id)).ConfigureAwait(false);
                 var rc = LoginDoGestor.LerCodigo(stC, corpoC);
                 if (rc.Codigo is not null) { codigo = rc.Codigo; break; }
                 if (rc.Expirado) return await FalharAsync("codigo expirou no ERP", ct).ConfigureAwait(false);
