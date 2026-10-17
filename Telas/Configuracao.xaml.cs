@@ -123,6 +123,9 @@ public partial class Configuracao : UserControl
         BlocoQuiosque.Visibility = Se(_jaConfigurado);
         // 1.0.41: o relógio do PC torto (duas leituras seguidas acima de 60 s): a linha e, sem a tarefa, o botão
         MostrarRelogio();
+        // 1.0.44: o login do Gestor sozinho: a linha (automatico pelo ERP, ultimo resultado) e o Entrar agora
+        BlocoLoginGestor.Visibility = Se(_jaConfigurado);
+        TxtLoginGestor.Text = ServicoLoginGestor.Linha;
         ChkQuiosque.IsChecked = Quiosque.Ligado;
         ChkTravarAtalhos.IsChecked = Quiosque.Travado;
         BtnSairWindows.Visibility = Se(Quiosque.Ligado);
@@ -364,6 +367,26 @@ public partial class Configuracao : UserControl
     }
 
     private static void Diag(Exception ex) { try { HospedeWebView2.Anotar("configuracao.txt", "relogio: " + ex.GetType().Name + " " + ex.Message, TimeSpan.Zero); } catch { } }
+
+    /// <summary>
+    /// "Entrar agora" (1.0.44): uma tentativa de login no Gestor fora do teto de 1 a cada 10 min e da pausa de
+    /// 2 h. Pode levar ate 15 min (o codigo vem pelo WhatsApp do dono); a linha mostra o resultado no fim.
+    /// </summary>
+    private async void EntrarAgora(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            BtnEntrarAgora.IsEnabled = false;
+            TxtLoginGestor.Text = "Entrando no Gestor. O código vem pelo WhatsApp do dono.";
+            TxtLoginGestor.Text = await ServicoLoginGestor.EntrarAgoraAsync();
+        }
+        catch (Exception ex)
+        {
+            TxtLoginGestor.Text = ServicoLoginGestor.Linha;
+            try { HospedeWebView2.Anotar("configuracao.txt", "login do gestor: " + ex.GetType().Name, TimeSpan.Zero); } catch { }
+        }
+        finally { BtnEntrarAgora.IsEnabled = true; }
+    }
 
     private void IrPara(PassoConfig p)
     {

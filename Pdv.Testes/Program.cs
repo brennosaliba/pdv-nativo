@@ -846,6 +846,16 @@ if (args.Length >= 1 && args[0] == "--so-1041")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (17/10/2026, 1.0.44): so a suite do login do Gestor sozinho. NAO e o gate.
+//   Pdv.Testes.exe --so-1044
+if (args.Length >= 1 && args[0] == "--so-1044")
+{
+    await TestesLoginGestor.RodarAsync((cond, nome) => Check("login-gestor: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so 1044) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 // MODO DE DESENVOLVIMENTO (15/10/2026): so o banco de conversas (arquivo) e a observacao do cartao.
 // NAO e o gate.
 //   Pdv.Testes.exe --so-arquivo
@@ -2258,6 +2268,14 @@ await TestesRecuperacaoRespondida.RodarAsync((cond, nome) => Check("recuperacao-
 Console.WriteLine();
 Console.WriteLine("--- Reiniciar o computador pelo caixa e a saida de som ---");
 TestesReinicioDoPc.Rodar((cond, nome) => Check("reiniciar-pc: " + nome, cond));
+// -- 17/10/2026: O LOGIN DO GESTOR SOZINHO (caixa 1.0.44, pedido do dono) ------------------------
+// Quando a sessao do Gestor cai, o caixa pede as credenciais ao ERP (edge gestor-login), preenche a tela de
+// login, escolhe "e-mail" na escolha do canal, pede o codigo (o ERP o pede ao dono pelo WhatsApp), consulta a
+// cada 5 s por ate 15 min, digita e confirma. Tetos: 1 tentativa a cada 10 min; 3 falhas seguidas = 2 h de
+// pausa e aviso ao dono. Nada de e-mail, senha ou codigo no diag.
+Console.WriteLine();
+Console.WriteLine("--- Login do Gestor sozinho: a maquina, o contrato, o fluxo com a nuvem de mentira e o script no node ---");
+await TestesLoginGestor.RodarAsync((cond, nome) => Check("login-gestor: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

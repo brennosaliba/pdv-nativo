@@ -357,6 +357,10 @@ public partial class ChatIfood : UserControl
             // e o do SDK do Sendbird (07/10/2026, resgate pelo chat): diag() e enviar(). O envio só
             // roda com o token de uso único que o C# põe logo antes (EnviarPeloSdkAsync).
             await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptSendbird);
+            // 1.0.44 (pedido do dono, 17/10): o login do Gestor sozinho. Le a tela (login, canal, codigo, logado),
+            // preenche por tipo de campo, escolhe "e-mail" pelo texto e digita o codigo. Quem decide e o
+            // ServicoLoginGestor; o script so toca na pagina e nunca devolve o que digitou.
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(ScriptLogin);
             Passo("captura");
 
             // liga a captura de rede (groundwork do nativo) — best-effort
@@ -369,6 +373,17 @@ public partial class ChatIfood : UserControl
             PainelErro.Visibility = Visibility.Collapsed;
             _pronto = true;
             Passo("pronto");
+
+            // 1.0.44: o login do Gestor sozinho. A nuvem e a edge gestor-login pela sessao do terminal; a pagina e o
+            // ExecuteScriptAsync deste controle (na thread da tela); o diag e o do chat, ja mascarado pelo servico.
+            ServicoLoginGestor.Ligar(ConversaRaspadinha.NomeDoTerminal(),
+                corpo => Servicos.Nuvem().FuncaoAsync(LoginDoGestor.Edge, corpo, LoginDoGestor.Prazo),
+                js => HospedeWebView2.NaTela(Dispatcher, async () =>
+                {
+                    if (!_pronto || Web?.CoreWebView2 is not { } c) return "\"sem_pagina\"";
+                    return await c.ExecuteScriptAsync(js);
+                }),
+                Diag);
 
             // RESGATE PELO CHAT (07/10/2026): o serviço novo lê os quadros e manda o sinal de 60 s
             // desde já, com a loja desligada também (o sinal leva o diagnóstico que o dono confere
@@ -506,6 +521,8 @@ public partial class ChatIfood : UserControl
         if (!Dispatcher.CheckAccess()) { await HospedeWebView2.NaTela(Dispatcher, () => RecriarAsync(motivo, porGente)); return; }
         try
         {
+            // 1.0.44: a pagina velha morreu; a tentativa de login que estiver nela e cancelada, sem contar falha
+            ServicoLoginGestor.Desligar();
             // o Reabrir do aviso é gesto de gente: sem espera e sem o teto da hora
             if (!porGente) await Task.Delay(TimeSpan.FromSeconds(3));
             if (!porGente && !_tetoRecriar.Permitir(DateTime.UtcNow))
@@ -682,7 +699,11 @@ public partial class ChatIfood : UserControl
                 // lia, e sem o chat carregado o diagnóstico estourava o prazo: o caixa dizia
                 // "logado" com a tela de login aberta (Savassi, 13/10 20:41 a 14/10 16:10).
                 if (doc.RootElement.TryGetProperty("login", out var lg) && lg.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
                     _gestorPedeLogin = lg.ValueKind == JsonValueKind.True;
+                    // 1.0.44: o Gestor pedindo login e o gatilho do login sozinho (os tetos moram no servico)
+                    ServicoLoginGestor.Observar(_gestorPedeLogin);
+                }
             }
             else if (tipo == "modo")
             {
@@ -3922,6 +3943,173 @@ public partial class ChatIfood : UserControl
       }
 
       window.pdvSb = { diag: diag, enviar: enviar, prototipos: prototipos, registrar: registrar };
+    })();
+    """;
+
+    // ── O LOGIN DO GESTOR SOZINHO (1.0.44, 17/10/2026) ───────────────────────────────────────────────────
+    // Roda em toda pagina do WebView2 do chat (o login do iFood mora em outro endereco). So toca na pagina por
+    // TIPO de campo, atributo e texto: nunca por classe (o iFood troca as classes a cada build). Nunca devolve o
+    // que digitou: as respostas sao palavras fixas (login, canal, codigo, logado, enviado, sem_campos...).
+    // Quem decide a ordem, os tetos e a conversa com o ERP e o FluxoLoginGestor (Nucleo), pelo ServicoLoginGestor.
+    // Provado no node contra um DOM falso em Pdv.Testes/TestesLoginGestor.cs.
+    private const string ScriptLogin = """
+    (function () {
+      if (window.__pdvLogin) return; window.__pdvLogin = true;
+      function visivel(el){ try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; } }
+      function texto(el){ try { return String(el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase(); } catch (e) { return ''; } }
+      function attr(el, n){ try { return String(el.getAttribute(n) || '').toLowerCase(); } catch (e) { return ''; } }
+      function tipo(el){ var t = attr(el, 'type'); return t || (el.tagName === 'INPUT' ? 'text' : ''); }
+      function pista(el){ return attr(el, 'name') + ' ' + attr(el, 'id') + ' ' + attr(el, 'autocomplete') + ' ' + attr(el, 'placeholder') + ' ' + attr(el, 'aria-label'); }
+      function maxLen(el){ var m = parseInt(attr(el, 'maxlength'), 10); return isNaN(m) ? -1 : m; }
+      function campos(){
+        var out = [], l = document.querySelectorAll('input');
+        for (var i = 0; i < l.length; i++) if (visivel(l[i]) && !l[i].disabled) out.push(l[i]);
+        return out;
+      }
+      function campoSenha(){ var l = campos(); for (var i = 0; i < l.length; i++) if (tipo(l[i]) === 'password') return l[i]; return null; }
+      function pareceEmail(inp){
+        var t = tipo(inp);
+        if (t === 'email') return true;
+        if (t !== 'text') return false;
+        return /mail|usu|login|user/.test(pista(inp));
+      }
+      function campoEmail(){
+        var l = campos(), i;
+        for (i = 0; i < l.length; i++) if (pareceEmail(l[i])) return l[i];
+        // sem pista nenhuma: o campo de texto visivel que vem antes da senha
+        var s = campoSenha();
+        if (!s) return null;
+        for (i = 0; i < l.length; i++) { if (l[i] === s) break; if (tipo(l[i]) === 'text') return l[i]; }
+        return null;
+      }
+      function pareceCodigo(inp){
+        var t = tipo(inp);
+        if (t === 'password' || t === 'email' || t === 'radio' || t === 'checkbox' || t === 'hidden' || t === 'submit' || t === 'button' || t === 'search') return false;
+        if (attr(inp, 'autocomplete') === 'one-time-code') return true;
+        var m = maxLen(inp);
+        var numerico = attr(inp, 'inputmode') === 'numeric' || t === 'tel' || t === 'number' || attr(inp, 'pattern').indexOf('0-9') >= 0;
+        var nome = /c[oó]digo|code|otp|token|verif/.test(pista(inp));
+        return (numerico || nome) && m >= 4 && m <= 8;
+      }
+      function campoCodigo(){ var l = campos(); for (var i = 0; i < l.length; i++) if (pareceCodigo(l[i])) return l[i]; return null; }
+      function caixasDeDigito(){
+        var l = campos(), out = [];
+        for (var i = 0; i < l.length; i++) { var t = tipo(l[i]); if (t !== 'password' && t !== 'radio' && t !== 'checkbox' && maxLen(l[i]) === 1) out.push(l[i]); }
+        return (out.length >= 4 && out.length <= 8) ? out : null;
+      }
+      function clicaveis(){
+        var out = [], l = document.querySelectorAll('button,[role="button"],a,input');
+        for (var i = 0; i < l.length; i++) if (visivel(l[i]) && !l[i].disabled) out.push(l[i]);
+        return out;
+      }
+      function rotulo(el){ return texto(el) || attr(el, 'aria-label') || attr(el, 'value') || attr(el, 'title'); }
+      // a opcao "e-mail" da escolha do canal: um clicavel (botao, link, rotulo de radio) cujo texto fala em e-mail e nao em SMS
+      function opcaoEmail(){
+        var l = document.querySelectorAll('button,[role="button"],a,label,li,span,div,p');
+        for (var i = 0; i < l.length; i++) {
+          var el = l[i];
+          if (!visivel(el)) continue;
+          var t = texto(el);
+          if (!/e-?mail/.test(t) || /sms|whatsapp|telefone|celular/.test(t) || t.length > 80) continue;
+          var c = null;
+          try { c = el.closest('button,[role="button"],a,label,li'); } catch (e) { c = null; }
+          if (!c || !visivel(c)) continue;
+          var tc = texto(c);
+          if (/sms|whatsapp|telefone|celular/.test(tc) && !/e-?mail/.test(tc)) continue;
+          return c;
+        }
+        return null;
+      }
+      function botaoDe(palavras, proibidas){
+        var l = clicaveis(), porTipo = null, porTexto = null;
+        for (var i = 0; i < l.length; i++) {
+          var el = l[i], t = tipo(el), r = rotulo(el);
+          if (proibidas.test(r)) continue;
+          if (el.tagName === 'INPUT' && t !== 'submit') continue;
+          if (t === 'submit' && !porTipo) porTipo = el;
+          if (!porTexto && palavras.test(r)) porTexto = el;
+        }
+        return porTipo || porTexto;
+      }
+      function setValor(inp, v){
+        try { inp.focus(); } catch (e) {}
+        var feito = false;
+        try {
+          var proto = (typeof HTMLInputElement !== 'undefined') ? HTMLInputElement.prototype : null;
+          var d = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+          if (d && d.set) { d.set.call(inp, v); feito = true; }
+        } catch (e) {}
+        if (!feito) { try { inp.value = v; } catch (e) {} }
+        try { inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+      }
+      function enviar(botao, campo){
+        if (botao) { try { botao.click(); return true; } catch (e) {} }
+        try { if (campo && campo.form && typeof campo.form.requestSubmit === 'function') { campo.form.requestSubmit(); return true; } } catch (e) {}
+        try { if (campo && campo.form && typeof campo.form.submit === 'function') { campo.form.submit(); return true; } } catch (e) {}
+        try {
+          campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+          campo.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+          return true;
+        } catch (e) {}
+        return false;
+      }
+
+      // login | codigo | canal | carregando | logado | outra
+      window.pdvLoginTela = function () {
+        try {
+          if (campoSenha()) return 'login';
+          if (campoCodigo() || caixasDeDigito()) return 'codigo';
+          if (opcaoEmail()) return 'canal';
+          var href = '';
+          try { href = String(location.href || '').toLowerCase(); } catch (e) {}
+          if (/\/login|\/entrar|#\/auth|\/auth\b|\/signin/.test(href)) return 'carregando';
+          return clicaveis().length >= 2 ? 'logado' : 'outra';
+        } catch (e) { return 'erro'; }
+      };
+
+      // enviado | sem_campos
+      window.pdvLoginPreencher = function (email, senha) {
+        try {
+          var e = campoEmail(), s = campoSenha();
+          if (!e || !s) return 'sem_campos';
+          setValor(e, String(email));
+          setValor(s, String(senha));
+          var b = botaoDe(/entrar|acessar|login|continuar|avan|confirmar|prosseguir/, /criar|cadastr|esquec|recuper|voltar|cancel/);
+          return enviar(b, s) ? 'enviado' : 'sem_botao';
+        } catch (e) { return 'erro'; }
+      };
+
+      // true | false
+      window.pdvLoginEscolherEmail = function () {
+        try {
+          var op = opcaoEmail();
+          if (!op) return false;
+          try { op.click(); } catch (e) {}
+          // a opcao marcada (radio) pode precisar de um Continuar; o botao da propria opcao, nao
+          var b = botaoDe(/continuar|enviar|confirmar|avan|prosseguir|receber/, /sms|whatsapp|telefone|celular|voltar|cancel|e-?mail/);
+          if (b && b !== op) { try { b.click(); } catch (e) {} }
+          return true;
+        } catch (e) { return false; }
+      };
+
+      // enviado | sem_campo | codigo_invalido
+      window.pdvLoginDigitar = function (codigo) {
+        try {
+          var c = String(codigo || '');
+          if (!/^\d{4,8}$/.test(c)) return 'codigo_invalido';
+          var caixas = caixasDeDigito(), campo = null;
+          if (caixas) {
+            for (var i = 0; i < caixas.length && i < c.length; i++) setValor(caixas[i], c.charAt(i));
+            campo = caixas[caixas.length - 1];
+          } else {
+            campo = campoCodigo();
+            if (!campo) return 'sem_campo';
+            setValor(campo, c);
+          }
+          var b = botaoDe(/confirmar|verificar|validar|entrar|continuar|enviar|avan|prosseguir/, /reenviar|outro|voltar|cancel|nao recebi|não recebi/);
+          return enviar(b, campo) ? 'enviado' : 'sem_botao';
+        } catch (e) { return 'erro'; }
+      };
     })();
     """;
 }

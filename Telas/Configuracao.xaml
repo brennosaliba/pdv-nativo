@@ -685,6 +685,21 @@
                         </Button>
                     </StackPanel>
 
+                    <!-- 1.0.44 (17/10/2026, pedido do dono): o login do Gestor do iFood sozinho. A linha diz o que
+                         vale (automatico, pelo ERP) e o ultimo resultado; o botao forca uma tentativa agora,
+                         fora do teto de 1 a cada 10 min (ServicoLoginGestor). -->
+                    <StackPanel x:Name="BlocoLoginGestor" Visibility="Collapsed">
+                        <TextBlock Text="LOGIN DO GESTOR DO IFOOD" Foreground="{DynamicResource Marca}"
+                                   FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
+                        <TextBlock x:Name="TxtLoginGestor" Text="" Foreground="{DynamicResource Texto}" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <TextBlock Text="Quando o Gestor pede login, o caixa entra sozinho com o e-mail e a senha guardados no painel. O código chega pelo WhatsApp do dono."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <Button x:Name="BtnEntrarAgora" Click="EntrarAgora" Style="{StaticResource BotaoBase}" HorizontalAlignment="Left"
+                                MinHeight="44" Padding="16,0" Margin="0,0,0,8">
+                            <TextBlock Text="Entrar agora"/>
+                        </Button>
+                    </StackPanel>
+
                     <StackPanel x:Name="BlocoQuiosque">
                         <!-- SO O PDV NO WINDOWS (12/09/2026, pedido do dono): o Windows abre direto no
                              PDV, sem area de trabalho, barra ou outros programas. E o Shell do usuario
