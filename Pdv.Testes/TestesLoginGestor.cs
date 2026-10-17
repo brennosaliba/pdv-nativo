@@ -53,6 +53,16 @@ public static class TestesLoginGestor
                && u.GetProperty("ok").ValueKind == JsonValueKind.False && u.GetProperty("motivo").GetString() == "codigo recusado"
                && u.GetProperty("pausado_ate").GetString()!.StartsWith("2026-10-17T12:00:00", StringComparison.Ordinal),
             "LG-1d o corpo de usado leva id (numero), terminal, ok, motivo e pausado_ate (o ERP avisa o dono quando ha pausa)");
+        // o ERP (main 30d65b8) so aceita pausado_ate como yyyy-MM-ddTHH:mm:ss e o le como hora LOCAL de Brasilia: sem Z, sem fuso
+        var pa = u.GetProperty("pausado_ate").GetString()!;
+        checar(Regex.IsMatch(pa, @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$") && pa == "2026-10-17T12:00:00",
+            "LG-1d2 pausado_ate sai exatamente como yyyy-MM-ddTHH:mm:ss, sem Z e sem fuso (" + pa + ")");
+        var local = new DateTime(2026, 10, 17, 12, 0, 0, DateTimeKind.Local);
+        var emUtc = local.ToUniversalTime();
+        checar(JsonDocument.Parse(LoginDoGestor.CorpoUsado("CAIXA-01", "7", false, "x", emUtc)).RootElement.GetProperty("pausado_ate").GetString() == "2026-10-17T12:00:00",
+            "LG-1d3 um DateTime em UTC vira a hora local antes de sair (a hora que o caixa mostra)");
+        checar(JsonDocument.Parse(LoginDoGestor.CorpoUsado("CAIXA-01", "7", false, "x", new DateTime(2026, 1, 5, 9, 7, 3))).RootElement.GetProperty("pausado_ate").GetString() == "2026-01-05T09:07:03",
+            "LG-1d4 hora de um digito sai com zero a esquerda");
         var u2 = JsonDocument.Parse(LoginDoGestor.CorpoUsado("CAIXA-01", null, true, null, null)).RootElement;
         checar(u2.GetProperty("ok").ValueKind == JsonValueKind.True && u2.GetProperty("id").ValueKind == JsonValueKind.Null
                && u2.GetProperty("pausado_ate").ValueKind == JsonValueKind.Null,
@@ -442,8 +452,8 @@ public static class TestesLoginGestor
         checar(tela.Contains("ServicoLoginGestor.Ligar(") && tela.Contains("LoginDoGestor.Edge") && tela.Contains("LoginDoGestor.Prazo"),
             "LG-30b a tela liga o servico com a nuvem (edge gestor-login, com prazo) e a pagina");
         checar(servico.Contains("public static void Observar(bool pedeLogin)") && servico.Contains("Task<string> EntrarAgoraAsync()")
-               && servico.Contains("LoginDoGestor.Mascarar("),
-            "LG-30c o servico observa, tem o Entrar agora e mascara o que anota");
+               && servico.Contains("LoginDoGestor.Mascarar(") && servico.Contains("() => RelogioCorrigido.AgoraCorrigido"),
+            "LG-30c o servico observa, tem o Entrar agora, mascara o que anota e usa a hora local corrigida pelo servidor (o pausado_ate e hora de Brasilia)");
         checar(confXaml.Contains("x:Name=\"BlocoLoginGestor\"") && confXaml.Contains("x:Name=\"TxtLoginGestor\"") && confXaml.Contains("x:Name=\"BtnEntrarAgora\"")
                && confXaml.Contains("Text=\"Entrar agora\"") && confXaml.Contains("Click=\"EntrarAgora\""),
             "LG-30d a Configuracao tem a linha do login do Gestor e o botao Entrar agora");

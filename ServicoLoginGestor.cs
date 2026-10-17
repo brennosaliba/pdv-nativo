@@ -40,7 +40,9 @@ public static class ServicoLoginGestor
             try { _cts?.Cancel(); } catch { }
             _cts = new CancellationTokenSource();
             _diag = diag;
-            _fluxo = new FluxoLoginGestor(_estado, terminal, nuvem, pagina, Anotar, () => DateTime.Now);
+            // a hora e a LOCAL do PC corrigida pelo servidor (RelogioCorrigido): e a que o caixa mostra e a que o ERP
+            // entende no pausado_ate do usado (hora de Brasilia, sem fuso)
+            _fluxo = new FluxoLoginGestor(_estado, terminal, nuvem, pagina, Anotar, () => RelogioCorrigido.AgoraCorrigido);
             _ultimaLinhaRepetida = null;
         }
     }

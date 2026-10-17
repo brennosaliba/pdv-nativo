@@ -179,7 +179,9 @@ public sealed class LoginDoGestor
 
     /// <summary>
     /// <c>usado</c>: o fim da tentativa, deu certo ou nao. <paramref name="pausadoAte"/> preenchido = 3 falhas seguidas,
-    /// e o ERP avisa o dono pelo mesmo caminho dos avisos.
+    /// e o ERP avisa o dono pelo mesmo caminho dos avisos. O ERP so aceita <c>pausado_ate</c> como yyyy-MM-ddTHH:mm:ss
+    /// (senao 400 pausado_ate_invalido) e o le como HORA LOCAL DE BRASILIA (a que o caixa mostra): sem 'Z' e sem fuso.
+    /// Um DateTime em UTC e convertido para a hora local antes.
     /// </summary>
     public static string CorpoUsado(string terminal, string? id, bool ok, string? motivo, DateTime? pausadoAte)
         => JsonSerializer.Serialize(new Dictionary<string, object?>
@@ -189,7 +191,7 @@ public sealed class LoginDoGestor
             ["id"] = IdJson(id),
             ["ok"] = ok,
             ["motivo"] = motivo,
-            ["pausado_ate"] = pausadoAte?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture),
+            ["pausado_ate"] = pausadoAte is { } p ? (p.Kind == DateTimeKind.Utc ? p.ToLocalTime() : p).ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) : null,
         }, Json);
 
     /// <summary>
