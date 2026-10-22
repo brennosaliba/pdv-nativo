@@ -1315,7 +1315,7 @@ public static class Servicos
     /// para lá faz todo login falhar com "sem sessão", que foi exatamente o que
     /// aconteceu na primeira emissão de teste.
     /// </summary>
-    private static string UrlNuvem()
+    internal static string UrlNuvem()
     {
         using var cx = Banco.Abrir();
         var url = Vendas.Config(cx, "supabase_url");

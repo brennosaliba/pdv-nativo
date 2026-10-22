@@ -73,7 +73,9 @@ public partial class Venda : UserControl
     // por PRODUTO (nome normalizado → unidades grátis): reduz o que é cobrado e o
     // que vai pra nota fiscal. Cortesia é BRINDE, não venda — os itens cobertos
     // saem da NFC-e (evita o vDesc, que a EC2 ainda não distribui por item).
-    private readonly Cortesias _cortesias = new();
+    // SQL 212 (22/10/2026): com a nuvem do terminal, o caixa confere e usa o cupom pelas portas novas
+    // (categoria, o que foi zerado conferido no servidor); sem o SQL, cai nas antigas sozinho.
+    private Cortesias _cortesias = new(Servicos.Nuvem(), Servicos.UrlNuvem());
     private string? _cortesiaCodigo;
     private readonly Dictionary<string, int> _cortesiaCobertura = new(StringComparer.Ordinal);
     private string _categoriaAtual = "";
@@ -2772,59 +2774,53 @@ public partial class Venda : UserControl
         try { c = await _cortesias.ValidarAsync(codigo.Trim().ToUpperInvariant()); }
         finally { BtnCortesia.IsEnabled = _comanda.Count > 0 && _cortesiaCodigo is null; }
 
+        if (AplicarCupomNaComanda(c, codigo) is { } recado)
+            Dialogo.Avisar(dono, recado.Titulo, recado.Texto, "erro");
+    }
+
+    /// <summary>
+    /// O cupom ja conferido entra na comanda (SQL 212: produto ou categoria). Devolve o recado para o
+    /// operador quando nao entra; null quando entrou. Separado do dialogo para a bateria chamar direto.
+    /// </summary>
+    private (string Titulo, string Texto)? AplicarCupomNaComanda(Cortesia c, string codigo)
+    {
         if (!c.Ok)
-        {
-            Dialogo.Avisar(dono, "Cupom não vale", c.Erro switch
+            return ("Cupom não vale", c.Erro switch
             {
                 "not_found" => "Não achei esse código. Confira as letras e os números e digite de novo.",
                 "expired" => "Este cupom venceu. Siga a venda sem a cortesia.",
                 "already_redeemed" => "Este cupom já foi usado. Siga a venda sem a cortesia.",
                 "cancelled" => "Este cupom foi cancelado. Siga a venda sem a cortesia.",
                 "code_required" => "Digite o código do cupom.",
+                "loja_errada" => $"Este cupom é da loja {c.Loja}. Só pode ser usado lá.",
                 "sem_rede" => "Sem internet para conferir o cupom agora. Tente de novo em alguns segundos.",
                 _ => "Não deu para conferir o cupom agora. Tente de novo.",
-            }, "erro");
-            return;
-        }
+            });
 
         // Trava de loja no balcão: cortesia de outra loja não vale aqui (o servidor
         // também recusa no resgate, mas avisar cedo evita aplicar e falhar no fim).
         if (!string.IsNullOrWhiteSpace(c.Loja) && !string.IsNullOrWhiteSpace(_loja)
             && !string.Equals(c.Loja, _loja, StringComparison.OrdinalIgnoreCase))
-        {
-            Dialogo.Avisar(dono, "Cupom de outra loja",
-                $"Este cupom é da loja {c.Loja}. Só pode ser usado lá.", "erro");
-            return;
-        }
+            return ("Cupom de outra loja", $"Este cupom é da loja {c.Loja}. Só pode ser usado lá.");
         // COMANDA ABERTA (13/10/2026): reserva do cupom por conta. O mesmo codigo nao vale em
         // duas comandas guardadas ao mesmo tempo (seria o mesmo brinde dado duas vezes).
         if (CupomPresoEmOutraConta(c.Codigo ?? codigo) is { } outra)
-        {
-            Dialogo.Avisar(dono, "Cupom em outra comanda", ContasAbertas.Textos.CupomJaNaComanda(outra), "erro");
-            return;
-        }
+            return ("Cupom em outra comanda", ContasAbertas.Textos.CupomJaNaComanda(outra));
 
-        // Casa os itens do cupom com a comanda: cobre até a quantidade do cupom,
-        // limitada ao que o cliente realmente levou.
-        var cobertura = new Dictionary<string, int>(StringComparer.Ordinal);
-        var faltando = new List<string>();
-        foreach (var itemCupom in c.Itens)
-        {
-            var norm = NormalizarNome(itemCupom.Nome);
-            var disponivel = (int)_comanda.Where(i => NormalizarNome(i.Produto.Nome) == norm)
-                .Sum(i => i.Qtd.Milesimos / 1000);
-            var cobre = Math.Min(itemCupom.Quantidade, disponivel);
-            if (cobre <= 0) { faltando.Add(itemCupom.Nome); continue; }
-            cobertura[norm] = cobre;
-        }
+        // Casa os itens do cupom com a comanda (SQL 212): produto pelo id ou nome, categoria por
+        // qualquer item do grupo (o mais barato primeiro), sempre ate a quantidade do cupom e ate
+        // o que o cliente realmente levou. A mesma regra que o servidor confere no uso.
+        var conta = CoberturaCortesia.Calcular(c.Itens,
+            _comanda.Select(i => new LinhaParaCortesia(i.Produto.Id, i.Produto.Nome, i.Produto.Categoria,
+                i.Produto.Preco.Centavos, (int)(i.Qtd.Milesimos / 1000))).ToList(),
+            NormalizarNome);
+        var cobertura = conta.PorNome;
+        var faltando = conta.Faltando.Select(i => i.Rotulo).ToList();
 
         if (cobertura.Count == 0)
-        {
-            Dialogo.Avisar(dono, "Faltam itens do cupom",
+            return ("Faltam itens do cupom",
                 "Passe primeiro estes produtos na comanda e aplique o cupom depois:\n" +
-                string.Join(", ", c.Itens.Select(i => $"{i.Quantidade}× {i.Nome}")), "erro");
-            return;
-        }
+                string.Join(", ", c.Itens.Select(i => i.Rotulo)));
 
         _cortesiaCodigo = c.Codigo ?? codigo.Trim().ToUpperInvariant();
         _cortesiaCobertura.Clear();
@@ -2838,7 +2834,18 @@ public partial class Venda : UserControl
             TxtCortesiaItens.Text += $"  ·  fora da comanda: {string.Join(", ", faltando)}";
         CaixaCortesia.Visibility = Visibility.Visible;
         PintarComanda();
+        return null;
     }
+
+    /// <summary>
+    /// O que a cortesia zerou, por produto, para o servidor conferir no uso (SQL 212). Lido da comanda
+    /// ANTES de ela ser esvaziada.
+    /// </summary>
+    private List<ItemCoberto> CoberturaParaOServidor()
+        => _comanda.GroupBy(i => i.Produto.Id)
+            .Select(g => new ItemCoberto(g.Key, g.Sum(CoberturaDe)))
+            .Where(x => x.Quantidade > 0)
+            .ToList();
 
     private void RemoverCortesia(object sender, RoutedEventArgs e)
     {
@@ -2947,6 +2954,7 @@ public partial class Venda : UserControl
         }
 
         var cortesiaAplicada = _cortesiaCodigo;
+        var coberturaAplicada = cortesiaAplicada is null ? new List<ItemCoberto>() : CoberturaParaOServidor();
         // revisao 14/10: o cupom que esta comanda ja queimou (fechamento em cortesia que falhou) nao e
         // resgatado de novo se a comanda virar venda
         var cortesiaJaUsada = CortesiaJaUsadaNesta(_contaAberta?.Id, cortesiaAplicada);
@@ -2974,7 +2982,8 @@ public partial class Venda : UserControl
             {
                 // Cupom só morre com a venda concluída (dinheiro entrou). Falha no
                 // resgate não desfaz a venda — a cortesia já foi dada; loga e segue.
-                if (cortesiaAplicada is not null && !cortesiaJaUsada) _ = ResgatarSilenciosoAsync(cortesiaAplicada);
+                if (cortesiaAplicada is not null && !cortesiaJaUsada)
+                    _ = ResgatarSilenciosoAsync(cortesiaAplicada, coberturaAplicada, tela.VendaConcluida?.ClientKey);
                 if (cortesiaJaUsada) _cortesiaJaUsada = null;
                 // COMANDA ABERTA: a conta ja fechou dentro da transacao da venda. Solta ANTES
                 // de esvaziar, senao a repintura gravaria o carrinho vazio numa conta fechada.
@@ -2993,8 +3002,10 @@ public partial class Venda : UserControl
         PainelPagamento.Visibility = Visibility.Visible;
     }
 
-    private async Task ResgatarSilenciosoAsync(string codigo)
+    private async Task ResgatarSilenciosoAsync(string codigo, IReadOnlyList<ItemCoberto> cobertura, string? venda)
     {
+        // SQL 212: uma chave por uso; a fila reenvia com a MESMA chave e o servidor devolve ok.
+        var chave = Guid.NewGuid().ToString();
         // O resgate não pode derrubar a venda já concluída — mas também não pode
         // ser "dispara e esquece": se a rede caiu, o cupom continuava ATIVO no
         // servidor e o cliente já tinha levado os itens (cupom reutilizável).
@@ -3002,7 +3013,7 @@ public partial class Venda : UserControl
         // como o resto (venda, fechamento, cancelamento).
         try
         {
-            var r = await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja);
+            var r = await _cortesias.UsarAsync(codigo, cobertura, chave, _operador.Nome, _loja, venda);
             if (r.Ok) return;
         }
         catch { /* cai no enfileiramento abaixo */ }
@@ -3011,7 +3022,7 @@ public partial class Venda : UserControl
         {
             using var cx = Banco.Abrir();
             Caixa.Enfileirar(cx, null, "cortesia_resgate", codigo, codigo,
-                new { codigo, operador = _operador.Nome, loja = _loja });
+                new { codigo, operador = _operador.Nome, loja = _loja, cobertura, chave, venda });
         }
         catch { /* último recurso: nada mais a fazer sem derrubar a venda */ }
     }
@@ -3043,7 +3054,7 @@ public partial class Venda : UserControl
             {
                 AvisoLeve(ContasAbertas.Textos.UsandoCupom, "neutro");
                 Cortesia r;
-                try { r = await _cortesias.ResgatarAsync(codigo, _operador.Nome, _loja); }
+                try { r = await _cortesias.UsarAsync(codigo, CoberturaParaOServidor(), Guid.NewGuid().ToString(), _operador.Nome, _loja, null); }
                 catch { r = new Cortesia(false, "sem_rede", codigo, null, Array.Empty<ItemCortesia>()); }
                 // so recolhe se o toast ainda e o do cupom (outro aviso que chegou na espera fica os 8 s dele)
                 if (TxtToastAviso.Text == ContasAbertas.Textos.UsandoCupom) EsconderAvisoLeve();
@@ -3053,6 +3064,9 @@ public partial class Venda : UserControl
                     {
                         "already_redeemed" => "O cupom já tinha sido usado. Não entregue de graça: cobre a venda normal.",
                         "loja_errada" => "O cupom é de outra loja. Só pode ser usado lá.",
+                        "itens_fora_do_cupom" => "Algum item da comanda não faz parte do cupom. Tire o cupom e aplique de novo.",
+                        "expired" => "O cupom venceu. Não entregue de graça: cobre a venda normal.",
+                        "cancelled" => "O cupom foi cancelado. Não entregue de graça: cobre a venda normal.",
                         "sem_rede" => "Sem internet para usar o cupom agora. Tente de novo em alguns segundos.",
                         _ => "Não deu para usar o cupom agora. Tente de novo.",
                     }, "erro");

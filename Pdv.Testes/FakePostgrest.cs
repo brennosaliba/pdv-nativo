@@ -32,6 +32,16 @@ public sealed class FakePostgrest : IDisposable
     public ConcurrentDictionary<string, byte> Sessoes { get; } = new();
     /// <summary>Códigos de cortesia queimados via courtesy_redeem.</summary>
     public ConcurrentDictionary<string, byte> Resgatadas { get; } = new();
+    /// <summary>
+    /// CUPOM DE CORTESIA (SQL 212): codigo -> resposta do conferir (o JSON com ok, items, store...).
+    /// O usar guarda o corpo recebido e a chave do uso; a mesma chave devolve ok ja_usado, outra
+    /// devolve already_redeemed. CupomAusente encena o servidor sem o SQL 212 (404 PGRST202).
+    /// </summary>
+    public ConcurrentDictionary<string, string> CuponsCortesia { get; } = new();
+    public ConcurrentDictionary<string, string> UsosCupom { get; } = new();
+    public ConcurrentDictionary<string, string> ChaveDoUsoCupom { get; } = new();
+    public ConcurrentDictionary<string, string> BearerCupom { get; } = new();
+    public volatile bool CupomAusente;
 
     /// <summary>
     /// O que pdv_kds_pronto responde por pedido: "true" (marcou) ou "null" (fora do
@@ -255,6 +265,31 @@ public sealed class FakePostgrest : IDisposable
                     { Responder(ctx, 200, """{"ok":false,"error":"venda_nao_encontrada"}"""); return; }
                     Canceladas.TryAdd(chave, 1);
                     Responder(ctx, 200, """{"ok":true,"sale_id":"fake"}""");
+                    return;
+                }
+                case "/rest/v1/rpc/pdv_cupom_cortesia_conferir":
+                case "/rest/v1/rpc/pdv_cupom_cortesia_usar":
+                case "/rest/v1/rpc/courtesy_validate":
+                {
+                    var rpc = caminho[(caminho.LastIndexOf('/') + 1)..];
+                    ChamadasPorRpc.AddOrUpdate(rpc, 1, (_, n) => n + 1);
+                    BearerCupom[rpc] = ctx.Request.Headers["Authorization"] ?? "";
+                    if (CupomAusente && rpc != "courtesy_validate")
+                    {
+                        Responder(ctx, 404, $$"""{"code":"PGRST202","details":null,"hint":null,"message":"Could not find the function public.{{rpc}} in the schema cache"}""");
+                        return;
+                    }
+                    using var d = JsonDocument.Parse(string.IsNullOrWhiteSpace(corpo) ? "{}" : corpo);
+                    var code = d.RootElement.TryGetProperty("_code", out var cv) && cv.ValueKind == JsonValueKind.String ? cv.GetString() ?? "" : "";
+                    if (!CuponsCortesia.TryGetValue(code, out var resposta))
+                    { Responder(ctx, 200, """{"ok":false,"error":"not_found"}"""); return; }
+                    if (rpc != "pdv_cupom_cortesia_usar") { Responder(ctx, 200, resposta); return; }
+                    UsosCupom[code] = corpo;
+                    var chaveUso = d.RootElement.TryGetProperty("_ref", out var rv) && rv.ValueKind == JsonValueKind.String ? rv.GetString() ?? "" : "";
+                    var dona = ChaveDoUsoCupom.GetOrAdd(code, chaveUso);
+                    if (dona != chaveUso) { Responder(ctx, 200, """{"ok":false,"error":"already_redeemed"}"""); return; }
+                    var jaUsado = !Resgatadas.TryAdd(code, 1);
+                    Responder(ctx, 200, jaUsado ? """{"ok":true,"ja_usado":true}""" : """{"ok":true}""");
                     return;
                 }
                 case "/rest/v1/rpc/courtesy_redeem":

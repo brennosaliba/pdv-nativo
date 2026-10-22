@@ -104,6 +104,8 @@ public partial class Pagamento : UserControl
     private CancellationTokenSource? _cobranca;
     private DispatcherTimer? _avanco;
     private VendaGravada? _venda;
+    /// <summary>A venda gravada (client_key) depois do Concluida: o cupom de cortesia liga o uso a ela (SQL 212).</summary>
+    public VendaGravada? VendaConcluida => _venda;
     private bool _emitindo;
     // Charges de cartão APROVADOS nesta venda. Servem ao pop-up pós-aprovação das vias
     // em "Perguntar na tela": cada charge tem seu comprovante guardado em tef_transacao.

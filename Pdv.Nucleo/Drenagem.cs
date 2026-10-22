@@ -894,7 +894,8 @@ public sealed class Drenagem : IDisposable
     /// </summary>
     private async Task<(bool? Ok, string? Erro)> ResgatarCortesiaAsync(string payload, string token, CancellationToken ct)
     {
-        string? codigo = null, operador = null, loja = null;
+        string? codigo = null, operador = null, loja = null, chave = null, venda = null;
+        var cobertura = new List<ItemCoberto>();
         try
         {
             using var doc = JsonDocument.Parse(payload);
@@ -902,6 +903,16 @@ public sealed class Drenagem : IDisposable
             if (r.TryGetProperty("codigo", out var c) && c.ValueKind == JsonValueKind.String) codigo = c.GetString();
             if (r.TryGetProperty("operador", out var o) && o.ValueKind == JsonValueKind.String) operador = o.GetString();
             if (r.TryGetProperty("loja", out var l) && l.ValueKind == JsonValueKind.String) loja = l.GetString();
+            // SQL 212 (22/10/2026): o caixa novo manda o que foi zerado e a chave do uso
+            if (r.TryGetProperty("chave", out var k) && k.ValueKind == JsonValueKind.String) chave = k.GetString();
+            if (r.TryGetProperty("venda", out var v) && v.ValueKind == JsonValueKind.String) venda = v.GetString();
+            if (r.TryGetProperty("cobertura", out var cb) && cb.ValueKind == JsonValueKind.Array)
+                foreach (var it in cb.EnumerateArray())
+                {
+                    var pid = it.TryGetProperty("ProdutoId", out var pv) && pv.ValueKind == JsonValueKind.String ? pv.GetString() : null;
+                    var q = it.TryGetProperty("Quantidade", out var qv) && qv.TryGetInt32(out var qi) ? qi : 0;
+                    if (!string.IsNullOrWhiteSpace(pid) && q > 0) cobertura.Add(new ItemCoberto(pid!, q));
+                }
         }
         catch { return (false, "payload de cortesia corrompido"); }
 
@@ -914,7 +925,17 @@ public sealed class Drenagem : IDisposable
             ["_store"] = loja,
         });
 
-        var (status, resp) = await RpcAsync("courtesy_redeem", corpo, token, ct).ConfigureAwait(false);
+        int status; string? resp;
+        if (chave is not null && cobertura.Count > 0)
+        {
+            // porta nova: o servidor confere o que foi zerado; a mesma chave devolve ok no reenvio
+            (status, resp) = await RpcAsync("pdv_cupom_cortesia_usar",
+                Cortesias.CorpoDoUso(codigo!, cobertura, chave, operador, venda), token, ct).ConfigureAwait(false);
+            // servidor sem o SQL 212 (404): a porta antiga, como antes
+            if (status == 404)
+                (status, resp) = await RpcAsync("courtesy_redeem", corpo, token, ct).ConfigureAwait(false);
+        }
+        else (status, resp) = await RpcAsync("courtesy_redeem", corpo, token, ct).ConfigureAwait(false);
         if (status is < 200 or >= 300) return DesfechoDeStatus(status, resp);
         try
         {

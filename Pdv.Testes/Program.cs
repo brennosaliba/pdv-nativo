@@ -806,6 +806,18 @@ if (args.Length >= 1 && args[0] == "--so-envio")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (22/10/2026, SQL 212): so o cupom de cortesia gerado no painel (produto ou
+// categoria) e a comanda, que ele nao pode quebrar. NAO e o gate.
+//   Pdv.Testes.exe --so-cupom
+if (args.Length >= 1 && args[0] == "--so-cupom")
+{
+    await TestesCupomCortesia.RodarAsync((cond, nome) => Check("cupom: " + nome, cond));
+    TestesComandaTela.Rodar((cond, nome) => Check("comanda-tela: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so cupom) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
 // MODO DE DESENVOLVIMENTO (13/10/2026): so a suite da comanda aberta (conta_aberta/conta_lote), mais a do
 // pedido para a cozinha, que ela nao pode quebrar. NAO e o gate.
 //   Pdv.Testes.exe --so-conta
@@ -2107,6 +2119,7 @@ TestesWebView2Runtime.Rodar((cond, nome) => Check("runtime-web: " + nome, cond))
 Console.WriteLine();
 Console.WriteLine("--- Brinde da raspadinha: validador no topo da aba Promocoes, sem venda e sem nota ---");
 await TestesBrindes.RodarAsync((cond, nome) => Check("brinde: " + nome, cond));
+await TestesCupomCortesia.RodarAsync((cond, nome) => Check("cupom: " + nome, cond));
 
 // -- 22/09/2026: o CODIGO DA RASPADINHA que o cliente manda NO CHAT do iFood ------------
 // "Capturar quando o cliente enviar o codigo de resgate da raspadinha, validar e gerar uma comanda

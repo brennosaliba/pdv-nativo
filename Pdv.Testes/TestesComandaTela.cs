@@ -127,7 +127,7 @@ public static class TestesComandaTela
             "CA-12b a validacao do cupom no Fechar conta trava a tela e nao mexe em nada se a comanda ou o cupom mudaram na espera");
         var resgateTrava = Metodo(venda, "private async Task ResgatarEConcluirBrindeAsync()");
         checar(Regex.Matches(resgateTrava, @"IsEnabled = true").Count == 1 && Ordem(resgateTrava, "await Task.Delay(300)", "finally { IsEnabled = true; }")
-               && Ordem(resgateTrava, "var conta = _contaAberta;", "await _cortesias.ResgatarAsync(codigo")
+               && Ordem(resgateTrava, "var conta = _contaAberta;", "await _cortesias.UsarAsync(codigo")
                && resgateTrava.Contains("if (TxtToastAviso.Text == ContasAbertas.Textos.UsandoCupom) EsconderAvisoLeve();", StringComparison.Ordinal),
             "CA-12b o resgate le a conta antes do await, so destrava a tela no fim e so recolhe o toast se ainda for o do cupom");
         var pedir = Metodo(comanda, "private void PedirCozinhaDaConta()");
@@ -151,7 +151,8 @@ public static class TestesComandaTela
                && venda.Contains("MostrarResultado(dono, linhasFech, null, divergencias, comandas, resumoTeste, folha, papel, tefDisponivel);", StringComparison.Ordinal)
                && venda.Contains("destino.Papel.Colunas, comandas);", StringComparison.Ordinal),
             "CA-19 as contas que atravessam geram o evento e as duas linhas vao para a tela e para o papel");
-        checar(Metodo(venda, "private async void AplicarCortesia(object sender, RoutedEventArgs e)").Contains("CupomPresoEmOutraConta(", StringComparison.Ordinal),
+        checar(Metodo(venda, "private (string Titulo, string Texto)? AplicarCupomNaComanda(Cortesia c, string codigo)").Contains("CupomPresoEmOutraConta(", StringComparison.Ordinal)
+               && Metodo(venda, "private async void AplicarCortesia(object sender, RoutedEventArgs e)").Contains("AplicarCupomNaComanda(c, codigo)", StringComparison.Ordinal),
             "CA-15 AplicarCortesia recusa o cupom que ja esta em outra comanda");
 
         // a tela: os nomes e os clicks que o modo comanda precisa
