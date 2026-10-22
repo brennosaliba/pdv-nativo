@@ -7,12 +7,14 @@ namespace Pdv.Nucleo;
 
 /// <summary>
 /// Um item do cupom de cortesia. Produto: <see cref="Nome"/> e (cupom novo) <see cref="ProdutoId"/>.
-/// Categoria (SQL 212, 22/10/2026): <see cref="Categoria"/> preenchida, e qualquer produto do
-/// cardapio do caixa com esse grupo vale, ate <see cref="Quantidade"/>; o sabor e escolhido na hora.
+/// Categoria (SQL 212, 22/10/2026): <see cref="Categoria"/> preenchida SEM produto, e qualquer produto
+/// do cardapio do caixa com esse grupo vale, ate <see cref="Quantidade"/>; o sabor e escolhido na hora.
+/// <see cref="ValorCent"/> (SQL 215): o valor de referencia por unidade. Item mais barato sai de graca;
+/// mais caro desconta so o valor e cobra a diferenca. Nulo = cupom de antes do 215: sai de graca.
 /// </summary>
-public sealed record ItemCortesia(string Nome, int Quantidade, string? Categoria = null, string? ProdutoId = null)
+public sealed record ItemCortesia(string Nome, int Quantidade, string? Categoria = null, string? ProdutoId = null, long? ValorCent = null)
 {
-    public bool EhCategoria => !string.IsNullOrWhiteSpace(Categoria);
+    public bool EhCategoria => !string.IsNullOrWhiteSpace(Categoria) && string.IsNullOrWhiteSpace(ProdutoId);
     /// <summary>"2× DONUT NINHO" ou "4× Donuts Clássicos (sabor à escolha)".</summary>
     public string Rotulo => EhCategoria ? $"{Quantidade}× {Categoria} (sabor à escolha)" : $"{Quantidade}× {Nome}";
 }
@@ -29,22 +31,32 @@ public sealed record Cortesia(bool Ok, string? Erro, string? Codigo, string? Loj
 /// <summary>Uma linha da comanda como a cobertura da cortesia a enxerga.</summary>
 public sealed record LinhaParaCortesia(string ProdutoId, string Nome, string? Categoria, long PrecoCent, int Unidades);
 
-/// <summary>Unidades de um produto que a cortesia zerou (o que vai para o servidor conferir).</summary>
-public sealed record ItemCoberto(string ProdutoId, int Quantidade);
+/// <summary>
+/// Unidades de um produto que a cortesia cobriu (o que vai para o servidor conferir) e quanto foi
+/// abatido POR UNIDADE: o preco, quando saiu de graca; o valor do cupom, quando o item era mais caro.
+/// </summary>
+public sealed record ItemCoberto(string ProdutoId, int Quantidade, long? DescontoUnitCent = null);
 
 /// <summary>
-/// Quanto da comanda o cupom cobre (SQL 212). Espelha a conferência do servidor
-/// (pdv_cupom_cortesia_usar): cada unidade só sai de graça se casa com um item do cupom.
+/// Quanto da comanda o cupom cobre (SQL 212 e 215). Espelha a conferência do servidor
+/// (pdv_cupom_cortesia_usar): cada unidade só é coberta se casa com um item do cupom.
 ///  · item de PRODUTO casa pelo id (cupom novo) ou pelo nome (cupom antigo), até a quantidade;
 ///  · item de CATEGORIA casa com qualquer produto do grupo, até a quantidade, primeiro o que
-///    sobrou dos produtos e pelo MAIS BARATO (o brinde nunca vale mais que o liberado);
+///    sobrou dos produtos e pelo MAIS BARATO;
 ///  · produto primeiro, categoria depois: a categoria é a mais flexível.
+/// REGRA DE VALOR (SQL 215): cada unidade coberta leva o TETO da linha do cupom (ValorCent). Preço
+/// até o teto sai de graça; acima, o caixa abate só o teto e cobra a diferença. Sem teto (cupom de
+/// antes) sai de graça.
 /// O resultado é por NOME normalizado (é assim que a comanda, o rascunho e a conta guardam a
-/// cobertura desde a 1.0.32) e a lista do que ficou de fora.
+/// cobertura desde a 1.0.32): as unidades em <see cref="Resultado.PorNome"/> e o teto por unidade em
+/// <see cref="Resultado.TetoPorNome"/> (sem entrada = sem teto), mais a lista do que ficou de fora.
 /// </summary>
 public static class CoberturaCortesia
 {
-    public sealed record Resultado(Dictionary<string, int> PorNome, IReadOnlyList<ItemCortesia> Faltando);
+    public sealed record Resultado(Dictionary<string, int> PorNome, Dictionary<string, long> TetoPorNome, IReadOnlyList<ItemCortesia> Faltando);
+
+    /// <summary>Prefixo das chaves que guardam o teto dentro do mesmo dicionário da cobertura (persistência).</summary>
+    public const string PrefixoTeto = "$teto:";
 
     public static Resultado Calcular(IReadOnlyList<ItemCortesia> cupom, IReadOnlyList<LinhaParaCortesia> comanda,
         Func<string, string> normalizar)
@@ -60,12 +72,16 @@ public static class CoberturaCortesia
             livres[l.ProdutoId] += l.Unidades;
         }
         var cobertoPorProduto = new Dictionary<string, int>(StringComparer.Ordinal);
+        // teto por produto: null = alguma linha sem teto cobriu (sai de graca)
+        var tetoPorProduto = new Dictionary<string, long?>(StringComparer.Ordinal);
         var faltando = new List<ItemCortesia>();
 
-        void Cobrir(string pid, int q)
+        void Cobrir(string pid, int q, long? teto)
         {
             livres[pid] -= q;
             cobertoPorProduto[pid] = cobertoPorProduto.GetValueOrDefault(pid) + q;
+            if (!tetoPorProduto.TryGetValue(pid, out var atual)) tetoPorProduto[pid] = teto;
+            else if (atual is not null) tetoPorProduto[pid] = teto is null ? null : Math.Max(atual.Value, teto.Value);
         }
 
         foreach (var item in cupom.Where(i => !i.EhCategoria))
@@ -80,7 +96,7 @@ public static class CoberturaCortesia
                     : normalizar(item.Nome) == normalizar(l.Nome);
                 if (!casa || livres[pid] <= 0) continue;
                 var q = Math.Min(resta, livres[pid]);
-                Cobrir(pid, q);
+                Cobrir(pid, q, item.ValorCent);
                 resta -= q;
             }
             if (resta == item.Quantidade) faltando.Add(item);
@@ -99,20 +115,50 @@ public static class CoberturaCortesia
                 if (resta <= 0) break;
                 if (livres[pid] <= 0) continue;
                 var q = Math.Min(resta, livres[pid]);
-                Cobrir(pid, q);
+                Cobrir(pid, q, item.ValorCent);
                 resta -= q;
             }
             if (resta == item.Quantidade) faltando.Add(item);
         }
 
         var porNome = new Dictionary<string, int>(StringComparer.Ordinal);
+        var tetoPorNome = new Dictionary<string, long>(StringComparer.Ordinal);
+        var semTeto = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (pid, q) in cobertoPorProduto)
         {
             var nome = normalizar(info[pid].Nome);
             porNome[nome] = porNome.GetValueOrDefault(nome) + q;
+            var teto = tetoPorProduto[pid];
+            if (teto is null) semTeto.Add(nome);
+            else if (!tetoPorNome.TryGetValue(nome, out var t) || t < teto.Value) tetoPorNome[nome] = teto.Value;
         }
-        return new Resultado(porNome, faltando);
+        foreach (var n in semTeto) tetoPorNome.Remove(n);
+        return new Resultado(porNome, tetoPorNome, faltando);
     }
+
+    /// <summary>
+    /// Quanto cada unidade coberta abate: o preço inteiro até o teto; só o teto acima dele.
+    /// </summary>
+    public static long AbatimentoPorUnidade(long precoCent, long? tetoCent)
+        => tetoCent is null ? precoCent : Math.Min(precoCent, tetoCent.Value);
+
+    /// <summary>
+    /// Grava os tetos no MESMO dicionário da cobertura (chaves com <see cref="PrefixoTeto"/>): é esse
+    /// dicionário que o rascunho e a conta guardam no disco, e assim o teto sobrevive ao reinício.
+    /// </summary>
+    public static void GravarNoDicionario(Resultado r, Dictionary<string, int> destino)
+    {
+        destino.Clear();
+        foreach (var kv in r.PorNome) destino[kv.Key] = kv.Value;
+        foreach (var kv in r.TetoPorNome) destino[PrefixoTeto + kv.Key] = (int)Math.Min(int.MaxValue, kv.Value);
+    }
+
+    /// <summary>O teto por unidade de um nome, lido do dicionário da cobertura; nulo = sai de graça.</summary>
+    public static long? TetoDe(IReadOnlyDictionary<string, int> cobertura, string nomeNormalizado)
+        => cobertura.TryGetValue(PrefixoTeto + nomeNormalizado, out var t) ? t : null;
+
+    /// <summary>Só as entradas de unidades (sem as chaves de teto).</summary>
+    public static bool EhChaveDeTeto(string chave) => chave.StartsWith(PrefixoTeto, StringComparison.Ordinal);
 }
 
 /// <summary>
@@ -122,9 +168,10 @@ public static class CoberturaCortesia
 ///
 /// Duas portas no servidor:
 ///  · SQL 212 (22/10/2026): pdv_cupom_cortesia_conferir / pdv_cupom_cortesia_usar, com a
-///    SESSÃO do terminal (a loja vem do terminal). O "usar" manda o que foi zerado, o
-///    servidor confere contra o cupom e queima com trava: dois caixas, só um leva. A mesma
-///    chave de uso no reenvio devolve ok sem queimar de novo.
+///    SESSÃO do terminal (a loja vem do terminal). O "usar" manda o que foi coberto e o
+///    abatimento por unidade; o servidor confere contra o cupom (SQL 215: o valor de cada
+///    linha) e queima com trava: dois caixas, só um leva. A mesma chave de uso no reenvio
+///    devolve ok sem queimar de novo.
 ///  · as antigas courtesy_validate/courtesy_redeem pela chave anônima: o caixa cai nelas
 ///    quando o servidor ainda não tem o SQL 212 (404) ou o terminal está sem sessão.
 ///
@@ -160,7 +207,7 @@ public sealed class Cortesias
     }
 
     /// <summary>
-    /// Queima o cupom dizendo o que foi zerado (<paramref name="cobertura"/>). <paramref name="chave"/>
+    /// Queima o cupom dizendo o que foi coberto (<paramref name="cobertura"/>). <paramref name="chave"/>
     /// identifica este uso: o reenvio com a mesma chave devolve ok. <paramref name="venda"/> é a
     /// client_key da venda (nula quando a comanda toda foi cortesia). Sem o SQL 212 no servidor,
     /// cai no courtesy_redeem antigo.
@@ -183,7 +230,12 @@ public sealed class Cortesias
         => JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["_code"] = codigo,
-            ["_cobertura"] = cobertura.Select(c => new Dictionary<string, object> { ["product_id"] = c.ProdutoId, ["quantidade"] = c.Quantidade }).ToArray(),
+            ["_cobertura"] = cobertura.Select(c =>
+            {
+                var d = new Dictionary<string, object> { ["product_id"] = c.ProdutoId, ["quantidade"] = c.Quantidade };
+                if (c.DescontoUnitCent is { } desc) d["desconto_unit_cent"] = desc;
+                return d;
+            }).ToArray(),
             ["_ref"] = chave,
             ["_operador"] = operador,
             ["_venda"] = venda,
@@ -232,6 +284,7 @@ public sealed class Cortesias
             return new Cortesia(false, "sem_rede", null, null, Array.Empty<ItemCortesia>());
 
         string? S(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        long? L(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : null;
         var ok = r.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.True;
 
         var itens = new List<ItemCortesia>();
@@ -241,11 +294,13 @@ public sealed class Cortesias
                 if (it.ValueKind != JsonValueKind.Object) continue;
                 var nome = S(it, "name");
                 var categoria = S(it, "categoria");
+                var pid = S(it, "product_id");
                 var qtd = it.TryGetProperty("quantity", out var qv) && qv.TryGetInt32(out var q) ? q : 1;
-                if (!string.IsNullOrWhiteSpace(categoria))
-                    itens.Add(new ItemCortesia(categoria!, Math.Max(1, qtd), categoria));
-                else if (!string.IsNullOrWhiteSpace(nome))
-                    itens.Add(new ItemCortesia(nome!, Math.Max(1, qtd), null, S(it, "product_id")));
+                var valor = L(it, "valor_cent");
+                if (!string.IsNullOrWhiteSpace(nome) || !string.IsNullOrWhiteSpace(pid))
+                    itens.Add(new ItemCortesia(nome ?? "", Math.Max(1, qtd), categoria, pid, valor));
+                else if (!string.IsNullOrWhiteSpace(categoria))
+                    itens.Add(new ItemCortesia(categoria!, Math.Max(1, qtd), categoria, null, valor));
             }
 
         return new Cortesia(ok, S(r, "error"), S(r, "code"), S(r, "store"), itens, S(r, "reason"), S(r, "customer_name"));

@@ -2178,6 +2178,32 @@ public partial class Venda : UserControl
         return (int)Math.Max(0, Math.Min(saldo, item.Qtd.Milesimos / 1000));
     }
 
+    /// <summary>
+    /// REGRA DE VALOR (SQL 215, 22/10/2026): o teto por unidade coberta deste item (nulo = sai de graça).
+    /// O teto mora no mesmo dicionário da cobertura (chaves com prefixo), e por isso sobrevive ao
+    /// rascunho e à conta guardada.
+    /// </summary>
+    private long? TetoDe(ItemComanda item) => CoberturaCortesia.TetoDe(_cortesiaCobertura, NormalizarNome(item.Produto.Nome));
+
+    /// <summary>Unidades cobertas que saem DE GRAÇA (preço até o teto, ou cupom sem teto).</summary>
+    private int GratisDe(ItemComanda item)
+        => TetoDe(item) is { } teto && teto < item.Produto.Preco.Centavos ? 0 : CoberturaDe(item);
+
+    /// <summary>Unidades cobertas que ficam na venda com o ABATIMENTO do teto (item mais caro que o cupom).</summary>
+    private int AbatidasDe(ItemComanda item)
+        => TetoDe(item) is { } teto && teto < item.Produto.Preco.Centavos ? CoberturaDe(item) : 0;
+
+    /// <summary>Quanto o cupom abate nesta linha além das unidades grátis: unidades abatidas × teto.</summary>
+    private long AbatimentoDe(ItemComanda item)
+        => AbatidasDe(item) * (TetoDe(item) ?? 0);
+
+    /// <summary>"2× DONUT NINHO grátis, 1× DONUT PISTACHE com R$ 12,90 de desconto" (a caixa da cortesia).</summary>
+    private string TextoDaCortesia()
+        => string.Join(", ", _comanda.Where(i => CoberturaDe(i) > 0).Select(i =>
+            GratisDe(i) > 0
+                ? $"{GratisDe(i)}× {i.Produto.Nome} grátis"
+                : $"{AbatidasDe(i)}× {i.Produto.Nome} com {new Dinheiro(TetoDe(i) ?? 0).Formatado()} de desconto"));
+
     private Nucleo.Promocoes.Avaliacao? _avaliacao;
 
     /// <summary>A comanda como o motor a vê: quantidade já sem as unidades da cortesia.</summary>
@@ -2236,10 +2262,12 @@ public partial class Venda : UserControl
         ListaComanda.Items.Clear();
         foreach (var item in _comanda) ListaComanda.Items.Add(LinhaComanda(item));
 
-        // Total COBRADO: preço × unidades não cobertas pela cortesia, menos a promoção.
+        // Total COBRADO: preço × unidades não grátis, menos o abatimento do cupom (item mais caro que o
+        // valor liberado, SQL 215), menos a promoção.
         var totalCent = _comanda.Sum(i =>
-            i.Produto.Preco.Centavos * ((i.Qtd.Milesimos / 1000) - CoberturaDe(i))
+            i.Produto.Preco.Centavos * ((i.Qtd.Milesimos / 1000) - GratisDe(i))
             + i.Produto.Preco.VezesQtd(i.Qtd.Milesimos % 1000).Centavos
+            - AbatimentoDe(i)
             - i.DescontoCent);
         var total = new Dinheiro(Math.Max(0, totalCent));
         TxtTotal.Text = total.Formatado();
@@ -2551,9 +2579,7 @@ public partial class Venda : UserControl
         if (_cortesiaCodigo is not null)
         {
             TxtCortesiaTitulo.Text = $"Cortesia {_cortesiaCodigo} aplicada";
-            TxtCortesiaItens.Text = string.Join(", ",
-                _comanda.Where(i => CoberturaDe(i) > 0)
-                        .Select(i => $"{CoberturaDe(i)}× {i.Produto.Nome} grátis"));
+            TxtCortesiaItens.Text = TextoDaCortesia();
             CaixaCortesia.Visibility = Visibility.Visible;
         }
 
@@ -2823,13 +2849,11 @@ public partial class Venda : UserControl
                 string.Join(", ", c.Itens.Select(i => i.Rotulo)));
 
         _cortesiaCodigo = c.Codigo ?? codigo.Trim().ToUpperInvariant();
-        _cortesiaCobertura.Clear();
-        foreach (var kv in cobertura) _cortesiaCobertura[kv.Key] = kv.Value;
+        // unidades E tetos no mesmo dicionário (SQL 215): é ele que o rascunho e a conta guardam
+        CoberturaCortesia.GravarNoDicionario(conta, _cortesiaCobertura);
 
         TxtCortesiaTitulo.Text = $"Cortesia {_cortesiaCodigo} aplicada";
-        TxtCortesiaItens.Text = string.Join(", ",
-            _comanda.Where(i => CoberturaDe(i) > 0)
-                    .Select(i => $"{CoberturaDe(i)}× {i.Produto.Nome} grátis"));
+        TxtCortesiaItens.Text = TextoDaCortesia();
         if (faltando.Count > 0)
             TxtCortesiaItens.Text += $"  ·  fora da comanda: {string.Join(", ", faltando)}";
         CaixaCortesia.Visibility = Visibility.Visible;
@@ -2843,7 +2867,8 @@ public partial class Venda : UserControl
     /// </summary>
     private List<ItemCoberto> CoberturaParaOServidor()
         => _comanda.GroupBy(i => i.Produto.Id)
-            .Select(g => new ItemCoberto(g.Key, g.Sum(CoberturaDe)))
+            .Select(g => new ItemCoberto(g.Key, g.Sum(CoberturaDe),
+                CoberturaCortesia.AbatimentoPorUnidade(g.First().Produto.Preco.Centavos, TetoDe(g.First()))))
             .Where(x => x.Quantidade > 0)
             .ToList();
 
@@ -2909,19 +2934,21 @@ public partial class Venda : UserControl
         {
             var unidades = i.Qtd.Milesimos / 1000;
             var fracao = i.Qtd.Milesimos % 1000;
-            var cobradas = unidades - CoberturaDe(i);
+            // SQL 215: a unidade coberta mais cara que o cupom FICA na venda, com o teto como desconto
+            var cobradas = unidades - GratisDe(i);
             if (cobradas <= 0 && fracao == 0) continue;   // tudo cortesia: fora da nota
             var qtdCobrada = new Quantidade(cobradas * 1000 + fracao);
             var bruto = i.Produto.Preco.VezesQtd(qtdCobrada.Milesimos);
-            var desconto = new Dinheiro(Math.Clamp(i.DescontoCent, 0, bruto.Centavos));
+            var descontoPromo = Math.Clamp(i.DescontoCent, 0, bruto.Centavos);
+            var desconto = new Dinheiro(Math.Clamp(descontoPromo + AbatimentoDe(i), 0, bruto.Centavos));
             itens.Add(new LinhaVenda(
                 i.Produto.Id, i.Produto.Plu ?? i.Produto.Id, i.Produto.Nome,
                 qtdCobrada, i.Produto.Preco, new Dinheiro(bruto.Centavos - desconto.Centavos), i.Produto.Unidade,
                 i.Produto.Ncm, i.Produto.Cest, i.Produto.Csosn, null, i.Produto.Origem,
-                desconto, desconto.Centavos > 0 ? agora.PromoId : null,
-                desconto.Centavos > 0 ? agora.PromoNome : null, i.UnidadesGratis * 1000L,
+                desconto, descontoPromo > 0 ? agora.PromoId : null,
+                descontoPromo > 0 ? agora.PromoNome : null, i.UnidadesGratis * 1000L,
                 i.Escolhas is { Count: > 0 } ? i.Escolhas : null,
-                desconto.Centavos > 0 ? autorizacaoPromo : null));
+                descontoPromo > 0 ? autorizacaoPromo : null));
         }
 
         // Cortesia cobrindo a comanda INTEIRA: não há venda a cobrar nem nota a
@@ -3065,6 +3092,8 @@ public partial class Venda : UserControl
                         "already_redeemed" => "O cupom já tinha sido usado. Não entregue de graça: cobre a venda normal.",
                         "loja_errada" => "O cupom é de outra loja. Só pode ser usado lá.",
                         "itens_fora_do_cupom" => "Algum item da comanda não faz parte do cupom. Tire o cupom e aplique de novo.",
+                        "valor_acima_do_cupom" => "O item passa do valor do cupom. Tire o cupom e aplique de novo.",
+                        "precisa_caixa_novo" => "Este cupom precisa do caixa atualizado. Peça para atualizar o caixa.",
                         "expired" => "O cupom venceu. Não entregue de graça: cobre a venda normal.",
                         "cancelled" => "O cupom foi cancelado. Não entregue de graça: cobre a venda normal.",
                         "sem_rede" => "Sem internet para usar o cupom agora. Tente de novo em alguns segundos.",

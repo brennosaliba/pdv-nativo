@@ -911,7 +911,8 @@ public sealed class Drenagem : IDisposable
                 {
                     var pid = it.TryGetProperty("ProdutoId", out var pv) && pv.ValueKind == JsonValueKind.String ? pv.GetString() : null;
                     var q = it.TryGetProperty("Quantidade", out var qv) && qv.TryGetInt32(out var qi) ? qi : 0;
-                    if (!string.IsNullOrWhiteSpace(pid) && q > 0) cobertura.Add(new ItemCoberto(pid!, q));
+                    long? desc = it.TryGetProperty("DescontoUnitCent", out var dv) && dv.ValueKind == JsonValueKind.Number && dv.TryGetInt64(out var dl) ? dl : null;
+                    if (!string.IsNullOrWhiteSpace(pid) && q > 0) cobertura.Add(new ItemCoberto(pid!, q, desc));
                 }
         }
         catch { return (false, "payload de cortesia corrompido"); }

@@ -29,6 +29,9 @@ namespace Pdv.Testes;
 ///  5. a tela de verdade: 4 donuts clássicos de sabores escolhidos saem de graça e o premium é
 ///     cobrado; cupom de outra loja e categoria ausente dão recado de uma linha; a comanda toda em
 ///     cortesia queima o cupom no servidor com o que foi zerado.
+///  6. REGRA DE VALOR (SQL 215, 1.0.49): cada linha do cupom tem um teto por unidade. Item até o teto
+///     sai de graça; item mais caro fica na venda com o teto de desconto; o teto vai no dicionário da
+///     cobertura (sobrevive ao rascunho); o servidor recebe o abatimento por unidade.
 /// </summary>
 public static class TestesCupomCortesia
 {
@@ -94,6 +97,29 @@ public static class TestesCupomCortesia
 
         r = CoberturaCortesia.Calcular(cat4, new[] { L(Ninho, "DONUT NINHO", "Donuts Clássicos", 1290, 1), L(Ninho, "DONUT NINHO", "Donuts Clássicos", 1290, 2) }, Norm);
         checar(r.PorNome.GetValueOrDefault(Norm("DONUT NINHO")) == 3, "CC-7 duas linhas do mesmo produto somam (3 de 4)");
+        checar(r.TetoPorNome.Count == 0, "CC-7 cupom sem valor: sem teto (sai de graca)");
+
+        // REGRA DE VALOR: "qualquer um de Donuts Classicos" vale 12,90; o pistache (18,90) nao e da categoria,
+        // mas um cupom de "qualquer donut" de 12,90 cobrindo um ninho de 14,90 abate so 12,90
+        var cat1290 = new[] { new ItemCortesia("Donuts Clássicos", 2, "Donuts Clássicos", null, 1290) };
+        r = CoberturaCortesia.Calcular(cat1290, new[] { L(Ninho, "DONUT NINHO", "Donuts Clássicos", 1490, 1), L(Choco, "DONUT CHOCOLATE", "Donuts Clássicos", 990, 1) }, Norm);
+        checar(r.PorNome.GetValueOrDefault(Norm("DONUT NINHO")) == 1 && r.PorNome.GetValueOrDefault(Norm("DONUT CHOCOLATE")) == 1
+               && r.TetoPorNome.GetValueOrDefault(Norm("DONUT NINHO")) == 1290 && r.TetoPorNome.GetValueOrDefault(Norm("DONUT CHOCOLATE")) == 1290,
+            "CC-8 regra de valor: as duas unidades cobertas levam o teto de 12,90");
+        checar(CoberturaCortesia.AbatimentoPorUnidade(1490, 1290) == 1290 && CoberturaCortesia.AbatimentoPorUnidade(990, 1290) == 990
+               && CoberturaCortesia.AbatimentoPorUnidade(1490, null) == 1490,
+            "CC-9 abatimento por unidade: o teto quando o item e mais caro, o preco quando e mais barato ou sem teto");
+        var dic = new Dictionary<string, int>(StringComparer.Ordinal);
+        CoberturaCortesia.GravarNoDicionario(r, dic);
+        checar(dic[Norm("DONUT NINHO")] == 1 && CoberturaCortesia.TetoDe(dic, Norm("DONUT NINHO")) == 1290
+               && CoberturaCortesia.TetoDe(dic, Norm("DONUT HOMER")) is null
+               && dic.Keys.Count(CoberturaCortesia.EhChaveDeTeto) == 2 && dic.Keys.Count(k => !CoberturaCortesia.EhChaveDeTeto(k)) == 2,
+            "CC-10 o teto vai no mesmo dicionario da cobertura (chaves com prefixo) e volta de la");
+        // linha sem teto e linha com teto cobrindo o mesmo produto: sem teto vence (sai de graca)
+        var misturado = new[] { new ItemCortesia("DONUT NINHO", 1, null, Ninho), new ItemCortesia("Donuts Clássicos", 1, "Donuts Clássicos", null, 1000) };
+        r = CoberturaCortesia.Calcular(misturado, new[] { L(Ninho, "DONUT NINHO", "Donuts Clássicos", 1290, 2) }, Norm);
+        checar(r.PorNome.GetValueOrDefault(Norm("DONUT NINHO")) == 2 && !r.TetoPorNome.ContainsKey(Norm("DONUT NINHO")),
+            "CC-11 produto coberto por uma linha sem teto e outra com teto: fica sem teto");
     }
 
     // ── 2. leitura ──────────────────────────────────────────────────────────
@@ -105,14 +131,20 @@ public static class TestesCupomCortesia
         checar(c.Ok && c.Itens.Count == 2 && c.Itens[0].EhCategoria && c.Itens[0].Quantidade == 4 && c.Itens[1].ProdutoId == "p-c"
                && c.Motivo == "donut ruim" && c.Cliente == "Maria" && c.Loja == "American Day Savassi",
             "LC-1 a resposta nova traz categoria, produto com id, motivo e cliente");
+        var v2 = Ler("""{"ok":true,"code":"ADS-V2","items":[{"categoria":"Donuts Clássicos","quantity":2,"valor_cent":1290},{"name":"COOKIE","quantity":1,"product_id":"p-c","categoria":"Cookies","valor_cent":990}]}""");
+        checar(v2.Itens[0].EhCategoria && v2.Itens[0].ValorCent == 1290 && !v2.Itens[1].EhCategoria && v2.Itens[1].ValorCent == 990 && v2.Itens[1].Categoria == "Cookies",
+            "LC-1b SQL 215: valor por linha lido; produto certo com categoria NAO e categoria");
         var v = Ler("""{"ok":true,"code":"AD-ABC123","items":[{"name":"AFOGATTO","quantity":1}]}""");
         checar(v.Ok && v.Itens.Single().Nome == "AFOGATTO" && !v.Itens[0].EhCategoria && v.Itens[0].ProdutoId is null,
             "LC-2 a resposta antiga (so nome) continua lida");
-        var corpo = JsonDocument.Parse(Cortesias.CorpoDoUso("ADS-1", new[] { new ItemCoberto(Ninho, 2) }, "chave-1", "Ana", "ck-venda")).RootElement;
+        var corpo = JsonDocument.Parse(Cortesias.CorpoDoUso("ADS-1", new[] { new ItemCoberto(Ninho, 2, 1290) }, "chave-1", "Ana", "ck-venda")).RootElement;
         checar(corpo.GetProperty("_cobertura")[0].GetProperty("product_id").GetString() == Ninho
                && corpo.GetProperty("_cobertura")[0].GetProperty("quantidade").GetInt32() == 2
+               && corpo.GetProperty("_cobertura")[0].GetProperty("desconto_unit_cent").GetInt64() == 1290
                && corpo.GetProperty("_ref").GetString() == "chave-1" && corpo.GetProperty("_venda").GetString() == "ck-venda",
-            "LC-3 o corpo do uso leva o que foi zerado (product_id, quantidade), a chave e a venda, nos nomes da RPC");
+            "LC-3 o corpo do uso leva o que foi zerado (product_id, quantidade, desconto por unidade), a chave e a venda, nos nomes da RPC");
+        var semDesc = JsonDocument.Parse(Cortesias.CorpoDoUso("ADS-1", new[] { new ItemCoberto(Ninho, 1) }, "k", null, null)).RootElement;
+        checar(!semDesc.GetProperty("_cobertura")[0].TryGetProperty("desconto_unit_cent", out _), "LC-3b sem abatimento informado o campo nao vai");
         foreach (var t in new[] { new ItemCortesia("X", 2).Rotulo, new ItemCortesia("Donuts", 4, "Donuts").Rotulo })
             checar(!t.Contains('—') && !t.Contains('–'), $"LC-4 rotulo sem travessao ({t})");
     }
@@ -175,15 +207,16 @@ public static class TestesCupomCortesia
             using var dren = new Drenagem(nuvem, fake.Url);
             fake.CuponsCortesia["ADS-FILA001"] = """{"ok":true,"code":"ADS-FILA001","items":[{"categoria":"Donuts Clássicos","quantity":4}]}""";
             // exatamente o que ResgatarSilenciosoAsync enfileira quando a rede caiu na hora
-            var cobertura = new List<ItemCoberto> { new(Ninho, 4) };
+            var cobertura = new List<ItemCoberto> { new(Ninho, 4, 1290) };
             Caixa.Enfileirar(cx, null, "cortesia_resgate", "ADS-FILA001", "ADS-FILA001",
                 new { codigo = "ADS-FILA001", operador = "Ana", loja = "American Day Savassi", cobertura, chave = "chave-fila", venda = "ck-fila" });
             await dren.DrenarAsync();
             var enviado = cx.ExecuteScalar<string?>("SELECT enviado_em FROM outbox WHERE tipo='cortesia_resgate' AND client_key='ADS-FILA001'");
             var corpo = fake.UsosCupom.TryGetValue("ADS-FILA001", out var b) ? JsonDocument.Parse(b).RootElement : default;
             checar(enviado is not null && corpo.ValueKind == JsonValueKind.Object && corpo.GetProperty("_ref").GetString() == "chave-fila"
-                   && corpo.GetProperty("_cobertura")[0].GetProperty("quantidade").GetInt32() == 4 && corpo.GetProperty("_venda").GetString() == "ck-fila",
-                "CF-1 a fila sobe o uso pela porta nova com a MESMA chave, o que foi zerado e a venda");
+                   && corpo.GetProperty("_cobertura")[0].GetProperty("quantidade").GetInt32() == 4 && corpo.GetProperty("_venda").GetString() == "ck-fila"
+                   && corpo.GetProperty("_cobertura")[0].GetProperty("desconto_unit_cent").GetInt64() == 1290,
+                "CF-1 a fila sobe o uso pela porta nova com a MESMA chave, o que foi zerado, o abatimento por unidade e a venda");
 
             // fila de caixa velho (sem cobertura) e servidor sem o SQL: courtesy_redeem, como sempre
             Caixa.Enfileirar(cx, null, "cortesia_resgate", "AD-ANTIGO", "AD-ANTIGO", new { codigo = "AD-ANTIGO", operador = "Ana", loja = "American Day Savassi" });
@@ -283,8 +316,41 @@ public static class TestesCupomCortesia
         checar(Campo<TextBlock>(tela, "TxtCortesiaTitulo").Text == "Cortesia ADS-TELA001 aplicada" && itens.Contains("grátis")
                && !itens.Contains('—'), $"CT-1 a caixa da cortesia diz o codigo e os gratis ({itens})");
         var paraServidor = (List<ItemCoberto>)Invocar(tela, "CoberturaParaOServidor")!;
-        checar(paraServidor.Count == 2 && paraServidor.Sum(x => x.Quantidade) == 4 && paraServidor.All(x => x.ProdutoId is Ninho or Brig),
-            "CT-2 o que vai para o servidor conferir: 2 ninho e 2 brigadeiro, por id");
+        checar(paraServidor.Count == 2 && paraServidor.Sum(x => x.Quantidade) == 4 && paraServidor.All(x => x.ProdutoId is Ninho or Brig)
+               && paraServidor.All(x => x.DescontoUnitCent == (x.ProdutoId == Ninho ? 1290 : 1190)),
+            "CT-2 o que vai para o servidor conferir: 2 ninho e 2 brigadeiro, por id, com o preco como abatimento");
+        Tirar();
+
+        // REGRA DE VALOR (SQL 215): cupom "1 donut qualquer" de 12,90. A cliente escolheu o pistache (18,90):
+        // o pistache fica na venda com 12,90 de desconto e a cliente paga 6,00
+        Invocar(tela, "EsvaziarComanda");
+        Por(Pistache, 1); Por(Agua, 1);
+        host.UpdateLayout();
+        var qualquer = new Cortesia(true, null, "ADS-TELA009", "American Day Savassi",
+            new[] { new ItemCortesia("Donuts Premium", 1, "Donuts Premium", null, 1290) });
+        recado = Aplicar(qualquer);
+        host.UpdateLayout();
+        checar(recado is null && Cob(Pistache) == 1 && (int)Invocar(tela, "GratisDe", comanda.First(i => i.Produto.Id == Pistache))! == 0
+               && (int)Invocar(tela, "AbatidasDe", comanda.First(i => i.Produto.Id == Pistache))! == 1,
+            "CT-7 item mais caro que o valor do cupom: coberto, mas nao sai de graca (abatido)");
+        checar(Total() == new Dinheiro(1890 - 1290 + 500).Formatado(), $"CT-7 o total cobra a diferenca (6,00) e a agua ({Total()})");
+        var itensCortesia = Campo<TextBlock>(tela, "TxtCortesiaItens").Text;
+        checar(itensCortesia.Contains("1× DONUT PISTACHE com R$ 12,90 de desconto") && !itensCortesia.Contains('\u2014'),
+            $"CT-7 a caixa da cortesia diz o desconto ({itensCortesia})");
+        var paraServidor2 = (List<ItemCoberto>)Invocar(tela, "CoberturaParaOServidor")!;
+        checar(paraServidor2.Single().DescontoUnitCent == 1290, "CT-7 o servidor recebe o abatimento de 12,90 por unidade");
+        var cob = Campo<Dictionary<string, int>>(tela, "_cortesiaCobertura");
+        checar(CoberturaCortesia.TetoDe(cob, Norm("DONUT PISTACHE")) == 1290, "CT-7 o teto esta no dicionario da cobertura (vai para o rascunho)");
+        // o mesmo cupom cobrindo um item mais barato sai de graca
+        Tirar();
+        Invocar(tela, "EsvaziarComanda");
+        Por(Ninho, 1);
+        var baratinho = new Cortesia(true, null, "ADS-TELA010", "American Day Savassi",
+            new[] { new ItemCortesia("Donuts Clássicos", 1, "Donuts Clássicos", null, 1490) });
+        recado = Aplicar(baratinho);
+        host.UpdateLayout();
+        checar(recado is null && (int)Invocar(tela, "GratisDe", comanda[0])! == 1 && Total() == new Dinheiro(0).Formatado(),
+            $"CT-8 item mais barato que o valor: sai de graca ({Total()})");
         Tirar();
 
         recado = Aplicar(cat4 with { Loja = "American Day Castelo" });
