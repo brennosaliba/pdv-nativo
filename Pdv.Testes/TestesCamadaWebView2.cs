@@ -192,8 +192,10 @@ public static class TestesCamadaWebView2
             checar(corpo.Length > 0 && iTry >= 0 && iCore > iTry,
                 $"TW-7 chat: {assinatura.Split('(')[0].Split(' ').Last()} só encosta no CoreWebView2 dentro do try (com o navegador morto ele lança)");
         }
-        var recarregar = Corpo(chat, "private void Recarregar(");
-        checar(recarregar.IndexOf("try", StringComparison.Ordinal) is var it && it >= 0 && recarregar.IndexOf("Reload()", StringComparison.Ordinal) > it
+        // 1.0.47: o botao delega a recarga forte (RecarregarForteAsync), e e la que o Reload mora dentro do try
+        var recarregar = Corpo(chat, "private async Task RecarregarForteAsync(");
+        checar(Corpo(chat, "private async void Recarregar(").Contains("await RecarregarForteAsync(", StringComparison.Ordinal)
+               && recarregar.IndexOf("try", StringComparison.Ordinal) is var it && it >= 0 && recarregar.IndexOf("Reload()", StringComparison.Ordinal) > it
                && recarregar.Contains("RecriarAsync(", StringComparison.Ordinal),
             "TW-8 chat: Recarregar com o navegador morto recria em vez de lançar na tela");
         checar(chat.Contains("core.ProcessFailed +=", StringComparison.Ordinal)

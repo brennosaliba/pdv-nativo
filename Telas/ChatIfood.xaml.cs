@@ -318,6 +318,8 @@ public partial class ChatIfood : UserControl
                 _sockets = null;
                 _socketEscolhido = null;
                 if (e.IsSuccess) _ = AvisarOperadorNoChatAsync();   // 1.0.43: a página nova nasce sem saber do operador
+                _semRecorte = false;   // 1.0.47: pagina nova, cortina nova (cai sozinha em 20 s)
+                if (e.IsSuccess && _gestorInteiro) _ = ReaplicarGestorInteiroAsync(core);   // 1.0.47: o dono pediu o Gestor inteiro; a recarga nao o tira
                 Diag(e.IsSuccess ? "navegou: ok" : $"navegou: falhou {e.WebErrorStatus}");
                 TxtEstado.Text = e.IsSuccess ? "painel do chat" : "sem conexão: tentando de novo sozinho";
                 // Respostas prontas: a lista (lida do banco a cada carga) entra na página.
@@ -685,7 +687,18 @@ public partial class ChatIfood : UserControl
             else if (tipo == "modo")
             {
                 var modo = doc.RootElement.TryGetProperty("modo", out var v) ? v.GetString() : null;
-                TxtEstado.Text = modo == "gestor" ? "Gestor (chat na barra lateral)" : "painel do chat";
+                if (modo == "chat") _semRecorte = false;
+                TxtEstado.Text = modo == "gestor"
+                    ? (_semRecorte ? ChatSemRecorte : "Gestor (chat na barra lateral)")
+                    : "painel do chat";
+            }
+            else if (tipo == "cortina")
+            {
+                // 1.0.47: a cortina caiu pelo prazo (20 s) sem o chat isolado: o Gestor inteiro fica na tela, a
+                // captura e as tentativas de isolar seguem, e a barra diz isso ao operador
+                _semRecorte = true;
+                TxtEstado.Text = ChatSemRecorte;
+                Diag("cortina caiu pelo prazo sem o recorte (o Gestor inteiro fica na tela; a captura segue)");
             }
             else if (tipo == "chatmsgs")
             {
@@ -1745,14 +1758,64 @@ public partial class ChatIfood : UserControl
         catch (Exception ex) { Diag("abrir conversa: " + ex.GetType().Name); return false; }
     }
 
-    private void Recarregar(object sender, RoutedEventArgs e)
+    private async void Recarregar(object sender, RoutedEventArgs e)
     {
         ServicoChat.Recomecar();   // a próxima leitura vira linha de base
         if (!_pronto) { _ = IniciarAsync(); return; }
-        // com o navegador morto o controle lança: aí é recriar, não recarregar (15/09/2026)
-        try { Web.CoreWebView2?.Reload(); }
+        await RecarregarForteAsync("botao Recarregar");
+    }
+
+    /// <summary>
+    /// 1.0.47 (22/10/2026, o Gestor 9.349 atualizado): RECARGA FORTE. O Reload simples reaproveitava o cache de
+    /// disco, o Cache Storage e o service worker do Gestor antigo; com o Gestor novo no ar a pagina podia ficar
+    /// presa na casca velha (o spinner vermelho e branco em fundo cinza) e o Recarregar nao mudava nada. Agora
+    /// tira o service worker e os caches pela propria pagina (o mesmo que o botao escondido "Clear cache" do
+    /// Gestor faz), limpa cache de disco, Cache Storage e service workers do perfil (cookies e localStorage
+    /// ficam: o login do Gestor mora neles) e so entao recarrega. Se a limpeza falhar, recarrega do mesmo jeito.
+    /// Com o navegador morto o controle lança: aí é recriar, não recarregar (15/09/2026).
+    /// </summary>
+    private async Task RecarregarForteAsync(string motivo)
+    {
+        var core = Web.CoreWebView2;
+        if (core is null) { _ = RecriarAsync(motivo + " sem navegador"); return; }
+        try
+        {
+            TxtEstado.Text = "Recarregando o Gestor…";
+            var como = await LimparCacheDoGestorAsync(core);
+            Diag($"recarga forte ({motivo}): cache e service worker limpos por {como}");
+            core.Reload();
+        }
         catch (Exception ex) { Diag("recarregar: " + ex.GetType().Name); _ = RecriarAsync("recarregar com o navegador morto"); }
     }
+
+    /// <summary>
+    /// A limpeza da recarga forte. Devolve por onde foi: "perfil" (ClearBrowsingDataAsync: cache de disco,
+    /// Cache Storage e service workers), "cdp" (so o Network.clearBrowserCache, runtime sem Profile) ou "nada".
+    /// Nunca lança. Nunca toca em cookies nem no localStorage (o login do Gestor).
+    /// </summary>
+    internal static async Task<string> LimparCacheDoGestorAsync(CoreWebView2 core)
+    {
+        try
+        {
+            var js = core.ExecuteScriptAsync(JsTirarServiceWorker);
+            await Task.WhenAny(js, Task.Delay(3000));   // com prazo: pagina presa nao segura o Recarregar
+        }
+        catch { /* pagina sem script: o perfil resolve */ }
+        try
+        {
+            await core.Profile.ClearBrowsingDataAsync(
+                CoreWebView2BrowsingDataKinds.DiskCache | CoreWebView2BrowsingDataKinds.CacheStorage | CoreWebView2BrowsingDataKinds.ServiceWorkers);
+            return "perfil";
+        }
+        catch { /* runtime antigo sem Profile: o CDP */ }
+        try { await core.CallDevToolsProtocolMethodAsync("Network.clearBrowserCache", "{}"); return "cdp"; }
+        catch { return "nada"; }
+    }
+
+    /// <summary>O que a pagina mesma consegue tirar: todos os service workers registrados e os caches da origem.</summary>
+    internal const string JsTirarServiceWorker =
+        "(function(){ try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) navigator.serviceWorker.getRegistrations().then(function(rs){ rs.forEach(function(r){ try { r.unregister(); } catch (e) {} }); }); " +
+        "if (window.caches && caches.keys) caches.keys().then(function(ks){ ks.forEach(function(k){ try { caches.delete(k); } catch (e) {} }); }); } catch (e) {} return true; })()";
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
 
@@ -1808,6 +1871,12 @@ public partial class ChatIfood : UserControl
 
     private bool _gestorInteiro;
 
+    /// <summary>1.0.47: a cortina caiu pelo prazo (20 s) sem o chat isolado nesta pagina; zera a cada navegacao e quando o chat isola.</summary>
+    private bool _semRecorte;
+
+    /// <summary>A linha da barra quando o Gestor fica inteiro na tela por falta do recorte (a captura segue).</summary>
+    public const string ChatSemRecorte = "Chat sem o recorte por enquanto";
+
     /// <summary>
     /// Tira (ou devolve) o holofote: com o Gestor inteiro na tela dá para navegar até o
     /// pedido e chegar ao "Fale com o iFood". O observador de não lidas continua. Ao
@@ -1817,18 +1886,37 @@ public partial class ChatIfood : UserControl
     {
         try
         {
-            if (!_pronto || Web.CoreWebView2 is null) return;
+            // 1.0.47: com a pagina presa (cortina, casca do Gestor) o botao TEM que funcionar; so sem navegador nao da
+            if (Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu. Toque em Recarregar."; return; }
             // 1.0.29 (09/10, pedido do dono): abrir o Gestor inteiro pede o autenticador do gerente
             // geral ou do dono (nivel gerente = manager ou owner). Voltar para "So o chat" e livre.
             if (!_gestorInteiro && !await AutorizarGestorInteiroAsync()) return;
             _gestorInteiro = !_gestorInteiro;
             TxtGestorInteiro.Text = _gestorInteiro ? "Só o chat" : "Gestor inteiro";
-            await Web.CoreWebView2.ExecuteScriptAsync(_gestorInteiro
-                ? "window.__pdvSemHolofote = true; document.body.classList.remove('pdv-so-chat'); document.querySelectorAll('[data-pdv-hide]').forEach(function(x){ x.removeAttribute('data-pdv-hide'); });"
-                : "window.__pdvSemHolofote = false; window.pdvIsolar && window.pdvIsolar();");
+            await Web.CoreWebView2.ExecuteScriptAsync(_gestorInteiro ? JsGestorInteiro : JsSoOChat);
             TxtEstado.Text = _gestorInteiro ? "Gestor inteiro (toque em Só o chat para voltar)" : "painel do chat";
         }
-        catch (Exception ex) { Diag("gestor inteiro: " + ex.GetType().Name); }
+        catch (Exception ex) { Diag("gestor inteiro: " + ex.GetType().Name); TxtEstado.Text = "Não deu agora. Toque em Recarregar."; }
+    }
+
+    /// <summary>
+    /// 1.0.47: o Gestor inteiro tira o holofote E derruba a cortina na hora (pdvSemCortina: ela nao volta neste
+    /// documento). Antes so tirava o holofote: com a cortina presa o dono tocava e nada mudava (Savassi, 22/10).
+    /// O mesmo texto vai para a TV (ScriptsDoChatPainel.JsGestorInteiro do kiosk).
+    /// </summary>
+    internal const string JsGestorInteiro =
+        "window.__pdvSemHolofote = true; window.pdvSemCortina && window.pdvSemCortina(); document.body.classList.remove('pdv-so-chat'); " +
+        "document.querySelectorAll('[data-pdv-hide]').forEach(function(x){ x.removeAttribute('data-pdv-hide'); }); " +
+        "document.querySelectorAll('[data-pdv-veu]').forEach(function(x){ x.removeAttribute('data-pdv-veu'); });";
+
+    /// <summary>De volta para so o chat (a vigia da gaveta isola de novo sozinha).</summary>
+    internal const string JsSoOChat = "window.__pdvSemHolofote = false; window.pdvIsolar && window.pdvIsolar();";
+
+    /// <summary>1.0.47: a pagina recarregou com o dono no Gestor inteiro: a pagina nova nasce inteira (sem cortina).</summary>
+    private async Task ReaplicarGestorInteiroAsync(CoreWebView2 core)
+    {
+        try { await core.ExecuteScriptAsync(JsGestorInteiro); }
+        catch (Exception ex) { Diag("gestor inteiro apos a recarga: " + ex.GetType().Name); }
     }
 
     /// <summary>1.0.29: o codigo do autenticador do gerente geral ou do dono, conferido na nuvem. false = nao abre.</summary>
@@ -1865,21 +1953,34 @@ public partial class ChatIfood : UserControl
     /// </summary>
     private async void Diagnostico(object sender, RoutedEventArgs e)
     {
+        var dono = Window.GetWindow(this) ?? Application.Current.MainWindow;
         try
         {
-            if (!_pronto || Web.CoreWebView2 is null) { TxtEstado.Text = "o chat ainda não abriu"; return; }
+            // 1.0.47: funciona com a cortina presa e com a casca do Gestor na tela (so sem navegador nao da), e
+            // DIZ na tela onde gravou: o dono tocava e nao via nada (Savassi, 22/10)
+            if (Web.CoreWebView2 is null)
+            {
+                TxtEstado.Text = "o chat ainda não abriu";
+                if (dono is not null) Dialogo.Avisar(dono, "Diagnóstico", "O chat ainda não abriu. Toque em Recarregar.");
+                return;
+            }
             var bruto = await Web.CoreWebView2.ExecuteScriptAsync(ScriptDiagnostico);
             var texto = JsonSerializer.Deserialize<string>(bruto) ?? "";
             var caminho = Path.Combine(Pdv.Nucleo.Banco.Pasta, $"gestor-diagnostico-{DateTime.Now:HHmmss}.txt");
+            string runtime;
+            try { runtime = Web.CoreWebView2.Environment.BrowserVersionString; } catch { runtime = "?"; }
             File.WriteAllText(caminho,
-                $"url: {Web.CoreWebView2.Source}\ntitulo: {Web.CoreWebView2.DocumentTitle}\nquando: {DateTime.Now:dd/MM/yyyy HH:mm:ss}\n\n{texto}");
+                $"url: {Web.CoreWebView2.Source}\ntitulo: {Web.CoreWebView2.DocumentTitle}\nquando: {DateTime.Now:dd/MM/yyyy HH:mm:ss}\n"
+                + $"caixa: {Atualizacao.VersaoInstalada() ?? "?"} runtime WebView2: {runtime} navegacao: {_navegacao} modo: {(_gestorInteiro ? "gestor_inteiro" : "so_chat")}{(_semRecorte ? " (sem o recorte)" : "")}\n\n{texto}");
             TxtEstado.Text = "Diagnóstico gravado em " + caminho;
+            if (dono is not null) Dialogo.Avisar(dono, "Diagnóstico", "Gravado em " + caminho);
         }
         catch (Exception ex)
         {
             // texto cru de exceção não vai para a tela (revisão 15/09): o detalhe fica no diagnóstico
             Diag("diagnostico do gestor: " + ex.GetType().Name + " " + ex.Message);
             TxtEstado.Text = "O diagnóstico não gravou agora. Toque de novo.";
+            if (dono is not null) Dialogo.Avisar(dono, "Diagnóstico", "Não gravou agora. Toque de novo.");
         }
     }
 
@@ -1888,6 +1989,20 @@ public partial class ChatIfood : UserControl
           function mascara(s){ return (s || '').replace(/\s+/g, ' ').replace(/\d{4,}/g, '####').replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, 'email@####').slice(0, 70); }
           function visivel(el){ try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; } }
           var linhas = [], n = 0;
+          // 1.0.47: a primeira linha diz em que pe a pagina esta (a casca do Gestor ainda na tela? o app montou? a
+          // cortina? o login?), para o diag decidir entre "o Gestor nao abriu" e "o nosso recorte nao achou o chat"
+          try {
+            var ini = document.querySelector('.Initial'), root = document.getElementById('root');
+            var iniVis = ini ? (visivel(ini) && getComputedStyle(ini).display !== 'none' ? 'visivel' : 'sumiu') : 'nao_existe';
+            linhas.push('estado: readyState=' + document.readyState + ' casca_do_gestor=' + iniVis + ' root_filhos=' + (root ? root.children.length : -1)
+              + ' cortina=' + (window.pdvCortina ? window.pdvCortina() : '?')
+              + ' modo=' + (window.__pdvSemHolofote ? 'gestor_inteiro' : (document.body.classList.contains('pdv-so-chat') ? 'so_chat' : 'sem_recorte'))
+              + ' login=' + !!document.querySelector('input[type="password"]')
+              + ' sw=' + (navigator.serviceWorker && navigator.serviceWorker.controller ? 'controlado' : 'sem')
+              + ' navegador=' + mascara((/(Chrome|Edg)\/[\d.]+/.exec(navigator.userAgent) || ['?'])[0]));
+            var aviso = (document.body.innerText || '').match(/Erro ao carregar o chat[^\n]{0,60}|Isso est. demorando mais que o esperado[^\n]{0,60}|N.o foi poss.vel mostrar as conversas[^\n]{0,60}/);
+            if (aviso) linhas.push('aviso_do_gestor: ' + mascara(aviso[0]));
+          } catch (e) { linhas.push('estado: nao li (' + (e && e.name) + ')'); }
           function anda(el, prof){
             if (n > 3000 || prof > 18) return;
             if (!(el instanceof Element)) return;
@@ -1990,9 +2105,10 @@ public partial class ChatIfood : UserControl
           //    dono no inspetor: "ifdl-icon-chat"). Independe de posicao e de resolucao.
           var ic = document.querySelector('.ifdl-icon-chat,[class*="ifdl-icon-chat"],[class*="icon-chat"]');
           if (ic) { (ic.closest('a,button,[role="button"]') || ic).click(); return true; }
-          // 2) pelo rotulo, se um dia existir
-          var b = document.querySelector('[aria-label*="Conversas com clientes"],[aria-label*="Conversas"]');
-          if (b) { b.click(); return true; }
+          // 2) pelo rotulo: o Gestor 9.349 (22/10/2026) traz "Conversas com clientes" como rotulo do botao do
+          //    cabecalho (consumerChatEntryPoint.emptyLabel) e o chat novo marca os testes por data-testid
+          var b = document.querySelector('[aria-label*="Conversas com clientes"],[aria-label*="Conversas"],[data-testid*="consumer-chat"],[data-testid*="chat-entry"],[title*="Conversas"]');
+          if (b) { (b.closest('a,button,[role="button"]') || b).click(); return true; }
           var alvo = null, melhorX = -1;
           var cands = document.querySelectorAll('button,[role="button"],div');
           for (var i = 0; i < cands.length; i++) {
@@ -2024,7 +2140,7 @@ public partial class ChatIfood : UserControl
       //
       // A autoria sai da GEOMETRIA: num chat a fala da loja fica de um lado e a do cliente
       // do outro. Balao que atravessa o meio da coluna NAO decide, e vai com `minha` vazio
-      // — e o C# deixa de fora o que nao decidiu. Mandar a fala da propria loja para a
+      // : e o C# deixa de fora o que nao decidiu. Mandar a fala da propria loja para a
       // borda e justamente o que o desenho proibe, entao a duvida cala.
       //
       // ⚠️ Este leitor e COMPLEMENTO. O caminho principal sao os quadros do WebSocket, que
@@ -2178,7 +2294,7 @@ public partial class ChatIfood : UserControl
       };
 
       // ISOLAR o painel: "holofote" no chat, escondendo os irmãos na subida até o
-      // body. Só aplica se achar um painel grande de verdade — senão, não mexe
+      // body. Só aplica se achar um painel grande de verdade: senão, não mexe
       // (cai no Gestor inteiro, sem tela branca).
       function estilo(){
         if (document.getElementById('pdv-css')) return;
@@ -2206,6 +2322,15 @@ public partial class ChatIfood : UserControl
       // botão da barra. Subir a partir do BOTÃO leva à barra de cima, nunca ao
       // painel, que é uma gaveta em outro ramo do DOM: foi o defeito de 04/09,
       // que fazia o PDV cair no Gestor inteiro.
+      // 1.0.47 (22/10/2026, Gestor 9.349): o chat virou outro programa dentro do Gestor (o microfrontend
+      // partners-consumer-chat) e o titulo "Conversas" da gaveta nova nao e mais um h1: e um texto do design
+      // system (p, span ou div). Os cabecalhos continuam na frente; na falta deles vale qualquer elemento
+      // visivel e baixo cujo texto PROPRIO (sem os filhos) e so "Conversas" ou "Conversa".
+      function textoSoDele(el){
+        var t = '';
+        try { for (var i = 0; i < el.childNodes.length; i++) { var c = el.childNodes[i]; if (c.nodeType === 3) t += c.textContent; } } catch (e) {}
+        return t.trim();
+      }
       function tituloDoPainel(){
         var h = document.querySelectorAll('h1,h2,h3,[role="heading"]');
         for (var i = 0; i < h.length; i++){
@@ -2215,17 +2340,25 @@ public partial class ChatIfood : UserControl
             if (r.width > 0 && r.height > 0) return h[i];
           }
         }
+        var outros = document.querySelectorAll('h4,h5,p,span,div,label,strong');
+        for (var k = 0; k < outros.length; k++){
+          var el = outros[k];
+          if (el.id && /^pdv-/.test(el.id)) continue;
+          if (!/^conversas?$/i.test(textoSoDele(el))) continue;
+          var r2 = el.getBoundingClientRect();
+          if (r2.width > 0 && r2.height > 0 && r2.height <= 64 && r2.width <= 600) return el;
+        }
         return null;
       }
       function candidato(){
         var el = tituloDoPainel();
         if (!el) return null;
         // sobe do título até o contêiner da gaveta (largo o bastante para ser o
-        // painel, alto o bastante para não ser só o cabeçalho dele)
+        // painel, alto o bastante para não ser só o cabeçalho dele). 1.0.47: ate 1000 px (a gaveta nova e mais larga)
         var no = el;
         while (no && no !== document.body){
           var r = no.getBoundingClientRect();
-          if (r.width >= 250 && r.width <= 900 && r.height > 400) return no;
+          if (r.width >= 250 && r.width <= 1000 && r.height > 400) return no;
           no = no.parentElement;
         }
         return null;
@@ -2744,21 +2877,40 @@ public partial class ChatIfood : UserControl
       function agenda(){ if (pend) return; pend = setTimeout(function(){ pend=null; window.pdvContar(); if (window.pdvAjustarRespostas) window.pdvAjustarRespostas(); vigiarAjuda(); }, 400); }
       // CORTINA: o dono nao quer ver o painel do Gestor nem por 3 segundos depois
       // de recarregar. Cobre a pagina desde a carga e so sai quando o chat esta
-      // isolado. Nunca fica para sempre: cai sozinha em 25 s (tela morta e pior
+      // isolado. Nunca fica para sempre: cai sozinha em 20 s (tela morta e pior
       // que Gestor a mostra) e nunca cobre a tela de LOGIN (tem campo de senha).
+      // 1.0.47 (22/10/2026, o Gestor 9.349 mudou e a Savassi ficou presa no "Abrindo o chat..."):
+      //  . TODA subida da cortina arma a propria queda (20 s, era 25 s so na carga): a do Fale com o
+      //    iFood e a da conversa do pedido tambem caem sozinhas;
+      //  . "Gestor inteiro" a derruba na hora (pdvSemCortina) e ela nao volta neste documento;
+      //  . quando cai pelo prazo sem o chat isolado, avisa o C# (tipo cortina) para a barra dizer
+      //    "Chat sem o recorte por enquanto"; a captura e as tentativas de isolar seguem.
+      var CORTINA_MS = 20000, quedaDaCortina = null;
       function cortina(on){
         try {
           var c = document.getElementById('pdv-cortina');
-          if (!on) { if (c) c.remove(); return; }
+          if (!on) {
+            if (quedaDaCortina) { clearTimeout(quedaDaCortina); quedaDaCortina = null; }
+            if (c) c.remove();
+            return;
+          }
+          if (window.__pdvSemCortina) return;
           if (c || document.querySelector('input[type="password"]')) return;
           estilo();
           c = document.createElement('div'); c.id = 'pdv-cortina'; c.textContent = 'Abrindo o chat...';
-          document.body.appendChild(c);
+          (document.body || document.documentElement).appendChild(c);
+          quedaDaCortina = setTimeout(function(){
+            quedaDaCortina = null;
+            if (!document.getElementById('pdv-cortina')) return;
+            cortina(false);
+            if (!document.body || !document.body.classList.contains('pdv-so-chat')) envia({ tipo: 'cortina', motivo: 'tempo', ms: CORTINA_MS });
+          }, CORTINA_MS);
         } catch (e) {}
       }
+      window.pdvSemCortina = function () { window.__pdvSemCortina = true; cortina(false); return true; };
+      window.pdvCortina = function () { return document.getElementById('pdv-cortina') ? 'na_tela' : (window.__pdvSemCortina ? 'desligada' : 'nao'); };
       function liga(){
         cortina(true);
-        setTimeout(function(){ cortina(false); }, 25000);
         try { new MutationObserver(agenda).observe(document.body, {childList:true, subtree:true, characterData:true}); } catch(e){}
         // ⚠️ O chat é um mini-aplicativo que carrega TARDE: em teste real ele não
         // existia no DOM depois de 33 s. A tentativa antiga parava em 8 s e por

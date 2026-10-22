@@ -387,7 +387,7 @@ public static class TestesAprovacaoDono
             "AF-19 os sockets do Sendbird são contados pelo CDP (criado e fechado) e vão no diag");
 
         var csproj = Ler("Pdv.csproj");
-        checar(csproj.Contains("<Version>1.0.43</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.43 (o X no canto do painel e a vigia sem laço)");
+        checar(csproj.Contains("<Version>1.0.47</Version>", StringComparison.Ordinal), "AF-14 a versão do caixa é 1.0.47 (a cortina do chat cai em 20 s, o Gestor inteiro a derruba e o Recarregar limpa o cache: o Gestor 9.349 de 22/10)");
         var testes = new[] { Ler("Pdv.Testes", "TestesAprovacaoDono.cs"), Ler("Pdv.Testes", "TestesScriptSendbird.cs") };
         var novos = new[] { servico, js }.Concat(testes).ToArray();
         checar(testes.All(t => t.Length > 0) && novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),

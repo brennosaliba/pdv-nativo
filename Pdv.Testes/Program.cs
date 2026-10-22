@@ -828,6 +828,7 @@ if (args.Length >= 1 && args[0] == "--so-1041")
     await TestesSinalPreso.RodarAsync((cond, nome) => Check("sinal-preso: " + nome, cond));
     TestesRelogioDoWindows.Rodar((cond, nome) => Check("relogio: " + nome, cond));
     TestesScriptFechar.Rodar((cond, nome) => Check("script-fechar: " + nome, cond));
+    TestesScriptCortina.Rodar((cond, nome) => Check("script-cortina: " + nome, cond));
     Console.WriteLine();
     Console.WriteLine($"=== (so 1041) {ok} OK, {falhas} falhas ===");
     return falhas == 0 ? 0 : 1;
@@ -2208,6 +2209,13 @@ TestesRelogioDoWindows.Rodar((cond, nome) => Check("relogio: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- O X do painel da conversa: o script no node contra um DOM falso ---");
 TestesScriptFechar.Rodar((cond, nome) => Check("script-fechar: " + nome, cond));
+
+// -- 22/10/2026: O GESTOR 9.349 E A CORTINA PRESA NA SAVASSI (caixa 1.0.47) ---------------------------
+// A cortina "Abrindo o chat..." cai sozinha em 20 s, o Gestor inteiro a derruba na hora, o Recarregar limpa o
+// cache e o service worker, e a gaveta nova do chat (titulo num p) e achada. Script no node com relogio falso.
+Console.WriteLine();
+Console.WriteLine("--- A cortina do chat e o Gestor 9.349: o script no node com relogio falso ---");
+TestesScriptCortina.Rodar((cond, nome) => Check("script-cortina: " + nome, cond));
 
 // -- 16/10/2026: AS CAUSAS DE HOJE NA SAVASSI (caixa 1.0.42) ------------------------------------
 // (1) O relogio do PC 566 s atrasado descartava toda fala do cliente como "antiga": o relogio corrigido
