@@ -606,7 +606,7 @@ public static class TestesPromoAutorizacao
             var finalizar = Metodo(venda, "private void Finalizar(object sender, RoutedEventArgs e)");
             checar(!finalizar.Contains("agora.Pendentes.Count > 0", StringComparison.Ordinal),
                 "FP-10 promocao com senha nao segura o Finalizar (senao o botao morre com pendente na comanda)");
-            checar(finalizar.Contains("desconto.Centavos > 0 ? autorizacaoPromo : null", StringComparison.Ordinal),
+            checar(finalizar.Contains("descontoPromo > 0 ? autorizacaoPromo : null", StringComparison.Ordinal),
                 "FP-10b e a autorizacao da promocao continua indo para a LinhaVenda");
             var estorno = Metodo(venda, "private async Task EstornarTefAsync");
             var cancel = Metodo(venda, "private async Task CancelarVendaAsync");
