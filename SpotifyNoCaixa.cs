@@ -519,21 +519,41 @@ public static class SpotifyNoCaixa
     /// <summary>O nome da saída de som padrão (multimídia) deste Windows, ou o motivo de não saber. Nunca lança.</summary>
     public static string SaidaDeSomPadrao()
     {
+        var (l, erro) = LerSaida();
+        if (erro is not null) return "não deu para ler (" + erro + ")";
+        return !l.Achou ? "nenhuma (o Windows não tem saída de som padrão)" : l.Nome ?? "?";
+    }
+
+    /// <summary>
+    /// 1.0.48: a leitura para a regra SaidaDeSom (janela ♫ música e sinal): achou, nome e o formato
+    /// (PKEY_AudioEndpoint_FormFactor: 3 = fone, 6 = headset). Erro de leitura conta como "achou"
+    /// sem nome, para não acusar a loja de estar sem som quando é o COM que falhou. Nunca lança.
+    /// </summary>
+    public static SaidaDeSom.Leitura LerSaidaDeSom()
+    {
+        var (l, erro) = LerSaida();
+        return erro is null ? l : new SaidaDeSom.Leitura(true, null, null);
+    }
+
+    private static (SaidaDeSom.Leitura Leitura, string? Erro) LerSaida()
+    {
         object? en = null;
         IMMDevice? dev = null;
         try
         {
             en = new MMDeviceEnumerator();
             var h = ((IMMDeviceEnumerator)en).GetDefaultAudioEndpoint(0, 1, out dev);   // eRender, eMultimedia
-            if (h != 0 || dev is null) return "nenhuma (o Windows não tem saída de som padrão)";
+            if (h != 0 || dev is null) return (new SaidaDeSom.Leitura(false, null, null), null);   // 0x80070490: elemento não encontrado
             dev.GetId(out var id);
             var guid = id[(id.LastIndexOf("}.", StringComparison.Ordinal) + 2)..];
             using var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\" + guid + @"\Properties");
             var nome = k?.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2") as string;
             var placa = k?.GetValue("{b3f8fa53-0004-438e-9003-51a46e139bfc},6") as string;
-            return string.IsNullOrEmpty(nome) ? guid : placa is { Length: > 0 } ? $"{nome} ({placa})" : nome;
+            var formato = k?.GetValue("{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},0") is int f ? f : (int?)null;
+            var texto = string.IsNullOrEmpty(nome) ? guid : placa is { Length: > 0 } ? $"{nome} ({placa})" : nome;
+            return (new SaidaDeSom.Leitura(true, texto, formato), null);
         }
-        catch (Exception ex) { return "não deu para ler (" + ex.GetType().Name + ")"; }
+        catch (Exception ex) { return (new SaidaDeSom.Leitura(true, null, null), ex.GetType().Name); }
         finally
         {
             try { if (dev is not null) Marshal.ReleaseComObject(dev); } catch { }

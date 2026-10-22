@@ -1210,7 +1210,7 @@ public static class ConversaRaspadinha
     public static string EstadoDoSinal(string gestor, bool wsVivo, DateTime? ultimoQuadro, int fila,
         JsonObject? quadros, JsonObject? sdkDaPagina, IReadOnlyDictionary<string, int>? canaisPorMerchant,
         SaudeDoChat? saude = null, ContagemDoEnvio? envio = null, ContagemDeCartoes? solicitacao = null,
-        EstadoDaRecuperacao? recuperacao = null, int? relogioSeg = null)
+        EstadoDaRecuperacao? recuperacao = null, int? relogioSeg = null, string? som = null)
     {
         var sdk = new JsonObject();
         if (sdkDaPagina is not null)
@@ -1340,6 +1340,8 @@ public static class ConversaRaspadinha
         // 1.0.41: o desvio do relógio do PC em segundos (positivo = adiantado), medido contra o painel
         // 1.0.42: medido contra o 'agora' do próprio sinal (RelogioCorrigido); o do painel é a reserva
         if (relogioSeg is { } rs) o["relogio_seg"] = Math.Clamp(rs, -86_400 * 366, 86_400 * 366);
+        // 1.0.48: a saída de som do Windows (SaidaDeSom.ParaOSinal: "sem_saida" ou "fone"; nunca o nome do aparelho)
+        if (som is not null) o["som"] = som;
         return o.ToJsonString(Json);
     }
 

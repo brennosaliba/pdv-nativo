@@ -426,11 +426,18 @@ public partial class MainWindow : Window
         {
             // MODO QUIOSQUE (12/09/2026): o Windows abre direto no PDV. Fechar e mais nada
             // deixaria a tela preta; o operador escolhe o que vem depois.
+            // 1.0.48: "Reiniciar o computador" ao lado (pedido do dono, 22/10: PC travado). O
+            // Voltar da linha saiu: o Escolher já tem o dele embaixo.
             var o = Dialogo.Escolher(this, "Fechar o PDV",
                 "O Windows abre direto no PDV (modo quiosque). O turno aberto continua salvo.",
-                "Reiniciar o PDV", "Sair para o Windows", "Voltar");
+                "Reiniciar o PDV", "Reiniciar o computador", "Sair para o Windows");
             if (o == 0) { Quiosque.ReiniciarPdv(); Application.Current.Shutdown(); }
             else if (o == 1)
+            {
+                var (itens, maquininha) = OQueAVendaVive();
+                ReinicioDoPcNoCaixa.Pedir(this, itens, maquininha, null, null, "Fechar (quiosque)");
+            }
+            else if (o == 2)
             {
                 // Sair do quiosque é ação de admin (15/09/2026): só o usuário master da rede.
                 if (!AcessoDoMaster("Sair para o Windows", "saida_windows", "saida_windows_negada")) return;
@@ -438,10 +445,21 @@ public partial class MainWindow : Window
             }
             return;
         }
-        if (Dialogo.Confirmar(this, "Fechar o PDV",
-                "O caixa vai fechar (o turno aberto continua salvo). Fechar mesmo?",
-                "Fechar o PDV", "Voltar", perigo: true))
-            Application.Current.Shutdown();
+        var f = Dialogo.Escolher(this, "Fechar o PDV", "O turno aberto continua salvo.",
+            "Fechar o PDV", "Reiniciar o computador");
+        if (f == 0) Application.Current.Shutdown();
+        else if (f == 1)
+        {
+            var (itens, maquininha) = OQueAVendaVive();
+            ReinicioDoPcNoCaixa.Pedir(this, itens, maquininha, null, null, "Fechar");
+        }
+    }
+
+    /// <summary>A comanda e a maquininha como a tela de venda vê (o mesmo delegate do portão da atualização); sem tela, zero.</summary>
+    private static (int Itens, bool Maquininha) OQueAVendaVive()
+    {
+        try { return AtualizarCaixa.OQueATelaViveAgora?.Invoke() ?? (0, false); }
+        catch { return (0, false); }
     }
 
     /// <summary>

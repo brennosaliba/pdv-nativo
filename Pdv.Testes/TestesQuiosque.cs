@@ -31,8 +31,8 @@ public static class TestesQuiosque
             "a Configuração tem a opção, explica o login automático (netplwiz, com o dono) e o botão de abrir a área de trabalho");
         checar(conf.Contains("ChkQuiosque.IsChecked = Quiosque.Ligado") && conf.Contains("quiosqueQuer ? Quiosque.Ligar() : Quiosque.Desligar()") && conf.Contains("\"quiosque_ligado\""),
             "a tela lê o estado do Windows (não do banco), só mexe se mudou, e audita");
-        checar(main.Contains("if (Quiosque.Ligado)") && main.Contains("\"Reiniciar o PDV\", \"Sair para o Windows\", \"Voltar\"") && main.Contains("Quiosque.ReiniciarPdv()"),
-            "no quiosque, Fechar oferece Reiniciar o PDV ou Sair para o Windows (nunca tela preta)");
+        checar(main.Contains("if (Quiosque.Ligado)") && main.Contains("\"Reiniciar o PDV\", \"Reiniciar o computador\", \"Sair para o Windows\"") && main.Contains("Quiosque.ReiniciarPdv()"),
+            "no quiosque, Fechar oferece Reiniciar o PDV, Reiniciar o computador ou Sair para o Windows (nunca tela preta)");
         checar(app.Contains("if (a.IsTerminating) { try { if (Quiosque.Ligado) Quiosque.AbrirExplorer(); } catch { } }"),
             "se o PDV morrer como shell, o App abre o Explorer antes de cair");
         var q = Fonte("Quiosque.cs") ?? "";

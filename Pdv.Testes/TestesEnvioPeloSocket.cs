@@ -722,7 +722,7 @@ public static class TestesEnvioPeloSocket
                && tela.IndexOf("_sockets = null;", StringComparison.Ordinal) is var zera && zera > 0
                && tela.IndexOf("_socketEscolhido = null;", zera, StringComparison.Ordinal) is var zeraEscolhido && zeraEscolhido > zera && zeraEscolhido - zera < 80,
             "SK-97 o diag recalcula a atividade do socket escolhido pelo livro na hora do sinal; o escolhido vem do envio e da contagem; a navegação zera");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.47</Version>", StringComparison.Ordinal), "SK-59 a versão do caixa é 1.0.47 (a cortina do chat cai em 20 s, o Gestor inteiro a derruba e o Recarregar limpa o cache: o Gestor 9.349 de 22/10)");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.48</Version>", StringComparison.Ordinal), "SK-59 a versão do caixa é 1.0.48 (reiniciar o computador pelo caixa e o aviso da saída de som; sobre a 1.0.47 da Savassi)");
         var novos = new[] { nucleo, Ler("Pdv.Testes", "TestesEnvioPeloSocket.cs") };
         checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),
             "SK-60 nada com travessão nos arquivos novos");

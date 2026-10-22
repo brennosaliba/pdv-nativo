@@ -132,6 +132,9 @@ public static class Dialogo
         {
             var idx = i;
             var b = Botao(opcoes[i], false);
+            // 1.0.48: rótulo longo ("Reiniciar o computador") quebra em duas linhas em vez de ser cortado.
+            // O Content continua sendo a string (a suíte e a automação acham o botão pelo texto).
+            b.ContentTemplate = RotuloQuebravel();
             b.MinHeight = 68;
             b.Margin = new Thickness(i == 0 ? 0 : 4, 0, i == opcoes.Length - 1 ? 0 : 4, 0);
             b.Click += (_, _) => { escolhido = idx; janela.Close(); };
@@ -153,6 +156,16 @@ public static class Dialogo
         };
         janela.ShowDialog();
         return escolhido;
+    }
+
+    /// <summary>O molde do rótulo que quebra linha e centraliza (o Content do botão segue sendo a string).</summary>
+    private static DataTemplate RotuloQuebravel()
+    {
+        var texto = new FrameworkElementFactory(typeof(TextBlock));
+        texto.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding());
+        texto.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        texto.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
+        return new DataTemplate { VisualTree = texto };
     }
 
     /// <summary>Aviso simples. `tom`: "ok" (verde), "erro" (vermelho) ou null (neutro).</summary>

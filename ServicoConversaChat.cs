@@ -1113,9 +1113,12 @@ public static class ServicoConversaChat
             string estado;
             try
             {
+                // 1.0.48: a saída de som do Windows no sinal (follow-up da 1.0.42: Spotify tocando e a loja sem som)
+                string? som = null;
+                try { som = SaidaDeSom.ParaOSinal(SpotifyNoCaixa.LerSaidaDeSom()); } catch { som = null; }
                 estado = ConversaRaspadinha.EstadoDoSinal(gestorAgora, wsVivo, ultimo, fila,
                     Contadores.Quadros(), sdk, Contadores.CanaisPorMerchant(), _ponte?.Saude?.Invoke(),
-                    ContagemDoEnvio(agora), cartoes, recuperacao, relogioSeg);
+                    ContagemDoEnvio(agora), cartoes, recuperacao, relogioSeg, som);
             }
             catch (Exception ex)
             {

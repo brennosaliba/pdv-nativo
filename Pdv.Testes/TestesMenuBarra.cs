@@ -34,9 +34,9 @@ public static class TestesMenuBarra
 
         // ── 2. Fechar / Sair ────────────────────────────────────────────────
         var fecharSair = MenuBarra.FecharSair();
-        checar(fecharSair.Select(i => i.Rotulo).SequenceEqual(new[] { "Fechamento de caixa", "Sair" }),
-            "Fechar / Sair lista: Fechamento de caixa, Sair (nesta ordem)");
-        checar(fecharSair.Select(i => i.Acao).SequenceEqual(new[] { MenuBarra.FecharCaixa, MenuBarra.Sair }),
+        checar(fecharSair.Select(i => i.Rotulo).SequenceEqual(new[] { "Fechamento de caixa", "Sair", "Reiniciar o computador" }),
+            "Fechar / Sair lista: Fechamento de caixa, Sair, Reiniciar o computador (nesta ordem; o terceiro é da 1.0.48)");
+        checar(fecharSair.Select(i => i.Acao).SequenceEqual(new[] { MenuBarra.FecharCaixa, MenuBarra.Sair, MenuBarra.ReiniciarPc }),
             "cada item do Fechar / Sair aponta para a sua chave de ação");
 
         // ── 3. alvo de toque e texto ────────────────────────────────────────

@@ -36,6 +36,7 @@ public static class MenuBarra
     public const string Impressora = "impressora";
     public const string FecharCaixa = "fechar";
     public const string Sair = "sair";
+    public const string ReiniciarPc = "reiniciar_pc";
 
     /// <summary>
     /// Menu "Cancelar / Imprimir": cancelar venda, estornar, reimpressão e a
@@ -58,10 +59,14 @@ public static class MenuBarra
         return itens;
     }
 
-    /// <summary>Menu "Fechar / Sair": o pop-up de fechamento de caixa e o sair.</summary>
+    /// <summary>
+    /// Menu "Fechar / Sair": o pop-up de fechamento de caixa, o sair e, por último (1.0.48,
+    /// pedido do dono: PC travado), reiniciar o computador. A regra mora em ReinicioDoPc.
+    /// </summary>
     public static IReadOnlyList<Item> FecharSair() => new List<Item>
     {
         new("Fechamento de caixa", "🔒", FecharCaixa),
         new("Sair", "🚪", Sair),
+        new("Reiniciar o computador", "🔄", ReiniciarPc),
     };
 }

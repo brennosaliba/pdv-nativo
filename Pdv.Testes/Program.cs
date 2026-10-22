@@ -882,6 +882,7 @@ if (args.Length >= 1 && args[0] == "--so-troca")
     TestesReabrirOCaixa.Rodar((cond, nome) => Check("reabrir-o-caixa: " + nome, cond));
     TestesTrocaDeVersao.Rodar((cond, nome) => Check("troca-de-versao: " + nome, cond));
     TestesQuiosque.Rodar((cond, nome) => Check("quiosque: " + nome, cond));
+    TestesReinicioDoPc.Rodar((cond, nome) => Check("reiniciar-pc: " + nome, cond));
     TestesTravaCtrlAltDel.Rodar((cond, nome) => Check("trava-ctrl-alt-del: " + nome, cond));
     TestesDesfazerQuiosque.Rodar((cond, nome) => Check("desfazer-quiosque: " + nome, cond));
     TestesInstalador.Rodar((cond, nome) => Check("instalador: " + nome, cond));
@@ -2236,6 +2237,14 @@ TestesSocketSemUsuario.Rodar((cond, nome) => Check("socket-usuario: " + nome, co
 Console.WriteLine();
 Console.WriteLine("--- Recuperacao: a fala ja respondida pela equipe vai so para o arquivo ---");
 await TestesRecuperacaoRespondida.RodarAsync((cond, nome) => Check("recuperacao-respondida: " + nome, cond));
+
+// -- 22/10/2026: REINICIAR O COMPUTADOR PELO CAIXA (1.0.48, pedido do dono: PC travado) ----------------
+// A opcao ao lado do Fechar / Sair (venda, Fechar normal e quiosque): barrado com cobranca no pinpad,
+// uma confirmacao de uma linha (duas com venda em andamento), shutdown /r /t 3 sem /f, o Windows
+// aceita -> auditoria -> log -> so entao o PDV fecha. Junto, o aviso da saida de som (follow-up 1.0.42).
+Console.WriteLine();
+Console.WriteLine("--- Reiniciar o computador pelo caixa e a saida de som ---");
+TestesReinicioDoPc.Rodar((cond, nome) => Check("reiniciar-pc: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

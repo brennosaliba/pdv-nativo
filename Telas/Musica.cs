@@ -21,7 +21,7 @@ public sealed class Musica : Window
 
     private readonly Spotify _sp;
     private readonly string? _playlistUri, _playlistNome, _deviceId, _deviceNome;
-    private readonly TextBlock _faixa, _artista, _onde, _estado, _volumeTxt, _esteCaixa;
+    private readonly TextBlock _faixa, _artista, _onde, _estado, _volumeTxt, _esteCaixa, _som;
     private readonly Slider _volume;
     private readonly Button _tocar, _pausar;
     private readonly DispatcherTimer _relogio;
@@ -98,6 +98,14 @@ public sealed class Musica : Window
             Text = "", FontSize = 13, Foreground = R("TextoFraco"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0),
         };
         pilha.Children.Add(_esteCaixa);
+        // 1.0.48 (follow-up da 1.0.42): a Savassi "tocava" e ninguém ouvia porque a saída padrão
+        // do Windows era um fone (ou não havia nenhuma). A regra mora em Nucleo/SaidaDeSom.
+        _som = new TextBlock
+        {
+            Text = "", FontSize = 13, Foreground = R("Erro"), FontWeight = FontWeights.Bold, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0), Visibility = Visibility.Collapsed,
+        };
+        pilha.Children.Add(_som);
 
         var agora = new Border
         {
@@ -169,6 +177,13 @@ public sealed class Musica : Window
         // a lista de aparelhos muda devagar: uma pergunta a cada 4 batidas (32 s), e na 1ª
         if (_batidas++ % 4 == 0)
         {
+            try
+            {
+                var aviso = SaidaDeSom.Aviso(SpotifyNoCaixa.LerSaidaDeSom());
+                _som.Text = aviso ?? "";
+                _som.Visibility = aviso is null ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch { _som.Visibility = Visibility.Collapsed; }
             var (aps, erroAps) = await _sp.AparelhosAsync();
             _esteCaixa.Text = erroAps is not null ? ""
                 : SpotifyNoCaixa.EsteCaixaNaLista(aps, Environment.MachineName)

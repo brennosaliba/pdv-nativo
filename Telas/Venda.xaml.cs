@@ -4880,7 +4880,19 @@ public partial class Venda : UserControl
         {
             case MenuBarra.FecharCaixa: FecharCaixa(sender, e); break;
             case MenuBarra.Sair: Sair(sender, e); break;
+            case MenuBarra.ReiniciarPc: ReiniciarPc(sender, e); break;
         }
+    }
+
+    /// <summary>
+    /// 1.0.48: "Reiniciar o computador" (pedido do dono, 22/10: quando o PC trava). A regra (barrado,
+    /// uma ou duas confirmações, shutdown /r /t 3 sem /f, auditoria) mora em ReinicioDoPcNoCaixa.
+    /// A comanda aberta é guardada antes, como no Sair; o carrinho solto é avisado e confirmado de novo.
+    /// </summary>
+    private void ReiniciarPc(object sender, RoutedEventArgs e)
+    {
+        if (_contaAberta is not null) GuardarConta();
+        ReinicioDoPcNoCaixa.Pedir(Window.GetWindow(this)!, _comanda.Count, _tefOcupado, _operador.Id, _operador.Nome, "menu Fechar / Sair");
     }
 
     private TaskCompletionSource<string?>? _menuAberto;
