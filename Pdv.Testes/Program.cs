@@ -847,12 +847,14 @@ if (args.Length >= 1 && args[0] == "--so-1041")
 }
 
 // MODO DE DESENVOLVIMENTO (17/10/2026, 1.0.44): so a suite do login do Gestor sozinho. NAO e o gate.
-//   Pdv.Testes.exe --so-1044
-if (args.Length >= 1 && args[0] == "--so-1044")
+//   Pdv.Testes.exe --so-1050
+if (args.Length >= 1 && args[0] == "--so-1050")
 {
     await TestesLoginGestor.RodarAsync((cond, nome) => Check("login-gestor: " + nome, cond));
     Console.WriteLine();
-    Console.WriteLine($"=== (so 1044) {ok} OK, {falhas} falhas ===");
+    await TestesVigiaDoAparelho.RodarAsync((cond, nome) => Check("vigia-aparelho: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so 1050) {ok} OK, {falhas} falhas ===");
     return falhas == 0 ? 0 : 1;
 }
 
@@ -2276,6 +2278,13 @@ TestesReinicioDoPc.Rodar((cond, nome) => Check("reiniciar-pc: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Login do Gestor sozinho: a maquina, o contrato, o fluxo com a nuvem de mentira e o script no node ---");
 await TestesLoginGestor.RodarAsync((cond, nome) => Check("login-gestor: " + nome, cond));
+
+// -- 25/10/2026: O LADO DO APARELHO DO VIGIA (caixa 1.0.50, SQL 220) ------------------------------
+// O sinal de 1 em 1 min (tela do chat, print, erros do console sem segredo, o que o caixa suporta), a leitura da
+// resposta (comandos pendentes), a decisao de executar ou recusar (venda, pinpad, impressao) e o concluir.
+Console.WriteLine();
+Console.WriteLine("--- Vigia, o lado do aparelho: o sinal, o print, os comandos e o concluir ---");
+await TestesVigiaDoAparelho.RodarAsync((cond, nome) => Check("vigia-aparelho: " + nome, cond));
 
 Console.WriteLine($"\n=== {ok} OK, {falhas} falhas ===");
 return falhas == 0 ? 0 : 1;

@@ -1128,6 +1128,7 @@ public static class ServicoConversaChat
                 estado = ConversaRaspadinha.EstadoMinimo(gestorAgora, wsVivo, ultimo, fila, ex.GetType().Name, "estado");
             }
             var corpo = ConversaRaspadinha.CorpoSinal(Terminal, Versao, estado);
+            ServicoVigia.EstadoDoChat = estado; // 1.0.50: o sinal do Vigia leva as mesmas chaves
             Etapa("rede");
             var (st, resp) = await Servicos.Nuvem().FuncaoAsync(ConversaRaspadinha.Edge, corpo, ConversaRaspadinha.Prazo)
                 .WaitAsync(ConversaRaspadinha.Prazo + TimeSpan.FromSeconds(5)).ConfigureAwait(false);

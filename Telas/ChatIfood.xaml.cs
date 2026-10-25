@@ -385,6 +385,11 @@ public partial class ChatIfood : UserControl
                 }),
                 Diag);
 
+            // 1.0.50 (25/10/2026, SQL 220): o lado do aparelho do Vigia. O sinal de 1 em 1 min com a tela do chat,
+            // o print quando ela nao esta ok e os comandos do servidor (recarregar, relogar, reiniciar...). Ver
+            // Telas/ChatIfood.Vigia.cs e ServicoVigia.cs.
+            LigarVigia(core);
+
             // RESGATE PELO CHAT (07/10/2026): o serviço novo lê os quadros e manda o sinal de 60 s
             // desde já, com a loja desligada também (o sinal leva o diagnóstico que o dono confere
             // no ERP antes de ligar a Sombra). Tudo que roda na página passa por esta ponte.
@@ -2018,7 +2023,8 @@ public partial class ChatIfood : UserControl
             linhas.push('estado: readyState=' + document.readyState + ' casca_do_gestor=' + iniVis + ' root_filhos=' + (root ? root.children.length : -1)
               + ' cortina=' + (window.pdvCortina ? window.pdvCortina() : '?')
               + ' modo=' + (window.__pdvSemHolofote ? 'gestor_inteiro' : (document.body.classList.contains('pdv-so-chat') ? 'so_chat' : 'sem_recorte'))
-              + ' login=' + !!document.querySelector('input[type="password"]')
+              + ' login=' + (!!document.querySelector('input[type="password"]') || !!window.kcContext || /partners-auth\.ifood/i.test(String(location.host || '')))
+              + ' pagina=' + (window.pdvLoginTela ? window.pdvLoginTela() : '?')
               + ' sw=' + (navigator.serviceWorker && navigator.serviceWorker.controller ? 'controlado' : 'sem')
               + ' navegador=' + mascara((/(Chrome|Edg)\/[\d.]+/.exec(navigator.userAgent) || ['?'])[0]));
             var aviso = (document.body.innerText || '').match(/Erro ao carregar o chat[^\n]{0,60}|Isso est. demorando mais que o esperado[^\n]{0,60}|N.o foi poss.vel mostrar as conversas[^\n]{0,60}/);
@@ -2094,7 +2100,7 @@ public partial class ChatIfood : UserControl
               txt = (num && /\d/.test(num.textContent)) ? num.textContent : '';
             }
           }
-          envia({ tipo: 'naolidas', texto: txt, login: !!document.querySelector('input[type="password"]') || /\/login|\/entrar|#\/auth/i.test(location.href) });
+          envia({ tipo: 'naolidas', texto: txt, login: !!document.querySelector('input[type="password"]') || !!window.kcContext || /partners-auth\.ifood/i.test(String(location.host || '')) || /\/login|\/entrar|#\/auth/i.test(location.href) });
         } catch (e) { envia({ tipo: 'naolidas', texto: '' }); }
       };
 
@@ -3804,7 +3810,7 @@ public partial class ChatIfood : UserControl
       function diag(a){
         var id = a && a.id;
         (async function () {
-          var r = { tipo: 'pdvsbdiag', id: id, login: !!document.querySelector('input[type="password"]') };
+          var r = { tipo: 'pdvsbdiag', id: id, login: !!document.querySelector('input[type="password"]') || !!window.kcContext };
           try {
             var ws = a && a.ws;
             var lista = ordenar(instancias(), ws);
@@ -3946,26 +3952,47 @@ public partial class ChatIfood : UserControl
     })();
     """;
 
-    // ── O LOGIN DO GESTOR SOZINHO (1.0.44, 17/10/2026) ───────────────────────────────────────────────────
-    // Roda em toda pagina do WebView2 do chat (o login do iFood mora em outro endereco). So toca na pagina por
-    // TIPO de campo, atributo e texto: nunca por classe (o iFood troca as classes a cada build). Nunca devolve o
-    // que digitou: as respostas sao palavras fixas (login, canal, codigo, logado, enviado, sem_campos...).
-    // Quem decide a ordem, os tetos e a conversa com o ERP e o FluxoLoginGestor (Nucleo), pelo ServicoLoginGestor.
-    // Provado no node contra um DOM falso em Pdv.Testes/TestesLoginGestor.cs.
+    // ── O LOGIN DO GESTOR SOZINHO (1.0.44, 17/10/2026; 1.0.50, 25/10: a tela real do Gestor 9.350) ────────────
+    // Roda em toda pagina do WebView2 do chat: o login do iFood mora em partners-auth.ifood.com.br (Keycloak, tema
+    // partners-auth-default-theme, lido do bundle publico em 25/10/2026, sem logar). Toca na pagina por id, name,
+    // atributo e texto: nunca por classe. Nunca devolve o que digitou. Quem decide a ordem, os tetos e a conversa com
+    // o ERP e o FluxoLoginGestor (Nucleo), pelo ServicoLoginGestor. A TV leva a MESMA constante (ScriptsDoChatPainel).
+    // Provado no node contra um DOM falso com as telas do Keycloak em Pdv.Testes/script_login.test.cjs.
     private const string ScriptLogin = """
     (function () {
       if (window.__pdvLogin) return; window.__pdvLogin = true;
+      // ── O LOGIN DO GESTOR DE PEDIDOS, LIDO DA PAGINA REAL (25/10/2026, Gestor 9.350) ──────────────────────
+      // O login do Gestor mora em partners-auth.ifood.com.br (Keycloak, tema "partners-auth-default-theme",
+      // Keycloakify/React). As telas, pelo kcContext.pageId que o proprio Keycloak poe na pagina:
+      //   login-username   form#login-page-form, input#username (name=username), botao submit name=login "Continuar"
+      //   login-password   form#kc-form-login, input#password (name=password), input#kc-login (submit) "Entrar"
+      //   login            as duas juntas (form#login-page-form, #username e #password)
+      //   select-otp-method  radios input[name=otpChannel] value EMAIL|PHONE|WHATSAPP (data-testid otp-options), "Continuar"
+      //   enter-otp / enforce-mfa-code  OTPInput: 6 caixas [data-is-otp-input] + o oculto [data-is-otp-hidden-input] name=otpCode, "Continuar"
+      //   login-otp        input#otp (Keycloak padrao, autenticador)
+      //   enforce-mfa-method  o iFood pede para CADASTRAR a verificacao em 2 etapas (nao entra sozinho)
+      //   login-page-expired / error  so o botao Voltar (login-actions/restart)
+      // Toca na pagina por id, name, atributo e texto: nunca por classe. Nunca devolve o que digitou.
       function visivel(el){ try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch (e) { return false; } }
       function texto(el){ try { return String(el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase(); } catch (e) { return ''; } }
       function attr(el, n){ try { return String(el.getAttribute(n) || '').toLowerCase(); } catch (e) { return ''; } }
       function tipo(el){ var t = attr(el, 'type'); return t || (el.tagName === 'INPUT' ? 'text' : ''); }
       function pista(el){ return attr(el, 'name') + ' ' + attr(el, 'id') + ' ' + attr(el, 'autocomplete') + ' ' + attr(el, 'placeholder') + ' ' + attr(el, 'aria-label'); }
       function maxLen(el){ var m = parseInt(attr(el, 'maxlength'), 10); return isNaN(m) ? -1 : m; }
-      function campos(){
-        var out = [], l = document.querySelectorAll('input');
-        for (var i = 0; i < l.length; i++) if (visivel(l[i]) && !l[i].disabled) out.push(l[i]);
-        return out;
+      function todos(sel){ try { return Array.prototype.slice.call(document.querySelectorAll(sel)); } catch (e) { return []; } }
+      function primeiro(sel){ var l = todos(sel); for (var i = 0; i < l.length; i++) if (visivel(l[i]) && !l[i].disabled) return l[i]; return null; }
+      function campos(){ var out = [], l = todos('input'); for (var i = 0; i < l.length; i++) if (visivel(l[i]) && !l[i].disabled) out.push(l[i]); return out; }
+      function hostAuth(){ try { return /partners-auth\.ifood/i.test(String(location.host || '')); } catch (e) { return false; } }
+      function paginaId(){
+        try {
+          var k = window.kcContext;
+          if (!k || typeof k.pageId !== 'string') return '';
+          return k.pageId.replace(/\.ftl$/i, '').toLowerCase();
+        } catch (e) { return ''; }
       }
+      function mascara(s){ return String(s || '').replace(/\s+/g, ' ').replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, 'email@####').replace(/\d{4,}/g, '####').trim().slice(0, 90); }
+
+      // ── os campos ──
       function campoSenha(){ var l = campos(); for (var i = 0; i < l.length; i++) if (tipo(l[i]) === 'password') return l[i]; return null; }
       function pareceEmail(inp){
         var t = tipo(inp);
@@ -3973,15 +4000,22 @@ public partial class ChatIfood : UserControl
         if (t !== 'text') return false;
         return /mail|usu|login|user/.test(pista(inp));
       }
+      function campoEmailMesmoTravado(){ var l = todos('input#username'); for (var i = 0; i < l.length; i++) if (visivel(l[i])) return l[i]; return null; }
       function campoEmail(){
+        var e = primeiro('input#username'); if (e && pareceEmail(e)) return e;
         var l = campos(), i;
         for (i = 0; i < l.length; i++) if (pareceEmail(l[i])) return l[i];
-        // sem pista nenhuma: o campo de texto visivel que vem antes da senha
         var s = campoSenha();
         if (!s) return null;
         for (i = 0; i < l.length; i++) { if (l[i] === s) break; if (tipo(l[i]) === 'text') return l[i]; }
         return null;
       }
+      function caixasOtp(){
+        var out = [], l = todos('input[data-is-otp-input]');
+        for (var i = 0; i < l.length; i++) if (visivel(l[i]) && !l[i].disabled) out.push(l[i]);
+        return (out.length >= 4 && out.length <= 8) ? out : null;
+      }
+      function ocultoOtp(){ var l = todos('input[data-is-otp-hidden-input]'); return l.length ? l[0] : null; }
       function pareceCodigo(inp){
         var t = tipo(inp);
         if (t === 'password' || t === 'email' || t === 'radio' || t === 'checkbox' || t === 'hidden' || t === 'submit' || t === 'button' || t === 'search') return false;
@@ -3991,21 +4025,49 @@ public partial class ChatIfood : UserControl
         var nome = /c[oó]digo|code|otp|token|verif/.test(pista(inp));
         return (numerico || nome) && m >= 4 && m <= 8;
       }
-      function campoCodigo(){ var l = campos(); for (var i = 0; i < l.length; i++) if (pareceCodigo(l[i])) return l[i]; return null; }
+      function campoCodigo(){
+        var o = primeiro('input#otp'); if (o) return o;
+        var l = campos(); for (var i = 0; i < l.length; i++) if (pareceCodigo(l[i])) return l[i]; return null;
+      }
       function caixasDeDigito(){
         var l = campos(), out = [];
         for (var i = 0; i < l.length; i++) { var t = tipo(l[i]); if (t !== 'password' && t !== 'radio' && t !== 'checkbox' && maxLen(l[i]) === 1) out.push(l[i]); }
         return (out.length >= 4 && out.length <= 8) ? out : null;
       }
       function clicaveis(){
-        var out = [], l = document.querySelectorAll('button,[role="button"],a,input');
+        var out = [], l = todos('button,[role="button"],a,input');
         for (var i = 0; i < l.length; i++) if (visivel(l[i]) && !l[i].disabled) out.push(l[i]);
         return out;
       }
       function rotulo(el){ return texto(el) || attr(el, 'aria-label') || attr(el, 'value') || attr(el, 'title'); }
-      // a opcao "e-mail" da escolha do canal: um clicavel (botao, link, rotulo de radio) cujo texto fala em e-mail e nao em SMS
+      function botaoDe(palavras, proibidas){
+        var l = clicaveis(), porNome = null, porTipo = null, porTexto = null;
+        for (var i = 0; i < l.length; i++) {
+          var el = l[i], t = tipo(el), r = rotulo(el);
+          if (proibidas.test(r)) continue;
+          if (el.tagName === 'INPUT' && t !== 'submit') continue;
+          if (el.tagName === 'A' && t !== 'submit' && !/^(submit|button)$/.test(attr(el, 'type'))) { if (!porTexto && palavras.test(r)) porTexto = el; continue; }
+          if (t === 'submit' && attr(el, 'name') === 'login' && !porNome) porNome = el;
+          if (t === 'submit' && !porTipo) porTipo = el;
+          if (!porTexto && palavras.test(r)) porTexto = el;
+        }
+        return porNome || porTipo || porTexto;
+      }
+      // a opcao EMAIL da escolha do canal: o radio input[name=otpChannel][value=EMAIL] (o Keycloak do iFood), ou o texto
+      function radioEmail(){
+        var l = todos('input[name="otpChannel"]');
+        for (var i = 0; i < l.length; i++) if (attr(l[i], 'value') === 'email') return l[i];
+        return null;
+      }
       function opcaoEmail(){
-        var l = document.querySelectorAll('button,[role="button"],a,label,li,span,div,p');
+        var r = radioEmail();
+        if (r) {
+          var lab = null;
+          try { lab = r.id ? document.querySelector('label[for="' + r.id + '"]') : null; } catch (e) { lab = null; }
+          if (!lab) { try { lab = r.closest('label'); } catch (e) { lab = null; } }
+          return lab || r;
+        }
+        var l = todos('button,[role="button"],a,label,li,span,div,p');
         for (var i = 0; i < l.length; i++) {
           var el = l[i];
           if (!visivel(el)) continue;
@@ -4020,17 +4082,30 @@ public partial class ChatIfood : UserControl
         }
         return null;
       }
-      function botaoDe(palavras, proibidas){
-        var l = clicaveis(), porTipo = null, porTexto = null;
+      function temOpcoesDeCanal(){ return todos('input[name="otpChannel"]').length > 0 || !!opcaoEmail(); }
+      function captchaNaTela(){
+        var l = todos('iframe,div,script');
         for (var i = 0; i < l.length; i++) {
-          var el = l[i], t = tipo(el), r = rotulo(el);
-          if (proibidas.test(r)) continue;
-          if (el.tagName === 'INPUT' && t !== 'submit') continue;
-          if (t === 'submit' && !porTipo) porTipo = el;
-          if (!porTexto && palavras.test(r)) porTexto = el;
+          var el = l[i], src = attr(el, 'src'), cls = attr(el, 'class'), id = attr(el, 'id');
+          if (/recaptcha|hcaptcha|turnstile|captcha/.test(src + ' ' + cls + ' ' + id) && (el.tagName === 'SCRIPT' || visivel(el))) return true;
+          if (el.tagName === 'DIV' && (attr(el, 'data-sitekey') || attr(el, 'data-captcha'))) return true;
         }
-        return porTipo || porTexto;
+        return false;
       }
+      function linkVoltar(){
+        var a = primeiro('a[href*="login-actions/restart"]'); if (a) return a;
+        var l = clicaveis();
+        for (var i = 0; i < l.length; i++) if (/^(voltar|back|tentar de novo|tentar novamente|entrar de novo)$/.test(rotulo(l[i]))) return l[i];
+        return null;
+      }
+      // a casca do Gestor (o app Angular ainda nao montou): o #root existe e esta vazio. Sem classe (o iFood as troca).
+      function cascaDoGestor(){
+        try {
+          var root = document.getElementById('root');
+          return !!root && root.children.length === 0;
+        } catch (e) { return false; }
+      }
+
       function setValor(inp, v){
         try { inp.focus(); } catch (e) {}
         var feito = false;
@@ -4054,29 +4129,88 @@ public partial class ChatIfood : UserControl
         return false;
       }
 
-      // login | codigo | canal | carregando | logado | outra
+      // ── a tela ──
+      // email | senha | login | canal | codigo | mfa_cadastro | expirada | erro | captcha | carregando | logado | outra
       window.pdvLoginTela = function () {
         try {
-          if (campoSenha()) return 'login';
-          if (campoCodigo() || caixasDeDigito()) return 'codigo';
-          if (opcaoEmail()) return 'canal';
+          var auth = hostAuth(), id = paginaId();
+          if ((auth || id) && captchaNaTela()) return 'captcha';
+          if (id) {
+            if (id === 'login-username') return campoEmail() ? 'email' : 'carregando';
+            if (id === 'login-password') return campoSenha() ? 'senha' : 'carregando';
+            if (id === 'login') return (campoSenha() && (campoEmail() || campoEmailMesmoTravado())) ? 'login' : (campoSenha() ? 'senha' : 'carregando');
+            if (id === 'select-otp-method') return temOpcoesDeCanal() ? 'canal' : 'carregando';
+            if (id === 'enter-otp' || id === 'enforce-mfa-code' || id === 'login-otp') return (caixasOtp() || campoCodigo() || caixasDeDigito()) ? 'codigo' : 'carregando';
+            if (id === 'enforce-mfa-method' || id === 'login-config-totp') return 'mfa_cadastro';
+            if (id === 'login-page-expired') return 'expirada';
+            if (id === 'error' || id === 'info') return 'erro';
+            return 'outra';
+          }
+          // sem o kcContext: pelos campos (a tela generica de login), como na 1.0.44
+          var s = campoSenha(), e = campoEmail();
+          if (s && e) return 'login';
+          if (s) return 'senha';
+          if (caixasOtp() || campoCodigo() || caixasDeDigito()) return 'codigo';
+          if (e) return 'email';
+          if (temOpcoesDeCanal()) return 'canal';
+          if (auth) return linkVoltar() ? 'expirada' : 'carregando';
           var href = '';
-          try { href = String(location.href || '').toLowerCase(); } catch (e) {}
+          try { href = String(location.href || '').toLowerCase(); } catch (e2) {}
           if (/\/login|\/entrar|#\/auth|\/auth\b|\/signin/.test(href)) return 'carregando';
+          if (cascaDoGestor()) return 'carregando';
           return clicaveis().length >= 2 ? 'logado' : 'outra';
-        } catch (e) { return 'erro'; }
+        } catch (e) { return 'erro_script'; }
       };
 
-      // enviado | sem_campos
+      // o que a pagina diz (o erro do login), mascarado: nunca e-mail, nunca numero longo
+      window.pdvLoginMensagem = function () {
+        try {
+          var k = window.kcContext, m = '';
+          if (k && k.message && typeof k.message.summary === 'string') m = k.message.summary;
+          if (!m) {
+            var l = todos('[aria-live="polite"],[role="alert"],[id^="input-error"]');
+            for (var i = 0; i < l.length; i++) if (visivel(l[i]) && texto(l[i])) { m = l[i].textContent; break; }
+          }
+          return mascara(m);
+        } catch (e) { return ''; }
+      };
+
+      // enviado | sem_campo | sem_botao
+      window.pdvLoginEmail = function (email) {
+        try {
+          var e = campoEmail();
+          if (!e) return 'sem_campo';
+          setValor(e, String(email));
+          var b = botaoDe(/continuar|entrar|acessar|login|avan|confirmar|prosseguir|continue/, /criar|cadastr|esquec|recuper|voltar|cancel|ajuda|help|passkey|chave de acesso/);
+          return enviar(b, e) ? 'enviado' : 'sem_botao';
+        } catch (e2) { return 'erro'; }
+      };
+
+      // enviado | sem_campo | sem_botao
+      window.pdvLoginSenha = function (senha) {
+        try {
+          var s = campoSenha();
+          if (!s) return 'sem_campo';
+          setValor(s, String(senha));
+          var b = botaoDe(/entrar|acessar|login|continuar|avan|confirmar|prosseguir|sign in/, /criar|cadastr|esquec|recuper|voltar|cancel|ajuda|help|passkey|chave de acesso|mostrar|ocultar|show|hide/);
+          return enviar(b, s) ? 'enviado' : 'sem_botao';
+        } catch (e2) { return 'erro'; }
+      };
+
+      // as duas juntas (login.ftl) ou o que a tela tiver: enviado | sem_campos | sem_botao
       window.pdvLoginPreencher = function (email, senha) {
         try {
-          var e = campoEmail(), s = campoSenha();
-          if (!e || !s) return 'sem_campos';
-          setValor(e, String(email));
-          setValor(s, String(senha));
-          var b = botaoDe(/entrar|acessar|login|continuar|avan|confirmar|prosseguir/, /criar|cadastr|esquec|recuper|voltar|cancel/);
-          return enviar(b, s) ? 'enviado' : 'sem_botao';
-        } catch (e) { return 'erro'; }
+          var e = campoEmail() || campoEmailMesmoTravado(), s = campoSenha();
+          if (e && s) {
+            if (!e.disabled) setValor(e, String(email));
+            setValor(s, String(senha));
+            var b = botaoDe(/entrar|acessar|login|continuar|avan|confirmar|prosseguir/, /criar|cadastr|esquec|recuper|voltar|cancel|ajuda|help|passkey|mostrar|ocultar/);
+            return enviar(b, s) ? 'enviado' : 'sem_botao';
+          }
+          if (e) return window.pdvLoginEmail(email);
+          if (s) return window.pdvLoginSenha(senha);
+          return 'sem_campos';
+        } catch (e2) { return 'erro'; }
       };
 
       // true | false
@@ -4085,30 +4219,55 @@ public partial class ChatIfood : UserControl
           var op = opcaoEmail();
           if (!op) return false;
           try { op.click(); } catch (e) {}
-          // a opcao marcada (radio) pode precisar de um Continuar; o botao da propria opcao, nao
-          var b = botaoDe(/continuar|enviar|confirmar|avan|prosseguir|receber/, /sms|whatsapp|telefone|celular|voltar|cancel|e-?mail/);
+          var r = radioEmail();
+          if (r && !r.checked) { try { r.click(); } catch (e) {} }
+          if (r) { try { r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {} }
+          var b = botaoDe(/continuar|enviar|confirmar|avan|prosseguir|receber|continue/, /sms|whatsapp|telefone|celular|voltar|cancel|e-?mail|ajuda|acesso/);
           if (b && b !== op) { try { b.click(); } catch (e) {} }
           return true;
-        } catch (e) { return false; }
+        } catch (e2) { return false; }
       };
 
-      // enviado | sem_campo | codigo_invalido
+      // enviado | sem_campo | codigo_invalido | sem_botao
       window.pdvLoginDigitar = function (codigo) {
         try {
           var c = String(codigo || '');
           if (!/^\d{4,8}$/.test(c)) return 'codigo_invalido';
-          var caixas = caixasDeDigito(), campo = null;
+          var caixas = caixasOtp(), campo = null, i;
           if (caixas) {
-            for (var i = 0; i < caixas.length && i < c.length; i++) setValor(caixas[i], c.charAt(i));
+            // o OTPInput do iFood: com a 1a caixa em foco, o valor inteiro entra de uma vez (insertCharacters);
+            // se o oculto nao refletiu, um digito por caixa
+            setValor(caixas[0], c);
+            var oc = ocultoOtp();
+            if (oc && String(oc.value || '') !== c) {
+              for (i = 0; i < caixas.length && i < c.length; i++) setValor(caixas[i], c.charAt(i));
+            }
+            if (oc && String(oc.value || '') !== c) { try { setValor(oc, c); } catch (e) {} }
             campo = caixas[caixas.length - 1];
           } else {
-            campo = campoCodigo();
-            if (!campo) return 'sem_campo';
-            setValor(campo, c);
+            var digitos = caixasDeDigito();
+            if (digitos) {
+              for (i = 0; i < digitos.length && i < c.length; i++) setValor(digitos[i], c.charAt(i));
+              campo = digitos[digitos.length - 1];
+            } else {
+              campo = campoCodigo();
+              if (!campo) return 'sem_campo';
+              setValor(campo, c);
+            }
           }
-          var b = botaoDe(/confirmar|verificar|validar|entrar|continuar|enviar|avan|prosseguir/, /reenviar|outro|voltar|cancel|nao recebi|não recebi/);
+          var b = botaoDe(/continuar|confirmar|verificar|validar|entrar|enviar|avan|prosseguir|continue/, /reenviar|outro|voltar|cancel|nao recebi|não recebi|resend|ajuda|acesso/);
           return enviar(b, campo) ? 'enviado' : 'sem_botao';
-        } catch (e) { return 'erro'; }
+        } catch (e2) { return 'erro'; }
+      };
+
+      // a tela expirada ou de erro: toca em Voltar (recomeca o login). true | false
+      window.pdvLoginVoltar = function () {
+        try {
+          var a = linkVoltar();
+          if (!a) return false;
+          try { a.click(); } catch (e) {}
+          return true;
+        } catch (e2) { return false; }
       };
     })();
     """;

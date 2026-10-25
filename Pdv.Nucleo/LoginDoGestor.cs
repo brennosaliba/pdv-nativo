@@ -11,8 +11,10 @@ public enum FaseLogin
     Ocioso,
     /// <summary>Pedindo as credenciais ao ERP.</summary>
     Credenciais,
-    /// <summary>E-mail e senha preenchidos e enviados; esperando a tela seguinte.</summary>
+    /// <summary>O e-mail foi preenchido e enviado (ou e-mail e senha juntos); esperando a tela seguinte.</summary>
     Preencheu,
+    /// <summary>A senha foi preenchida e enviada; esperando a tela seguinte.</summary>
+    SenhaEnviada,
     /// <summary>A escolha do canal apareceu e o e-mail foi escolhido.</summary>
     CanalEmail,
     /// <summary>A tela do codigo apareceu; pedindo o codigo ao ERP (que o pede ao dono).</summary>
@@ -28,21 +30,28 @@ public enum FaseLogin
 }
 
 /// <summary>
-/// O LOGIN DO GESTOR DE PEDIDOS SOZINHO (1.0.44, 17/10/2026, pedido do dono): "caso caia, fazer o login
-/// automatico; na tela do codigo escolher 'enviar por e-mail'; eu recebo a solicitacao no meu WhatsApp, respondo
-/// com o codigo e fica automatico, sem o funcionario fazer nada".
+/// O LOGIN DO GESTOR DE PEDIDOS SOZINHO (1.0.44, 17/10/2026, pedido do dono; 1.0.50, 25/10: a tela real do Gestor
+/// 9.350): "caso caia, fazer o login automatico; na tela do codigo escolher 'enviar por e-mail'; eu recebo a
+/// solicitacao no meu WhatsApp, respondo com o codigo e fica automatico, sem o funcionario fazer nada".
 ///
 /// Esta classe e a parte PURA: a maquina de estados, os tetos, o contrato com a edge <c>gestor-login</c> do ERP
 /// e o mascaramento. Quem fala com a nuvem e com a pagina e <see cref="FluxoLoginGestor"/>; quem a injeta na tela
-/// e o ServicoLoginGestor do caixa.
+/// e o ServicoLoginGestor do caixa (na TV, o ChatCaptador do kiosk). O MESMO arquivo vale nos dois (a TV leva uma
+/// copia com o namespace dela).
+///
+/// A tela real (25/10/2026, lida do bundle publico de partners-auth.ifood.com.br, Keycloak): e-mail numa tela,
+/// senha na seguinte, a escolha do canal do codigo (E-mail, SMS, WhatsApp), o codigo de 6 digitos. As telas que o
+/// roteiro NAO atravessa: um captcha e o cadastro da verificacao em 2 etapas (enforce-mfa): desiste na hora, pausa o
+/// automatico por 2 h e o ERP avisa o dono (o <c>usado</c> leva <c>pausado_ate</c>).
 ///
 /// Os tetos, combinados na espec:
-///  · 1 tentativa a cada <see cref="EntreTentativas"/> por caixa (contada do comeco da tentativa);
+///  · 1 tentativa a cada <see cref="EntreTentativas"/> por aparelho (contada do comeco da tentativa);
 ///  · <see cref="FalhasParaPausar"/> falhas seguidas = o automatico para por <see cref="Pausa"/> e o ERP avisa o
 ///    dono (o <c>usado</c> leva <c>pausado_ate</c>);
 ///  · o codigo e consultado a cada <see cref="IntervaloConsulta"/> por ate <see cref="PrazoDoCodigo"/>;
-///  · "Entrar agora" na Configuracao (forcado) passa pelo teto e pela pausa, mas continua contando as falhas.
-/// Desligado no ERP, sem rede e cancelado NAO sao falhas: nao contam para a pausa.
+///  · "Entrar agora" (forcado: a Configuracao, a 🔧 da TV, o comando relogar_gestor do Vigia) passa pelo teto e pela
+///    pausa, mas continua contando as falhas.
+/// Desligado no ERP, sem rede, outro aparelho entrando e cancelado NAO sao falhas: nao contam para a pausa.
 /// </summary>
 public sealed class LoginDoGestor
 {
@@ -52,10 +61,17 @@ public sealed class LoginDoGestor
     public static readonly TimeSpan IntervaloConsulta = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan PrazoDoCodigo = TimeSpan.FromMinutes(15);
     public static readonly TimeSpan EntreTentativas = TimeSpan.FromMinutes(10);
-    /// <summary>Quanto esperar a tela seguinte (depois de enviar a senha, ou o codigo).</summary>
+    /// <summary>Quanto esperar a tela seguinte (depois de enviar o e-mail, a senha, ou o codigo).</summary>
     public static readonly TimeSpan EsperaDaTela = TimeSpan.FromSeconds(30);
+    /// <summary>A TV e a reserva: espera isto depois de ver o login antes de tentar (o caixa vai primeiro).</summary>
+    public static readonly TimeSpan EsperaDaTv = TimeSpan.FromMinutes(3);
     public const int FalhasParaPausar = 3;
     public static readonly TimeSpan Pausa = TimeSpan.FromHours(2);
+
+    /// <summary>As telas que o roteiro atravessa sozinho.</summary>
+    public static readonly string[] TelasDeEntrada = { "email", "senha", "login", "canal", "codigo" };
+    /// <summary>As telas em que o roteiro desiste na hora e avisa o dono (pausa de 2 h).</summary>
+    public static readonly string[] TelasQueParam = { "captcha", "mfa_cadastro" };
 
     public FaseLogin Fase { get; private set; } = FaseLogin.Ocioso;
     public int FalhasSeguidas { get; private set; }
@@ -69,6 +85,22 @@ public sealed class LoginDoGestor
     public bool DesligadoNoErp { get; private set; }
 
     public bool EmAndamento => Fase is not (FaseLogin.Ocioso or FaseLogin.Entrou or FaseLogin.Falhou);
+
+    // ── O PONTO DE ENTRADA DO VIGIA (comando relogar_gestor) ────────────────────────────────────
+    /// <summary>
+    /// Quem liga o login na tela (ServicoLoginGestor no caixa, ChatCaptador na TV) pendura aqui o "Entrar agora".
+    /// O comando <c>relogar_gestor</c> do Vigia chama <see cref="EntrarAgora"/>; sem ninguem pendurado, a resposta diz.
+    /// </summary>
+    public static Func<Task<string>>? ComandoEntrarAgora { get; set; }
+
+    /// <summary>"Entrar agora" de fora (o Vigia, a 🔧): forcado, passa pelo teto e pela pausa. Nunca lanca.</summary>
+    public static async Task<string> EntrarAgora()
+    {
+        var f = ComandoEntrarAgora;
+        if (f is null) return "o chat do iFood ainda nao abriu";
+        try { return await f().ConfigureAwait(false); }
+        catch (Exception ex) { return "nao deu agora (" + ex.GetType().Name + ")"; }
+    }
 
     /// <summary>Por que NAO comecar uma tentativa agora; nulo = pode. <paramref name="forcado"/> e o "Entrar agora".</summary>
     public string? PorQueNao(DateTime agora, bool forcado)
@@ -90,6 +122,7 @@ public sealed class LoginDoGestor
     }
 
     public void Preencheu() => Fase = FaseLogin.Preencheu;
+    public void SenhaEnviada() => Fase = FaseLogin.SenhaEnviada;
     public void CanalEmail() => Fase = FaseLogin.CanalEmail;
     public void PedirCodigo() => Fase = FaseLogin.PedirCodigo;
 
@@ -115,15 +148,18 @@ public sealed class LoginDoGestor
         EsperandoDesde = null;
     }
 
-    /// <summary>Uma falha de verdade (senha, codigo, tela). Devolve true quando esta falha pausou o automatico.</summary>
-    public bool Falhou(string motivo, DateTime agora)
+    /// <summary>
+    /// Uma falha de verdade (senha, codigo, tela). Devolve true quando esta falha pausou o automatico: na terceira
+    /// seguida, ou na hora com <paramref name="pausarAgora"/> (captcha, cadastro da verificacao: insistir nao adianta).
+    /// </summary>
+    public bool Falhou(string motivo, DateTime agora, bool pausarAgora = false)
     {
         Fase = FaseLogin.Falhou;
         FalhasSeguidas++;
         Ultimo = $"falhou {agora:HH\\:mm} ({motivo})";
         PedidoId = null;
         EsperandoDesde = null;
-        if (FalhasSeguidas < FalhasParaPausar) return false;
+        if (!pausarAgora && FalhasSeguidas < FalhasParaPausar) return false;
         PausadoAte = agora + Pausa;
         return true;
     }
@@ -138,7 +174,7 @@ public sealed class LoginDoGestor
         EsperandoDesde = null;
     }
 
-    /// <summary>A nuvem nao respondeu (sem rede, sem sessao, borda fora do ar): nao e falha.</summary>
+    /// <summary>A nuvem nao respondeu (sem rede, sem sessao, borda fora do ar, outro aparelho entrando): nao e falha.</summary>
     public void SemNuvem(string motivo, DateTime agora)
     {
         Fase = FaseLogin.Ocioso;
@@ -173,15 +209,22 @@ public sealed class LoginDoGestor
     /// <summary>O id do pedido e um inteiro (identity) no ERP; vai como numero quando e um, senao como texto.</summary>
     private static object? IdJson(string? id) => id is null ? null : (long.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : id);
 
-    public static string CorpoCredenciais() => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "credenciais" }, Json);
+    /// <summary>
+    /// <c>credenciais</c> leva o terminal (1.0.50 / SQL 222): o ERP deixa UM aparelho por vez entrar por loja (5 min);
+    /// o outro recebe <c>outro_aparelho_entrando</c>, que nao conta falha. A TV nao manda terminal (a edge poe o do token).
+    /// </summary>
+    public static string CorpoCredenciais(string? terminal = null)
+        => JsonSerializer.Serialize(terminal is null
+            ? new Dictionary<string, object?> { ["acao"] = "credenciais" }
+            : new Dictionary<string, object?> { ["acao"] = "credenciais", ["terminal"] = terminal }, Json);
     public static string CorpoPedirCodigo(string terminal) => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "pedir_codigo", ["terminal"] = terminal }, Json);
     public static string CorpoCodigo(string id) => JsonSerializer.Serialize(new Dictionary<string, object?> { ["acao"] = "codigo", ["id"] = IdJson(id) }, Json);
 
     /// <summary>
-    /// <c>usado</c>: o fim da tentativa, deu certo ou nao. <paramref name="pausadoAte"/> preenchido = 3 falhas seguidas,
-    /// e o ERP avisa o dono pelo mesmo caminho dos avisos. O ERP so aceita <c>pausado_ate</c> como yyyy-MM-ddTHH:mm:ss
-    /// (senao 400 pausado_ate_invalido) e o le como HORA LOCAL DE BRASILIA (a que o caixa mostra): sem 'Z' e sem fuso.
-    /// Um DateTime em UTC e convertido para a hora local antes.
+    /// <c>usado</c>: o fim da tentativa, deu certo ou nao. <paramref name="pausadoAte"/> preenchido = o automatico pausou
+    /// (3 falhas seguidas, ou captcha/cadastro na hora), e o ERP avisa o dono pelo mesmo caminho dos avisos. O ERP so
+    /// aceita <c>pausado_ate</c> como yyyy-MM-ddTHH:mm:ss (senao 400 pausado_ate_invalido) e o le como HORA LOCAL DE
+    /// BRASILIA (a que o caixa mostra): sem 'Z' e sem fuso. Um DateTime em UTC e convertido para a hora local antes.
     /// </summary>
     public static string CorpoUsado(string terminal, string? id, bool ok, string? motivo, DateTime? pausadoAte)
         => JsonSerializer.Serialize(new Dictionary<string, object?>
@@ -196,7 +239,7 @@ public sealed class LoginDoGestor
 
     /// <summary>
     /// A resposta de <c>credenciais</c>. <c>Desligado</c> = ligado false no ERP. <c>NaoConta</c> = nao ha login automatico
-    /// (sem cadastro, cadastro incompleto, SQL 193 nao rodou, sem rede...): nao e falha, so registro e teto.
+    /// (sem cadastro, cadastro incompleto, SQL 193 nao rodou, sem rede, outro aparelho entrando...): nao e falha, so registro e teto.
     /// </summary>
     public sealed record Credenciais(bool Ok, string? Email, string? Senha, string? Motivo, bool Desligado = false, bool NaoConta = false)
     {
@@ -204,13 +247,15 @@ public sealed class LoginDoGestor
         public bool SemNuvem => NaoConta;
     }
 
-    /// <summary>Os motivos do ERP que significam "sem login automatico", em frase curta para o diag e a Configuracao.</summary>
+    /// <summary>Os motivos do ERP que significam "sem login automatico agora", em frase curta para o diag e a Configuracao.</summary>
     private static (string Frase, bool NaoConta)? MotivoDoErp(string? motivo) => motivo switch
     {
         "sem_cadastro" => ("sem cadastro no ERP", true),
         "incompleto" => ("cadastro incompleto no ERP", true),
         "sem_sql_193" => ("sem login automatico (SQL 193 nao rodou)", true),
         "nao_autorizado" => ("sem sessao na nuvem", true),
+        // SQL 222: o outro aparelho da loja (caixa ou TV) esta entrando ha menos de 5 min: a vez e dele
+        "outro_aparelho_entrando" => ("outro aparelho esta entrando", true),
         _ => null,
     };
 
@@ -368,9 +413,11 @@ public sealed class LoginDoGestor
 /// <c>Servicos.Nuvem().FuncaoAsync("gestor-login", corpo, prazo)</c>, a pagina e o <c>ExecuteScriptAsync</c> do
 /// WebView2 do chat (que devolve o JSON do valor), a espera e o Task.Delay.
 ///
-/// O que a pagina responde (ScriptLogin, Telas/ChatIfood.xaml.cs): <c>pdvLoginTela()</c> = login | canal | codigo |
-/// logado | carregando | outra; <c>pdvLoginPreencher(email, senha)</c> = enviado | sem_campos; <c>pdvLoginEscolherEmail()</c>
-/// = true | false; <c>pdvLoginDigitar(codigo)</c> = enviado | sem_campo | codigo_invalido.
+/// O que a pagina responde (ScriptLogin, Telas/ChatIfood.xaml.cs; a mesma constante na TV):
+///  <c>pdvLoginTela()</c> = email | senha | login | canal | codigo | mfa_cadastro | expirada | erro | captcha | carregando | logado | outra;
+///  <c>pdvLoginEmail(email)</c> / <c>pdvLoginSenha(senha)</c> / <c>pdvLoginPreencher(email, senha)</c> = enviado | sem_campo(s) | sem_botao;
+///  <c>pdvLoginEscolherEmail()</c> = true | false; <c>pdvLoginDigitar(codigo)</c> = enviado | sem_campo | codigo_invalido;
+///  <c>pdvLoginVoltar()</c> = true | false (a tela expirada); <c>pdvLoginMensagem()</c> = o erro da pagina, ja mascarado.
 /// </summary>
 public sealed class FluxoLoginGestor
 {
@@ -402,6 +449,10 @@ public sealed class FluxoLoginGestor
     public LoginDoGestor Estado => _estado;
     public bool Rodando => Volatile.Read(ref _rodando) == 1;
 
+    private static bool Entra(string tela) => Array.IndexOf(LoginDoGestor.TelasDeEntrada, tela) >= 0;
+    private static bool Para(string tela) => Array.IndexOf(LoginDoGestor.TelasQueParam, tela) >= 0;
+    private static string MotivoDaParada(string tela) => tela == "captcha" ? "captcha na tela de login" : "o iFood pede o cadastro da verificacao em 2 etapas";
+
     /// <summary>Uma tentativa inteira. Devolve true se entrou. Nunca lanca (cancelado inclusive).</summary>
     public async Task<bool> TentarAsync(bool forcado, CancellationToken ct)
     {
@@ -411,33 +462,74 @@ public sealed class FluxoLoginGestor
             if (_estado.PorQueNao(_agora(), forcado) is { } nao) { Diag($"nao agora ({nao})"); return false; }
             var tela = await TelaAsync().ConfigureAwait(false);
             if (tela == "logado") { _estado.JaLogado(); Diag("o Gestor ja esta logado"); return false; }
-            if (tela is not ("login" or "canal" or "codigo")) { Diag($"nao agora (a pagina diz {tela})"); return false; }
+            if (tela is "expirada" or "erro")
+            {
+                // a pagina do login expirou (ou deu erro): o Voltar recomeca o login; a tela nova decide
+                var voltou = Limpar(await _pagina("window.pdvLoginVoltar ? window.pdvLoginVoltar() : false").ConfigureAwait(false));
+                if (voltou != "true") { Diag($"nao agora (a pagina diz {tela} e nao tem Voltar)"); return false; }
+                Diag($"a pagina diz {tela}: toquei em Voltar");
+                tela = await EsperarSairDeAsync(tela, ct).ConfigureAwait(false);
+                if (tela == "logado") { _estado.JaLogado(); Diag("o Gestor ja esta logado"); return false; }
+            }
+            if (Para(tela))
+            {
+                // captcha / cadastro da verificacao: insistir nao adianta; pausa na hora e o dono e avisado pelo ERP
+                _estado.Comecar(_agora());
+                return await FalharAsync(MotivoDaParada(tela), ct, pausarAgora: true).ConfigureAwait(false);
+            }
+            if (!Entra(tela)) { Diag($"nao agora (a pagina diz {tela})"); return false; }
 
             _estado.Comecar(_agora());
             Diag("pedido");
-            if (tela == "login")
+            if (tela is "email" or "senha" or "login")
             {
-                var (st, corpo) = await _nuvem(LoginDoGestor.CorpoCredenciais()).ConfigureAwait(false);
+                var (st, corpo) = await _nuvem(LoginDoGestor.CorpoCredenciais(_terminal)).ConfigureAwait(false);
                 var cr = LoginDoGestor.LerCredenciais(st, corpo);
                 if (cr.Desligado) { _estado.Desligado(_agora()); Diag("desligado no ERP"); return false; }
                 if (cr.NaoConta) { _estado.SemNuvem(cr.Motivo!, _agora()); Diag(cr.Motivo!); return false; }
                 if (!cr.Ok) return await FalharAsync(cr.Motivo ?? "sem credenciais", ct).ConfigureAwait(false);
                 _segredos.Add(cr.Email); _segredos.Add(cr.Senha);
-                var r = await _pagina("window.pdvLoginPreencher ? window.pdvLoginPreencher(" + JsonSerializer.Serialize(cr.Email) + ", " + JsonSerializer.Serialize(cr.Senha) + ") : 'sem_script'").ConfigureAwait(false);
-                r = Limpar(r);
-                if (r != "enviado") return await FalharAsync($"a pagina diz {r}", ct).ConfigureAwait(false);
-                _estado.Preencheu();
-                tela = await EsperarTelaAsync("login", ct).ConfigureAwait(false);
+
+                if (tela == "email")
+                {
+                    var r = Limpar(await _pagina("window.pdvLoginEmail ? window.pdvLoginEmail(" + JsonSerializer.Serialize(cr.Email) + ") : 'sem_script'").ConfigureAwait(false));
+                    if (r != "enviado") return await FalharAsync($"a pagina diz {r}", ct).ConfigureAwait(false);
+                    _estado.Preencheu();
+                    tela = await EsperarSairDeAsync("email", ct).ConfigureAwait(false);
+                    if (tela == "email") return await FalharAsync("e-mail recusado" + await MensagemAsync().ConfigureAwait(false), ct).ConfigureAwait(false);
+                    if (Para(tela)) return await FalharAsync(MotivoDaParada(tela), ct, pausarAgora: true).ConfigureAwait(false);
+                }
+                if (tela == "login")
+                {
+                    var r = Limpar(await _pagina("window.pdvLoginPreencher ? window.pdvLoginPreencher(" + JsonSerializer.Serialize(cr.Email) + ", " + JsonSerializer.Serialize(cr.Senha) + ") : 'sem_script'").ConfigureAwait(false));
+                    if (r != "enviado") return await FalharAsync($"a pagina diz {r}", ct).ConfigureAwait(false);
+                    _estado.Preencheu();
+                    _estado.SenhaEnviada();
+                    tela = await EsperarSairDeAsync("login", ct).ConfigureAwait(false);
+                    if (tela is "login" or "senha") return await FalharAsync("senha recusada" + await MensagemAsync().ConfigureAwait(false), ct).ConfigureAwait(false);
+                }
+                else if (tela == "senha")
+                {
+                    var r = Limpar(await _pagina("window.pdvLoginSenha ? window.pdvLoginSenha(" + JsonSerializer.Serialize(cr.Senha) + ") : 'sem_script'").ConfigureAwait(false));
+                    if (r != "enviado") return await FalharAsync($"a pagina diz {r}", ct).ConfigureAwait(false);
+                    _estado.SenhaEnviada();
+                    tela = await EsperarSairDeAsync("senha", ct).ConfigureAwait(false);
+                    if (tela == "senha") return await FalharAsync("senha recusada" + await MensagemAsync().ConfigureAwait(false), ct).ConfigureAwait(false);
+                }
+                if (Para(tela)) return await FalharAsync(MotivoDaParada(tela), ct, pausarAgora: true).ConfigureAwait(false);
+                if (tela is "expirada" or "erro") return await FalharAsync($"a pagina diz {tela}", ct).ConfigureAwait(false);
+                if (tela == "email") return await FalharAsync("voltou para a tela do e-mail", ct).ConfigureAwait(false);
             }
             if (tela == "canal")
             {
                 var esc = Limpar(await _pagina("window.pdvLoginEscolherEmail ? window.pdvLoginEscolherEmail() : false").ConfigureAwait(false));
                 if (esc != "true") return await FalharAsync("nao achei a opcao e-mail", ct).ConfigureAwait(false);
                 _estado.CanalEmail();
-                tela = await EsperarTelaAsync("canal", ct).ConfigureAwait(false);
+                tela = await EsperarSairDeAsync("canal", ct).ConfigureAwait(false);
+                if (Para(tela)) return await FalharAsync(MotivoDaParada(tela), ct, pausarAgora: true).ConfigureAwait(false);
             }
             if (tela == "logado") return await EntrarAsync(null, ct).ConfigureAwait(false);
-            if (tela != "codigo") return await FalharAsync(tela == "login" ? "ainda na tela de login" : $"a pagina diz {tela}", ct).ConfigureAwait(false);
+            if (tela != "codigo") return await FalharAsync(tela == "canal" ? "ainda na escolha do canal" : $"a pagina diz {tela}", ct).ConfigureAwait(false);
 
             _estado.PedirCodigo();
             var (stP, corpoP) = await _nuvem(LoginDoGestor.CorpoPedirCodigo(_terminal)).ConfigureAwait(false);
@@ -472,17 +564,20 @@ public sealed class FluxoLoginGestor
                 if (rc.Codigo is not null) { codigo = rc.Codigo; break; }
                 if (rc.Expirado) return await FalharAsync("codigo expirou no ERP", ct).ConfigureAwait(false);
                 if (!rc.Esperando) return await FalharAsync(rc.Motivo ?? "consulta do codigo recusada", ct).ConfigureAwait(false);
-                // alguem pode ter entrado na mao enquanto esperavamos
-                if (await TelaAsync().ConfigureAwait(false) == "logado") return await EntrarAsync("alguem entrou na mao", ct).ConfigureAwait(false);
+                // alguem pode ter entrado na mao enquanto esperavamos; ou a pagina do codigo expirou
+                var agoraTela = await TelaAsync().ConfigureAwait(false);
+                if (agoraTela == "logado") return await EntrarAsync("alguem entrou na mao", ct).ConfigureAwait(false);
+                if (agoraTela is "expirada" or "erro") return await FalharAsync($"a pagina diz {agoraTela} enquanto esperava o codigo", ct).ConfigureAwait(false);
             }
             _segredos.Add(codigo);
             Diag("codigo recebido");
             var dig = Limpar(await _pagina("window.pdvLoginDigitar ? window.pdvLoginDigitar(" + JsonSerializer.Serialize(codigo) + ") : 'sem_script'").ConfigureAwait(false));
             if (dig != "enviado") return await FalharAsync($"a pagina diz {dig}", ct).ConfigureAwait(false);
             _estado.Digitou();
-            tela = await EsperarTelaAsync("codigo", ct).ConfigureAwait(false);
+            tela = await EsperarSairDeAsync("codigo", ct).ConfigureAwait(false);
             if (tela == "logado") return await EntrarAsync(null, ct).ConfigureAwait(false);
-            return await FalharAsync(tela == "codigo" ? "codigo recusado" : $"a pagina diz {tela}", ct).ConfigureAwait(false);
+            if (Para(tela)) return await FalharAsync(MotivoDaParada(tela), ct, pausarAgora: true).ConfigureAwait(false);
+            return await FalharAsync(tela == "codigo" ? "codigo recusado" + await MensagemAsync().ConfigureAwait(false) : $"a pagina diz {tela}", ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { _estado.Cancelado(); Diag("cancelado"); return false; }
         catch (Exception ex)
@@ -503,12 +598,14 @@ public sealed class FluxoLoginGestor
         return true;
     }
 
-    private async Task<bool> FalharAsync(string motivo, CancellationToken ct)
+    private async Task<bool> FalharAsync(string motivo, CancellationToken ct, bool pausarAgora = false)
     {
         var id = _estado.PedidoId;
-        var pausou = _estado.Falhou(motivo, _agora());
+        var pausou = _estado.Falhou(motivo, _agora(), pausarAgora);
         Diag(pausou ? $"falhou ({motivo}), automatico pausado por 2 h, dono avisado" : $"falhou ({motivo})");
-        await UsadoAsync(id, false, motivo, pausou ? _estado.PausadoAte : null, ct).ConfigureAwait(false);
+        // o motivo que vai ao ERP (e ao dono, no aviso da pausa): na terceira seguida diz que foram 3
+        var motivoDoErp = pausou && !pausarAgora ? $"{LoginDoGestor.FalhasParaPausar} falhas seguidas ({motivo})" : motivo;
+        await UsadoAsync(id, false, motivoDoErp, pausou ? _estado.PausadoAte : null, ct).ConfigureAwait(false);
         return false;
     }
 
@@ -521,6 +618,18 @@ public sealed class FluxoLoginGestor
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) { Diag("usado: " + ex.GetType().Name); }
+    }
+
+    /// <summary>
+    /// Espera a tela sair de <paramref name="atual"/> (ate <see cref="LoginDoGestor.EsperaDaTela"/>, lendo a cada
+    /// segundo). "carregando" no meio (a pagina seguinte chegando, o Gestor montando) ganha mais duas esperas.
+    /// </summary>
+    private async Task<string> EsperarSairDeAsync(string atual, CancellationToken ct)
+    {
+        var tela = await EsperarTelaAsync(atual, ct).ConfigureAwait(false);
+        for (var i = 0; i < 2 && tela == "carregando"; i++)
+            tela = await EsperarTelaAsync("carregando", ct).ConfigureAwait(false);
+        return tela;
     }
 
     /// <summary>Espera a tela mudar (ate <see cref="LoginDoGestor.EsperaDaTela"/>), lendo a cada segundo.</summary>
@@ -541,6 +650,20 @@ public sealed class FluxoLoginGestor
         try { return Limpar(await _pagina("window.pdvLoginTela ? window.pdvLoginTela() : 'sem_script'").ConfigureAwait(false)); }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { return "erro " + ex.GetType().Name; }
+    }
+
+    /// <summary>O erro que a pagina mostra (ja mascarado pelo script; mascarado de novo aqui), como " (texto)" ou vazio.</summary>
+    private async Task<string> MensagemAsync()
+    {
+        try
+        {
+            var m = Limpar(await _pagina("window.pdvLoginMensagem ? window.pdvLoginMensagem() : ''").ConfigureAwait(false));
+            if (m is "sem_script" or "") return "";
+            var limpa = LoginDoGestor.Mascarar(m, _segredos.ToArray());
+            return limpa.Length == 0 ? "" : " (a pagina diz: " + (limpa.Length > 80 ? limpa[..80] : limpa) + ")";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return ""; }
     }
 
     /// <summary>O ExecuteScriptAsync devolve o JSON do valor: "login" com aspas, true sem.</summary>

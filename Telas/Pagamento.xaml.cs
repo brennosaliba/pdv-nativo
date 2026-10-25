@@ -33,6 +33,8 @@ public sealed record ContaNoPagamento(string Id, long Numero, string? Nome, Dest
 /// </summary>
 public partial class Pagamento : UserControl
 {
+    /// <summary>1.0.50: a tela de pagamento esta na tela (o print do Vigia espera ela sair).</summary>
+    public static volatile bool NaTela;
     /// <summary>
     /// O passo do roteiro de homologacao que esta venda executa, quando ela nasceu
     /// de um toque no roteiro. Nulo na venda normal da loja, e por isso venda de
@@ -155,6 +157,9 @@ public partial class Pagamento : UserControl
         Teclado.Limpou += () => { _digitado = ""; PintarDinheiro(); };
 
         Unloaded += (_, _) => { _avanco?.Stop(); _cobranca?.Cancel(); };
+        // 1.0.50: o Vigia nunca tira print com a tela de pagamento aberta (dados de cartao)
+        Loaded += (_, _) => NaTela = true;
+        Unloaded += (_, _) => NaTela = false;
     }
 
     // ── 1. FORMA ────────────────────────────────────────────────────────────
