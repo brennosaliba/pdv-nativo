@@ -44,7 +44,9 @@ public static class ConfigLojaPainel
         /// <summary>22/09/2026: capturar o código da raspadinha no chat do iFood.</summary>
         bool? RaspadinhaNoChat = null,
         /// <summary>08/10/2026 (SQL 154): a tela de resgate manual da raspadinha dentro do PDV.</summary>
-        bool? RaspadinhaResgatePdv = null);
+        bool? RaspadinhaResgatePdv = null,
+        /// <summary>26/10/2026 (SQL 224): a digital na entrada e no fechamento. Nasce ligada; null = painel sem o 224.</summary>
+        bool? BiometriaTurno = null);
 
     /// <summary>O JSON da RPC (array) em linhas; JSON estranho = lista vazia, nunca exceção.</summary>
     public static IReadOnlyList<Linha> Ler(string? json)
@@ -72,7 +74,7 @@ public static class ConfigLojaPainel
                     DateTimeStyles.RoundtripKind, out var d) ? d.ToLocalTime() : null;
                 saida.Add(new Linha(store, S("chat_respostas"), S("admin_pin_hash"), S("admin_pin_salt"), em,
                     S("playlist_uri"), S("playlist_nome"), S("device_id"), S("device_nome"), I("volume"),
-                    B("raspadinha_no_caixa"), B("raspadinha_no_chat"), B("raspadinha_resgate_pdv")));
+                    B("raspadinha_no_caixa"), B("raspadinha_no_chat"), B("raspadinha_resgate_pdv"), B("biometria_turno")));
             }
         }
         catch { /* JSON ilegível: nada a aplicar */ }
@@ -156,6 +158,18 @@ public static class ConfigLojaPainel
         var resgateAntes = Vendas.Config(cx, ResgateManual.ChaveConfigLoja);
         Gravar(cx, ResgateManual.ChaveConfigLoja, l.RaspadinhaResgatePdv == true ? "1" : null);
         if (resgateAntes != Vendas.Config(cx, ResgateManual.ChaveConfigLoja)) mudou.Add("resgate da raspadinha no caixa");
+
+        // A DIGITAL (26/10/2026, SQL 224): ao contrario dos cartoes acima, NASCE LIGADA (pedido do
+        // dono): o painel so serve para desligar. Campo ausente (servidor sem o 224) = fica como
+        // esta (ligada por padrao), e a marca do painel nao e gravada: e ela que diz ao caixa que
+        // a nuvem ja tem as colunas do turno e a RPC de registro.
+        if (l.BiometriaTurno is { } bio)
+        {
+            var bioAntes = Biometria.Ligada(cx);
+            Vendas.GravarConfig(cx, Biometria.ChaveLigada, bio ? "1" : "0");
+            Vendas.GravarConfig(cx, Biometria.ChavePainelEm, agora.ToString("o"));
+            if (bioAntes != bio) mudou.Add(bio ? "digital ligada" : "digital desligada");
+        }
 
         return string.Join(", ", mudou);
     }

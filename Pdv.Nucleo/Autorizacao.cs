@@ -251,6 +251,28 @@ public static class Autorizacao
     public const string TipoResgateDesfazer = "resgate_desfazer";
 
     /// <summary>
+    /// 1.0.52 (26/10, SQL 224): a RESERVA da digital. Sem leitor, sem driver ou tres leituras sem
+    /// reconhecer, a entrada e o fechamento do turno pedem o autenticador do gerente ou do dono
+    /// (nivel gerente) e a escolha do funcionario na lista. Antes do 224 a nuvem so aceita o do dono.
+    /// </summary>
+    public const string TipoTurnoSemDigital = "turno_sem_digital";
+
+    /// <summary>1.0.52: recadastrar ou apagar uma digital na Configuracao pede o mesmo codigo (nivel gerente).</summary>
+    public const string TipoDigitalRecadastro = "digital_recadastro";
+
+    /// <summary>A referencia do log da reserva: "turno:(terminal):(entrada|fechamento):(aaaammddhhmmss)".</summary>
+    public static string ReferenciaTurnoSemDigital(string terminal, string finalidade, DateTime agora)
+        => "turno:" + new string((terminal ?? "").Where(char.IsLetterOrDigit).Take(40).ToArray())
+           + ":" + new string((finalidade ?? "").Where(char.IsLetterOrDigit).Take(20).ToArray())
+           + ":" + agora.ToString("yyyyMMddHHmmss");
+
+    /// <summary>A referencia do log do recadastro: "digital:(terminal):(cpf_hash curto):(aaaammddhhmmss)".</summary>
+    public static string ReferenciaDigitalRecadastro(string terminal, string cpfHash, DateTime agora)
+        => "digital:" + new string((terminal ?? "").Where(char.IsLetterOrDigit).Take(40).ToArray())
+           + ":" + new string((cpfHash ?? "").Where(char.IsLetterOrDigit).Take(16).ToArray())
+           + ":" + agora.ToString("yyyyMMddHHmmss");
+
+    /// <summary>
     /// AMARRA O REGISTRO ÀQUELE RESGATE (154): "resgate:&lt;bonus_id&gt;", a mesma referência que o
     /// servidor grava ao conferir o código dentro da transação do desfazer.
     /// </summary>
@@ -321,6 +343,8 @@ public static class Autorizacao
             "cancelamento" => ("Cancelamento", "não autorizado."),
             "promocao" => ("Promoção", "não autorizada."),
             TipoGestorInteiro => ("Acesso ao Gestor", "não autorizado."),
+            TipoTurnoSemDigital => ("Entrada sem digital", "não autorizada."),
+            TipoDigitalRecadastro => ("Recadastro da digital", "não autorizado."),
             _ => ("Estorno", "não autorizado."),
         };
         var papel = Papel(pedido.Nivel);

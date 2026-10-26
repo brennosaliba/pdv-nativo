@@ -4508,6 +4508,26 @@ public partial class Venda : UserControl
         _fechandoCaixa = true;
         try
         {
+            // 1.0.52: A DIGITAL NO FECHAMENTO. Quem encosta o dedo (ou e escolhido na reserva) e quem
+            // fecha: fechado_por, fechado_via e o hash do CPF vao no turno. Ninguem reconhecido = o
+            // caixa continua aberto.
+            AssinaturaDigital? assinaturaFechamento = null;
+            var quemFecha = _operador;
+            bool digital;
+            using (var cxd = Banco.Abrir()) digital = Biometria.Ligada(cxd);
+            if (digital)
+            {
+                var d = await PortaoDigitalDaTela.IdentificarAsync(dono, "fechamento", ofertaPrimeiraVez: false);
+                if (!d.Entrou)
+                {
+                    if (!d.Avisado) Dialogo.Avisar(dono, "Fechamento de caixa", d.Motivo, "erro");
+                    return;
+                }
+                assinaturaFechamento = AssinaturaDigital.De(d);
+                quemFecha = d.Operador!;
+                if (TefEmAndamento(dono)) return;
+            }
+
             // O ROTEIRO vem do Núcleo (Caixa.PlanoDeConferencia): ele diz, forma por forma,
             // quanto a maquininha já liquidou e quanto sobra para o operador conferir.
             // Cartão do TEF NÃO é campo: o valor vem do TEF e a tela só mostra.
@@ -4578,7 +4598,7 @@ public partial class Venda : UserControl
                 using var cx = Banco.Abrir();
                 var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                 var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
-                var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, null, tefDisponivel, fica);
+                var linhasFech = Caixa.Fechar(cx, _sessao, contagem, quemFecha, tolerancia, null, tefDisponivel, fica, assinaturaFechamento);
                 var comandas = ComandasAtravessaram(cx);
                 var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, null, comandas);
                 var papel = await ImprimirRetiradaAsync(cx, contagem, fica);
@@ -4596,7 +4616,7 @@ public partial class Venda : UserControl
                     using var cx = Banco.Abrir();
                     var divergencias = Caixa.DivergenciasTef(cx, _sessao);
                     var resumoTeste = Caixa.ResumoDeTeste(cx, _sessao);
-                    var linhasFech = Caixa.Fechar(cx, _sessao, contagem, _operador, tolerancia, just, tefDisponivel, fica);
+                    var linhasFech = Caixa.Fechar(cx, _sessao, contagem, quemFecha, tolerancia, just, tefDisponivel, fica, assinaturaFechamento);
                     var comandas = ComandasAtravessaram(cx);
                     var folha = await ImprimirFechamentoAsync(dono, cx, linhasFech, contagem, fica, tefDisponivel, just, comandas);
                     var papel = await ImprimirRetiradaAsync(cx, contagem, fica);

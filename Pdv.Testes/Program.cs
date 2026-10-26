@@ -77,6 +77,21 @@ if (args.Length >= 1 && args[0] == "--testar-pinpad")
     return r.Ok ? 0 : 1;
 }
 
+// A SONDA DO LEITOR DE DIGITAL (1.0.52): prova que winbio.dll carrega nesta maquina e mostra o que o
+// Windows lista (sem leitor = lista vazia, sem travar) e o que o registro diz do USB 05BA (DigitalPersona).
+//   Pdv.Testes.exe --sondar-biometria
+if (args.Length >= 1 && args[0] == "--sondar-biometria")
+{
+    var (unidades, hr, erro) = Pdv.Nucleo.LeitorWinBio.Enumerar();
+    Console.WriteLine($"WinBioEnumBiometricUnits: hr=0x{hr:X8} unidades={unidades.Count}" + (erro is null ? "" : $" ({erro})"));
+    foreach (var l in Pdv.Nucleo.DriverDigitalPersona.LinhasDeDiagnostico(unidades.Select(u => u.ToString()).ToList(), hr, erro,
+                 Pdv.Nucleo.DriverDigitalPersona.LerAparelhos()))
+        Console.WriteLine("  " + l);
+    var sonda = new Pdv.Nucleo.LeitorWinBio().SondarAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Console.WriteLine($"sonda: {sonda.Estado} ({sonda.Detalhe})");
+    return 0;
+}
+
 if (args.Length >= 1 && args[0] == "--empacotar")
 {
     if (args.Length < 5)
@@ -828,6 +843,16 @@ if (args.Length >= 1 && args[0] == "--so-conta")
     TestesComandaTela.Rodar((cond, nome) => Check("comanda-tela: " + nome, cond));
     Console.WriteLine();
     Console.WriteLine($"=== (so conta) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
+
+// MODO DE DESENVOLVIMENTO (26/10/2026, 1.0.52): so a suite da digital. NAO e o gate.
+//   Pdv.Testes.exe --so-biometria
+if (args.Length >= 1 && args[0] == "--so-biometria")
+{
+    await TestesBiometria.RodarAsync((cond, nome) => Check("biometria: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so biometria) {ok} OK, {falhas} falhas ===");
     return falhas == 0 ? 0 : 1;
 }
 
@@ -1813,6 +1838,14 @@ TestesCategorias.Rodar((cond, nome) => Check("categoria: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Autorizacao de estorno (autenticador do dono) ---");
 await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome, cond));
+
+// -- 26/10/2026: A DIGITAL NO LUGAR DA SENHA (caixa 1.0.52, SQL 224) ---------------------------
+// Leitor HID DigitalPersona U.are.U 4500 pelo WinBio. O portao (reconheceu, 3x nao, sem leitor, cancelou,
+// primeira vez), a reserva (TOTP do gerente + lista), a guarda local com DPAPI, o turno com via e hash,
+// a fila com as colunas novas, a chave do painel (nasce ligada) e o diagnostico do driver.
+Console.WriteLine();
+Console.WriteLine("--- A digital no lugar da senha: o portao, a reserva, a guarda, o turno e o leitor ---");
+await TestesBiometria.RodarAsync((cond, nome) => Check("biometria: " + nome, cond));
 
 // -- 05/09/2026: PROMOCAO COM 2FA DO GERENTE OU DO DONO ------------------------
 // "Crio desconto funcionario para nao ter abuso e quero que essa promocao tenha

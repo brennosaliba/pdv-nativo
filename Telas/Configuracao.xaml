@@ -700,6 +700,33 @@
                         </Button>
                     </StackPanel>
 
+                    <!-- 1.0.52 (26/10/2026, pedido do dono): a DIGITAL no lugar da senha na entrada e no
+                         fechamento. O cadastro acontece sozinho na primeira entrada de cada um; aqui fica o
+                         diagnostico do leitor (WinBio e driver) e o RECADASTRO ou o apagar, com o codigo do
+                         gerente ou do dono. Ligar e desligar e no painel (/pdv/config-loja, cartao Biometria). -->
+                    <StackPanel x:Name="BlocoDigital" Visibility="Collapsed">
+                        <TextBlock Text="DIGITAL (BIOMETRIA)" Foreground="{DynamicResource Marca}"
+                                   FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
+                        <TextBlock x:Name="TxtDigitalEstado" Text="" Foreground="{DynamicResource Texto}" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtDigitalLista" Text="" Foreground="{DynamicResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <TextBlock Text="A primeira entrada de cada funcionário cadastra a digital sozinha (CPF e senha, depois 3 leituras). Aqui só o recadastro ou o apagar, com o código do gerente ou do dono. Ligar e desligar por loja: painel, Configurações, cartão Biometria."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="BtnConferirLeitor" Click="ConferirLeitor" Style="{StaticResource BotaoBase}"
+                                    MinHeight="44" Padding="16,0" Margin="0,0,8,0">
+                                <TextBlock Text="Conferir o leitor"/>
+                            </Button>
+                            <Button x:Name="BtnRecadastrarDigital" Click="RecadastrarDigital" Style="{StaticResource BotaoBase}"
+                                    MinHeight="44" Padding="16,0" Margin="0,0,8,0">
+                                <TextBlock Text="Recadastrar digital"/>
+                            </Button>
+                            <Button x:Name="BtnApagarDigital" Click="ApagarDigital" Style="{StaticResource BotaoBase}"
+                                    MinHeight="44" Padding="16,0">
+                                <TextBlock Text="Apagar digital"/>
+                            </Button>
+                        </StackPanel>
+                    </StackPanel>
+
                     <StackPanel x:Name="BlocoQuiosque">
                         <!-- SO O PDV NO WINDOWS (12/09/2026, pedido do dono): o Windows abre direto no
                              PDV, sem area de trabalho, barra ou outros programas. E o Shell do usuario

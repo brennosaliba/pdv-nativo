@@ -25,6 +25,10 @@
 
             <Button x:Name="BtnEntrar" Style="{StaticResource BotaoPrincipal}" Content="Entrar"
                     Margin="5,14,5,0" Click="Entrar" IsEnabled="False"/>
+            <!-- 1.0.52: com a digital ligada o teclado some e este botao reabre a leitura
+                 ("Encoste o dedo no leitor"); a primeira vez de cada um volta ao CPF e senha. -->
+            <Button x:Name="BtnDigital" Style="{StaticResource BotaoPrincipal}" Content="Encoste o dedo no leitor"
+                    Margin="5,14,5,0" Click="LerDigital" Visibility="Collapsed"/>
         </StackPanel>
 
         <!-- Configuração fica no rodapé, discreta e protegida por senha: o operador

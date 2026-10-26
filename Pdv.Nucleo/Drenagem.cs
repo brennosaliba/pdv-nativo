@@ -788,7 +788,8 @@ public sealed class Drenagem : IDisposable
             {
                 s = cx.QueryFirstOrDefault("""
                     SELECT business_date, operador_id, operador_nome, abertura_em,
-                           fundo_troco_cent, fechamento_em, fechado_por
+                           fundo_troco_cent, fechamento_em, fechado_por,
+                           aberto_via, aberto_cpf_hash, fechado_via, fechado_cpf_hash, via_motivo
                       FROM caixa_sessao WHERE id = @Id
                     """, new { Id = sessaoId });
                 if (s is null) return (false, "sessão sumiu do local: não adianta insistir");
@@ -817,6 +818,16 @@ public sealed class Drenagem : IDisposable
                 ["fechamento_em"] = s.fechamento_em as string,
                 ["fechado_por"] = s.fechado_por as string,
             });
+            // 1.0.52: a digital. As colunas so existem na nuvem depois do SQL 224; se o servidor
+            // responder PGRST204 (coluna desconhecida), a sessao sobe sem elas em vez de virar
+            // dead-letter (a abertura do turno nao pode ficar presa por causa de uma coluna nova).
+            var comDigital = ComAssinaturaDigital(corpo, s.aberto_via as string, s.aberto_cpf_hash as string,
+                s.fechado_via as string, s.fechado_cpf_hash as string, s.via_motivo as string);
+            if (comDigital is not null)
+            {
+                var r = await PostRestAsync("/rest/v1/pdv_caixa_sessoes?on_conflict=client_key", comDigital, token, ct).ConfigureAwait(false);
+                if (r.Ok != false || !SemColunaNaNuvem(r.Erro)) return r;
+            }
 
             return await PostRestAsync("/rest/v1/pdv_caixa_sessoes?on_conflict=client_key",
                 corpo, token, ct).ConfigureAwait(false);
@@ -1280,6 +1291,28 @@ public sealed class Drenagem : IDisposable
     /// <summary>404 com PGRST202 = a funcao nao existe no schema cache do PostgREST (RPC ainda nao publicada).</summary>
     internal static bool RpcAusente(int status, string? corpo)
         => status == 404 && corpo is not null && corpo.Contains("PGRST202", StringComparison.Ordinal);
+
+    /// <summary>
+    /// O corpo da sessao com as colunas da digital (1.0.52). Null quando o turno nao passou pela
+    /// digital nem pela reserva (nada a acrescentar: o corpo de sempre basta).
+    /// </summary>
+    public static string? ComAssinaturaDigital(string corpoJson, string? abertoVia, string? abertoCpfHash,
+        string? fechadoVia, string? fechadoCpfHash, string? motivo)
+    {
+        if (abertoVia is null && fechadoVia is null) return null;
+        var dic = JsonSerializer.Deserialize<Dictionary<string, object?>>(corpoJson) ?? new();
+        dic["aberto_via"] = abertoVia;
+        dic["aberto_cpf_hash"] = abertoCpfHash;
+        dic["fechado_via"] = fechadoVia;
+        dic["fechado_cpf_hash"] = fechadoCpfHash;
+        dic["via_motivo"] = motivo;
+        return JsonSerializer.Serialize(dic);
+    }
+
+    /// <summary>PGRST204 = "coluna nao existe no cache do esquema": o SQL 224 ainda nao rodou.</summary>
+    public static bool SemColunaNaNuvem(string? erro)
+        => erro is not null && (erro.Contains("PGRST204", StringComparison.Ordinal)
+                                || (erro.Contains("Could not find the", StringComparison.OrdinalIgnoreCase) && erro.Contains("column", StringComparison.OrdinalIgnoreCase)));
 
     internal static (bool? Ok, string? Erro) DesfechoDeStatus(int status, string? corpo)
     {

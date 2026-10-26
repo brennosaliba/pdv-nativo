@@ -131,6 +131,23 @@ public partial class AberturaCaixa : UserControl
         try
         {
         var dono = Window.GetWindow(this)!;
+        // 1.0.52: fechar o caixa esquecido tambem pede a digital (ou a reserva). Antes de abrir a
+        // conexao: a leitura espera o dedo.
+        AssinaturaDigital? assinatura = null;
+        var quemFecha = _operador;
+        bool digital;
+        using (var cxd = Banco.Abrir()) digital = Biometria.Ligada(cxd);
+        if (digital)
+        {
+            var d = await PortaoDigitalDaTela.IdentificarAsync(dono, "fechamento", ofertaPrimeiraVez: false);
+            if (!d.Entrou)
+            {
+                if (!d.Avisado) Dialogo.Avisar(dono, "Fechamento de caixa", d.Motivo, "erro");
+                return;
+            }
+            assinatura = AssinaturaDigital.De(d);
+            quemFecha = d.Operador!;
+        }
         using var cx = Banco.Abrir();
         var antiga = Caixa.SessaoAberta(cx);
         if (antiga is null || antiga.BusinessDate == Caixa.DiaOperacional()) { Avisar(); return; }
@@ -159,7 +176,7 @@ public partial class AberturaCaixa : UserControl
         var tolerancia = new Dinheiro(200);
         try
         {
-            await Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia), antiga, null);
+            await Concluir(Caixa.Fechar(cx, antiga, contagem, quemFecha, tolerancia, assinatura: assinatura), antiga, null);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("Justifique"))
         {
@@ -167,7 +184,7 @@ public partial class AberturaCaixa : UserControl
             // "O que aconteceu?" aqui só fazia o operador ler a mesma coisa duas vezes.
             var just = PedirTexto.Justificativa(dono, "Diferença no caixa", ex.Message);
             if (string.IsNullOrWhiteSpace(just)) return;
-            try { await Concluir(Caixa.Fechar(cx, antiga, contagem, _operador, tolerancia, just), antiga, just); }
+            try { await Concluir(Caixa.Fechar(cx, antiga, contagem, quemFecha, tolerancia, just, assinatura: assinatura), antiga, just); }
             catch (Exception e2) { NaoFechou(dono, e2); }
         }
         catch (Exception ex)
@@ -326,7 +343,8 @@ public partial class AberturaCaixa : UserControl
                     $"esperado={exp.Formatado()} contado={new Dinheiro(_centavos).Formatado()}");
             }
 
-            var s = Caixa.Abrir(cx, _operador, new Dinheiro(_centavos));
+            // 1.0.52: a assinatura da digital que a entrada deixou (via, hash do CPF, motivo da reserva)
+            var s = Caixa.Abrir(cx, _operador, new Dinheiro(_centavos), EntradaDigital.Tomar());
             aberta = s;
             if (PapelDeCaixa.SaiSozinho(Impressoes.Politica(cx, Impressoes.Abertura), s.Teste))
                 papeis.Add(("Abertura de caixa", PapelDeCaixa.Abertura(loja, DateTime.Now, s, esperado, destino.Papel.Colunas)));

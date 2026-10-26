@@ -33,6 +33,12 @@ public partial class Login : UserControl
     public event Action<Operador>? Entrou;
     public event Action? PediuConfig;
 
+    // 1.0.52: a digital no lugar da senha. _modoDigital = a chave da loja esta ligada (nasce ligada);
+    // _primeiraVez = o operador tocou em "Primeira vez" e volta ao CPF e senha, que cadastra a digital.
+    private bool _modoDigital;
+    private bool _primeiraVez;
+    private bool _lendoDigital;
+
 
     public Login(string nomeLoja)
     {
@@ -48,6 +54,15 @@ public partial class Login : UserControl
             // esperar e sem avisar: se chegar a tempo, o funcionário novo nem percebe
             // que faltava alguma coisa. Se não chegar, o Entrar pergunta de novo.
             _ = Task.Run(async () => { try { await BaixarOperadoresAsync(); } catch { } });
+            // 1.0.52: a digital no lugar da senha (ligada por padrao; o painel desliga por loja)
+            bool digital;
+            using (var cx = Banco.Abrir()) digital = Biometria.Ligada(cx);
+            if (digital && !_modoDigital)
+            {
+                _modoDigital = true;
+                Pintar();
+                _ = LerDigitalAsync();
+            }
         };
         Pintar();
 
@@ -70,9 +85,21 @@ public partial class Login : UserControl
 
     private void Pintar()
     {
+        // 1.0.52: no modo digital (sem a primeira vez) a tela e uma linha e um botao
+        var soDigital = _modoDigital && !_primeiraVez;
+        Teclado.Visibility = soDigital ? Visibility.Collapsed : Visibility.Visible;
+        TxtPin.Visibility = soDigital ? Visibility.Collapsed : Visibility.Visible;
+        BtnEntrar.Visibility = soDigital ? Visibility.Collapsed : Visibility.Visible;
+        BtnDigital.Visibility = soDigital ? Visibility.Visible : Visibility.Collapsed;
+        if (soDigital)
+        {
+            TxtEtapa.Text = Biometria.TituloEntrada;
+            TxtErro.Text = "";
+            return;
+        }
         if (_etapa == Etapa.Cpf)
         {
-            TxtEtapa.Text = "Digite seu CPF (ou o PIN antigo)";
+            TxtEtapa.Text = _modoDigital ? "Primeira vez: digite seu CPF" : "Digite seu CPF (ou o PIN antigo)";
             TxtPin.Text = FormatarCpfParcial(_cpf);
             TxtPin.FontSize = 34;
             BtnEntrar.IsEnabled = _cpf.Length == 11 || Operadores.PinValido(_cpf);
@@ -135,6 +162,71 @@ public partial class Login : UserControl
     });
 
     private static Task<int> BaixarOperadoresAsync() => Painel.BuscarAsync();
+
+    /// <summary>O botao "Encoste o dedo no leitor" (e a abertura da tela): a leitura da digital.</summary>
+    private void LerDigital(object sender, RoutedEventArgs e) => _ = LerDigitalAsync();
+
+    /// <summary>
+    /// A ENTRADA PELA DIGITAL (1.0.52). A maquina de estados mora em PortaoDigital.IdentificarAsync:
+    /// reconheceu = entra (sem senha); 3 sem reconhecer, sem leitor ou sem driver = reserva (codigo
+    /// do gerente ou do dono + lista); Primeira vez = volta ao CPF e senha, que cadastra a digital
+    /// (ver Entrar). A assinatura (via, hash do CPF, motivo) fica em EntradaDigital para a tela de
+    /// abertura gravar no turno.
+    /// </summary>
+    private async Task LerDigitalAsync()
+    {
+        if (_lendoDigital || !_modoDigital) return;
+        var dono = Window.GetWindow(this);
+        if (dono is null) return;
+        _lendoDigital = true;
+        try
+        {
+            _primeiraVez = false;
+            Pintar();
+            var d = await PortaoDigitalDaTela.IdentificarAsync(dono, "entrada", ofertaPrimeiraVez: true);
+            if (d.PrimeiraVez)
+            {
+                _primeiraVez = true;
+                _etapa = Etapa.Cpf; _cpf = ""; _senha = "";
+                Pintar();
+                return;
+            }
+            if (!d.Entrou)
+            {
+                if (!d.Avisado) TxtErro.Text = d.Motivo;
+                return;
+            }
+            using var cx = Banco.Abrir();
+            EntradaDigital.Guardar(AssinaturaDigital.De(d));
+            Entrou4(cx, d.Operador!, d.Via == ViaDigital.Digital ? "digital" : d.Motivo);
+        }
+        catch (Exception ex)
+        {
+            TxtErro.Text = "A leitura da digital falhou (" + ex.Message + ").";
+        }
+        finally { _lendoDigital = false; }
+    }
+
+    /// <summary>
+    /// A PRIMEIRA VEZ (1.0.52): a senha provou quem e; agora o caixa colhe a digital 3 vezes, liga
+    /// ao CPF e entra. Quem ja tem digital neste caixa nao entra mais pela senha (so pela digital
+    /// ou pela reserva): senao a senha copiada continuaria valendo.
+    /// </summary>
+    private async Task<bool> PrimeiraVezAsync(Operador op, string cpf)
+    {
+        var dono = Window.GetWindow(this);
+        if (dono is null) return false;
+        using (var cx = Banco.Abrir())
+            if (Digitais.PorCpf(cx, cpf) is not null)
+            {
+                TxtErro.Text = Biometria.AvisoJaTemDigital;
+                return false;
+            }
+        var guardada = await PortaoDigitalDaTela.CadastrarAsync(dono, op, Biometria.TituloPrimeiraVez, null);
+        if (guardada is null) { TxtErro.Text = Biometria.AvisoCadastroCancelado; return false; }
+        EntradaDigital.Guardar(new AssinaturaDigital(Biometria.ViaDigitalTexto, guardada.CpfHash, "primeira vez: senha e cadastro da digital"));
+        return true;
+    }
 
     private async void Entrar(object sender, RoutedEventArgs e)
     {
@@ -211,6 +303,15 @@ public partial class Login : UserControl
             _senha = "";
             Pintar();
             Errou(cx, "Senha errada.");
+            return;
+        }
+        // 1.0.52: com a digital ligada, a senha so vale na primeira vez, e cadastra a digital
+        if (_modoDigital)
+        {
+            var cpf = _cpf;
+            var entrou = await PrimeiraVezAsync(op, cpf);
+            if (!entrou) { _senha = ""; Pintar(); return; }
+            Entrou4(cx, op, $"cpf={cpf} · primeira vez: cadastrou a digital");
             return;
         }
         Entrou4(cx, op, $"cpf={_cpf}");

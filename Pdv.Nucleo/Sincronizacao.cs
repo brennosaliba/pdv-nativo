@@ -305,6 +305,11 @@ public static class Sincronizacao
             try { await nuvem.BaixarChaveCozinhaAsync(cx).ConfigureAwait(false); }
             catch { /* fica a chave que já está guardada */ }
 
+            // as digitais cadastradas neste caixa que o ERP ainda nao sabe (1.0.52, SQL 224)
+            andamento?.Report("Registrando as digitais no painel…");
+            try { await nuvem.RegistrarDigitaisAsync(cx).ConfigureAwait(false); }
+            catch { /* fica pendente para o proximo Atualizar */ }
+
             mudou = ImpressaoDigital(cx) != antes;
 
             // Fotos por último e sem prazo curto: é o que mais demora e é o que menos

@@ -399,6 +399,29 @@ public sealed class Nuvem
         catch { return null; }
     }
 
+    // ── DIGITAIS (1.0.52, SQL 224): o ERP fica sabendo QUE o CPF tem digital neste terminal ──
+    /// <summary>
+    /// Manda ao ERP os cadastros e as remocoes que ele ainda nao sabe (RPC
+    /// <see cref="RegistroDigital.Rpc"/>). A digital em si nunca viaja: so cpf_hash, operador,
+    /// nome e datas. 404 (SQL 224 ainda nao rodou) ou rede caida = fica pendente para o proximo
+    /// Atualizar. As regras (o que mandar, como ler a resposta) moram em RegistroDigital.
+    /// Devolve quantos registros a nuvem aceitou.
+    /// </summary>
+    public async Task<int> RegistrarDigitaisAsync(SqliteConnection cx, CancellationToken ct = default)
+    {
+        var pendentes = RegistroDigital.Pendentes(cx);
+        if (pendentes.Count == 0) return 0;
+        var n = 0;
+        foreach (var p in pendentes)
+        {
+            var (status, corpo) = await RpcAsync(RegistroDigital.Rpc, p.Json, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+            var desfecho = RegistroDigital.Ler(status, corpo);
+            if (desfecho == RegistroDigital.Desfecho.Aceito) { RegistroDigital.Marcar(cx, p); n++; }
+            else if (desfecho == RegistroDigital.Desfecho.SemRpc) break;   // sem o 224: nem adianta seguir
+        }
+        return n;
+    }
+
     // ── USUÁRIO MASTER DA REDE (15/09/2026) ────────────────────────────────────────────
     /// <summary>
     /// O master da empresa deste terminal (RPC <see cref="UsuarioMaster.Rpc"/>): nome, hash e sal.

@@ -10,6 +10,18 @@ public sealed record Operador(string Id, string Nome, string Perfil)
 }
 
 /// <summary>
+/// 1.0.52: por onde a pessoa passou para abrir ou fechar o turno. <paramref name="Via"/> e
+/// "digital" ou "reserva"; <paramref name="CpfHash"/> e o SHA-256 do CPF de quem encostou o
+/// dedo (ou foi escolhido na reserva); <paramref name="Motivo"/> so na reserva ("pela
+/// reserva: sem leitor"). Nulo = a senha de antes (biometria desligada).
+/// </summary>
+public sealed record AssinaturaDigital(string Via, string? CpfHash, string? Motivo = null)
+{
+    public static AssinaturaDigital De(DesfechoDigital d)
+        => new(d.ViaTexto, d.CpfHash, d.Via == ViaDigital.Reserva ? d.Motivo : null);
+}
+
+/// <summary>
 /// Um turno de caixa.
 ///
 /// <paramref name="Teste"/> (07/09/2026): turno que o MODO DE HOMOLOGAÇÃO abriu
@@ -150,7 +162,8 @@ public static class Caixa
     /// caso que mais estraga fechamento (as vendas de dois dias caem no mesmo turno e
     /// depois não dá pra separar).
     /// </summary>
-    public static Sessao Abrir(SqliteConnection cx, Operador operador, Dinheiro fundoTroco)
+    public static Sessao Abrir(SqliteConnection cx, Operador operador, Dinheiro fundoTroco,
+        AssinaturaDigital? assinatura = null)
     {
         if (fundoTroco.Centavos < 0) throw new InvalidOperationException("Fundo de troco não pode ser negativo.");
 
@@ -189,11 +202,13 @@ public static class Caixa
         using var tx = cx.BeginTransaction();
         cx.Execute("""
             INSERT INTO caixa_sessao (id, business_date, operador_id, operador_nome,
-                                      abertura_em, fundo_troco_cent, status)
-            VALUES (@Id, @Bd, @Op, @Nome, @Ab, @Fundo, 'aberto')
+                                      abertura_em, fundo_troco_cent, status, aberto_via, aberto_cpf_hash, via_motivo)
+            VALUES (@Id, @Bd, @Op, @Nome, @Ab, @Fundo, 'aberto', @Via, @Cpf, @Motivo)
             """,
-            new { Id = s.Id, Bd = s.BusinessDate, Op = idAssina, Nome = operador.Nome, Ab = Agora, Fundo = fundoTroco.Centavos }, tx);
-        Auditar(cx, tx, "caixa_aberto", idAssina, null, $"fundo={fundoTroco.Reais:F2}");
+            new { Id = s.Id, Bd = s.BusinessDate, Op = idAssina, Nome = operador.Nome, Ab = Agora, Fundo = fundoTroco.Centavos,
+                  Via = assinatura?.Via, Cpf = assinatura?.CpfHash, Motivo = assinatura?.Motivo }, tx);
+        Auditar(cx, tx, "caixa_aberto", idAssina, null, $"fundo={fundoTroco.Reais:F2}"
+            + (assinatura is null ? "" : $" · {assinatura.Via}" + (assinatura.Motivo is null ? "" : $" ({assinatura.Motivo})")));
         Enfileirar(cx, tx, "caixa_sessao", s.Id, s.Id, new { s.Id, s.BusinessDate, operador = idAssina, fundo_cent = fundoTroco.Centavos, abertura = Agora });
         tx.Commit();
         return s;
@@ -617,7 +632,7 @@ public static class Caixa
     public static List<LinhaFechamento> Fechar(SqliteConnection cx, Sessao sessao,
         Dictionary<string, Dinheiro> contagem, Operador quemFecha,
         Dinheiro tolerancia, string? justificativa = null, bool tefDisponivel = true,
-        Dinheiro? ficaNoCaixa = null)
+        Dinheiro? ficaNoCaixa = null, AssinaturaDigital? assinatura = null)
     {
         ExigirAberto(cx, sessao);
         // A conta da retirada é conferida ANTES de qualquer gravação: não existe fechar o
@@ -707,8 +722,12 @@ public static class Caixa
         // com o id velho na memória da tela, e o histórico dizia que duas pessoas
         // diferentes cuidaram do mesmo caixa.
         var idFecha = Operadores.IdCanonico(cx, quemFecha.Id);
-        cx.Execute("UPDATE caixa_sessao SET status='fechado', fechamento_em=@Em, fechado_por=@Por WHERE id=@Id",
-            new { Em = Agora, Por = idFecha, Id = sessao.Id }, tx);
+        cx.Execute("UPDATE caixa_sessao SET status='fechado', fechamento_em=@Em, fechado_por=@Por, fechado_via=@Via, fechado_cpf_hash=@Cpf, " +
+                   "via_motivo=COALESCE(@Motivo, via_motivo) WHERE id=@Id",
+            new { Em = Agora, Por = idFecha, Id = sessao.Id, Via = assinatura?.Via, Cpf = assinatura?.CpfHash, Motivo = assinatura?.Motivo }, tx);
+        if (assinatura is not null)
+            Auditar(cx, tx, "caixa_fechado_" + assinatura.Via, idFecha, null,
+                $"{quemFecha.Nome}" + (assinatura.Motivo is null ? "" : $" · {assinatura.Motivo}"));
         // A auditoria registra a QUEBRA discriminada, não só o número total: "faltou 50 no
         // dinheiro e sobrou 50 no crédito" e "bateu tudo" são fatos opostos que dariam o
         // mesmo total líquido.

@@ -712,6 +712,14 @@ public static class Servicos
             };
     }
 
+    private static Pdv.Nucleo.LeitorWinBio? _leitor;
+
+    /// <summary>O leitor de digital do Windows (1.0.52): um por processo, sem estado entre leituras.</summary>
+    public static Pdv.Nucleo.ILeitorDigital Leitor()
+    {
+        lock (Trava) return _leitor ??= new Pdv.Nucleo.LeitorWinBio();
+    }
+
     private static string? TerminalUuid()
     {
         try

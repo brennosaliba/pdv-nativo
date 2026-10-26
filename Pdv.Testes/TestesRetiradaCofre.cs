@@ -114,7 +114,7 @@ public static class TestesRetiradaCofre
         var banco = Fonte(Path.Combine("Pdv.Nucleo", "Banco.cs")) ?? "";
         checar(venda.Contains("RetiradaCofre.Pergunta(contadoDinheiro)") && venda.Contains("PedirValor.MostrarComVoltar(dono, \"Fechamento de caixa\", RetiradaCofre.Pergunta("),
             "o fechamento pergunta quanto fica, com Voltar");
-        checar(venda.Contains("tefDisponivel, fica)") && venda.Count(s => s == 'x') >= 0 && venda.Split("tefDisponivel, fica)").Length == 3,
+        checar(venda.Contains("tefDisponivel, fica, assinaturaFechamento)") && venda.Split("tefDisponivel, fica, assinaturaFechamento)").Length == 3,
             "os dois caminhos do fechamento (com e sem justificativa) passam o que ficou para o Núcleo");
         checar(venda.Contains("Impressao.ImprimirTextoAsync(\"Retirada para o cofre\"") && venda.Contains("Impressao.DestinoCupom("),
             "o papel da retirada sai na impressora e na bobina do cupom");

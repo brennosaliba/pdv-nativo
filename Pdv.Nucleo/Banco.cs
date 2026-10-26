@@ -66,6 +66,14 @@ public static class Banco
         foreach (var alter in new[]
         {
             "ALTER TABLE operador ADD COLUMN cpf TEXT",
+            // 1.0.52 (26/10/2026): por onde o turno abriu e fechou ('digital' | 'reserva' | nulo =
+            // senha de antes), o hash do CPF de quem encostou o dedo ou foi escolhido, e o motivo da
+            // reserva. Sobem para pdv_caixa_sessoes (SQL 224).
+            "ALTER TABLE caixa_sessao ADD COLUMN aberto_via TEXT",
+            "ALTER TABLE caixa_sessao ADD COLUMN aberto_cpf_hash TEXT",
+            "ALTER TABLE caixa_sessao ADD COLUMN fechado_via TEXT",
+            "ALTER TABLE caixa_sessao ADD COLUMN fechado_cpf_hash TEXT",
+            "ALTER TABLE caixa_sessao ADD COLUMN via_motivo TEXT",
             // marca quem é regido pelo painel: só esses são atualizados/desativados
             // pela sincronização — operador criado localmente não é tocado
             "ALTER TABLE operador ADD COLUMN da_nuvem INTEGER NOT NULL DEFAULT 0",
@@ -696,6 +704,30 @@ public static class Banco
           botoes_json    TEXT NOT NULL,
           ids_json       TEXT NOT NULL,
           criado_em      TEXT NOT NULL
+        );
+
+        -- ── DIGITAL (1.0.52): a chave do Windows ligada ao CPF ────────────────
+        -- A digital em si fica no Windows (WinBio). Aqui so a chave (conta + dedo), o CPF
+        -- cifrado pelo DPAPI da maquina e o hash do CPF que sobe para a nuvem.
+        CREATE TABLE IF NOT EXISTS digital (
+          chave          TEXT PRIMARY KEY,
+          cpf_cifrado    TEXT NOT NULL,
+          cpf_hash       TEXT NOT NULL UNIQUE,
+          operador_id    TEXT,
+          nome           TEXT NOT NULL,
+          vaga           INTEGER NOT NULL,
+          cadastrada_em  TEXT NOT NULL,
+          cadastrada_por TEXT,
+          registrada_em  TEXT                    -- quando o ERP ficou sabendo (SQL 224)
+        );
+        CREATE TABLE IF NOT EXISTS digital_removida (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          chave          TEXT NOT NULL,
+          cpf_hash       TEXT NOT NULL,
+          nome           TEXT NOT NULL,
+          removida_em    TEXT NOT NULL,
+          removida_por   TEXT,
+          registrada_em  TEXT
         );
 
         -- ── CONFIGURAÇÃO SOLTA DO TERMINAL ────────────────────────────────────

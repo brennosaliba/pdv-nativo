@@ -126,6 +126,9 @@ public partial class Configuracao : UserControl
         // 1.0.44: o login do Gestor sozinho: a linha (automatico pelo ERP, ultimo resultado) e o Entrar agora
         BlocoLoginGestor.Visibility = Se(_jaConfigurado);
         TxtLoginGestor.Text = ServicoLoginGestor.Linha;
+        // 1.0.52: a digital: o estado do leitor e as cadastradas neste caixa
+        BlocoDigital.Visibility = Se(_jaConfigurado);
+        if (_jaConfigurado) PintarDigital(cx);
         ChkQuiosque.IsChecked = Quiosque.Ligado;
         ChkTravarAtalhos.IsChecked = Quiosque.Travado;
         BtnSairWindows.Visibility = Se(Quiosque.Ligado);
@@ -386,6 +389,97 @@ public partial class Configuracao : UserControl
             try { HospedeWebView2.Anotar("configuracao.txt", "login do gestor: " + ex.GetType().Name, TimeSpan.Zero); } catch { }
         }
         finally { BtnEntrarAgora.IsEnabled = true; }
+    }
+
+    // ── A DIGITAL (1.0.52) ─────────────────────────────────────────────────────────
+
+    /// <summary>A lista das digitais deste caixa e a chave da loja. O leitor e conferido pelo botao (demora).</summary>
+    private void PintarDigital(Microsoft.Data.Sqlite.SqliteConnection cx)
+    {
+        var ligada = Biometria.Ligada(cx);
+        var lista = Digitais.Listar(cx);
+        TxtDigitalEstado.Text = (ligada ? "Digital LIGADA nesta loja." : "Digital DESLIGADA nesta loja (painel).")
+            + " Toque em Conferir o leitor para ver o leitor do Windows.";
+        TxtDigitalLista.Text = lista.Count == 0
+            ? "Nenhuma digital cadastrada neste caixa."
+            : $"Cadastradas ({lista.Count} de {Biometria.Vagas}): " + string.Join("; ",
+                lista.Select(d => $"{d.Nome} ({d.CadastradaEm:dd/MM})" + (d.Registrada ? "" : " [painel ainda nao sabe]")));
+    }
+
+    private async void ConferirLeitor(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            BtnConferirLeitor.IsEnabled = false;
+            TxtDigitalEstado.Text = "Conferindo o leitor...";
+            var (unidades, hr, erro) = await Task.Run(LeitorWinBio.Enumerar);
+            var aparelhos = await Task.Run(DriverDigitalPersona.LerAparelhos);
+            var linhas = DriverDigitalPersona.LinhasDeDiagnostico(unidades.Select(u => u.ToString()).ToList(), hr, erro, aparelhos);
+            using var cx = Banco.Abrir();
+            TxtDigitalEstado.Text = (Biometria.Ligada(cx) ? "Digital LIGADA nesta loja. " : "Digital DESLIGADA nesta loja (painel). ") + string.Join("\n", linhas);
+            try { HospedeWebView2.Anotar("configuracao.txt", "leitor de digital: " + string.Join(" | ", linhas), TimeSpan.Zero); } catch { }
+        }
+        catch (Exception ex) { TxtDigitalEstado.Text = "Nao deu para conferir o leitor (" + ex.Message + ")."; }
+        finally { BtnConferirLeitor.IsEnabled = true; }
+    }
+
+    /// <summary>Recadastrar: escolhe o funcionario, codigo do gerente ou do dono, 3 leituras, e a antiga sai.</summary>
+    private async void RecadastrarDigital(object sender, RoutedEventArgs e)
+    {
+        var dono = Window.GetWindow(this);
+        if (dono is null) return;
+        try
+        {
+            BtnRecadastrarDigital.IsEnabled = false;
+            IReadOnlyList<Operador> lista;
+            using (var cx = Banco.Abrir()) lista = Digitais.ListaDaReserva(cx);
+            var op = await new TelaDigital(dono).EscolherFuncionarioAsync("Recadastrar a digital de quem?", lista);
+            if (op is null) return;
+            string? cpfHash;
+            using (var cx = Banco.Abrir()) cpfHash = Digitais.CpfHashOuNulo(Digitais.CpfDoOperador(cx, op.Id));
+            if (cpfHash is null) { Dialogo.Avisar(dono, "Digital", $"{op.Nome} nao tem CPF no cadastro. Cadastre o CPF no painel e toque em Atualizar.", "erro"); return; }
+            var aut = await PortaoDigitalDaTela.AutorizarRecadastroAsync(dono, cpfHash);
+            if (aut is null) return;
+            var guardada = await PortaoDigitalDaTela.CadastrarAsync(dono, op, Biometria.TituloRecadastro, aut.AprovadoPor);
+            if (guardada is null) return;
+            using (var cx = Banco.Abrir())
+            {
+                Caixa.Auditar(cx, null, "digital_recadastrada", op.Id, aut.Autorizador, $"{op.Nome}{Autorizacao.Trilha(aut)}");
+                PintarDigital(cx);
+            }
+            Dialogo.Avisar(dono, "Digital", $"Digital de {op.Nome} cadastrada. O painel fica sabendo no proximo Atualizar.", "ok");
+        }
+        catch (Exception ex) { Dialogo.Avisar(dono, "Digital", "Nao deu para recadastrar (" + ex.Message + ").", "erro"); }
+        finally { BtnRecadastrarDigital.IsEnabled = true; }
+    }
+
+    /// <summary>Apagar: escolhe, codigo do gerente ou do dono, some do Windows e do caixa; o painel fica sabendo.</summary>
+    private async void ApagarDigital(object sender, RoutedEventArgs e)
+    {
+        var dono = Window.GetWindow(this);
+        if (dono is null) return;
+        try
+        {
+            BtnApagarDigital.IsEnabled = false;
+            IReadOnlyList<DigitalGuardada> lista;
+            using (var cx = Banco.Abrir()) lista = Digitais.Listar(cx);
+            if (lista.Count == 0) { Dialogo.Avisar(dono, "Digital", "Nenhuma digital cadastrada neste caixa.", "erro"); return; }
+            var escolha = await new TelaDigital(dono).EscolherFuncionarioAsync("Apagar a digital de quem?",
+                lista.Select(d => new Operador(d.CpfHash, d.Nome, "operador")).ToList());
+            if (escolha is null) return;
+            var d = lista.First(x => x.CpfHash == escolha.Id);
+            var aut = await PortaoDigitalDaTela.AutorizarRecadastroAsync(dono, d.CpfHash);
+            if (aut is null) return;
+            try { await Servicos.Leitor().ApagarAsync(d.Chave, CancellationToken.None); } catch { }
+            using (var cx = Banco.Abrir())
+            {
+                Digitais.Apagar(cx, d.Cpf, aut.AprovadoPor);
+                PintarDigital(cx);
+            }
+            Dialogo.Avisar(dono, "Digital", $"Digital de {d.Nome} apagada. Na proxima entrada ela cadastra de novo com CPF e senha.", "ok");
+        }
+        catch (Exception ex) { Dialogo.Avisar(dono, "Digital", "Nao deu para apagar (" + ex.Message + ").", "erro"); }
+        finally { BtnApagarDigital.IsEnabled = true; }
     }
 
     private void IrPara(PassoConfig p)

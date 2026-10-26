@@ -72,7 +72,7 @@ public static class TestesScriptCortina
         checar(scriptDiag.Contains("casca_do_gestor=") && scriptDiag.Contains("root_filhos=") && scriptDiag.Contains("cortina=") && scriptDiag.Contains("aviso_do_gestor"),
             "CT-22 a primeira linha do diag diz se a casca do Gestor segue na tela, se o app montou, a cortina e o aviso do Gestor");
         var csproj = TestesScriptSendbird.LerSeExiste(Path.Combine(raiz, "Pdv.csproj"));
-        checar(csproj.Contains("<Version>1.0.50</Version>", StringComparison.Ordinal), "CT-23 a versao e 1.0.50 (login do Gestor na tela real, um aparelho por vez, e o lado do aparelho do Vigia)");
+        checar(csproj.Contains("<Version>1.0.52</Version>", StringComparison.Ordinal), "CT-23 a versao e 1.0.52 (a digital no lugar da senha)");
 
         // ── o node ──
         var harness = Path.Combine(raiz, "Pdv.Testes", "script_cortina.test.cjs");

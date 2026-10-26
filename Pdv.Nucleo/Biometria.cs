@@ -1,0 +1,552 @@
+using System.Security.Cryptography;
+using System.Text;
+using Dapper;
+using Microsoft.Data.Sqlite;
+
+namespace Pdv.Nucleo;
+
+// ════════════════════════════════════════════════════════════════════════════
+//  A DIGITAL NO LUGAR DA SENHA (1.0.52, 26/10/2026, pedido do dono)
+//
+//  O dono comprou um leitor HID DigitalPersona U.are.U 4500. Na ENTRADA do
+//  operador (que e o que abre o turno) e no FECHAMENTO do caixa, o caixa passa a
+//  pedir a digital, ligada ao CPF do funcionario, em vez da senha.
+//
+//  Como funciona, em quatro linhas:
+//   · a digital vive SO neste PC, dentro do Windows (Windows Biometric Framework,
+//     o mesmo cofre do Windows Hello). O caixa nunca ve a imagem nem o molde: o
+//     Windows devolve uma identidade (quem) e um dedo (qual), e e isso que o
+//     caixa guarda, ligado ao CPF, na tabela `digital` do SQLite, com o CPF
+//     cifrado pelo DPAPI da maquina (so este Windows abre);
+//   · primeira vez de cada funcionario neste caixa: ele entra como hoje (CPF e
+//     senha), o caixa colhe a digital ali mesmo e, dali em diante, so digital;
+//   · sem leitor, sem driver, ou tres leituras sem reconhecer: a RESERVA, que e
+//     o codigo do autenticador do gerente ou do dono (pdv_autorizacao_totp, tipo
+//     'turno_sem_digital', nivel gerente: SQL 224) mais a escolha do funcionario
+//     na lista, tudo auditado com "pela reserva: motivo";
+//   · o ERP so fica sabendo QUE aquele CPF tem digital naquele terminal (SQL
+//     224, pdv_biometria_terminal): a digital em si nao sai do PC.
+//
+//  A regra mora aqui, no Nucleo, e nao no code-behind das telas, pelo mesmo
+//  motivo da autorizacao do estorno: e uma maquina de estados com dinheiro no
+//  fim, e a suite precisa rodar todos os caminhos sem leitor e sem janela. O
+//  leitor entra por ILeitorDigital (LeitorWinBio e o de verdade; a suite usa um
+//  de mentira) e a tela por ITelaDigital.
+//
+//  Testes: Pdv.Testes/TestesBiometria.cs
+// ════════════════════════════════════════════════════════════════════════════
+
+/// <summary>O que a sonda do leitor devolve antes de qualquer leitura.</summary>
+public enum EstadoLeitor
+{
+    /// <summary>Ha pelo menos uma unidade de impressao digital no Windows.</summary>
+    Pronto,
+    /// <summary>O Windows nao enumera nenhum leitor (nem plugado, nem driver).</summary>
+    SemLeitor,
+    /// <summary>O leitor esta plugado, mas sem o driver WBF: o Windows nao o enxerga como biometria.</summary>
+    SemDriver,
+    /// <summary>O servico de biometria do Windows nao respondeu (WbioSrvc parado, politica, erro).</summary>
+    SemServico,
+}
+
+/// <summary>A sonda: o estado, uma linha para a tela e as unidades que o Windows listou.</summary>
+public sealed record SondaLeitor(EstadoLeitor Estado, string Detalhe, IReadOnlyList<string> Unidades)
+{
+    public bool Pronto => Estado == EstadoLeitor.Pronto;
+}
+
+public enum ResultadoCaptura { Reconhecido, NaoReconhecido, Cancelado, Falha, SemLeitor }
+
+/// <summary>Uma leitura de identificacao. <see cref="Chave"/> so vem no Reconhecido.</summary>
+public sealed record Captura(ResultadoCaptura Resultado, string? Chave = null, string? Motivo = null)
+{
+    public static Captura Reconhecida(string chave) => new(ResultadoCaptura.Reconhecido, chave);
+    public static readonly Captura NaoReconhecida = new(ResultadoCaptura.NaoReconhecido);
+    public static readonly Captura Cancelada = new(ResultadoCaptura.Cancelado);
+    public static Captura Falhou(string motivo) => new(ResultadoCaptura.Falha, null, motivo);
+}
+
+public enum ResultadoCadastro { Ok, Cancelado, Falha, SemLeitor }
+
+/// <summary>Um cadastro (varias leituras do mesmo dedo). <see cref="Chave"/> so no Ok.</summary>
+public sealed record Cadastro(ResultadoCadastro Resultado, string? Chave = null, int Amostras = 0, string? Motivo = null)
+{
+    public static Cadastro Feito(string chave, int amostras) => new(ResultadoCadastro.Ok, chave, amostras);
+    public static readonly Cadastro Cancelado = new(ResultadoCadastro.Cancelado);
+    public static Cadastro Falhou(string motivo) => new(ResultadoCadastro.Falha, null, 0, motivo);
+}
+
+/// <summary>
+/// O leitor. A implementacao real e <see cref="LeitorWinBio"/> (winbio.dll). Trocar pelo SDK
+/// do fabricante, se o modelo exigir, e escrever outra classe aqui atras: a maquina de
+/// estados e as telas nao mudam.
+/// </summary>
+public interface ILeitorDigital
+{
+    /// <summary>Nome curto para o diagnostico ("WinBio", "falso").</summary>
+    string Nome { get; }
+
+    /// <summary>Ha leitor? Nunca lanca: sem leitor e estado, nao excecao.</summary>
+    Task<SondaLeitor> SondarAsync(CancellationToken ct);
+
+    /// <summary>Espera um dedo e diz de quem e (a chave que o cadastro devolveu). Cancelar pelo token.</summary>
+    Task<Captura> IdentificarAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Cadastra um dedo na <paramref name="vaga"/> (1..10; o Windows guarda uma digital por
+    /// dedo da conta, e cada funcionario ocupa um "dedo"). <paramref name="amostra"/> recebe
+    /// 1, 2, 3... a cada leitura aceita.
+    /// </summary>
+    Task<Cadastro> CadastrarAsync(int vaga, IProgress<int>? amostra, CancellationToken ct);
+
+    /// <summary>Apaga a digital daquela chave no Windows. false = nao estava la (ja serve).</summary>
+    Task<bool> ApagarAsync(string chave, CancellationToken ct);
+}
+
+/// <summary>O que o operador pode tocar enquanto o leitor espera o dedo.</summary>
+public enum EscolhaNaLeitura { Nenhuma, PrimeiraVez, SemDigital, Desistiu }
+
+/// <summary>O que a tela devolve de uma leitura: o que o leitor disse, ou o botao que o operador tocou.</summary>
+public sealed record LeituraNaTela(Captura? Captura, EscolhaNaLeitura Escolha = EscolhaNaLeitura.Nenhuma);
+
+/// <summary>
+/// A tela. Tudo que precisa de janela sai por aqui, para a maquina de estados rodar
+/// na suite sem WPF. A implementacao real e Telas/TelaDigital.cs.
+/// </summary>
+public interface ITelaDigital
+{
+    /// <summary>
+    /// Mostra "<paramref name="titulo"/>" (uma linha: "Encoste o dedo no leitor") enquanto
+    /// <paramref name="ler"/> roda; <paramref name="aviso"/> e a linha vermelha entre
+    /// tentativas. Os botoes cancelam o token de <paramref name="ler"/> e marcam a escolha.
+    /// <paramref name="ofertaPrimeiraVez"/> mostra o botao "Primeira vez" (so na entrada).
+    /// </summary>
+    Task<LeituraNaTela> LerAsync(string titulo, string? aviso, bool ofertaPrimeiraVez,
+        Func<CancellationToken, Task<Captura>> ler);
+
+    /// <summary>
+    /// Mostra "Primeira vez: encoste o dedo 3 vezes" enquanto <paramref name="cadastrar"/>
+    /// roda; o progresso recebe "Leitura 1 de 3"... O unico botao e Cancelar.
+    /// </summary>
+    Task<Cadastro> CadastrarAsync(string titulo, Func<IProgress<string>, CancellationToken, Task<Cadastro>> cadastrar);
+
+    /// <summary>A lista de funcionarios da reserva. null = desistiu.</summary>
+    Task<Operador?> EscolherFuncionarioAsync(string titulo, IReadOnlyList<Operador> lista);
+
+    /// <summary>Uma caixa de aviso de uma linha.</summary>
+    void Avisar(string titulo, string texto);
+}
+
+/// <summary>Por onde a pessoa passou. Vira a coluna `via` do turno e a linha de auditoria.</summary>
+public enum ViaDigital
+{
+    /// <summary>O leitor reconheceu a digital.</summary>
+    Digital,
+    /// <summary>Codigo do gerente ou do dono mais a escolha na lista.</summary>
+    Reserva,
+    /// <summary>Ninguem entrou: desistiu, codigo recusado, ou pediu a primeira vez (ver <see cref="DesfechoDigital.PrimeiraVez"/>).</summary>
+    Cancelado,
+}
+
+/// <summary>
+/// O desfecho do portao. <see cref="Operador"/> e <see cref="Cpf"/> so vem quando a Via e
+/// Digital ou Reserva. <see cref="Motivo"/> e o que vai para a auditoria ("pela reserva: sem
+/// leitor"). <see cref="Autorizador"/> e <see cref="Registro"/> sao a trilha do TOTP.
+/// </summary>
+public sealed record DesfechoDigital(ViaDigital Via, Operador? Operador, string? Cpf, string Motivo,
+    string? Autorizador = null, string? Registro = null)
+{
+    public bool Entrou => Via != ViaDigital.Cancelado && Operador is not null;
+
+    /// <summary>O operador tocou em "Primeira vez": a tela segue para CPF e senha e depois cadastra.</summary>
+    public bool PrimeiraVez { get; init; }
+
+    /// <summary>A tela ja explicou por que nao seguiu (ele cancelou): nao avisar de novo.</summary>
+    public bool Avisado { get; init; }
+
+    /// <summary>"digital" ou "reserva": o que vai na coluna do turno e na nuvem.</summary>
+    public string ViaTexto => Via == ViaDigital.Digital ? Biometria.ViaDigitalTexto : Biometria.ViaReservaTexto;
+
+    /// <summary>O hash do CPF para o turno e a nuvem (null sem CPF).</summary>
+    public string? CpfHash => Cpf is null ? null : Digitais.CpfHash(Cpf);
+}
+
+/// <summary>Uma linha da tabela local `digital`.</summary>
+public sealed record DigitalGuardada(string Chave, string Cpf, string CpfHash, string? OperadorId, string Nome,
+    DateTime CadastradaEm, string? CadastradaPor, int Vaga, bool Registrada);
+
+/// <summary>Configuracao e constantes da biometria.</summary>
+public static class Biometria
+{
+    /// <summary>
+    /// A chave de ligar/desligar por loja, copiada do painel (pdv_loja_config.biometria_turno,
+    /// SQL 224). NASCE LIGADA (pedido do dono): sem a chave, vale ligada; o cartao do painel
+    /// serve para desligar.
+    /// </summary>
+    public const string ChaveLigada = "biometria_turno";
+
+    /// <summary>Quando o painel mandou a chave pela ultima vez: prova de que o SQL 224 esta no ar.</summary>
+    public const string ChavePainelEm = "biometria_painel_em";
+
+    public const string ViaDigitalTexto = "digital";
+    public const string ViaReservaTexto = "reserva";
+
+    /// <summary>Quantas leituras o cadastro pede, no minimo (o Windows pode pedir mais).</summary>
+    public const int LeiturasDoCadastro = 3;
+
+    /// <summary>Quantas leituras sem reconhecer antes de cair na reserva.</summary>
+    public const int MaxTentativas = 3;
+
+    /// <summary>Quantos dedos uma conta do Windows guarda: e o teto de funcionarios com digital por caixa.</summary>
+    public const int Vagas = 10;
+
+    // Os textos de uma linha que as telas mostram. Sem travessao (regra do dono).
+    public const string TituloEntrada = "Encoste o dedo no leitor";
+    public const string TituloFechamento = "Fechamento: encoste o dedo no leitor";
+    public const string TituloPrimeiraVez = "Primeira vez: encoste o dedo 3 vezes";
+    public const string TituloRecadastro = "Recadastro: encoste o dedo 3 vezes";
+    public const string AvisoSemLeitor = "Sem leitor de digital. Entrada pela reserva: codigo do gerente ou do dono.";
+    public const string AvisoSemDriver = "Leitor encontrado, falta o driver do Windows (DigitalPersona WBF). Entrada pela reserva.";
+    public const string AvisoSemServico = "O servico de biometria do Windows nao respondeu. Entrada pela reserva.";
+    public const string AvisoDigitalDesconhecida = "Essa digital nao esta cadastrada neste caixa.";
+    public const string AvisoJaTemDigital = "Voce ja tem digital neste caixa. Encoste o dedo no leitor.";
+    public const string AvisoCadastroCancelado = "Cadastro da digital cancelado. Entre de novo.";
+    public const string AvisoVagasEsgotadas = "Este caixa ja tem 10 digitais cadastradas. Apague uma na Configuracao.";
+
+    /// <summary>Ligada por padrao: so a chave "0" desliga.</summary>
+    public static bool Ligada(SqliteConnection cx) => Vendas.Config(cx, ChaveLigada) != "0";
+
+    /// <summary>O painel ja mandou a chave (= o SQL 224 esta no ar e as colunas do turno existem na nuvem).</summary>
+    public static bool PainelConhece(SqliteConnection cx) => Vendas.Config(cx, ChavePainelEm) is not null;
+
+    /// <summary>A frase da reserva entre tentativas: "Nao reconheci (2 de 3). Tente de novo."</summary>
+    public static string AvisoNaoReconheci(int tentativa) => $"Nao reconheci ({tentativa} de {MaxTentativas}). Tente de novo.";
+
+    /// <summary>A linha do progresso do cadastro: "Leitura 2 de 3" (passando de 3, "Mais uma vez (4)").</summary>
+    public static string ProgressoCadastro(int amostra) => amostra <= LeiturasDoCadastro
+        ? $"Leitura {amostra} de {LeiturasDoCadastro}"
+        : $"Mais uma vez ({amostra})";
+
+    /// <summary>O motivo de auditoria da reserva: "pela reserva: sem leitor".</summary>
+    public static string MotivoReserva(string causa) => "pela reserva: " + causa;
+
+    /// <summary>O aviso de uma linha para cada estado do leitor que nao e Pronto.</summary>
+    public static string AvisoDoEstado(EstadoLeitor estado) => estado switch
+    {
+        EstadoLeitor.SemDriver => AvisoSemDriver,
+        EstadoLeitor.SemServico => AvisoSemServico,
+        _ => AvisoSemLeitor,
+    };
+
+    /// <summary>A causa curta (para a auditoria) de cada estado do leitor que nao e Pronto.</summary>
+    public static string CausaDoEstado(EstadoLeitor estado) => estado switch
+    {
+        EstadoLeitor.SemDriver => "leitor sem driver WBF",
+        EstadoLeitor.SemServico => "servico de biometria parado",
+        _ => "sem leitor",
+    };
+}
+
+/// <summary>
+/// A guarda local: chave do Windows ligada ao CPF. O CPF vai cifrado pelo DPAPI da MAQUINA
+/// (so este Windows abre; o banco copiado para outro PC nao revela CPF), e ao lado vai o
+/// hash (SHA-256 dos 11 digitos) que e o que sobe para a nuvem e vai na coluna do turno.
+/// </summary>
+public static class Digitais
+{
+    /// <summary>Entropia fixa do DPAPI: separa este cofre de qualquer outro programa da maquina.</summary>
+    private static readonly byte[] Entropia = Encoding.UTF8.GetBytes("PdvNativo.digital.v1");
+
+    /// <summary>SHA-256 hex dos 11 digitos. Null para CPF que nao e CPF.</summary>
+    public static string? CpfHashOuNulo(string? cpf)
+    {
+        var chave = Operadores.CpfChave(cpf);
+        return chave is null ? null : CpfHash(chave);
+    }
+
+    /// <summary>SHA-256 hex dos digitos (sem validar): e a chave de identidade na nuvem.</summary>
+    public static string CpfHash(string cpf)
+        => Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes(Documentos.SoDigitos(cpf)))).ToLowerInvariant();
+
+    /// <summary>Cifra pelo DPAPI da maquina. Fora do Windows (nunca em producao) guarda marcado em claro.</summary>
+    public static string Cifrar(string texto)
+    {
+        var bytes = Encoding.UTF8.GetBytes(texto);
+        if (OperatingSystem.IsWindows())
+            return "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(bytes, Entropia, DataProtectionScope.LocalMachine));
+        return "claro:" + Convert.ToBase64String(bytes);
+    }
+
+    /// <summary>O inverso de <see cref="Cifrar"/>. Null quando este Windows nao abre (banco de outro PC).</summary>
+    public static string? Decifrar(string? guardado)
+    {
+        if (string.IsNullOrEmpty(guardado)) return null;
+        try
+        {
+            if (guardado.StartsWith("dpapi:", StringComparison.Ordinal))
+            {
+                if (!OperatingSystem.IsWindows()) return null;
+                var b = ProtectedData.Unprotect(Convert.FromBase64String(guardado[6..]), Entropia, DataProtectionScope.LocalMachine);
+                return Encoding.UTF8.GetString(b);
+            }
+            if (guardado.StartsWith("claro:", StringComparison.Ordinal))
+                return Encoding.UTF8.GetString(Convert.FromBase64String(guardado[6..]));
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Guarda (ou substitui) a digital daquele CPF. Um CPF, uma digital: recadastrar troca a
+    /// chave; a linha antiga vai embora. Devolve a linha guardada.
+    /// </summary>
+    public static DigitalGuardada Guardar(SqliteConnection cx, string chave, string cpf, string? operadorId,
+        string nome, int vaga, string? cadastradaPor, DateTime? agora = null)
+    {
+        var cpfChave = Operadores.CpfChave(cpf) ?? throw new InvalidOperationException("CPF invalido para a digital.");
+        if (string.IsNullOrWhiteSpace(chave)) throw new InvalidOperationException("A digital veio sem chave.");
+        var em = (agora ?? DateTime.Now).ToString("o");
+        var hash = CpfHash(cpfChave);
+        using var tx = cx.BeginTransaction();
+        // a mesma pessoa de novo (recadastro) e a mesma chave reaproveitada: as duas saem antes
+        cx.Execute("DELETE FROM digital WHERE cpf_hash = @H OR chave = @K", new { H = hash, K = chave }, tx);
+        cx.Execute("""
+            INSERT INTO digital (chave, cpf_cifrado, cpf_hash, operador_id, nome, vaga, cadastrada_em, cadastrada_por, registrada_em)
+            VALUES (@K, @C, @H, @Op, @N, @V, @Em, @Por, NULL)
+            """, new { K = chave, C = Cifrar(cpfChave), H = hash, Op = operadorId, N = nome, V = vaga, Em = em, Por = cadastradaPor }, tx);
+        Caixa.Auditar(cx, tx, "digital_cadastrada", operadorId, null,
+            $"{nome} (cpf {Mascarar(cpfChave)}) vaga {vaga}" + (cadastradaPor is null ? "" : $" · por {cadastradaPor}"));
+        tx.Commit();
+        return new DigitalGuardada(chave, cpfChave, hash, operadorId, nome, DateTime.Parse(em), cadastradaPor, vaga, false);
+    }
+
+    /// <summary>"529.***.***-25": o CPF nunca vai inteiro para a auditoria.</summary>
+    public static string Mascarar(string cpf)
+    {
+        var d = Documentos.SoDigitos(cpf);
+        return d.Length == 11 ? $"{d[..3]}.***.***-{d[9..]}" : "***";
+    }
+
+    public static DigitalGuardada? PorChave(SqliteConnection cx, string chave)
+        => Ler(cx, "WHERE chave = @K", new { K = chave }).FirstOrDefault();
+
+    public static DigitalGuardada? PorCpf(SqliteConnection cx, string cpf)
+    {
+        var h = CpfHashOuNulo(cpf);
+        return h is null ? null : Ler(cx, "WHERE cpf_hash = @H", new { H = h }).FirstOrDefault();
+    }
+
+    public static IReadOnlyList<DigitalGuardada> Listar(SqliteConnection cx) => Ler(cx, "", null);
+
+    /// <summary>As que o ERP ainda nao sabe (registrada_em nula): o que o Atualizar manda.</summary>
+    public static IReadOnlyList<DigitalGuardada> PendentesDeRegistro(SqliteConnection cx)
+        => Ler(cx, "WHERE registrada_em IS NULL", null);
+
+    public static void MarcarRegistrada(SqliteConnection cx, string chave, DateTime? agora = null)
+        => cx.Execute("UPDATE digital SET registrada_em = @Em WHERE chave = @K",
+            new { Em = (agora ?? DateTime.Now).ToString("o"), K = chave });
+
+    /// <summary>
+    /// Apaga a digital daquele CPF. A remocao fica anotada em `digital_removida` para o
+    /// Atualizar avisar o ERP (e para o Windows ser limpo pela chave).
+    /// </summary>
+    public static DigitalGuardada? Apagar(SqliteConnection cx, string cpf, string? por, DateTime? agora = null)
+    {
+        var d = PorCpf(cx, cpf);
+        if (d is null) return null;
+        var em = (agora ?? DateTime.Now).ToString("o");
+        using var tx = cx.BeginTransaction();
+        cx.Execute("DELETE FROM digital WHERE chave = @K", new { K = d.Chave }, tx);
+        cx.Execute("INSERT INTO digital_removida (chave, cpf_hash, nome, removida_em, removida_por) VALUES (@K,@H,@N,@Em,@Por)",
+            new { K = d.Chave, H = d.CpfHash, N = d.Nome, Em = em, Por = por }, tx);
+        Caixa.Auditar(cx, tx, "digital_apagada", d.OperadorId, null, $"{d.Nome} (cpf {Mascarar(d.Cpf)})" + (por is null ? "" : $" · por {por}"));
+        tx.Commit();
+        return d;
+    }
+
+    /// <summary>As remocoes que o ERP ainda nao sabe.</summary>
+    public static IReadOnlyList<(string Chave, string CpfHash, string Nome, DateTime RemovidaEm, string? Por)> RemocoesPendentes(SqliteConnection cx)
+        => cx.Query("SELECT chave, cpf_hash, nome, removida_em, removida_por FROM digital_removida WHERE registrada_em IS NULL")
+             .Select(r => ((string)r.chave, (string)r.cpf_hash, (string)r.nome, DateTime.Parse((string)r.removida_em), (string?)r.removida_por))
+             .ToList();
+
+    public static void MarcarRemocaoRegistrada(SqliteConnection cx, string chave, DateTime? agora = null)
+        => cx.Execute("UPDATE digital_removida SET registrada_em = @Em WHERE chave = @K AND registrada_em IS NULL",
+            new { Em = (agora ?? DateTime.Now).ToString("o"), K = chave });
+
+    /// <summary>A primeira vaga (1..10) livre; null = as dez ocupadas.</summary>
+    public static int? ProximaVaga(SqliteConnection cx)
+    {
+        var usadas = cx.Query<int>("SELECT vaga FROM digital").ToHashSet();
+        for (var v = 1; v <= Biometria.Vagas; v++) if (!usadas.Contains(v)) return v;
+        return null;
+    }
+
+    /// <summary>
+    /// O operador ATIVO daquela chave: a linha da digital diz o CPF, e o cadastro de operadores
+    /// diz quem e hoje (demitido no painel = digital nao entra mais, mesmo guardada).
+    /// </summary>
+    public static Operador? OperadorDaChave(SqliteConnection cx, string chave)
+    {
+        var d = PorChave(cx, chave);
+        return d is null ? null : OperadorDoCpf(cx, d.Cpf);
+    }
+
+    public static Operador? OperadorDoCpf(SqliteConnection cx, string cpf)
+    {
+        var limpo = Operadores.CpfChave(cpf);
+        if (limpo is null) return null;
+        return cx.QueryFirstOrDefault<Operador>("""
+            SELECT id AS Id, nome AS Nome, perfil AS Perfil FROM operador
+             WHERE ativo = 1 AND id <> '_admin_' AND mesmo_que IS NULL AND cpf IS NOT NULL AND cpf <> ''
+               AND replace(replace(replace(cpf,'.',''),'-',''),' ','') = @C
+             ORDER BY da_nuvem DESC LIMIT 1
+            """, new { C = limpo });
+    }
+
+    /// <summary>O CPF de um operador ativo (para o cadastro na primeira vez). Null sem CPF valido.</summary>
+    public static string? CpfDoOperador(SqliteConnection cx, string operadorId)
+        => Operadores.CpfChave(cx.ExecuteScalar<string?>("SELECT cpf FROM operador WHERE id = @Id", new { Id = operadorId }));
+
+    /// <summary>Os operadores ativos com CPF, por nome: a lista da reserva.</summary>
+    public static IReadOnlyList<Operador> ListaDaReserva(SqliteConnection cx)
+        => cx.Query<Operador>("""
+            SELECT id AS Id, nome AS Nome, perfil AS Perfil FROM operador
+             WHERE ativo = 1 AND id <> '_admin_' AND mesmo_que IS NULL
+             ORDER BY nome
+            """).ToList();
+
+    private static List<DigitalGuardada> Ler(SqliteConnection cx, string where, object? p)
+    {
+        var saida = new List<DigitalGuardada>();
+        foreach (var r in cx.Query($"SELECT chave, cpf_cifrado, cpf_hash, operador_id, nome, vaga, cadastrada_em, cadastrada_por, registrada_em FROM digital {where} ORDER BY nome", p))
+        {
+            var cpf = Decifrar((string?)r.cpf_cifrado);
+            if (cpf is null) continue;   // banco de outro PC: a linha nao vale aqui
+            saida.Add(new DigitalGuardada((string)r.chave, cpf, (string)r.cpf_hash, (string?)r.operador_id, (string)r.nome,
+                DateTime.Parse((string)r.cadastrada_em), (string?)r.cadastrada_por, (int)(long)r.vaga, r.registrada_em is not null));
+        }
+        return saida;
+    }
+}
+
+/// <summary>
+/// A MAQUINA DE ESTADOS DO PORTAO. Todo caminho termina em Digital (o leitor reconheceu),
+/// Reserva (codigo do gerente ou do dono e escolha na lista) ou Cancelado. Nenhum await
+/// aqui leva ConfigureAwait(false): quem chama e a thread de UI e as continuacoes encostam
+/// em janela (mesma regra de Autorizacao.ResolverAsync).
+/// </summary>
+public static class PortaoDigital
+{
+    /// <summary>
+    /// Identifica quem esta no caixa pela digital.
+    /// </summary>
+    /// <param name="porChave">chave do Windows -> operador ativo (null = digital desconhecida ou pessoa demitida).</param>
+    /// <param name="lista">a lista da reserva (quem pode ser escolhido).</param>
+    /// <param name="finalidade">"entrada" ou "fechamento": muda o titulo e vai na referencia do TOTP.</param>
+    /// <param name="ofertaPrimeiraVez">so na entrada: o botao que leva ao CPF e senha de hoje.</param>
+    public static async Task<DesfechoDigital> IdentificarAsync(ILeitorDigital leitor, ITelaDigital tela,
+        Func<string, Operador?> porChave, Func<Operador, string?> cpfDe, IReadOnlyList<Operador> lista,
+        IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal, string finalidade,
+        bool ofertaPrimeiraVez, Func<DateTime>? agora = null, CancellationToken ct = default)
+    {
+        var titulo = finalidade == "fechamento" ? Biometria.TituloFechamento : Biometria.TituloEntrada;
+        var sonda = await leitor.SondarAsync(ct);
+        if (!sonda.Pronto)
+        {
+            tela.Avisar("Leitor de digital", Biometria.AvisoDoEstado(sonda.Estado));
+            return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade,
+                Biometria.CausaDoEstado(sonda.Estado), agora, ct);
+        }
+
+        string? aviso = null;
+        for (var tentativa = 1; tentativa <= Biometria.MaxTentativas; tentativa++)
+        {
+            var leitura = await tela.LerAsync(titulo, aviso, ofertaPrimeiraVez, leitor.IdentificarAsync);
+            switch (leitura.Escolha)
+            {
+                case EscolhaNaLeitura.PrimeiraVez:
+                    return new DesfechoDigital(ViaDigital.Cancelado, null, null, "primeira vez: CPF e senha") { PrimeiraVez = true, Avisado = true };
+                case EscolhaNaLeitura.SemDigital:
+                    return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade, "o operador pediu a reserva", agora, ct);
+                case EscolhaNaLeitura.Desistiu:
+                    return new DesfechoDigital(ViaDigital.Cancelado, null, null, "o operador desistiu") { Avisado = true };
+            }
+
+            var c = leitura.Captura ?? Captura.Cancelada;
+            switch (c.Resultado)
+            {
+                case ResultadoCaptura.Reconhecido:
+                {
+                    var op = porChave(c.Chave!);
+                    if (op is not null)
+                        return new DesfechoDigital(ViaDigital.Digital, op, cpfDe(op), "digital reconhecida");
+                    aviso = Biometria.AvisoDigitalDesconhecida;
+                    break;
+                }
+                case ResultadoCaptura.SemLeitor:
+                    tela.Avisar("Leitor de digital", Biometria.AvisoSemLeitor);
+                    return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade, "o leitor sumiu no meio", agora, ct);
+                case ResultadoCaptura.Cancelado:
+                    return new DesfechoDigital(ViaDigital.Cancelado, null, null, "o operador desistiu") { Avisado = true };
+                case ResultadoCaptura.Falha:
+                    aviso = $"O leitor falhou ({c.Motivo}). Tente de novo.";
+                    break;
+                default:
+                    aviso = Biometria.AvisoNaoReconheci(tentativa);
+                    break;
+            }
+        }
+
+        tela.Avisar("Digital nao reconhecida", $"{Biometria.MaxTentativas} leituras sem reconhecer. Entrada pela reserva: codigo do gerente ou do dono.");
+        return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade,
+            $"{Biometria.MaxTentativas} leituras sem reconhecer", agora, ct);
+    }
+
+    /// <summary>
+    /// A RESERVA: codigo do autenticador do gerente ou do dono (tipo 'turno_sem_digital', nivel
+    /// gerente) e a escolha do funcionario na lista. Sem o SQL 224 a nuvem so aceita o codigo do
+    /// dono (mesma regra do 203 para fechar_pdv). Sem internet nao ha reserva: a regra do TOTP.
+    /// </summary>
+    public static async Task<DesfechoDigital> ReservaAsync(ITelaDigital tela, IReadOnlyList<Operador> lista,
+        Func<Operador, string?> cpfDe, IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal,
+        string finalidade, string causa, Func<DateTime>? agora = null, CancellationToken ct = default)
+    {
+        var pedido = new PedidoAutorizacao(terminal, Autorizacao.ReferenciaTurnoSemDigital(terminal, finalidade, (agora ?? (() => DateTime.Now))()), 0)
+        {
+            Tipo = Autorizacao.TipoTurnoSemDigital,
+            Nivel = Autorizacao.NivelGerente,
+            Operador = causa,
+        };
+        var aut = await Autorizacao.ResolverAsync(remota, pedido, telaTotp, ct);
+        if (!aut.Autorizado)
+            return new DesfechoDigital(ViaDigital.Cancelado, null, null, Biometria.MotivoReserva(causa) + " · " + aut.Motivo) { Avisado = aut.Avisado };
+
+        var escolhido = await tela.EscolherFuncionarioAsync(finalidade == "fechamento" ? "Quem esta fechando o caixa?" : "Quem esta entrando?", lista);
+        if (escolhido is null)
+            return new DesfechoDigital(ViaDigital.Cancelado, null, null, Biometria.MotivoReserva(causa) + " · ninguem escolhido") { Avisado = true };
+        return new DesfechoDigital(ViaDigital.Reserva, escolhido, cpfDe(escolhido), Biometria.MotivoReserva(causa),
+            aut.AprovadoPor, aut.TokenId);
+    }
+
+    /// <summary>
+    /// O cadastro: o minimo de 3 leituras (o Windows pode pedir mais), e a guarda ligada ao CPF.
+    /// Devolve o cadastro do leitor; quem chama grava com <see cref="Digitais.Guardar"/> quando Ok.
+    /// </summary>
+    public static Task<Cadastro> CadastrarAsync(ILeitorDigital leitor, ITelaDigital tela, string titulo, int vaga,
+        CancellationToken ct = default)
+        => tela.CadastrarAsync(titulo, (progresso, token) =>
+            leitor.CadastrarAsync(vaga, new ProgressoDireto<int>(n => progresso.Report(Biometria.ProgressoCadastro(n))), token));
+
+    /// <summary>
+    /// IProgress que avisa NA HORA e na mesma thread. O Progress&lt;T&gt; do .NET posta no
+    /// SynchronizationContext capturado (fora da UI, na thread pool, depois): a suite veria
+    /// "Leitura 3 de 3" chegar depois do fim, e a tela de WPF ja faz o Invoke que precisa.
+    /// </summary>
+    public sealed class ProgressoDireto<T> : IProgress<T>
+    {
+        private readonly Action<T> _ao;
+        public ProgressoDireto(Action<T> ao) => _ao = ao;
+        public void Report(T value) => _ao(value);
+    }
+}
