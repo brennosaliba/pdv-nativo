@@ -219,7 +219,13 @@ public static class PortaoDigitalDaTela
             case ResultadoCadastro.Ok:
             {
                 using var cx = Banco.Abrir();
-                return Digitais.Guardar(cx, cad.Chave!, cpf, op.Id, op.Nome, vaga.Value, por);
+                // 1.0.53: no leitor da HID o mesmo dedo em duas pessoas confundiria a entrada
+                if (Digitais.DonoDaParecida(cx, cad, cpf) is { } outro)
+                {
+                    Dialogo.Avisar(dono, "Digital", Biometria.AvisoDigitalDeOutro(outro), "erro");
+                    return null;
+                }
+                return Digitais.Guardar(cx, cad.Chave!, cpf, op.Id, op.Nome, vaga.Value, por, null, cad.Motor, cad.Molde);
             }
             case ResultadoCadastro.Cancelado:
                 Dialogo.Avisar(dono, "Digital", Biometria.AvisoCadastroCancelado, "erro");

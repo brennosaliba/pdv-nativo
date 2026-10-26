@@ -299,11 +299,13 @@ public sealed class LeitorWinBio : ILeitorDigital
 
 /// <summary>
 /// O LEITOR ESTA PLUGADO MAS O WINDOWS NAO O ENXERGA? (pedido do dono, 26/10): o U.are.U 4500
-/// e USB VID 05BA PID 000A. Sem o driver WBF o Windows o lista como "dispositivo USB" (ou
-/// com o driver antigo da DigitalPersona, classe propria) e o WinBio nao o enumera. Aqui
-/// lemos o registro (HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_05BA&amp;PID_xxxx): a
-/// subchave volatil `Control` so existe com o aparelho presente; a classe "Biometric" e a
-/// marca do driver WBF. A regra e pura (Avaliar); o registro e so a leitura.
+/// e USB VID 05BA PID 000A. Sem o driver WBF o Windows o lista como "dispositivo USB" ou com o
+/// driver da HID que nao e WBF (o "Non-WBF" ou o que vem com o U.are.U RTE/SDK), e o WinBio nao
+/// o enumera. Aqui lemos o registro (HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_05BA&amp;PID_xxxx):
+/// a subchave volatil `Control` so existe com o aparelho presente; a classe e o servico (o
+/// driver) dizem qual driver esta la. WBF = classe Biometric com o servico WUDFRd (UMDF). A
+/// regra e pura (Avaliar); o registro e so a leitura. 1.0.53: o servico, a descricao, a versao
+/// e o fornecedor do driver entram no diagnostico.
 /// </summary>
 public static class DriverDigitalPersona
 {
@@ -311,23 +313,44 @@ public static class DriverDigitalPersona
     public const string PidUareU4500 = "PID_000A";
     public const string ClasseBiometrica = "Biometric";
     public const string GuidClasseBiometrica = "{53D29EF7-377C-4D14-864B-EB3A85769359}";
+    /// <summary>O servico do driver WBF da HID (UMDF). Outro servico na classe Biometric = driver que o WinBio nao usa.</summary>
+    public const string ServicoWbf = "WUDFRd";
 
     /// <summary>
     /// O passo que a loja faz quando falta o driver (vai no relatorio e na Configuracao).
     /// </summary>
     public const string PassoDoDriver =
-        "Instale o driver WBF: Windows Update > Atualizacoes opcionais > Atualizacoes de driver > " +
-        "\"DigitalPersona, Inc. - Biometric\" (ou o pacote \"U.are.U WBF driver\" do site da HID Global). Depois reinicie o PC.";
+        "Passo: instale o \"HID DigitalPersona 4500 WBF (Hello) Driver\" (site da HID, hidglobal.com, Drivers; " +
+        "ou Windows Update > Atualizações opcionais > Atualizações de driver) OU o U.are.U RTE de 64 bits. Depois reinicie o PC.";
 
-    /// <summary>Um aparelho DigitalPersona visto no registro.</summary>
-    public sealed record Aparelho(string Pid, string Classe, bool Presente);
+    /// <summary>
+    /// Um aparelho DigitalPersona visto no registro. <paramref name="Servico"/> e o driver
+    /// (WUDFRd = WBF); versao e fornecedor vem da chave da classe do driver.
+    /// </summary>
+    public sealed record Aparelho(string Pid, string Classe, bool Presente, string Servico = "", string Descricao = "",
+        string VersaoDriver = "", string Fornecedor = "", string InstanciaId = "");
 
     public sealed record Diagnostico(EstadoLeitor Estado, string Detalhe);
 
+    /// <summary>Classe Biometric com o servico WUDFRd (ou servico nao lido): o driver WBF.</summary>
+    public static bool EhWbf(Aparelho a)
+        => string.Equals(a.Classe, ClasseBiometrica, StringComparison.OrdinalIgnoreCase)
+           && (a.Servico.Length == 0 || string.Equals(a.Servico, ServicoWbf, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>
-    /// A regra: nenhum aparelho = SemLeitor; aparelho presente com classe Biometric = o WBF
-    /// existe (se o WinBio nao listou, e o servico); presente sem a classe = SemDriver;
-    /// aparelho so no historico (nao presente) = SemLeitor com a dica.
+    /// O driver PROPRIO da HID (nao WBF): na loja (26/10) o Get-PnpDevice mostrou classe
+    /// "Authentication Devices", status OK. Com ele o WinBio nao ve nada; quem fala com o
+    /// leitor e o runtime da HID (dpfpdd/dpfj). Classe Biometric com servico que nao e o
+    /// WUDFRd tambem conta (o driver antigo da DigitalPersona).
+    /// </summary>
+    public static bool EhDriverDaHid(Aparelho a)
+        => a.Classe.Contains("Authentication", StringComparison.OrdinalIgnoreCase)
+           || (string.Equals(a.Classe, ClasseBiometrica, StringComparison.OrdinalIgnoreCase) && !EhWbf(a));
+
+    /// <summary>
+    /// A regra: nenhum aparelho = SemLeitor; aparelho presente com o driver WBF (classe
+    /// Biometric, servico WUDFRd ou nao lido) = o WBF existe (se o WinBio nao listou, e o
+    /// servico); presente com outro driver = SemDriver; so no historico = SemLeitor com a dica.
     /// </summary>
     public static Diagnostico Avaliar(IReadOnlyList<Aparelho> aparelhos)
     {
@@ -335,17 +358,43 @@ public static class DriverDigitalPersona
         var presentes = aparelhos.Where(a => a.Presente).ToList();
         if (presentes.Count == 0)
             return new Diagnostico(EstadoLeitor.SemLeitor, "o leitor DigitalPersona ja esteve neste PC, mas nao esta plugado agora");
-        if (presentes.Any(a => string.Equals(a.Classe, ClasseBiometrica, StringComparison.OrdinalIgnoreCase)))
+        if (presentes.Any(EhWbf))
             return new Diagnostico(EstadoLeitor.SemServico, "leitor DigitalPersona plugado com driver WBF, mas o Windows nao o listou: confira o servico Windows Biometric Service");
+        var p = presentes[0];
+        if (presentes.FirstOrDefault(EhDriverDaHid) is { } daHid)
+            return new Diagnostico(EstadoLeitor.SemDriver,
+                $"leitor DigitalPersona plugado com o driver da HID ({daHid.Pid}, classe \"{daHid.Classe}\"" + (daHid.Servico.Length > 0 ? $", driver {daHid.Servico}" : "") +
+                "), que nao e o WBF: o Windows nao o usa, quem le e o runtime da HID (U.are.U RTE).");
         return new Diagnostico(EstadoLeitor.SemDriver,
-            $"leitor DigitalPersona plugado ({presentes[0].Pid}, classe \"{presentes[0].Classe}\"), sem o driver WBF. " + PassoDoDriver);
+            $"leitor DigitalPersona plugado ({p.Pid}, classe \"{p.Classe}\"" + (p.Servico.Length > 0 ? $", driver {p.Servico}" : "") +
+            "), sem o driver WBF. " + PassoDoDriver);
+    }
+
+    /// <summary>Uma entrada USB em uma linha: "PID_000A, classe Biometric, driver WUDFRd 5.0.0.5 (HID Global), "U.are.U 4500", plugado".</summary>
+    public static string Linha(Aparelho a)
+    {
+        var driver = (a.Servico.Length == 0 && a.VersaoDriver.Length == 0 ? "driver nao informado" : "driver " + (a.Servico.Length > 0 ? a.Servico : "?"))
+            + (a.VersaoDriver.Length > 0 ? " " + a.VersaoDriver : "")
+            + (a.Fornecedor.Length > 0 ? $" ({a.Fornecedor})" : "");
+        return $"{a.Pid}, classe {(a.Classe.Length > 0 ? a.Classe : "?")}, {driver}"
+               + (a.Descricao.Length > 0 ? $", \"{a.Descricao}\"" : "")
+               + (a.Presente ? ", plugado" : ", desplugado")
+               + (a.InstanciaId.Length > 0 ? $", id {a.InstanciaId}" : "");
     }
 
     /// <summary>Le o registro desta maquina. Nunca lanca; fora do Windows, lista vazia.</summary>
     public static Diagnostico Ler() => Avaliar(LerAparelhos());
 
+    /// <summary>"@oem12.inf,%desc%;U.are.U 4500" vira "U.are.U 4500".</summary>
+    private static string Legivel(object? v)
+    {
+        var s = v as string ?? "";
+        var i = s.LastIndexOf(';');
+        return (i >= 0 ? s[(i + 1)..] : s).Trim();
+    }
+
     [SupportedOSPlatform("windows")]
-    private static List<Aparelho> LerAparelhosWindows()
+    private static List<Aparelho> LerDoRegistro()
     {
         var saida = new List<Aparelho>();
         try
@@ -367,7 +416,21 @@ public static class DriverDigitalPersona
                         classe = ClasseBiometrica;
                     bool presente;
                     using (var c = k.OpenSubKey("Control")) presente = c is not null;
-                    saida.Add(new Aparelho(pid, classe, presente));
+                    var servico = k.GetValue("Service") as string ?? "";
+                    var descricao = Legivel(k.GetValue("FriendlyName") ?? k.GetValue("DeviceDesc"));
+                    string versao = "", fornecedor = "";
+                    try
+                    {
+                        // "Driver" = "{guid da classe}\0003": a chave do driver instalado
+                        if (k.GetValue("Driver") is string drv && drv.Length > 0)
+                        {
+                            using var kd = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Class\" + drv);
+                            versao = kd?.GetValue("DriverVersion") as string ?? "";
+                            fornecedor = kd?.GetValue("ProviderName") as string ?? "";
+                        }
+                    }
+                    catch { }
+                    saida.Add(new Aparelho(pid, classe, presente, servico, descricao, versao, fornecedor, "USB\\" + nome + "\\" + inst));
                 }
             }
         }
@@ -375,8 +438,124 @@ public static class DriverDigitalPersona
         return saida;
     }
 
+    /// <summary>
+    /// Os aparelhos 05BA desta maquina. PLUGADO vem do SetupAPI (SetupDiGetClassDevs com
+    /// DIGCF_PRESENT), a mesma fonte do Gerenciador de Dispositivos e do Get-PnpDevice, com a
+    /// classe real (Biometric, Authentication Devices). O registro so completa versao e
+    /// fornecedor do driver e lista o que ja esteve aqui. 1.0.53: na loja (26/10) o leitor
+    /// estava plugado, Status OK, e a 1.0.52 dizia "ja esteve aqui, mas nao esta": a subchave
+    /// volatil Control nao aparecia. Ela so vale agora se o SetupAPI nao responder.
+    /// </summary>
     public static List<Aparelho> LerAparelhos()
-        => OperatingSystem.IsWindows() ? LerAparelhosWindows() : new List<Aparelho>();
+    {
+        if (!OperatingSystem.IsWindows()) return new List<Aparelho>();
+        var registro = LerDoRegistro();
+        var presentes = LerPresentes();
+        return presentes is null ? registro : Juntar(registro, presentes);
+    }
+
+    /// <summary>Quantos aparelhos presentes o SetupAPI lista nesta maquina (qualquer fabricante): prova que a chamada funciona. -1 = nao respondeu.</summary>
+    /// <summary>Os presentes pelo SetupAPI com o filtro no id da instancia (o --sondar-biometria VID_xxxx usa, para conferir a leitura em qualquer aparelho).</summary>
+    public static IReadOnlyList<Aparelho> PresentesPeloSetupApi(string filtro)
+        => OperatingSystem.IsWindows() ? (IReadOnlyList<Aparelho>?)LerPresentes(filtro) ?? Array.Empty<Aparelho>() : Array.Empty<Aparelho>();
+
+    public static int ContarPresentesNoSistema()
+        => OperatingSystem.IsWindows() ? (LerPresentes("\\")?.Count ?? -1) : -1;
+
+    /// <summary>
+    /// A regra da mescla (pura, a suite prova): todo aparelho que o SetupAPI diz presente entra
+    /// como plugado, com a classe e o driver que ele diz (o registro completa o que faltar,
+    /// pelo id da instancia); o que so o registro conhece entra como desplugado.
+    /// </summary>
+    public static List<Aparelho> Juntar(IReadOnlyList<Aparelho> doRegistro, IReadOnlyList<Aparelho> presentes)
+    {
+        var saida = new List<Aparelho>();
+        foreach (var p in presentes)
+        {
+            var r = doRegistro.FirstOrDefault(x => string.Equals(x.InstanciaId, p.InstanciaId, StringComparison.OrdinalIgnoreCase));
+            saida.Add(p with
+            {
+                Presente = true,
+                Classe = p.Classe.Length > 0 ? p.Classe : r?.Classe ?? "",
+                Servico = p.Servico.Length > 0 ? p.Servico : r?.Servico ?? "",
+                Descricao = p.Descricao.Length > 0 ? p.Descricao : r?.Descricao ?? "",
+                VersaoDriver = p.VersaoDriver.Length > 0 ? p.VersaoDriver : r?.VersaoDriver ?? "",
+                Fornecedor = p.Fornecedor.Length > 0 ? p.Fornecedor : r?.Fornecedor ?? "",
+            });
+        }
+        foreach (var r in doRegistro)
+            if (!presentes.Any(p => string.Equals(p.InstanciaId, r.InstanciaId, StringComparison.OrdinalIgnoreCase)))
+                saida.Add(r with { Presente = false });
+        return saida;
+    }
+
+    // ── SetupAPI (setupapi.dll): os aparelhos PRESENTES ─────────────────────────────
+    private const uint DIGCF_PRESENT = 0x2, DIGCF_ALLCLASSES = 0x4;
+    private const uint SPDRP_DEVICEDESC = 0x0, SPDRP_SERVICE = 0x4, SPDRP_CLASS = 0x7, SPDRP_DRIVER = 0x9, SPDRP_FRIENDLYNAME = 0xC;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SP_DEVINFO_DATA { public uint CbSize; public Guid ClassGuid; public uint DevInst; public IntPtr Reserved; }
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr SetupDiGetClassDevsW(IntPtr classGuid, string? enumerator, IntPtr hwnd, uint flags);
+    [DllImport("setupapi.dll", SetLastError = true)]
+    private static extern bool SetupDiEnumDeviceInfo(IntPtr set, uint indice, ref SP_DEVINFO_DATA dado);
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiGetDeviceInstanceIdW(IntPtr set, ref SP_DEVINFO_DATA dado, char[] id, int tamanho, out int necessario);
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiGetDeviceRegistryPropertyW(IntPtr set, ref SP_DEVINFO_DATA dado, uint prop, out uint tipo, byte[]? buf, int tamanho, out int necessario);
+    [DllImport("setupapi.dll", SetLastError = true)]
+    private static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
+
+    private static string Propriedade(IntPtr set, ref SP_DEVINFO_DATA d, uint prop)
+    {
+        var buf = new byte[1024];
+        if (!SetupDiGetDeviceRegistryPropertyW(set, ref d, prop, out _, buf, buf.Length, out var n) || n <= 0) return "";
+        return System.Text.Encoding.Unicode.GetString(buf, 0, Math.Min(n, buf.Length)).TrimEnd('\0').Trim();
+    }
+
+    /// <summary>Os 05BA presentes pelo SetupAPI. null = o SetupAPI nao respondeu (cai no registro).</summary>
+    [SupportedOSPlatform("windows")]
+    private static List<Aparelho>? LerPresentes(string filtro = Vid)
+    {
+        IntPtr set = new(-1);
+        try
+        {
+            set = SetupDiGetClassDevsW(IntPtr.Zero, null, IntPtr.Zero, DIGCF_PRESENT | DIGCF_ALLCLASSES);
+            if (set == new IntPtr(-1)) return null;
+            var saida = new List<Aparelho>();
+            var d = new SP_DEVINFO_DATA { CbSize = (uint)Marshal.SizeOf<SP_DEVINFO_DATA>() };
+            var id = new char[512];
+            for (uint i = 0; SetupDiEnumDeviceInfo(set, i, ref d); i++)
+            {
+                if (!SetupDiGetDeviceInstanceIdW(set, ref d, id, id.Length, out _)) continue;
+                var inst = new string(id).TrimEnd('\0');
+                var fim = inst.IndexOf('\0');
+                if (fim >= 0) inst = inst[..fim];
+                if (inst.IndexOf(filtro, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                var pid = inst.Split('\\', '&').FirstOrDefault(x => x.StartsWith("PID_", StringComparison.OrdinalIgnoreCase)) ?? inst;
+                var desc = Propriedade(set, ref d, SPDRP_FRIENDLYNAME);
+                if (desc.Length == 0) desc = Propriedade(set, ref d, SPDRP_DEVICEDESC);
+                string versao = "", fornecedor = "";
+                var drv = Propriedade(set, ref d, SPDRP_DRIVER);
+                if (drv.Length > 0)
+                {
+                    try
+                    {
+                        using var kd = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Class\" + drv);
+                        versao = kd?.GetValue("DriverVersion") as string ?? "";
+                        fornecedor = kd?.GetValue("ProviderName") as string ?? "";
+                    }
+                    catch { }
+                }
+                saida.Add(new Aparelho(pid.ToUpperInvariant(), Propriedade(set, ref d, SPDRP_CLASS), true, Propriedade(set, ref d, SPDRP_SERVICE),
+                    desc, versao, fornecedor, inst));
+            }
+            return saida;
+        }
+        catch { return null; }
+        finally { if (set != new IntPtr(-1) && set != IntPtr.Zero) { try { SetupDiDestroyDeviceInfoList(set); } catch { } } }
+    }
 
     /// <summary>
     /// As linhas da Configuracao: as unidades do WinBio e, sem nenhuma, o que o registro diz

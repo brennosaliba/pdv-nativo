@@ -712,13 +712,28 @@ public static class Servicos
             };
     }
 
-    private static Pdv.Nucleo.LeitorWinBio? _leitor;
+    private static Pdv.Nucleo.LeitorAutomatico? _leitor;
+    private static Pdv.Nucleo.ApiHidUareU? _apiHid;
 
-    /// <summary>O leitor de digital do Windows (1.0.52): um por processo, sem estado entre leituras.</summary>
-    public static Pdv.Nucleo.ILeitorDigital Leitor()
+    /// <summary>
+    /// O leitor de digital (1.0.53): um por processo. A cada sonda escolhe o Windows (WinBio,
+    /// driver WBF) ou, sem unidade no Windows, o runtime da HID (U.are.U RTE), que compara
+    /// com os moldes da guarda local.
+    /// </summary>
+    public static Pdv.Nucleo.LeitorAutomatico Leitor()
     {
-        lock (Trava) return _leitor ??= new Pdv.Nucleo.LeitorWinBio();
+        lock (Trava)
+            return _leitor ??= new Pdv.Nucleo.LeitorAutomatico(new Pdv.Nucleo.LeitorWinBio(),
+                new Pdv.Nucleo.LeitorHidUareU(ApiHidSemTrava(), () => { using var cx = Banco.Abrir(); return Pdv.Nucleo.Digitais.Moldes(cx); }));
     }
+
+    /// <summary>A API C da HID (dpfpdd/dpfj do RTE instalado no PC), para o Conferir o leitor.</summary>
+    public static Pdv.Nucleo.ApiHidUareU ApiHid() { lock (Trava) return ApiHidSemTrava(); }
+
+    private static Pdv.Nucleo.ApiHidUareU ApiHidSemTrava() => _apiHid ??= new Pdv.Nucleo.ApiHidUareU();
+
+    /// <summary>"winbio", "hid" ou null: o motor da ultima sonda (a primeira vez na HID nao trava em digital do WinBio).</summary>
+    public static string? MotorDoLeitor() => Leitor().MotorEmUso;
 
     private static string? TerminalUuid()
     {

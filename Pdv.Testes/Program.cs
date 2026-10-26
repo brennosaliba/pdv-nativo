@@ -89,6 +89,14 @@ if (args.Length >= 1 && args[0] == "--sondar-biometria")
         Console.WriteLine("  " + l);
     var sonda = new Pdv.Nucleo.LeitorWinBio().SondarAsync(CancellationToken.None).GetAwaiter().GetResult();
     Console.WriteLine($"sonda: {sonda.Estado} ({sonda.Detalhe})");
+    if (args.Length >= 2)
+        foreach (var a in Pdv.Nucleo.DriverDigitalPersona.PresentesPeloSetupApi(args[1]))
+            Console.WriteLine("  setupapi: " + Pdv.Nucleo.DriverDigitalPersona.Linha(a));
+    // 1.0.53: o diagnostico inteiro (o mesmo do Conferir o leitor), com o runtime da HID
+    var api = new Pdv.Nucleo.ApiHidUareU();
+    var auto = new Pdv.Nucleo.LeitorAutomatico(new Pdv.Nucleo.LeitorWinBio(), new Pdv.Nucleo.LeitorHidUareU(api, () => Array.Empty<Pdv.Nucleo.MoldeGuardado>()));
+    foreach (var l in Pdv.Nucleo.DiagnosticoLeitor.ColherAsync(auto, api, "Pdv.Testes").GetAwaiter().GetResult())
+        Console.WriteLine("  " + l);
     return 0;
 }
 
@@ -851,6 +859,7 @@ if (args.Length >= 1 && args[0] == "--so-conta")
 if (args.Length >= 1 && args[0] == "--so-biometria")
 {
     await TestesBiometria.RodarAsync((cond, nome) => Check("biometria: " + nome, cond));
+    await TestesLeitorHid.RodarAsync((cond, nome) => Check("leitor hid: " + nome, cond));
     Console.WriteLine();
     Console.WriteLine($"=== (so biometria) {ok} OK, {falhas} falhas ===");
     return falhas == 0 ? 0 : 1;
@@ -1846,6 +1855,13 @@ await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome,
 Console.WriteLine();
 Console.WriteLine("--- A digital no lugar da senha: o portao, a reserva, a guarda, o turno e o leitor ---");
 await TestesBiometria.RodarAsync((cond, nome) => Check("biometria: " + nome, cond));
+
+// -- 26/10/2026: O SEGUNDO LEITOR, PELO RUNTIME DA HID (caixa 1.0.53) ------------------------------
+// Na loja o U.are.U 4500 estava com o driver da HID (classe Authentication Devices), que o WinBio nao ve.
+// LeitorHidUareU (dpfpdd/dpfj por P/Invoke, moldes na guarda), a escolha automatica e o Conferir o leitor.
+Console.WriteLine();
+Console.WriteLine("--- O leitor pelo runtime da HID: a escolha, a comparacao, o cadastro e o diagnostico ---");
+await TestesLeitorHid.RodarAsync((cond, nome) => Check("leitor hid: " + nome, cond));
 
 // -- 05/09/2026: PROMOCAO COM 2FA DO GERENTE OU DO DONO ------------------------
 // "Crio desconto funcionario para nao ter abuso e quero que essa promocao tenha

@@ -217,7 +217,7 @@ public partial class Login : UserControl
         var dono = Window.GetWindow(this);
         if (dono is null) return false;
         using (var cx = Banco.Abrir())
-            if (Digitais.PorCpf(cx, cpf) is not null)
+            if (Digitais.JaTem(cx, cpf, Servicos.MotorDoLeitor()))
             {
                 TxtErro.Text = Biometria.AvisoJaTemDigital;
                 return false;

@@ -74,6 +74,10 @@ public static class Banco
             "ALTER TABLE caixa_sessao ADD COLUMN fechado_via TEXT",
             "ALTER TABLE caixa_sessao ADD COLUMN fechado_cpf_hash TEXT",
             "ALTER TABLE caixa_sessao ADD COLUMN via_motivo TEXT",
+            // 1.0.53 (26/10/2026): o segundo leitor, pelo runtime da HID (U.are.U RTE). Ali o molde
+            // e nosso: vai cifrado pelo DPAPI da maquina, e o motor diz de quem e a chave.
+            "ALTER TABLE digital ADD COLUMN motor TEXT NOT NULL DEFAULT 'winbio'",
+            "ALTER TABLE digital ADD COLUMN molde_cifrado TEXT",
             // marca quem é regido pelo painel: só esses são atualizados/desativados
             // pela sincronização — operador criado localmente não é tocado
             "ALTER TABLE operador ADD COLUMN da_nuvem INTEGER NOT NULL DEFAULT 0",

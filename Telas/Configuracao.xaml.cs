@@ -412,12 +412,17 @@ public partial class Configuracao : UserControl
         {
             BtnConferirLeitor.IsEnabled = false;
             TxtDigitalEstado.Text = "Conferindo o leitor...";
-            var (unidades, hr, erro) = await Task.Run(LeitorWinBio.Enumerar);
-            var aparelhos = await Task.Run(DriverDigitalPersona.LerAparelhos);
-            var linhas = DriverDigitalPersona.LinhasDeDiagnostico(unidades.Select(u => u.ToString()).ToList(), hr, erro, aparelhos);
-            using var cx = Banco.Abrir();
-            TxtDigitalEstado.Text = (Biometria.Ligada(cx) ? "Digital LIGADA nesta loja. " : "Digital DESLIGADA nesta loja (painel). ") + string.Join("\n", linhas);
+            // 1.0.53: o motor em uso (Windows ou HID), as unidades do Windows, o runtime da HID (versao,
+            // de onde carregou, leitores) e as entradas USB 05BA com classe e driver, numa janela
+            // que o dono fotografa e manda.
+            var versao = typeof(Configuracao).Assembly.GetName().Version?.ToString(3) ?? "?";
+            var linhas = await DiagnosticoLeitor.ColherAsync(Servicos.Leitor(), Servicos.ApiHid(), versao);
+            bool ligada;
+            using (var cx = Banco.Abrir()) ligada = Biometria.Ligada(cx);
+            TxtDigitalEstado.Text = (ligada ? "Digital LIGADA nesta loja. " : "Digital DESLIGADA nesta loja (painel). ") + (linhas.Count > 1 ? linhas[1] : "");
             try { HospedeWebView2.Anotar("configuracao.txt", "leitor de digital: " + string.Join(" | ", linhas), TimeSpan.Zero); } catch { }
+            if (Window.GetWindow(this) is { } dono)
+                Dialogo.Relatorio(dono, "Leitor de digital", string.Join("\n", linhas));
         }
         catch (Exception ex) { TxtDigitalEstado.Text = "Nao deu para conferir o leitor (" + ex.Message + ")."; }
         finally { BtnConferirLeitor.IsEnabled = true; }

@@ -74,12 +74,21 @@ public sealed record Cadastro(ResultadoCadastro Resultado, string? Chave = null,
     public static Cadastro Feito(string chave, int amostras) => new(ResultadoCadastro.Ok, chave, amostras);
     public static readonly Cadastro Cancelado = new(ResultadoCadastro.Cancelado);
     public static Cadastro Falhou(string motivo) => new(ResultadoCadastro.Falha, null, 0, motivo);
+
+    /// <summary>"winbio" (o molde fica no Windows) ou "hid" (o molde vem em <see cref="Molde"/> e vai para a guarda). 1.0.53.</summary>
+    public string Motor { get; init; } = "winbio";
+
+    /// <summary>So no motor hid: o molde (FMD ISO) que a guarda cifra e usa para identificar.</summary>
+    public byte[]? Molde { get; init; }
+
+    /// <summary>A chave de uma digital JA guardada que bate com este dedo (o mesmo dedo em outra pessoa). 1.0.53.</summary>
+    public string? ChaveParecida { get; init; }
 }
 
 /// <summary>
-/// O leitor. A implementacao real e <see cref="LeitorWinBio"/> (winbio.dll). Trocar pelo SDK
-/// do fabricante, se o modelo exigir, e escrever outra classe aqui atras: a maquina de
-/// estados e as telas nao mudam.
+/// O leitor. As implementacoes reais sao <see cref="LeitorWinBio"/> (winbio.dll, driver WBF)
+/// e <see cref="LeitorHidUareU"/> (runtime da HID, U.are.U RTE), escolhidas a cada sonda por
+/// <see cref="LeitorAutomatico"/> (1.0.53). A maquina de estados e as telas nao mudam.
 /// </summary>
 public interface ILeitorDigital
 {
@@ -173,7 +182,11 @@ public sealed record DesfechoDigital(ViaDigital Via, Operador? Operador, string?
 
 /// <summary>Uma linha da tabela local `digital`.</summary>
 public sealed record DigitalGuardada(string Chave, string Cpf, string CpfHash, string? OperadorId, string Nome,
-    DateTime CadastradaEm, string? CadastradaPor, int Vaga, bool Registrada);
+    DateTime CadastradaEm, string? CadastradaPor, int Vaga, bool Registrada)
+{
+    /// <summary>"winbio" ou "hid" (coluna motor, 1.0.53).</summary>
+    public string Motor { get; init; } = "winbio";
+}
 
 /// <summary>Configuracao e constantes da biometria.</summary>
 public static class Biometria
@@ -206,12 +219,17 @@ public static class Biometria
     public const string TituloPrimeiraVez = "Primeira vez: encoste o dedo 3 vezes";
     public const string TituloRecadastro = "Recadastro: encoste o dedo 3 vezes";
     public const string AvisoSemLeitor = "Sem leitor de digital. Entrada pela reserva: codigo do gerente ou do dono.";
-    public const string AvisoSemDriver = "Leitor encontrado, falta o driver do Windows (DigitalPersona WBF). Entrada pela reserva.";
+    /// <summary>A frase do dono (26/10, 1.0.53) quando nem o Windows nem o runtime da HID acham o leitor plugado.</summary>
+    public const string AvisoLeitorNaoEncontrado = "Leitor não encontrado. Instale o driver WBF da HID ou o U.are.U RTE.";
+    public const string AvisoSemDriver = AvisoLeitorNaoEncontrado + " Entrada pela reserva.";
     public const string AvisoSemServico = "O servico de biometria do Windows nao respondeu. Entrada pela reserva.";
     public const string AvisoDigitalDesconhecida = "Essa digital nao esta cadastrada neste caixa.";
     public const string AvisoJaTemDigital = "Voce ja tem digital neste caixa. Encoste o dedo no leitor.";
     public const string AvisoCadastroCancelado = "Cadastro da digital cancelado. Entre de novo.";
     public const string AvisoVagasEsgotadas = "Este caixa ja tem 10 digitais cadastradas. Apague uma na Configuracao.";
+
+    /// <summary>O mesmo dedo ja esta guardado em outra pessoa (motor hid, 1.0.53).</summary>
+    public static string AvisoDigitalDeOutro(string nome) => $"Essa digital já está cadastrada para {nome}.";
 
     /// <summary>Ligada por padrao: so a chave "0" desliga.</summary>
     public static bool Ligada(SqliteConnection cx) => Vendas.Config(cx, ChaveLigada) != "0";
@@ -241,7 +259,7 @@ public static class Biometria
     /// <summary>A causa curta (para a auditoria) de cada estado do leitor que nao e Pronto.</summary>
     public static string CausaDoEstado(EstadoLeitor estado) => estado switch
     {
-        EstadoLeitor.SemDriver => "leitor sem driver WBF",
+        EstadoLeitor.SemDriver => "leitor sem driver (WBF ou U.are.U RTE)",
         EstadoLeitor.SemServico => "servico de biometria parado",
         _ => "sem leitor",
     };
@@ -301,8 +319,10 @@ public static class Digitais
     /// chave; a linha antiga vai embora. Devolve a linha guardada.
     /// </summary>
     public static DigitalGuardada Guardar(SqliteConnection cx, string chave, string cpf, string? operadorId,
-        string nome, int vaga, string? cadastradaPor, DateTime? agora = null)
+        string nome, int vaga, string? cadastradaPor, DateTime? agora = null, string motor = "winbio", byte[]? molde = null)
     {
+        if (motor == LeitorHidUareU.MotorTexto && (molde is null || molde.Length == 0))
+            throw new InvalidOperationException("A digital da HID veio sem molde.");
         var cpfChave = Operadores.CpfChave(cpf) ?? throw new InvalidOperationException("CPF invalido para a digital.");
         if (string.IsNullOrWhiteSpace(chave)) throw new InvalidOperationException("A digital veio sem chave.");
         var em = (agora ?? DateTime.Now).ToString("o");
@@ -311,13 +331,76 @@ public static class Digitais
         // a mesma pessoa de novo (recadastro) e a mesma chave reaproveitada: as duas saem antes
         cx.Execute("DELETE FROM digital WHERE cpf_hash = @H OR chave = @K", new { H = hash, K = chave }, tx);
         cx.Execute("""
-            INSERT INTO digital (chave, cpf_cifrado, cpf_hash, operador_id, nome, vaga, cadastrada_em, cadastrada_por, registrada_em)
-            VALUES (@K, @C, @H, @Op, @N, @V, @Em, @Por, NULL)
-            """, new { K = chave, C = Cifrar(cpfChave), H = hash, Op = operadorId, N = nome, V = vaga, Em = em, Por = cadastradaPor }, tx);
+            INSERT INTO digital (chave, cpf_cifrado, cpf_hash, operador_id, nome, vaga, cadastrada_em, cadastrada_por, registrada_em, motor, molde_cifrado)
+            VALUES (@K, @C, @H, @Op, @N, @V, @Em, @Por, NULL, @Mo, @Ml)
+            """, new { K = chave, C = Cifrar(cpfChave), H = hash, Op = operadorId, N = nome, V = vaga, Em = em, Por = cadastradaPor,
+                  Mo = motor, Ml = molde is null ? null : CifrarBytes(molde) }, tx);
         Caixa.Auditar(cx, tx, "digital_cadastrada", operadorId, null,
-            $"{nome} (cpf {Mascarar(cpfChave)}) vaga {vaga}" + (cadastradaPor is null ? "" : $" · por {cadastradaPor}"));
+            $"{nome} (cpf {Mascarar(cpfChave)}) vaga {vaga} {motor}" + (cadastradaPor is null ? "" : $" · por {cadastradaPor}"));
         tx.Commit();
-        return new DigitalGuardada(chave, cpfChave, hash, operadorId, nome, DateTime.Parse(em), cadastradaPor, vaga, false);
+        return new DigitalGuardada(chave, cpfChave, hash, operadorId, nome, DateTime.Parse(em), cadastradaPor, vaga, false) { Motor = motor };
+    }
+
+    /// <summary>Cifra bytes pelo DPAPI da maquina (o molde da HID). Mesmo formato de <see cref="Cifrar"/>.</summary>
+    public static string CifrarBytes(byte[] bytes)
+    {
+        if (OperatingSystem.IsWindows())
+            return "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(bytes, Entropia, DataProtectionScope.LocalMachine));
+        return "claro:" + Convert.ToBase64String(bytes);
+    }
+
+    /// <summary>O inverso de <see cref="CifrarBytes"/>. Null quando este Windows nao abre.</summary>
+    public static byte[]? DecifrarBytes(string? guardado)
+    {
+        if (string.IsNullOrEmpty(guardado)) return null;
+        try
+        {
+            if (guardado.StartsWith("dpapi:", StringComparison.Ordinal))
+                return OperatingSystem.IsWindows()
+                    ? ProtectedData.Unprotect(Convert.FromBase64String(guardado[6..]), Entropia, DataProtectionScope.LocalMachine)
+                    : null;
+            if (guardado.StartsWith("claro:", StringComparison.Ordinal)) return Convert.FromBase64String(guardado[6..]);
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Os moldes da HID desta guarda, decifrados: e contra eles que o LeitorHidUareU compara
+    /// (ate 10 por caixa). Linha de outro PC (nao decifra) fica de fora.
+    /// </summary>
+    public static IReadOnlyList<MoldeGuardado> Moldes(SqliteConnection cx)
+    {
+        var saida = new List<MoldeGuardado>();
+        foreach (var r in cx.Query("SELECT chave, molde_cifrado FROM digital WHERE motor = @M AND molde_cifrado IS NOT NULL ORDER BY vaga",
+                     new { M = LeitorHidUareU.MotorTexto }))
+        {
+            var m = DecifrarBytes((string?)r.molde_cifrado);
+            if (m is { Length: > 0 }) saida.Add(new MoldeGuardado((string)r.chave, m));
+        }
+        return saida;
+    }
+
+    /// <summary>
+    /// O CPF ja tem digital no motor em uso? (<paramref name="motor"/> null = em qualquer um.)
+    /// A digital do WinBio nao serve no leitor da HID: quem so tem aquela pode cadastrar de novo.
+    /// </summary>
+    public static bool JaTem(SqliteConnection cx, string cpf, string? motor)
+    {
+        var d = PorCpf(cx, cpf);
+        return d is not null && (motor is null || d.Motor == motor);
+    }
+
+    /// <summary>
+    /// O cadastro achou o mesmo dedo ja guardado (ChaveParecida)? Devolve o NOME de quem tem,
+    /// se for outra pessoa; null se nao ha parecida ou se e o proprio CPF (recadastro).
+    /// </summary>
+    public static string? DonoDaParecida(SqliteConnection cx, Cadastro cad, string cpf)
+    {
+        if (cad.ChaveParecida is null) return null;
+        var d = PorChave(cx, cad.ChaveParecida);
+        if (d is null) return null;
+        return d.CpfHash == CpfHash(cpf) ? null : d.Nome;
     }
 
     /// <summary>"529.***.***-25": o CPF nunca vai inteiro para a auditoria.</summary>
@@ -419,12 +502,13 @@ public static class Digitais
     private static List<DigitalGuardada> Ler(SqliteConnection cx, string where, object? p)
     {
         var saida = new List<DigitalGuardada>();
-        foreach (var r in cx.Query($"SELECT chave, cpf_cifrado, cpf_hash, operador_id, nome, vaga, cadastrada_em, cadastrada_por, registrada_em FROM digital {where} ORDER BY nome", p))
+        foreach (var r in cx.Query($"SELECT chave, cpf_cifrado, cpf_hash, operador_id, nome, vaga, cadastrada_em, cadastrada_por, registrada_em, motor FROM digital {where} ORDER BY nome", p))
         {
             var cpf = Decifrar((string?)r.cpf_cifrado);
             if (cpf is null) continue;   // banco de outro PC: a linha nao vale aqui
             saida.Add(new DigitalGuardada((string)r.chave, cpf, (string)r.cpf_hash, (string?)r.operador_id, (string)r.nome,
-                DateTime.Parse((string)r.cadastrada_em), (string?)r.cadastrada_por, (int)(long)r.vaga, r.registrada_em is not null));
+                DateTime.Parse((string)r.cadastrada_em), (string?)r.cadastrada_por, (int)(long)r.vaga, r.registrada_em is not null)
+                { Motor = (string?)r.motor ?? "winbio" });
         }
         return saida;
     }
