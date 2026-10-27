@@ -55,6 +55,12 @@ public enum ViaAutorizacao
     Homologacao,
     /// <summary>Código do autenticador do dono (Google Authenticator), conferido pela nuvem.</summary>
     Totp,
+    /// <summary>
+    /// 1.0.56 (SQL 228): código de emergência de uso único, conferido NESTE caixa contra o pacote de
+    /// hashes, só quando o 2FA online falhou por falta de rede e só nos atos de
+    /// <see cref="Emergencia.TiposQueValem"/>. Nunca estorno, cancelamento ou promoção.
+    /// </summary>
+    Emergencia,
 }
 
 /// <summary>
@@ -90,6 +96,12 @@ public sealed record PedidoAutorizacao(
     /// <summary>Tipo "promocao": a promoção que pediu o código (vai no detalhe do log).</summary>
     public string? PromocaoId { get; init; }
     public string? PromocaoNome { get; init; }
+
+    /// <summary>1.0.56: o hash do CPF de quem opera (sobe com o uso do código de emergência).</summary>
+    public string? CpfHash { get; init; }
+
+    /// <summary>1.0.56: "entrada", "fechamento"... o que o painel mostra no uso do código de emergência.</summary>
+    public string? Finalidade { get; init; }
 }
 
 /// <summary>A nuvem. Implementação real: <see cref="ClienteAutorizacao"/>.</summary>
@@ -114,6 +126,12 @@ public interface ITelaAutorizacao
     /// <paramref name="nivel"/> só muda o rótulo ("do gerente" / "do dono"): quem confere é a nuvem.
     /// </summary>
     Task<string?> PedirCodigoAsync(string? aviso, string nivel);
+
+    /// <summary>
+    /// 1.0.56: SEM INTERNET, pede o código de emergência de 8 dígitos. null = o operador cancelou.
+    /// O padrão (tela que não sabe pedir) é cancelar: nenhuma tela aprova por omissão.
+    /// </summary>
+    Task<string?> PedirCodigoEmergenciaAsync(string? aviso) => Task.FromResult<string?>(null);
 }
 
 /// <summary>
@@ -141,8 +159,8 @@ public sealed record DesfechoAutorizacao(ViaAutorizacao Via, string? AprovadoPor
     /// que assine: entra uma marca sintética com o id do registro da nuvem, e o
     /// nome do dono vai no detalhe. (A coluna é TEXT livre e não sai daqui.)
     /// </summary>
-    public string? Autorizador => Via == ViaAutorizacao.Totp && TokenId is { Length: > 0 }
-        ? "totp:" + TokenId[..Math.Min(8, TokenId.Length)]
+    public string? Autorizador => TokenId is { Length: > 0 } && Via is ViaAutorizacao.Totp or ViaAutorizacao.Emergencia
+        ? (Via == ViaAutorizacao.Totp ? "totp:" : "emerg:") + TokenId[..Math.Min(8, TokenId.Length)]
         : null;
 }
 
@@ -340,8 +358,18 @@ public static class Autorizacao
     {
         ViaAutorizacao.Totp => $" · autorizado pelo autenticador do {Papel(d.Nivel)} ({d.AprovadoPor}, registro {Curto(d.TokenId)})",
         ViaAutorizacao.Homologacao => " · SEM APROVAÇÃO REMOTA (modo homologação)",
+        ViaAutorizacao.Emergencia => $" · autorizado por código de emergência sem internet (registro {Curto(d.TokenId)})",
         _ => "",
     };
+
+    /// <summary>
+    /// 1.0.56: os códigos de emergência deste caixa. O Servicos liga a guarda do SQLite no começo;
+    /// a suíte passa a sua pelo parâmetro de <see cref="ResolverAsync"/>. Null = sem emergência.
+    /// </summary>
+    public static Func<ICodigosEmergencia?>? EmergenciaDoCaixa { get; set; }
+
+    /// <summary>Relógio da emergência (a suíte troca).</summary>
+    public static Func<DateTime> Agora { get; set; } = () => DateTime.Now;
 
     private static string Curto(string? id) => id is { Length: > 8 } ? id[..8] : id ?? "?";
 
@@ -360,7 +388,7 @@ public static class Autorizacao
     /// </summary>
     public static async Task<DesfechoAutorizacao> ResolverAsync(
         IAutorizacaoRemota? remota, PedidoAutorizacao pedido, ITelaAutorizacao tela,
-        CancellationToken ct = default)
+        CancellationToken ct = default, ICodigosEmergencia? emergencia = null)
     {
         // O texto da recusa é o que a tela mostra, em UMA linha: "<motivo> <Ato> não autorizado."
         var (ato, naoAutorizado) = pedido.Tipo switch
@@ -401,8 +429,14 @@ public static class Autorizacao
                 return new DesfechoAutorizacao(ViaAutorizacao.Totp, v.Autorizador, v.Id,
                     $"aprovado pelo autenticador do {papel} (" + (v.Autorizador ?? papel) + ")") { Nivel = pedido.Nivel };
 
-            // Rede caída ou nuvem muda: não é veredito, mas também não é autorização.
-            if (!v.Definitiva) return Nao("Sem internet.");
+            // Rede caída ou nuvem muda: não é veredito, mas também não é autorização. 1.0.56: SÓ AQUI
+            // (falta de rede, nunca código errado ou recusa da nuvem) e só nos atos que a regra deixa,
+            // a tela passa a aceitar o código de emergência de uso único.
+            if (!v.Definitiva)
+            {
+                var em = Emergencia.TipoVale(pedido.Tipo) ? emergencia ?? EmergenciaDoCaixa?.Invoke() : null;
+                return em is null ? Nao("Sem internet.") : await EmergenciaAsync(em, pedido, tela, Nao);
+            }
 
             if (Normal(v.Motivo) == MotivoCodigoInvalido)
             {
@@ -417,6 +451,50 @@ public static class Autorizacao
         }
 
         return Nao($"Código inválido {MaxTentativas} vezes.");
+    }
+
+    /// <summary>
+    /// SEM INTERNET (1.0.56): o código de emergência. Só chega aqui depois de o 2FA online falhar por
+    /// falta de rede e com o tipo na lista. Três tentativas; cada erro conta na trava de 10 minutos.
+    /// O PBKDF2 roda fora da thread da tela; a continuação volta para ela (sem ConfigureAwait).
+    /// </summary>
+    private static async Task<DesfechoAutorizacao> EmergenciaAsync(ICodigosEmergencia em, PedidoAutorizacao pedido,
+        ITelaAutorizacao tela, Func<string, DesfechoAutorizacao> nao)
+    {
+        SituacaoEmergencia sit;
+        try { sit = em.Situacao(pedido, Agora()); }
+        catch { return nao("Sem internet."); }
+        switch (sit)
+        {
+            case SituacaoEmergencia.TipoNaoVale: return nao("Sem internet.");
+            case SituacaoEmergencia.SemCodigos: return nao(Emergencia.MotivoSemCodigos);
+            case SituacaoEmergencia.Bloqueada: return nao(Emergencia.MotivoBloqueada);
+            case SituacaoEmergencia.AcimaDoTeto:
+                return nao(Emergencia.MotivoAcimaDoTeto(em is GuardaEmergencia g ? g.Teto() : Emergencia.TetoPadraoCent));
+        }
+
+        string? aviso = Emergencia.AvisoDigite;
+        for (var tentativa = 1; tentativa <= MaxTentativas; tentativa++)
+        {
+            var codigo = await tela.PedirCodigoEmergenciaAsync(aviso);
+            if (codigo is null)
+                return new DesfechoAutorizacao(ViaAutorizacao.Recusada, null, null,
+                    "o operador desistiu do código de emergência") { Avisado = true, Nivel = pedido.Nivel };
+
+            ConferenciaEmergencia c;
+            using (tela.Aguardando("Conferindo o código…"))
+            {
+                try { c = await Task.Run(() => em.Conferir(codigo, pedido, Agora())); }
+                catch { c = new ConferenciaEmergencia(false, null); }
+            }
+            if (c.Ok && c.CodigoId is { Length: > 0 })
+                return new DesfechoAutorizacao(ViaAutorizacao.Emergencia, Emergencia.AprovadoPor, c.CodigoId,
+                    "aprovado por código de emergência sem internet") { Nivel = pedido.Nivel };
+            if (c.Situacao == SituacaoEmergencia.Bloqueada) return nao(Emergencia.MotivoBloqueada);
+            if (c.Situacao != SituacaoEmergencia.Pronta) return nao("Sem internet.");
+            aviso = Emergencia.AvisoInvalido;
+        }
+        return nao(Emergencia.MotivoInvalidoVezes(MaxTentativas));
     }
 
     private static string TextoDoMotivo(string? motivo, string papel) => Normal(motivo) switch
@@ -461,6 +539,7 @@ public sealed class ClienteAutorizacao : IAutorizacaoRemota
     private readonly string _endpoint;
     private readonly string _anonKey;
     private readonly TimeSpan _tempo;
+    private readonly Func<bool>? _semRede;
 
     /// <summary>
     /// Uma linha por tentativa (status HTTP, veredito, motivo) para o diagnóstico
@@ -474,9 +553,15 @@ public sealed class ClienteAutorizacao : IAutorizacaoRemota
     /// como em toda chamada ao PostgREST. Sem sessão o cliente nem vai à rede.
     /// </param>
     /// <param name="terminalUuid">O `terminal.terminal_uuid`: é o balde do rate limit na nuvem.</param>
+    /// <param name="semRede">
+    /// 1.0.56: sem token, a sessão caiu POR FALTA DE REDE (a renovação nem chegou ao servidor)? Aí a
+    /// resposta é "não sei" (Definitiva=false), como rede caída, e não "sem sessão". Sem isto, caixa
+    /// offline há mais de uma hora (o token vence) nunca chegaria ao código de emergência.
+    /// </param>
     public ClienteAutorizacao(Func<CancellationToken, Task<string?>> obterToken, string? urlBase = null,
-        string? anonKey = null, TimeSpan? tempo = null, Func<string?>? terminalUuid = null)
+        string? anonKey = null, TimeSpan? tempo = null, Func<string?>? terminalUuid = null, Func<bool>? semRede = null)
     {
+        _semRede = semRede;
         _obterToken = obterToken;
         _endpoint = (urlBase ?? Nuvem.UrlPadrao).TrimEnd('/') + "/rest/v1/rpc/" + Rpc;
         _anonKey = anonKey ?? Nuvem.AnonKey;
@@ -495,6 +580,13 @@ public sealed class ClienteAutorizacao : IAutorizacaoRemota
 
         if (string.IsNullOrWhiteSpace(token))
         {
+            bool caiuARede;
+            try { caiuARede = _semRede?.Invoke() == true; } catch { caiuARede = false; }
+            if (caiuARede)
+            {
+                Anotar($"{tipo} {referencia} código {mascara}: sem rede para renovar a sessão");
+                return new RespostaTotp(false, false, "sem_resposta", null, null);
+            }
             Anotar($"{tipo} {referencia} código {mascara}: {MotivoSemSessao}");
             return new RespostaTotp(false, true, MotivoSemSessao, null, null);
         }

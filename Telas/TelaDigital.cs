@@ -331,14 +331,21 @@ public static class PortaoGerenteDaTela
     public static ILeitorDigital? LeitorDeTeste { get; set; }
 
     /// <param name="quemOpera">quem opera o caixa; com <paramref name="exigeOutro"/>, a digital dele nao autoriza.</param>
+    /// <param name="valorCent">1.0.56: o valor do ato (a sangria); sem internet o codigo de emergencia so vale ate o teto.</param>
     public static async Task<Operador?> AutorizarAsync(Window dono, string tipo, string referencia, string acao,
-        Operador? quemOpera, bool exigeOutro, string? detalhe = null)
+        Operador? quemOpera, bool exigeOutro, string? detalhe = null, long valorCent = 0)
     {
         string terminal;
-        using (var cx = Banco.Abrir()) terminal = Autorizacao.NomeDoTerminal(cx);
+        string? cpfHash = null;
+        using (var cx = Banco.Abrir())
+        {
+            terminal = Autorizacao.NomeDoTerminal(cx);
+            if (quemOpera is not null && Digitais.CpfDoOperador(cx, quemOpera.Id) is { } cpf) cpfHash = Digitais.CpfHash(cpf);
+        }
         IAutorizacaoRemota? remota;
         try { remota = Servicos.Autorizador(); } catch { remota = null; }
-        var pedido = new PedidoAutorizacao(terminal, referencia, 0) { Tipo = tipo, Nivel = Autorizacao.NivelGerente, Operador = detalhe ?? quemOpera?.Nome };
+        var pedido = new PedidoAutorizacao(terminal, referencia, valorCent)
+            { Tipo = tipo, Nivel = Autorizacao.NivelGerente, Operador = detalhe ?? quemOpera?.Nome, CpfHash = cpfHash, Finalidade = acao };
         Func<Operador, bool>? mesma = exigeOutro && quemOpera is not null
             ? op => { using var c = Banco.Abrir(); return Operadores.IdCanonico(c, op.Id) == Operadores.IdCanonico(c, quemOpera.Id); }
             : null;

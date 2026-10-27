@@ -733,6 +733,31 @@ public static class Banco
           nivel     TEXT,
           em        TEXT NOT NULL
         );
+        -- 1.0.56 (SQL 228): CODIGOS DE EMERGENCIA, para autorizar sem internet. O pacote (hash, sal e
+        -- iteracoes de cada codigo vivo, mais o teto da sangria) fica CIFRADO pelo DPAPI numa linha so;
+        -- o codigo em si nunca chega aqui. emergencia_uso: o que este caixa ja usou (a chave e o id do
+        -- codigo: usar duas vezes e impossivel); emergencia_tentativa: a trava de 5 erros em 10 minutos.
+        CREATE TABLE IF NOT EXISTS emergencia_pacote (
+          id          INTEGER PRIMARY KEY CHECK (id = 1),
+          cifrado     TEXT NOT NULL,
+          quantidade  INTEGER NOT NULL DEFAULT 0,
+          recebido_em TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS emergencia_uso (
+          codigo_id   TEXT PRIMARY KEY,
+          usado_em    TEXT NOT NULL,
+          usado_para  TEXT NOT NULL,
+          referencia  TEXT NOT NULL,
+          cpf_hash    TEXT,
+          valor_cent  INTEGER,
+          operador    TEXT,
+          finalidade  TEXT
+        );
+        CREATE TABLE IF NOT EXISTS emergencia_tentativa (
+          id  INTEGER PRIMARY KEY AUTOINCREMENT,
+          em  TEXT NOT NULL,
+          ok  INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS digital_removida (
           id             INTEGER PRIMARY KEY AUTOINCREMENT,
           chave          TEXT NOT NULL,

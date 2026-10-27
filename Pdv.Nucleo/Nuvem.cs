@@ -50,6 +50,7 @@ public sealed class Nuvem
             req.Headers.TryAddWithoutValidation("apikey", AnonKey);
             req.Content = new StringContent(JsonSerializer.Serialize(corpo), Encoding.UTF8, "application/json");
             using var resp = await _http.SendAsync(req, ct);
+            UltimaFalhaFoiRede = false;   // o servidor respondeu: o que vier daqui nao e falta de rede
             if (!resp.IsSuccessStatusCode)
             {
                 // refresh_token recusado não volta a funcionar sozinho: descarta, senão
@@ -64,8 +65,20 @@ public sealed class Nuvem
             _expira = DateTime.Now.AddSeconds(seg - 120);   // renova antes de vencer
             return _token is not null;
         }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+        {
+            UltimaFalhaFoiRede = true;   // nem chegou ao servidor (DNS, conexao, prazo)
+            return false;
+        }
         catch { return false; }
     }
+
+    /// <summary>
+    /// 1.0.56: a ultima renovacao de sessao falhou por FALTA DE REDE (nao por senha ou token
+    /// recusado). E o que separa "sem internet" de "sem sessao" quando o token ja venceu, e e so
+    /// isso que abre o codigo de emergencia (ClienteAutorizacao, parametro semRede).
+    /// </summary>
+    public bool UltimaFalhaFoiRede { get; private set; }
 
     public bool Autenticado => _token is not null && DateTime.Now < _expira;
 
@@ -420,6 +433,23 @@ public sealed class Nuvem
             else if (desfecho == RegistroDigital.Desfecho.SemRpc) break;   // sem o 224: nem adianta seguir
         }
         return n;
+    }
+
+    // ── CODIGOS DE EMERGENCIA (1.0.56, SQL 228) ───────────────────────────────────────
+    /// <summary>
+    /// Baixa o pacote dos codigos de emergencia (hashes, sal, iteracoes e o teto da sangria) da loja
+    /// deste terminal e guarda cifrado (GuardaEmergencia.AplicarPacote). 404 (SQL 228 ainda nao
+    /// rodou), rede caida ou resposta que nao e pacote: o guardado continua valendo. Devolve o que
+    /// mudou ("" = nada; null = nao deu para consultar).
+    /// </summary>
+    public async Task<string?> BaixarPacoteEmergenciaAsync(SqliteConnection cx, CancellationToken ct = default)
+    {
+        Vendas.GravarConfig(cx, Emergencia.ChaveConsultadoEm, DateTime.Now.ToString("o"));
+        var terminal = cx.ExecuteScalar<string?>("SELECT terminal_uuid FROM terminal LIMIT 1");
+        var (status, corpo) = await RpcAsync(Emergencia.RpcPacote,
+            JsonSerializer.Serialize(new { _terminal_uuid = terminal }), TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+        if (status is < 200 or >= 300) return null;
+        return GuardaEmergencia.AplicarPacote(cx, corpo, DateTime.Now);
     }
 
     // ── USUÁRIO MASTER DA REDE (15/09/2026) ────────────────────────────────────────────

@@ -33,6 +33,8 @@ public sealed record AutorizacaoGerente(bool Autorizado, string Via, Operador? G
 {
     public const string ViaDigital = "digital";
     public const string ViaCodigo = "codigo";
+    /// <summary>1.0.56: codigo de emergencia de uso unico, sem internet (SQL 228).</summary>
+    public const string ViaEmergencia = "emergencia";
 
     /// <summary>A tela ja explicou por que nao seguiu: nao avisar de novo.</summary>
     public bool Avisado { get; init; }
@@ -40,6 +42,7 @@ public sealed record AutorizacaoGerente(bool Autorizado, string Via, Operador? G
     /// <summary>"digital do gerente BIA" ou "codigo do gerente: Marcos (nivel gerente, registro log-0001)".</summary>
     public string Trilha => !Autorizado || Gerente is null ? Motivo
         : Via == ViaDigital ? $"digital do gerente {Gerente.Nome}"
+        : Via == ViaEmergencia ? $"codigo de emergencia sem internet (registro {Curto(Registro)})"
         : $"codigo do gerente: {Gerente.Nome} (nivel {Nivel ?? Autorizacao.NivelGerente}, registro {Curto(Registro)})";
 
     private static string Curto(string? id) => id is { Length: > 8 } ? id[..8] : id ?? "?";
@@ -96,6 +99,9 @@ public static class PortaoGerente
         if (!aut.Autorizado)
             return new AutorizacaoGerente(false, AutorizacaoGerente.ViaCodigo, null, aut.Motivo) { Avisado = aut.Avisado };
         var gerente = new Operador(aut.Autorizador ?? "totp:?", aut.AprovadoPor ?? "gerente", "gerente");
+        // 1.0.56: sem internet, o codigo de emergencia (a regra mora em Autorizacao.ResolverAsync)
+        if (aut.Via == ViaAutorizacao.Emergencia)
+            return new AutorizacaoGerente(true, AutorizacaoGerente.ViaEmergencia, gerente, "codigo de emergencia", aut.TokenId, aut.Nivel ?? Autorizacao.NivelGerente);
         return new AutorizacaoGerente(true, AutorizacaoGerente.ViaCodigo, gerente, "codigo do gerente", aut.TokenId, aut.Nivel ?? Autorizacao.NivelGerente);
     }
 
@@ -108,7 +114,7 @@ public static class PortaoGerente
     public static void Registrar(SqliteConnection cx, AutorizacaoGerente a, string tipo, string? operadorId)
     {
         if (!a.Autorizado || a.Gerente is null) return;
-        if (a.Via == AutorizacaoGerente.ViaCodigo)
+        if (a.Via is AutorizacaoGerente.ViaCodigo or AutorizacaoGerente.ViaEmergencia)
             cx.Execute("""
                 INSERT INTO autorizador_codigo (id, nome, registro, nivel, em) VALUES (@Id, @N, @R, @Nv, @Em)
                 ON CONFLICT(id) DO UPDATE SET nome = @N, registro = @R, nivel = @Nv, em = @Em

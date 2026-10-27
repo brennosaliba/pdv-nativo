@@ -59,7 +59,10 @@ public sealed class Drenagem : IDisposable
           (PedidoCozinha.TipoNaFila, 10),
           // 13/10/2026: o rastro da comanda aberta (ContasAbertas). Ate o dono rodar o SQL da RPC
           // cada envio volta 404 PGRST202 (espera), e o registro nunca passa na frente do dinheiro.
-          (ContasAbertas.TipoEvento, 5) };
+          (ContasAbertas.TipoEvento, 5),
+          // 27/10/2026 (1.0.56): o uso do codigo de emergencia. Janela propria: antes do SQL 228 cada
+          // envio volta 404 PGRST202 (espera) e o registro nunca passa na frente do dinheiro.
+          (Emergencia.TipoNaFila, 5) };
 
     /// <summary>
     /// Tipos que NAO dependem da nuvem e por isso drenam MESMO SEM sessao de nuvem (13/10/2026): o
@@ -86,6 +89,8 @@ public sealed class Drenagem : IDisposable
             : tipo == PedidoCozinha.TipoNaFila ? PedidoCozinha.Validade
             // 13/10/2026: o rastro da comanda e REGISTRO, nao transitorio: nunca sai da fila por idade
             : tipo == ContasAbertas.TipoEvento ? ContasAbertas.SemPrazo
+            // 27/10/2026: o uso do codigo de emergencia e REGISTRO (o dono precisa ver): nunca sai por idade
+            : tipo == Emergencia.TipoNaFila ? ContasAbertas.SemPrazo
             : TimeSpan.FromDays(DiasParaDesistir);
 
     /// <summary>Tamanho da janela principal, a do dinheiro.</summary>
@@ -238,6 +243,12 @@ public sealed class Drenagem : IDisposable
             var token = await _nuvem.SessaoOkAsync(ct).ConfigureAwait(false)
                 ? await _nuvem.TokenAsync(ct).ConfigureAwait(false) : null;
             var semNuvem = token is null;
+            if (!semNuvem && ComSessao is { } comSessao)
+            {
+                try { await comSessao(_nuvem, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch { /* o pacote fica para a proxima varredura */ }
+            }
 
             var enviados = 0;
             List<dynamic> fila;
@@ -378,6 +389,10 @@ public sealed class Drenagem : IDisposable
             // atravessou o fechamento, lote mandado de novo). A RPC pdv_conta_evento so registra, idempotente
             // pela client_key; 404 PGRST202 espera o dono rodar o SQL. Ver ContasAbertas.ResolverEventoNaFilaAsync.
             ContasAbertas.TipoEvento => await ContasAbertas.ResolverEventoNaFilaAsync((string)item.client_key, (string)item.payload,
+                (nome, corpo) => RpcAsync(nome, corpo, token, ct)).ConfigureAwait(false),
+            // 27/10/2026 (1.0.56, SQL 228): o codigo de emergencia usado sem internet. A nuvem marca usado
+            // (sai do pacote de todos os caixas) e alerta duplicidade; reenviar e idempotente.
+            Emergencia.TipoNaFila => await Emergencia.ResolverNaFilaAsync((string)item.payload, TerminalUuidLocal(),
                 (nome, corpo) => RpcAsync(nome, corpo, token, ct)).ConfigureAwait(false),
             // Tipo sem handler NÃO pode virar retry eterno em silêncio (foi assim
             // que caixa_sessao e venda_cancelada entupiram a fila): false o manda
@@ -1097,7 +1112,25 @@ public sealed class Drenagem : IDisposable
           "movimento", "caixa_sessao", "cortesia_resgate", "kds_pronto",
           Autorizacao.TipoNaFila, Brindes.TipoNaFila, ChatRaspadinha.TipoNaFila,
           EntregadorGestor.TipoNaFila, ConversaRaspadinha.TipoNaFila, ChatArquivo.TipoNaFila,
-          PedidoCozinha.TipoNaFila, ContasAbertas.TipoEvento };
+          PedidoCozinha.TipoNaFila, ContasAbertas.TipoEvento, Emergencia.TipoNaFila };
+
+    /// <summary>O terminal_uuid deste caixa (pareamento), lido na hora do envio.</summary>
+    private static string? TerminalUuidLocal()
+    {
+        try
+        {
+            using var cx = Banco.Abrir();
+            return cx.ExecuteScalar<string?>("SELECT terminal_uuid FROM terminal LIMIT 1");
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// 1.0.56: o que roda a cada varredura COM sessao de nuvem, antes da fila (hoje: o pacote dos
+    /// codigos de emergencia, de 15 em 15 minutos). Quem liga e o Servicos; a suite deixa nulo.
+    /// Falha aqui nunca segura a fila.
+    /// </summary>
+    public static Func<Nuvem, CancellationToken, Task>? ComSessao { get; set; }
 
     /// <summary>
     /// 13/10/2026: manda um pedido da fila para a TV da cozinha (POST /api/pdv/pedidos no servidor

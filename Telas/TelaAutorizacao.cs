@@ -24,4 +24,8 @@ public sealed class TelaAutorizacao : ITelaAutorizacao
 
     public Task<string?> PedirCodigoAsync(string? aviso, string nivel)
         => Task.FromResult(PedirCodigo.Mostrar(_dono, aviso, nivel));
+
+    /// <summary>1.0.56: sem internet, o codigo de emergencia de 8 digitos (so depois do 2FA cair por falta de rede).</summary>
+    public Task<string?> PedirCodigoEmergenciaAsync(string? aviso)
+        => Task.FromResult(PedirCodigo.Mostrar(_dono, aviso, Autorizacao.NivelGerente, emergencia: true));
 }

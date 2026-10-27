@@ -4431,7 +4431,7 @@ public partial class Venda : UserControl
             // registro (autorizacao_gerente). Sem conexao aberta: a leitura e o codigo esperam a pessoa.
             var sup = await PortaoGerenteDaTela.AutorizarAsync(dono, Autorizacao.TipoSangria,
                 Autorizacao.ReferenciaSangria(_sessao.Id, DateTime.Now), "sangria", _operador, exigeOutro: true,
-                detalhe: $"sangria {valor.Value.Formatado()} · {motivo}");
+                detalhe: $"sangria {valor.Value.Formatado()} · {motivo}", valorCent: valor.Value.Centavos);
             if (sup is null) return;
             autorizador = sup.Id;
         }

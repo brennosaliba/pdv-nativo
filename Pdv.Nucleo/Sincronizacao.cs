@@ -310,6 +310,11 @@ public static class Sincronizacao
             try { await nuvem.RegistrarDigitaisAsync(cx).ConfigureAwait(false); }
             catch { /* fica pendente para o proximo Atualizar */ }
 
+            // os codigos de emergencia da loja (1.0.56, SQL 228): so os hashes, cifrados, para autorizar sem internet
+            andamento?.Report("Baixando os códigos de emergência…");
+            try { await nuvem.BaixarPacoteEmergenciaAsync(cx).ConfigureAwait(false); }
+            catch { /* fica o pacote que ja esta guardado */ }
+
             mudou = ImpressaoDigital(cx) != antes;
 
             // Fotos por último e sem prazo curto: é o que mais demora e é o que menos

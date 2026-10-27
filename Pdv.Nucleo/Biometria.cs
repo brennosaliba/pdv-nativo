@@ -216,7 +216,12 @@ public sealed record DesfechoDigital(ViaDigital Via, Operador? Operador, string?
     /// </summary>
     public string MotivoAuditado => Autorizador is null || (Via != ViaDigital.Reserva && !PrimeiroCadastro)
         ? Motivo
-        : $"{Motivo} · autorizado por {Autorizador} (codigo nivel {NivelCodigo ?? "gerente"})";
+        : NivelCodigo == NivelEmergencia
+            ? $"{Motivo} · autorizado por codigo de emergencia sem internet (registro {(Registro is { Length: > 8 } r ? r[..8] : Registro)})"
+            : $"{Motivo} · autorizado por {Autorizador} (codigo nivel {NivelCodigo ?? "gerente"})";
+
+    /// <summary>1.0.56: o NivelCodigo de quem entrou pelo codigo de emergencia (sem internet).</summary>
+    public const string NivelEmergencia = "emergencia";
 
     /// <summary>A linha da auditoria da entrada: nome, hash curto do CPF e o motivo auditado.</summary>
     public string LinhaDeAuditoria => Operador is null ? Motivo
@@ -770,13 +775,16 @@ public static class PortaoDigital
             Tipo = Autorizacao.TipoTurnoSemDigital,
             Nivel = Autorizacao.NivelGerente,
             Operador = $"{op.Nome} ({causa})",
+            // 1.0.56: sem internet o codigo de emergencia sobe com quem entrou e para que
+            CpfHash = cpf is null ? null : Digitais.CpfHash(cpf),
+            Finalidade = finalidade,
         };
         var aut = await Autorizacao.ResolverAsync(remota, pedido, telaTotp, ct);
         if (!aut.Autorizado)
             return new DesfechoDigital(ViaDigital.Cancelado, null, null, Biometria.MotivoReserva(causa) + " · " + aut.Motivo) { Avisado = aut.Avisado };
 
         return new DesfechoDigital(ViaDigital.Reserva, op, cpf, Biometria.MotivoReserva(causa), aut.AprovadoPor, aut.TokenId)
-            { NivelCodigo = aut.Nivel ?? Autorizacao.NivelGerente };
+            { NivelCodigo = aut.Via == ViaAutorizacao.Emergencia ? DesfechoDigital.NivelEmergencia : aut.Nivel ?? Autorizacao.NivelGerente };
     }
 
     /// <summary>

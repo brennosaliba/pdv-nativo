@@ -860,6 +860,8 @@ if (args.Length >= 1 && args[0] == "--so-biometria")
 {
     await TestesBiometria.RodarAsync((cond, nome) => Check("biometria: " + nome, cond));
     await TestesLeitorHid.RodarAsync((cond, nome) => Check("leitor hid: " + nome, cond));
+    await TestesEmergencia.RodarAsync((cond, nome) => Check("emergencia: " + nome, cond));
+    await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome, cond));
     Console.WriteLine();
     Console.WriteLine($"=== (so biometria) {ok} OK, {falhas} falhas ===");
     return falhas == 0 ? 0 : 1;
@@ -1855,6 +1857,13 @@ await TestesAutorizacao.RodarAsync((cond, nome) => Check("autorizacao: " + nome,
 Console.WriteLine();
 Console.WriteLine("--- A digital no lugar da senha: o portao, a reserva, a guarda, o turno e o leitor ---");
 await TestesBiometria.RodarAsync((cond, nome) => Check("biometria: " + nome, cond));
+
+// -- 27/10/2026: CODIGOS DE EMERGENCIA (caixa 1.0.56, SQL 228) ------------------------------------
+// Sem internet, o codigo de 8 digitos de uso unico (hash PBKDF2 guardado cifrado): so offline, so na
+// entrada/fechamento pela reserva, sangria ate o teto e fechar sem contar; uso unico; fila; trava.
+Console.WriteLine();
+Console.WriteLine("--- Codigos de emergencia: so offline, so os atos da regra, uso unico, teto e fila ---");
+await TestesEmergencia.RodarAsync((cond, nome) => Check("emergencia: " + nome, cond));
 
 // -- 26/10/2026: O SEGUNDO LEITOR, PELO RUNTIME DA HID (caixa 1.0.53) ------------------------------
 // Na loja o U.are.U 4500 estava com o driver da HID (classe Authentication Devices), que o WinBio nao ve.

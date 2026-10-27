@@ -84,17 +84,20 @@ public static class PedirCodigo
     /// gerente (promoção com 2FA de gerente); o resto da tela é o mesmo, e quem confere
     /// de quem é o código continua sendo a nuvem.
     /// </summary>
-    public static string? Mostrar(Window dono, string? aviso, string nivel = Autorizacao.NivelDono)
+    /// <param name="emergencia">1.0.56: sem internet, o codigo de emergencia de uso unico (8 digitos).</param>
+    public static string? Mostrar(Window dono, string? aviso, string nivel = Autorizacao.NivelDono, bool emergencia = false)
     {
         string? resposta = null;
         var gerente = nivel == Autorizacao.NivelGerente;
+        var digitos = emergencia ? Emergencia.Digitos : 6;
         var janela = Dialogo.Base(dono, 460);
         var painel = new StackPanel();
-        painel.Children.Add(PedirValor.Cabecalho(janela, gerente ? "Autorização do gerente" : "Autorização do dono"));
+        painel.Children.Add(PedirValor.Cabecalho(janela, emergencia ? "Sem internet" : gerente ? "Autorização do gerente" : "Autorização do dono"));
 
         painel.Children.Add(new TextBlock
         {
-            Text = gerente ? "Código do autenticador do gerente" : "Código do autenticador do dono",
+            Text = emergencia ? "Código de emergência (8 dígitos, vale uma vez)"
+                : gerente ? "Código do autenticador do gerente" : "Código do autenticador do dono",
             FontSize = 15, TextWrapping = TextWrapping.Wrap,
             Foreground = (Brush)Application.Current.Resources["TextoFraco"],
             Margin = new Thickness(0, 0, 0, 10),
@@ -111,7 +114,7 @@ public static class PedirCodigo
 
         var caixa = new TextBox
         {
-            FontSize = 34, MaxLength = 6, TextAlignment = TextAlignment.Center,
+            FontSize = 34, MaxLength = digitos, TextAlignment = TextAlignment.Center,
             FontFamily = new FontFamily("Consolas"), Padding = new Thickness(10),
             Background = (Brush)Application.Current.Resources["Painel"],
             Foreground = (Brush)Application.Current.Resources["Texto"],
@@ -129,7 +132,7 @@ public static class PedirCodigo
         painel.Children.Add(caixa);
 
         var teclado = new TecladoNumerico { Margin = new Thickness(0, 12, 0, 0) };
-        teclado.Digitou += d => { if (caixa.Text.Length < 6) caixa.Text += d; };
+        teclado.Digitou += d => { if (caixa.Text.Length < digitos) caixa.Text += d; };
         teclado.Apagou += () => { if (caixa.Text.Length > 0) caixa.Text = caixa.Text[..^1]; };
         teclado.Limpou += () => caixa.Text = "";
         painel.Children.Add(teclado);
@@ -144,7 +147,7 @@ public static class PedirCodigo
         cancelar.Click += (_, _) => janela.Close();
         void Confirmar()
         {
-            if (caixa.Text.Length != 6) { alerta.Text = "O código tem 6 dígitos."; alerta.Visibility = Visibility.Visible; return; }
+            if (caixa.Text.Length != digitos) { alerta.Text = $"O código tem {digitos} dígitos."; alerta.Visibility = Visibility.Visible; return; }
             resposta = caixa.Text;
             janela.Close();
         }

@@ -607,17 +607,18 @@ public static class TestesAutorizacao
                     foreach (Match m in rx.Matches(t))
                     {
                         var via = m.Groups[1].Value;
-                        if (via is not ("Recusada" or "Totp")) construcoes.Add($"{Path.GetFileName(f)}: {via}");
-                        if (via == "Totp" && !f.EndsWith(Path.Combine("Pdv.Nucleo", "Autorizacao.cs"), StringComparison.Ordinal))
+                        // 1.0.56: Emergencia (codigo de uso unico sem internet) tambem so nasce no nucleo
+                        if (via is not ("Recusada" or "Totp" or "Emergencia")) construcoes.Add($"{Path.GetFileName(f)}: {via}");
+                        if (via is "Totp" or "Emergencia" && !f.EndsWith(Path.Combine("Pdv.Nucleo", "Autorizacao.cs"), StringComparison.Ordinal))
                             forasDoNucleo.Add(Path.GetFileName(f));
                     }
                     if (Regex.IsMatch(t, @"with\s*\{[^}]*\bVia\s*=")) construcoes.Add($"{Path.GetFileName(f)}: with {{ Via = }}");
                 }
                 checar(fontes.Length > 0 && construcoes.Count == 0,
-                    "FT-1 em todo fonte do .exe só existe DesfechoAutorizacao com Via=Recusada ou Via=Totp"
+                    "FT-1 em todo fonte do .exe só existe DesfechoAutorizacao com Via=Recusada, Via=Totp ou Via=Emergencia (1.0.56)"
                     + (construcoes.Count > 0 ? " — ACHEI: " + string.Join(", ", construcoes) : ""));
                 checar(forasDoNucleo.Count == 0,
-                    "FT-2 só o núcleo (Autorizacao.cs) fabrica Via=Totp; tela nenhuma aprova por conta própria"
+                    "FT-2 só o núcleo (Autorizacao.cs) fabrica Via=Totp e Via=Emergencia; tela nenhuma aprova por conta própria"
                     + (forasDoNucleo.Count > 0 ? " — ACHEI EM: " + string.Join(", ", forasDoNucleo) : ""));
 
                 var nomes = Enum.GetNames(typeof(ViaAutorizacao));
@@ -644,7 +645,8 @@ public static class TestesAutorizacao
 
                 var pedirCodigo = Fonte("Telas", "PedirCodigo.cs") ?? "";
                 checar(pedirCodigo.Contains("Código do autenticador do dono", StringComparison.Ordinal)
-                       && pedirCodigo.Contains("MaxLength = 6", StringComparison.Ordinal)
+                       && pedirCodigo.Contains("var digitos = emergencia ? Emergencia.Digitos : 6;", StringComparison.Ordinal)
+                       && pedirCodigo.Contains("MaxLength = digitos", StringComparison.Ordinal)
                        && !pedirCodigo.Contains("PIN", StringComparison.Ordinal)
                        && !pedirCodigo.Contains("Não recebi", StringComparison.Ordinal),
                     "FT-7 a tela do código pede 'Código do autenticador do dono', 6 dígitos, sem 'novo código' e sem PIN");

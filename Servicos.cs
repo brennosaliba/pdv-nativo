@@ -156,6 +156,14 @@ public static class Servicos
             if (_drenagem is not null) return _drenagem;
             if (!TemContaDeNuvem()) return null;
             _drenagem = new Drenagem(Nuvem(), UrlNuvem());
+            // 1.0.56: com sinal, a cada 15 min, o pacote dos codigos de emergencia desce sozinho (sem
+            // ninguem tocar em Atualizar): o que outro caixa usou ou o painel anulou some daqui.
+            Drenagem.ComSessao = async (n, ct) =>
+            {
+                using var cx = Banco.Abrir();
+                if (!Emergencia.PacoteVencido(Vendas.Config(cx, Emergencia.ChaveConsultadoEm), DateTime.Now)) return;
+                await n.BaixarPacoteEmergenciaAsync(cx, ct).ConfigureAwait(false);
+            };
             // Sobe a fila sozinha (a cada 45 s e quando a rede volta). O painel
             // precisa refletir a venda em SEGUNDOS — o dono não pode abrir o
             // relatório à noite e ver R$ 0,00 porque ninguém apertou um botão.
@@ -705,11 +713,15 @@ public static class Servicos
             // URL FIXA de proposito (revisao 04/09): o veredito do estorno nao pode depender de uma
             // linha editavel do SQLite local (config.supabase_url); quem trocasse a URL por um
             // servidor de mentira teria "ok" sem codigo. O TOTP fala SO com o projeto de producao.
+        {
+            // 1.0.56: os codigos de emergencia (SQL 228), so para quando o 2FA falha por falta de rede
+            Autorizacao.EmergenciaDoCaixa ??= () => new GuardaEmergencia(() => Banco.Abrir(), TerminalUuid);
             return _autorizador ??= new ClienteAutorizacao(ct => Nuvem().TokenAsync(ct), Pdv.Nucleo.Nuvem.UrlPadrao,
-                terminalUuid: TerminalUuid)
+                terminalUuid: TerminalUuid, semRede: () => Nuvem().UltimaFalhaFoiRede)
             {
                 Diagnostico = linha => AnotarDiagnostico("autorizacao.txt", linha),
             };
+        }
     }
 
     private static Pdv.Nucleo.LeitorAutomatico? _leitor;
