@@ -95,7 +95,7 @@ if (args.Length >= 1 && args[0] == "--sondar-biometria")
     // 1.0.53: o diagnostico inteiro (o mesmo do Conferir o leitor), com o runtime da HID
     var api = new Pdv.Nucleo.ApiHidUareU();
     var auto = new Pdv.Nucleo.LeitorAutomatico(new Pdv.Nucleo.LeitorWinBio(), new Pdv.Nucleo.LeitorHidUareU(api, () => Array.Empty<Pdv.Nucleo.MoldeGuardado>()));
-    foreach (var l in Pdv.Nucleo.DiagnosticoLeitor.ColherAsync(auto, api, "Pdv.Testes").GetAwaiter().GetResult())
+    foreach (var l in Pdv.Nucleo.DiagnosticoLeitor.ColherAsync(auto, api, "Pdv.Testes").GetAwaiter().GetResult().Janela)
         Console.WriteLine("  " + l);
     return 0;
 }

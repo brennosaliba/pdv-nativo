@@ -364,6 +364,64 @@ public static class TestesLeitorHid
             checar(DriverDigitalPersona.PassoDoDriver.Contains("hidglobal.com") && DriverDigitalPersona.PassoDoDriver.Contains("U.are.U RTE")
                    && DriverDigitalPersona.PassoDoDriver.Contains("Windows Update"), "Q-12 o passo cita o site da HID, o RTE e o Windows Update");
 
+            // ── Q2. o resumo em linguagem de loja (1.0.57) ──────────────────────────
+            // o caso da foto do dono (27/10, 16:12): o Windows le, o RTE da HID nao esta instalado
+            var unidadesFoto = new[] { "#3 U.are.U® 4500 Fingerprint Reader (WBF) (CROSSMATCH U.are.U Fingerprint Reader)" };
+            var hidFoto = new RuntimeHid(false, null, null, @"dpfpdd.dll nao achada no System32, no PATH nem em Program Files\DigitalPersona");
+            var usbFoto = new[] { new DriverDigitalPersona.Aparelho("PID_000A", "Biometric", true, "WUDFRd", "U.are.U® 4500 Fingerprint Reader (WBF)", "5.0.0.5", "CROSSMATCH", @"USB\VID_05BA&PID_000A\{...}") };
+            var foto = DiagnosticoLeitor.Montar("winbio", unidadesFoto, 0, null, hidFoto, Array.Empty<DispositivoHid>(), null, usbFoto, "1.0.57", new DateTime(2026, 10, 27, 16, 12, 0));
+            checar(foto.Janela[0] == "Caixa 1.0.57, 27/10/2026 16:12" && foto.Janela[1] == "Leitor funcionando." && foto.Estado == "Leitor funcionando.",
+                "Q-22 a foto do dono: a janela abre com a versao e a hora e logo depois \"Leitor funcionando.\"");
+            checar(foto.Resumo.SequenceEqual(new[] { "Leitor funcionando.", "O caixa lê a digital pelo Windows.", "Não precisa fazer nada.", "Leitor: U.are.U 4500, plugado" }),
+                "Q-23 a foto do dono: o resumo diz que funciona, que le pelo Windows, que nao precisa fazer nada e o nome curto do leitor");
+            var assusta = new[] { "erro", "falh", "instal", "encontrad", "não está", "nenhum", "falta", "errado", "driver", "RTE", "dll", "WinBio", "HID", "parad", "respond" };
+            checar(foto.Resumo.All(l => assusta.All(p => !l.Contains(p, StringComparison.OrdinalIgnoreCase))),
+                "Q-24 a foto do dono: nenhuma palavra no resumo que pareca erro (nao instalado, falta, driver, HID, RTE...)");
+            var iDet = foto.Janela.ToList().IndexOf(DiagnosticoLeitor.TituloDetalhes);
+            checar(DiagnosticoLeitor.TituloDetalhes == "Detalhes técnicos (para o suporte):" && iDet == foto.Resumo.Count + 2 && foto.Janela[iDet - 1] == ""
+                   && foto.Janela.Skip(iDet + 1).SequenceEqual(foto.Tecnicas.Skip(1)) && foto.Janela.Count(l => l.StartsWith("Caixa 1.0.57")) == 1,
+                "Q-25 depois do resumo: linha em branco, \"Detalhes técnicos (para o suporte):\" e as linhas tecnicas (a da versao nao repete)");
+            checar(foto.Tecnicas.Contains("HID: U.are.U RTE não instalado (não faz falta, o Windows já lê)") && !string.Join("\n", foto.Janela).Contains("dpfpdd.dll nao achada")
+                   && foto.Tecnicas.Contains("Motor em uso: Windows (WinBio)") && foto.Tecnicas.Any(l => l.Contains("PID_000A, classe Biometric, driver WUDFRd 5.0.0.5 (CROSSMATCH)")),
+                "Q-26 com o Windows lendo, a linha do RTE da HID diz que nao faz falta (sem o caminho da dll); o resto dos detalhes continua");
+
+            var rHid = DiagnosticoLeitor.Resumo("hid", Array.Empty<string>(), new RuntimeHid(true, @"C:\Windows\System32\dpfpdd.dll", "3.2.1", null), new ApiHidFalsa().Lista, loja);
+            checar(rHid.Take(3).SequenceEqual(new[] { "Leitor funcionando.", "O caixa lê a digital pelo programa da HID.", "Não precisa fazer nada." }),
+                "Q-27 motor da HID: \"Leitor funcionando.\" e le pelo programa da HID, nao precisa fazer nada");
+            var tecHid = DiagnosticoLeitor.Linhas("hid", Array.Empty<string>(), 0, null, new RuntimeHid(true, @"C:\Windows\System32\dpfpdd.dll", "3.2.1", null), new ApiHidFalsa().Lista, null, loja, "1.0.57", DateTime.Now);
+            checar(!tecHid.Contains(DiagnosticoLeitor.RteNaoFazFalta), "Q-28 com a HID lendo, a linha 'nao faz falta' nao aparece");
+
+            var rErrado = DiagnosticoLeitor.Resumo(null, Array.Empty<string>(), new RuntimeHid(false, null, null, "dpfpdd.dll nao achada"), Array.Empty<DispositivoHid>(), loja);
+            checar(rErrado[0] == "O leitor não está funcionando." && rErrado[1] == "Ele está plugado, mas com o driver errado."
+                   && rErrado.Any(l => l.Contains("Atualizar driver")) && rErrado.Any(l => l.Contains("Com Disco"))
+                   && rErrado.Any(l => l.Contains("\"U.are.U 4500 Fingerprint Reader (WBF)\"")) && rErrado.Any(l => l.Contains("Reinicie o computador")),
+                "Q-29 PC da loja (driver da HID, sem o programa): nao funciona, driver errado, e o passo do WBF (Atualizar driver, Com Disco, reiniciar)");
+            var rServico = DiagnosticoLeitor.Resumo(null, Array.Empty<string>(), new RuntimeHid(false, null, null, "x"), Array.Empty<DispositivoHid>(),
+                new[] { new DriverDigitalPersona.Aparelho("PID_000A", "Biometric", true, "WUDFRd", "U.are.U 4500 Fingerprint Reader (WBF)") });
+            checar(rServico.SequenceEqual(new[] { "O leitor não está funcionando.", "O serviço de biometria do Windows não respondeu.", "Reinicie o computador." }),
+                "Q-30 WBF plugado e o Windows sem listar: o servico de biometria nao respondeu, reinicie o computador");
+            var rSemDriver = DiagnosticoLeitor.Resumo(null, Array.Empty<string>(), new RuntimeHid(false, null, null, "x"), Array.Empty<DispositivoHid>(),
+                new[] { new DriverDigitalPersona.Aparelho("PID_000A", "", true) });
+            checar(rSemDriver[0] == "O leitor não está funcionando." && rSemDriver[1].Contains("falta o driver") && rSemDriver.Skip(2).SequenceEqual(DiagnosticoLeitor.PassoDriverWbf),
+                "Q-31 plugado sem driver: nao funciona, falta o driver, e o passo");
+            var rNada = DiagnosticoLeitor.Resumo(null, Array.Empty<string>(), new RuntimeHid(false, null, null, "x"), Array.Empty<DispositivoHid>(), Array.Empty<DriverDigitalPersona.Aparelho>());
+            var rJaEsteve = DiagnosticoLeitor.Resumo(null, Array.Empty<string>(), new RuntimeHid(false, null, null, "x"), Array.Empty<DispositivoHid>(),
+                new[] { new DriverDigitalPersona.Aparelho("PID_000A", "Biometric", false, "WUDFRd") });
+            var cabo = new[] { "Nenhum leitor plugado neste caixa.", "Confira o cabo USB ou troque de porta." };
+            checar(rNada.SequenceEqual(cabo) && rJaEsteve.SequenceEqual(cabo), "Q-32 nada plugado (ou so um que ja esteve aqui): nenhum leitor plugado, confira o cabo USB");
+            var rHidSemAparelho = DiagnosticoLeitor.Resumo(null, Array.Empty<string>(), new RuntimeHid(true, @"C:\Windows\System32\dpfpdd.dll", "3.2.1", null), Array.Empty<DispositivoHid>(), loja);
+            checar(rHidSemAparelho[0] == "O leitor não está funcionando." && rHidSemAparelho.Any(l => l.Contains("plugue de novo")),
+                "Q-33 driver da HID com o programa da HID que nao acha o leitor: replugar e reiniciar");
+            checar(DiagnosticoLeitor.NomeCurto("Leitora de Impressão Digital, U.are.U® 4500") == "U.are.U 4500" && DiagnosticoLeitor.NomeCurto(unidadesFoto[0]) == "U.are.U 4500"
+                   && DiagnosticoLeitor.NomeCurto("") is null && DiagnosticoLeitor.NomeCurto("(WBF)") is null, "Q-34 o nome curto do leitor tira marca, numero e parenteses");
+            var todosResumos = new[] { foto.Resumo, rHid, rErrado, rServico, rSemDriver, rNada, rHidSemAparelho }.SelectMany(x => x).Concat(foto.Janela).ToList();
+            checar(todosResumos.All(l => !l.Contains((char)0x2014) && !l.Contains((char)0x2013)), "Q-35 o resumo e a janela nao tem travessao");
+            checar(new[] { foto.Resumo, rHid, rErrado, rServico, rSemDriver, rNada, rHidSemAparelho }.SelectMany(x => x).All(l => l.Length <= 130),
+                "Q-36 frases curtas: nenhuma linha do resumo passa de 130 letras");
+            var confTela = File.ReadAllText(Caminho("Telas/Configuracao.xaml.cs"));
+            checar(confTela.Contains("conferencia.Estado") && confTela.Contains("conferencia.Janela") && !confTela.Contains("linhas[1]") && confTela.Contains("\"Leitor de digital\""),
+                "Q-37 a Configuracao mostra a primeira frase do resumo na linha de estado e a janela inteira no relatorio");
+
             // ── R. a API de verdade, sem leitor ─────────────────────────────────────
             var real = new ApiHidUareU();
             RuntimeHid rt = new(false, null, null, "nao rodou");
@@ -410,7 +468,7 @@ public static class TestesLeitorHid
             checar(bio.Contains("Digitais.JaTem(cx, cpf, _motor())") && telaDig.Contains("Servicos.MotorDoLeitor") && login.Contains("PortaoDigitalDaTela.EntrarAsync("), "S-03 ja tem digital olha o motor em uso (o primeiro cadastro, 1.0.54)");
             var conf = File.ReadAllText(Caminho("Telas/Configuracao.xaml.cs"));
             checar(conf.Contains("DiagnosticoLeitor.ColherAsync(") && conf.Contains("Dialogo.Relatorio("), "S-04 Conferir o leitor mostra o diagnostico completo numa janela para fotografar");
-            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.56</Version>"), "S-05 a versao do caixa e 1.0.56 (codigos de emergencia)");
+            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.57</Version>"), "S-05 a versao do caixa e 1.0.57 (texto do leitor)");
             var novos = new[] { "Pdv.Nucleo/LeitorHidUareU.cs", "Pdv.Nucleo/LeitorAutomatico.cs", "Pdv.Testes/TestesLeitorHid.cs" }.Select(a => File.ReadAllText(Caminho(a)));
             checar(novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)), "S-06 os arquivos novos nao tem travessao");
         }

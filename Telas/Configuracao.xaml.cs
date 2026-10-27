@@ -412,11 +412,13 @@ public partial class Configuracao : UserControl
             TxtDigitalEstado.Text = "Conferindo o leitor...";
             // 1.0.53: o motor em uso (Windows ou HID), as unidades do Windows, o runtime da HID (versao,
             // de onde carregou, leitores) e as entradas USB 05BA com classe e driver, numa janela
-            // que o dono fotografa e manda.
+            // que o dono fotografa e manda. 1.0.57: a janela abre com o resumo em linguagem de loja
+            // ("Leitor funcionando."), e os detalhes tecnicos vem depois, para o suporte.
             var versao = typeof(Configuracao).Assembly.GetName().Version?.ToString(3) ?? "?";
-            var linhas = await DiagnosticoLeitor.ColherAsync(Servicos.Leitor(), Servicos.ApiHid(), versao);
-            TxtDigitalEstado.Text = "Digital obrigatória nesta loja. " + (linhas.Count > 1 ? linhas[1] : "");
-            try { HospedeWebView2.Anotar("configuracao.txt", "leitor de digital: " + string.Join(" | ", linhas), TimeSpan.Zero); } catch { }
+            var conferencia = await DiagnosticoLeitor.ColherAsync(Servicos.Leitor(), Servicos.ApiHid(), versao);
+            var linhas = conferencia.Janela;
+            TxtDigitalEstado.Text = "Digital obrigatória nesta loja. " + conferencia.Estado;
+            try { HospedeWebView2.Anotar("configuracao.txt", "leitor de digital: " + string.Join(" | ", linhas.Where(x => x.Length > 0)), TimeSpan.Zero); } catch { }
             if (Window.GetWindow(this) is { } dono)
                 Dialogo.Relatorio(dono, "Leitor de digital", string.Join("\n", linhas));
         }
