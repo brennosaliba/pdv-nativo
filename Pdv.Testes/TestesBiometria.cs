@@ -23,6 +23,8 @@ namespace Pdv.Testes;
 ///  · o WinBio de verdade carrega nesta maquina (enumeracao sem travar; sem leitor = vazio);
 ///  · o diagnostico do driver (U.are.U 4500, USB 05BA) e puro e diz a frase certa;
 ///  · os textos de tela sem travessao, e a versao;
+///  · O. 1.0.55: BIOMETRIA OBRIGATORIA (o painel nao desliga) e a AUTORIZACAO DO GERENTE sem PIN
+///    (digital do gerente, conferida pelo papel, ou codigo do gerente geral/dono);
 ///  · N. SO DIGITAL (1.0.54, 27/10): nenhuma senha entra; biometria desligada = reserva em toda
 ///    entrada; na reserva e no primeiro cadastro o funcionario digita o CPF (operador ativo da
 ///    loja; o que nao confere e recusado sem pedir codigo) e o gerente geral ou o dono autoriza
@@ -351,16 +353,20 @@ public static class TestesBiometria
             checar(fonteDren.Contains("SemColunaNaNuvem(r.Erro)") && fonteDren.Contains("aberto_via, aberto_cpf_hash, fechado_via, fechado_cpf_hash, via_motivo"), "H-09 a fila tenta com as colunas e, no PGRST204, manda o corpo de sempre");
 
             // ── I. a chave do painel: nasce ligada; so o painel desliga ────────────────
-            checar(Biometria.Ligada(cx) && !Biometria.PainelConhece(cx), "I-01 sem chave nenhuma: ligada, e o painel ainda nao falou");
+            checar(!Biometria.PainelConhece(cx), "I-01 sem chave nenhuma: o painel ainda nao falou");
             var linhas = ConfigLojaPainel.Ler("""[{"store":"American Day Savassi","chat_respostas":null,"biometria_turno":false}]""");
             checar(linhas[0].BiometriaTurno == false, "I-02 o painel manda biometria_turno");
             var mudou = ConfigLojaPainel.Aplicar(cx, linhas[0], new DateTime(2026, 10, 26, 10, 0, 0));
-            checar(!Biometria.Ligada(cx) && Biometria.PainelConhece(cx) && mudou.Contains("digital desligada"), "I-03 painel desliga: desligada, marca do painel gravada, e o Atualizar diz o que mudou");
+            checar(Biometria.PainelConhece(cx) && !mudou.Contains("digital") && Vendas.Config(cx, Biometria.ChaveLigada) is null,
+                "I-03 1.0.55: o painel mandando false NAO desliga nada (biometria obrigatoria); so a marca do painel e gravada");
             mudou = ConfigLojaPainel.Aplicar(cx, ConfigLojaPainel.Ler("""[{"store":"American Day Savassi","biometria_turno":true}]""")[0], DateTime.Now);
-            checar(Biometria.Ligada(cx) && mudou.Contains("digital ligada"), "I-04 painel liga de volta");
+            checar(!mudou.Contains("digital") && Vendas.Config(cx, Biometria.ChaveLigada) is null, "I-04 true tambem nao muda nada");
             cx.Execute("DELETE FROM config WHERE chave IN ('biometria_turno','biometria_painel_em')");
             mudou = ConfigLojaPainel.Aplicar(cx, ConfigLojaPainel.Ler("""[{"store":"American Day Savassi","chat_respostas":null}]""")[0], DateTime.Now);
-            checar(Biometria.Ligada(cx) && !Biometria.PainelConhece(cx) && !mudou.Contains("digital"), "I-05 painel sem o 224 (campo ausente): continua ligada e sem a marca");
+            checar(!Biometria.PainelConhece(cx) && !mudou.Contains("digital"), "I-05 painel sem o 224 (campo ausente): sem a marca");
+            Vendas.GravarConfig(cx, Biometria.ChaveLigada, "0");
+            ConfigLojaPainel.Aplicar(cx, ConfigLojaPainel.Ler("""[{"store":"American Day Savassi","biometria_turno":false}]""")[0], DateTime.Now);
+            checar(Vendas.Config(cx, Biometria.ChaveLigada) is null, "I-06 a chave antiga \"0\" de um caixa 1.0.54 e apagada no Atualizar");
 
             // ── J. o registro no ERP: corpo sem CPF, 404 fica pendente ────────────────
             Digitais.Guardar(cx, "winbio:3:12:cccc:dedo:5", CpfBia, Bia.Id, Bia.Nome, 5, "Marcos", new DateTime(2026, 10, 26, 9, 30, 0, DateTimeKind.Local));
@@ -413,19 +419,23 @@ public static class TestesBiometria
             Digitais.Guardar(cx, "winbio:3:12:bbbb:dedo:2", CpfBia, Bia.Id, Bia.Nome, 2, null);
             var guarda = new GuardaDigitalSqlite(() => Banco.Abrir(arquivo), () => "winbio");
             var agora27 = () => new DateTime(2026, 10, 27, 9, 0, 0);
-            Task<DesfechoDigital> Entrar(bool ligada, LeitorFalso l, TelaFalsa t, RemotaFalsa? r, TelaTotpFalsa tt)
-                => PortaoDigital.EntrarAsync(ligada, l, t, guarda, ch => Digitais.OperadorDaChave(cx, ch), r, tt, "CAIXA-01", agora27);
+            Task<DesfechoDigital> Entrar(bool _, LeitorFalso l, TelaFalsa t, RemotaFalsa? r, TelaTotpFalsa tt)
+                => PortaoDigital.EntrarAsync(l, t, guarda, ch => Digitais.OperadorDaChave(cx, ch), r, tt, "CAIXA-01", agora27);
 
-            // N1. biometria desligada: o caixa nao tem senha, toda entrada e a reserva (CPF + codigo)
-            leitor = new LeitorFalso(); tela = new TelaFalsa { CpfPadrao = CpfAna }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            // N1. 1.0.55: BIOMETRIA OBRIGATORIA. Mesmo com o painel mandando false, a entrada pede a digital
+            Vendas.GravarConfig(cx, Biometria.ChaveLigada, "0");
+            leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2")); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
             d = await Entrar(false, leitor, tela, remota, totp);
-            checar(d.Via == ViaDigital.Reserva && d.Operador?.Id == Ana.Id && d.Motivo == "pela reserva: biometria desligada na loja", "N-01 biometria desligada: a ANA digita o CPF e entra pela reserva");
-            checar(leitor.Sondas == 0 && leitor.Identificacoes == 0 && remota.Chamadas.Count == 1 && remota.Chamadas[0].Tipo == Autorizacao.TipoTurnoSemDigital
-                   && remota.Chamadas[0].Nivel == Autorizacao.NivelGerente && totp.Niveis.SequenceEqual(new[] { "gerente" }), "N-02 desligada nem toca o leitor; o codigo e turno_sem_digital no nivel gerente");
-            checar(AssinaturaDigital.De(d).Via == "reserva" && AssinaturaDigital.De(d).Motivo == "pela reserva: biometria desligada na loja · autorizado por Marcos (codigo nivel gerente)", "N-03 o turno grava reserva, o motivo e quem autorizou");
-            leitor = new LeitorFalso(); tela = new TelaFalsa(); remota = new RemotaFalsa { SemInternet = true }; totp = new TelaTotpFalsa();
-            d = await Entrar(false, leitor, tela, remota, totp);
-            checar(!d.Entrou && d.Via == ViaDigital.Cancelado && tela.VezesPediuCpf == 1, "N-04 desligada e sem internet: ninguem entra (nao existe senha de volta)");
+            checar(d.Via == ViaDigital.Digital && d.Operador?.Id == Bia.Id && leitor.Sondas == 1 && remota.Chamadas.Count == 0, "N-01 com a chave antiga em \"0\" a entrada continua pela digital (nao existe desligar)");
+            cx.Execute("DELETE FROM config WHERE chave = @C", new { C = Biometria.ChaveLigada });
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa { CpfPadrao = CpfAna }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(d.Via == ViaDigital.Reserva && d.Operador?.Id == Ana.Id && remota.Chamadas.Count == 1 && remota.Chamadas[0].Tipo == Autorizacao.TipoTurnoSemDigital
+                   && remota.Chamadas[0].Nivel == Autorizacao.NivelGerente && totp.Niveis.SequenceEqual(new[] { "gerente" }), "N-02 sem leitor: a reserva (CPF + codigo do gerente geral ou do dono)");
+            checar(AssinaturaDigital.De(d).Via == "reserva" && AssinaturaDigital.De(d).Motivo == "pela reserva: sem leitor · autorizado por Marcos (codigo nivel gerente)", "N-03 o turno grava reserva, o motivo e quem autorizou");
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); remota = new RemotaFalsa { SemInternet = true }; totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(!d.Entrou && d.Via == ViaDigital.Cancelado && tela.VezesPediuCpf == 1, "N-04 sem leitor e sem internet: ninguem entra (nao existe senha de volta)");
 
             // N2. ligada: a digital reconhecida entra sem codigo
             leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2")); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
@@ -491,6 +501,77 @@ public static class TestesBiometria
             var guardaHid = new GuardaDigitalSqlite(() => Banco.Abrir(arquivo), () => LeitorHidUareU.MotorTexto);
             checar(!guardaHid.JaTem(CpfBia) && guarda.JaTem(CpfBia), "N-24 digital do WinBio nao serve no leitor da HID: ali a BIA pode cadastrar");
 
+
+            // ── O. 1.0.55: A AUTORIZACAO DO GERENTE SEM PIN (digital do gerente ou codigo) ──────
+            Task<AutorizacaoGerente> Gerente(LeitorFalso l, TelaFalsa t, RemotaFalsa? r, TelaTotpFalsa tt, Operador? quemOpera, string tipo = "sangria")
+                => PortaoGerente.AutorizarAsync(l, t, ch => Digitais.OperadorDaChave(cx, ch),
+                    quemOpera is null ? null : op => Operadores.IdCanonico(cx, op.Id) == Operadores.IdCanonico(cx, quemOpera.Id),
+                    r, tt, new PedidoAutorizacao("CAIXA-01", Autorizacao.ReferenciaSangria("ses-1", new DateTime(2026, 10, 27, 9, 0, 0)), 0) { Tipo = tipo }, "sangria");
+            // a BIA (perfil gerente) tem digital aaaa? nao: a chave dela e bbbb:2; a ANA (operador) tem aaaa:1
+            Digitais.Guardar(cx, "winbio:3:12:aaaa:dedo:1", CpfAna, Ana.Id, Ana.Nome, 1, null);
+            leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2")); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            var ag = await Gerente(leitor, tela, remota, totp, Ana);
+            checar(ag.Autorizado && ag.Via == AutorizacaoGerente.ViaDigital && ag.Gerente?.Id == Bia.Id && remota.Chamadas.Count == 0 && ag.Trilha == "digital do gerente BIA",
+                "O-01 a digital da BIA (gerente) autoriza a sangria da ANA, sem codigo; a trilha diz a via");
+            checar(tela.Titulos[0] == PortaoGerente.Titulo("sangria") && !tela.OfertasPrimeiraVez[0], "O-02 a leitura diz Gerente: encoste o dedo, sem Primeira vez");
+            leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:aaaa:dedo:1")); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2"));
+            tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            ag = await Gerente(leitor, tela, remota, totp, Ana);
+            checar(ag.Autorizado && ag.Gerente?.Id == Bia.Id && tela.Avisos[1] == PortaoGerente.AvisoNaoEGerente, "O-03 digital de funcionario comum (ANA) nao autoriza: Essa digital nao e de gerente");
+            leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2")); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            for (var i = 0; i < 2; i++) leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2"));
+            ag = await Gerente(leitor, tela, remota, totp, Bia);
+            checar(ag.Autorizado && ag.Via == AutorizacaoGerente.ViaCodigo && tela.Avisos[1] == PortaoGerente.AvisoQuemOpera && remota.Chamadas.Count == 1,
+                "O-04 a gerente que opera nao autoriza a propria sangria com a digital: 3 vezes e cai no codigo");
+            checar(remota.Chamadas[0].Tipo == Autorizacao.TipoSangria && remota.Chamadas[0].Nivel == Autorizacao.NivelGerente && remota.Chamadas[0].Referencia == "sangria:ses-1:20261027090000",
+                "O-05 o codigo e do tipo sangria, nivel gerente (gerente geral ou dono), referencia com o turno");
+            checar(ag.Gerente is { Nome: "Marcos", Perfil: "gerente" } && ag.Gerente.Id.StartsWith("totp:") && ag.Gerente.ESupervisor && ag.Trilha.StartsWith("codigo do gerente: Marcos (nivel gerente"),
+                "O-06 pelo codigo, o gerente vira um autorizador com id totp: e o nome de quem aprovou");
+            leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa(); tela.Escolhas.Enqueue(EscolhaNaLeitura.SemDigital); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            ag = await Gerente(leitor, tela, remota, totp, Ana, Autorizacao.TipoCaixaSemContagem);
+            checar(ag.Autorizado && ag.Via == AutorizacaoGerente.ViaCodigo && remota.Chamadas[0].Tipo == "caixa_sem_contagem", "O-07 Sem digital na tela: direto ao codigo (fechar sem contar)");
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemDriver }; tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            ag = await Gerente(leitor, tela, remota, totp, Ana, Autorizacao.TipoComandaGerente);
+            checar(ag.Autorizado && ag.Via == AutorizacaoGerente.ViaCodigo && leitor.Identificacoes == 0 && remota.Chamadas[0].Tipo == "comanda_gerente", "O-08 leitor sem driver: avisa e vai ao codigo (comanda)");
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); remota = new RemotaFalsa { Aprova = false }; totp = new TelaTotpFalsa();
+            ag = await Gerente(leitor, tela, remota, totp, Ana);
+            checar(!ag.Autorizado && ag.Gerente is null && ag.Motivo.Contains("Sangria não autorizada"), "O-09 codigo recusado: ninguem autoriza, e a frase diz Sangria nao autorizada");
+            leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa(); tela.Escolhas.Enqueue(EscolhaNaLeitura.Desistiu); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            ag = await Gerente(leitor, tela, remota, totp, Ana);
+            checar(!ag.Autorizado && ag.Avisado && remota.Chamadas.Count == 0, "O-10 Cancelar na leitura: nada autorizado, nenhum codigo pedido");
+            cx.Execute("UPDATE operador SET ativo = 0 WHERE id = 'op-bia'");
+            leitor = new LeitorFalso { Estado = EstadoLeitor.Pronto }; for (var i = 0; i < 3; i++) leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2"));
+            tela = new TelaFalsa(); remota = new RemotaFalsa { SemInternet = true }; totp = new TelaTotpFalsa();
+            ag = await Gerente(leitor, tela, remota, totp, Ana);
+            checar(!ag.Autorizado && tela.Avisos[1] == Biometria.AvisoDigitalDesconhecida, "O-11 gerente desligada no painel: a digital dela nao autoriza mais");
+            cx.Execute("UPDATE operador SET ativo = 1 WHERE id = 'op-bia'");
+            // o registro: o nome de quem autorizou pelo codigo fica guardado para a fila e o papel
+            var porCodigo = new AutorizacaoGerente(true, AutorizacaoGerente.ViaCodigo, new Operador("totp:log-0001", "Marcos", "gerente"), "codigo do gerente", "log-0001-abcd", "gerente");
+            PortaoGerente.Registrar(cx, porCodigo, Autorizacao.TipoSangria, Ana.Id);
+            checar(PortaoGerente.NomeDoCodigo(cx, "totp:log-0001") == "Marcos" && PortaoGerente.NomeDoCodigo(cx, Bia.Id) is null, "O-12 o nome de quem autorizou pelo codigo fica guardado");
+            var audG = cx.ExecuteScalar<string>("SELECT detalhe FROM auditoria WHERE evento='autorizacao_gerente' ORDER BY id DESC LIMIT 1")!;
+            checar(audG.Contains("sangria") && audG.Contains("codigo do gerente: Marcos"), "O-13 a auditoria diz o ato, quem autorizou e por qual via");
+            var sesG = Caixa.Abrir(cx, Ana, new Dinheiro(50000));
+            Caixa.Movimentar(cx, sesG, "suprimento", new Dinheiro(10000), "troco", Ana);
+            Caixa.Movimentar(cx, sesG, "sangria", new Dinheiro(5000), "cofre", Ana, porCodigo.Gerente!.Id, "cofre");
+            checar(cx.ExecuteScalar<string>("SELECT autorizado_por FROM caixa_movimento WHERE tipo='sangria' ORDER BY criado_em DESC LIMIT 1") == "totp:log-0001",
+                "O-14 a sangria autorizada pelo codigo grava o autorizador totp: (e a fila acha o nome pelo registro)");
+            bool lancouS = false;
+            try { Caixa.Movimentar(cx, sesG, "sangria", new Dinheiro(100), "cofre", Ana, Ana.Id, "cofre"); } catch (InvalidOperationException) { lancouS = true; }
+            checar(lancouS, "O-15 o nucleo continua barrando a propria sangria");
+            Caixa.Fechar(cx, sesG, new Dictionary<string, Dinheiro> { ["dinheiro"] = Caixa.Apurado(cx, sesG)["dinheiro"] }, Ana, new Dinheiro(200), "fechamento de teste do gerente sem pin");
+            var fonteDrenG = File.ReadAllText(Caminho("Pdv.Nucleo/Drenagem.cs"));
+            checar(fonteDrenG.Contains("PortaoGerente.NomeDoCodigo(cx, ap)"), "O-16 a fila da sangria manda o nome de quem autorizou pelo codigo");
+            var telasG = new[] { "Telas/Venda.xaml.cs", "Telas/Venda.Comanda.cs", "Telas/AberturaCaixa.xaml.cs" }.Select(a => File.ReadAllText(Caminho(a))).ToList();
+            checar(telasG.All(t => !t.Contains("AutorizarSupervisor(") && !t.Contains("PedirSenha.Mostrar(")), "O-17 nenhuma tela do turno pede PIN ou senha de gerente");
+            checar(telasG[0].Contains("Autorizacao.TipoSangria") && telasG[1].Contains("Autorizacao.TipoComandaGerente") && telasG[2].Contains("Autorizacao.TipoCaixaSemContagem")
+                   && telasG.All(t => t.Contains("PortaoGerenteDaTela.AutorizarAsync(")), "O-18 sangria, comanda e fechar sem contar passam pela digital ou codigo do gerente");
+            var fonteTelaDigG = File.ReadAllText(Caminho("Telas/TelaDigital.cs"));
+            checar(fonteTelaDigG.Contains("PortaoGerente.Registrar(cx, a, tipo") && fonteTelaDigG.Contains("autorizacao_gerente_negada"), "O-19 a tela registra quem autorizou (e a recusa)");
+            checar(Autorizacao.TipoSangria == "sangria" && Autorizacao.TipoCaixaSemContagem == "caixa_sem_contagem" && Autorizacao.TipoComandaGerente == "comanda_gerente"
+                   && Autorizacao.ReferenciaCaixaSemContagem("ses-1") == "semcontagem:ses-1", "O-20 os tipos novos do codigo (SQL 225)");
+            cx.Execute("DELETE FROM digital WHERE chave = 'winbio:3:12:aaaa:dedo:1'");
+
             // N6. nenhuma senha no caminho do turno; o master segue na Configuracao
             var fonteLoginN = File.ReadAllText(Caminho("Telas/Login.xaml.cs"));
             var xamlLogin = File.ReadAllText(Caminho("Telas/Login.xaml"));
@@ -503,9 +584,9 @@ public static class TestesBiometria
                 "N-27 o master (admin da rede, nao e operador de turno) entra na Configuracao pela senha dele, como antes");
             var (mh, ms) = HashDeSenha.Gerar("98765432");
             UsuarioMaster.Aplicar(cx, new UsuarioMaster.Master("Brenno", mh, ms, new DateTime(2026, 10, 27, 12, 0, 0, DateTimeKind.Utc)));
-            checar(Biometria.Ligada(cx) && UsuarioMaster.Conferir(cx, "98765432").Liberado && !UsuarioMaster.Conferir(cx, "4725").Liberado,
+            checar(UsuarioMaster.Conferir(cx, "98765432").Liberado && !UsuarioMaster.Conferir(cx, "4725").Liberado,
                 "N-28 com a digital ligada a senha do master abre a Configuracao e a senha de operador nao abre");
-            var textosN = new[] { Biometria.BotaoPrimeiraVez, Biometria.BotaoSemDigital, Biometria.TituloSemBiometria, Biometria.BotaoSemBiometria,
+            var textosN = new[] { Biometria.BotaoPrimeiraVez, Biometria.BotaoSemDigital, PortaoGerente.AvisoNaoEGerente, PortaoGerente.AvisoQuemOpera, PortaoGerente.Titulo("sangria"),
                 Biometria.TituloCpfEntrada, Biometria.TituloCpfFechamento, Biometria.TituloCpfCadastro, Biometria.AvisoCpfInvalido, Biometria.AvisoCpfNaoEhFuncionario, Biometria.TituloEntrada, Biometria.TituloFechamento, Biometria.TituloPrimeiraVez };
             checar(textosN.All(t => !t.Contains("senha", StringComparison.OrdinalIgnoreCase) && t.Split('\n').Length == 1 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),
                 "N-29 os textos da entrada sao de uma linha, sem travessao e sem a palavra senha");
@@ -522,14 +603,15 @@ public static class TestesBiometria
             var novos = new[] { "Pdv.Nucleo/Biometria.cs", "Pdv.Nucleo/LeitorWinBio.cs", "Pdv.Nucleo/RegistroDigital.cs", "Telas/TelaDigital.cs", "Pdv.Testes/TestesBiometria.cs" }
                 .Select(a => File.Exists(Caminho(a)) ? File.ReadAllText(Caminho(a)) : "").ToList();
             checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)), "M-03 os arquivos novos existem e nao tem travessao");
-            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.54</Version>"), "M-04 a versao do caixa e 1.0.54 (so digital)");
+            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.55</Version>"), "M-04 a versao do caixa e 1.0.55 (biometria obrigatoria e gerente sem PIN)");
             var fonteAut = File.ReadAllText(Caminho("Pdv.Nucleo/Autorizacao.cs"));
             checar(fonteAut.Contains("TipoTurnoSemDigital => (\"Entrada sem digital\"") && Autorizacao.TipoTurnoSemDigital == "turno_sem_digital" && Autorizacao.TipoDigitalRecadastro == "digital_recadastro", "M-05 os tipos novos do TOTP e a frase da recusa");
             var fonteLogin = File.ReadAllText(Caminho("Telas/Login.xaml.cs"));
             var fonteVenda = File.ReadAllText(Caminho("Telas/Venda.xaml.cs"));
             var fonteAbert = File.ReadAllText(Caminho("Telas/AberturaCaixa.xaml.cs"));
-            checar(fonteLogin.Contains("PortaoDigitalDaTela.EntrarAsync(dono, _ligada)") && fonteLogin.Contains("Biometria.Ligada("), "M-06 a entrada passa pelo portao (so digital; desligada = reserva)");
-            checar(fonteVenda.Contains("PortaoDigitalDaTela.IdentificarAsync(dono, \"fechamento\"") && fonteVenda.Contains("Biometria.Ligada("), "M-07 o fechamento do caixa passa pelo portao");
+            checar(fonteLogin.Contains("PortaoDigitalDaTela.EntrarAsync(dono)") && !fonteLogin.Contains("Biometria.Ligada("), "M-06 a entrada passa pelo portao, sem chave de desligar");
+            checar(fonteVenda.Contains("PortaoDigitalDaTela.IdentificarAsync(dono, \"fechamento\"") && !fonteVenda.Contains("Biometria.Ligada(") && !fonteAbert.Contains("Biometria.Ligada("),
+                "M-07 o fechamento do caixa sempre passa pelo portao (biometria obrigatoria)");
             checar(fonteAbert.Contains("PortaoDigitalDaTela.IdentificarAsync(dono, \"fechamento\"") && fonteAbert.Contains("EntradaDigital.Tomar()"), "M-08 fechar o caixa esquecido (na abertura) tambem passa pelo portao");
             var fonteTelaDig = File.ReadAllText(Caminho("Telas/TelaDigital.cs"));
             checar(fonteTelaDig.Contains("new GuardaDigitalSqlite(") && fonteTelaDig.Contains("Servicos.MotorDoLeitor"), "M-09 o primeiro cadastro usa a guarda de verdade e o motor em uso");

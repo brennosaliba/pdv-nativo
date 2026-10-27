@@ -109,15 +109,15 @@ public static class TestesComandaTela
         checar(Metodo(comanda, "private ContaNoPagamento? ContaParaOPagamento()").Contains("ContasAbertas.MarcarFechando(cx, conta.Id);", StringComparison.Ordinal)
                && Metodo(comanda, "private void ContaDesistiuDoPagamento()").Contains("ContasAbertas.LimparFechando(cx, conta.Id);", StringComparison.Ordinal),
             "CA-12 fechando_em marcado ao abrir o Pagamento e limpo no Voltar para a comanda");
-        var pin = Metodo(comanda, "private Operador? PedirOutroGerente(string titulo, string rotulo)");
-        checar(pin.Contains("while (true)", StringComparison.Ordinal) && pin.Contains("PedirSenha.Mostrar(", StringComparison.Ordinal)
-               && pin.Contains("Operadores.AutorizarSupervisor(cx, pin)", StringComparison.Ordinal) && pin.Contains("sup.Id == _operador.Id", StringComparison.Ordinal)
-               && Regex.Matches(pin, "continue;").Count == 2,
-            "CA-18 o PIN e UMA janela: errado ou do proprio operador avisa e reabre; Cancelar volta");
+        var pin = Trecho(comanda, "private Task<Operador?> PedirOutroGerenteAsync(", "// ── pedir a cozinha");
+        checar(pin.Contains("PortaoGerenteDaTela.AutorizarAsync(", StringComparison.Ordinal) && pin.Contains("Autorizacao.TipoComandaGerente", StringComparison.Ordinal)
+               && pin.Contains("exigeOutro: true", StringComparison.Ordinal) && !comanda.Contains("PedirSenha.Mostrar(", StringComparison.Ordinal)
+               && !comanda.Contains("AutorizarSupervisor(", StringComparison.Ordinal),
+            "CA-18 1.0.55: OUTRO gerente pela digital (papel gerente) ou pelo codigo; nenhum PIN");
         var passo = Trecho(venda, "Button Passo(string txt, int delta)", "var controles = new StackPanel");
         checar(passo.Contains("if (novo < item.CozinhaMilesimos) { TirarProduzido(item, Math.Max(0, novo)); return; }", StringComparison.Ordinal)
                && venda.Contains("if (item.CozinhaMilesimos > 0) { TirarProduzido(item, 0); return; }", StringComparison.Ordinal),
-            "CA-18 menos e lixeira cruzando o ja pedido caem em TirarProduzido (PIN); acima do pedido continua livre");
+            "CA-18 menos e lixeira cruzando o ja pedido caem em TirarProduzido (gerente); acima do pedido continua livre");
         checar(Metodo(venda, "private void LimparComanda(object sender, RoutedEventArgs e)").Contains("if (_contaAberta is not null) { LimparSoOPendente(); return; }", StringComparison.Ordinal)
                && Metodo(comanda, "private void LimparSoOPendente()").Contains("JaPedidosFicam", StringComparison.Ordinal),
             "CA-7 o Limpar em modo comanda tira so o que nao foi pedido (nunca vira cancelar comanda)");
@@ -138,11 +138,11 @@ public static class TestesComandaTela
         checar(Metodo(comanda, "private void CutucarCozinha(string loteId, long numero)").Contains("DispatcherTimer", StringComparison.Ordinal)
                && comanda.Contains("Textos.CozinhaRecebeuEGuardou(numero), \"ok\"", StringComparison.Ordinal),
             "CA-5 o toast honesto: a confirmacao da TV vem por timer (a tela segue viva) e vira 'Cozinha recebeu. Comanda N guardada.'");
-        var cancelar = Metodo(comanda, "private void CancelarContaComAutorizacao(string id)");
-        checar(cancelar.Contains("PedirTexto.Mostrar(", StringComparison.Ordinal) && cancelar.Contains("PedirOutroGerente(", StringComparison.Ordinal)
+        var cancelar = Metodo(comanda, "private async void CancelarContaComAutorizacao(string id)");
+        checar(cancelar.Contains("PedirTexto.Mostrar(", StringComparison.Ordinal) && cancelar.Contains("PedirOutroGerenteAsync(", StringComparison.Ordinal)
                && cancelar.Contains("ContasAbertas.Cancelar(cx, id, _operador, null, null);", StringComparison.Ordinal)
                && cancelar.Contains("ContasAbertas.Cancelar(cx, id, _operador, motivo, sup);", StringComparison.Ordinal),
-            "CA-17 cancelar: vazia confirma; com item pede motivo e o PIN de outro gerente");
+            "CA-17 cancelar: vazia confirma; com item pede motivo e outro gerente (digital ou codigo)");
         var fechamento = Metodo(comanda, "private bool ComandasDeixamFechar(Window dono)");
         checar(fechamento.Contains("CancelarVaziasAutomatico(cx, _operador)", StringComparison.Ordinal) && fechamento.Contains("ComandasAbertas(resumo.AbertasN, resumo.Abertas)", StringComparison.Ordinal)
                && fechamento.Contains("FecharMesmoAssim", StringComparison.Ordinal) && fechamento.Contains("catch { return true; }", StringComparison.Ordinal),
@@ -333,6 +333,7 @@ public static class TestesComandaTela
         }
         finally
         {
+            Pdv.Telas.PortaoGerenteDaTela.LeitorDeTeste = null;
             Banco.CaminhoForcado = anterior;
             SqliteConnection.ClearAllPools();
             try { File.Delete(arquivo); } catch { }
@@ -351,9 +352,13 @@ public static class TestesComandaTela
         // Sem isto o teste pergunta a versao a PRODUCAO com o uuid de teste,
         // e nasce um terminal fantasma na frota do dono. Ver Isolamento.cs.
         Isolamento.SemNuvem(cx);
-        Operadores.Salvar(cx, "op-ui", "Cleide", "2468", "operador");
-        Operadores.Salvar(cx, "ger-ui", "Marcos", "1357", "gerente");
-        Operadores.Salvar(cx, "ger-ui-2", "Paula", "9753", "gerente");
+        Operadores.Salvar(cx, "op-ui", "Cleide", "2468", "operador", "52998224725");
+        Operadores.Salvar(cx, "ger-ui", "Marcos", "1357", "gerente", "11144477735");
+        Operadores.Salvar(cx, "ger-ui-2", "Paula", "9753", "gerente", "39053344705");
+        // 1.0.55: o gerente autoriza pela digital (ou pelo codigo); as digitais da tela de teste
+        Digitais.Guardar(cx, "winbio:ui:op", "52998224725", "op-ui", "Cleide", 1, null);
+        Digitais.Guardar(cx, "winbio:ui:ger", "11144477735", "ger-ui", "Marcos", 2, null);
+        Digitais.Guardar(cx, "winbio:ui:ger2", "39053344705", "ger-ui-2", "Paula", 3, null);
         SemearCatalogo(cx);
         Vendas.GravarConfig(cx, PedidoCozinha.ChaveToken, "chave-da-foto-0123456789abcdef");
         Vendas.GravarConfig(cx, PedidoCozinha.ChaveUrl, Isolamento.UrlMorta);
@@ -459,20 +464,24 @@ public static class TestesComandaTela
         Clicar(menos);   // 3 -> 2: ainda acima dos 2 pedidos, livre
         host.UpdateLayout();
         checar(linhaNinho.Qtd.Milesimos == 2000 && linhaNinho.CozinhaMilesimos == 2000, "CT-8 descer ate o que ja foi pedido e livre (3 -> 2)");
-        // 2 -> 1 cruza: PIN. 1) Cancelar: nada muda. 2) PIN errado: aviso e a janela reabre; o proprio gerente nao vale; 3) outro gerente tira.
-        Roteiro(host, d => Clicar(Botao(d, "Cancelar")));
+        // 2 -> 1 cruza: o GERENTE (1.0.55: digital do gerente ou codigo, no lugar do PIN).
+        // 1) Cancelar na leitura: nada muda. 2) digital da operadora: nao vale; a do Marcos (gerente) tira.
+        var leitorUi = new LeitorRoteiro();
+        Pdv.Telas.PortaoGerenteDaTela.LeitorDeTeste = leitorUi;
+        leitorUi.Leituras.Enqueue(Captura.Cancelada);
         Clicar(BotaoDaComanda(tela, "Diminuir " + ninho.Nome));
-        checar(linhaNinho.Qtd.Milesimos == 2000, "CT-8 Cancelar na janela do PIN: a linha fica como estava");
-        var janelasPin = 0;
-        Roteiro(host,
-            d => { janelasPin++; Senha(d, "0000"); Clicar(Botao(d, "Confirmar")); },                 // PIN errado
-            d => Clicar(Botao(d, "Entendi")),                                                           // "PIN nao confere"
-            d => { janelasPin++; Senha(d, "1357"); Clicar(Botao(d, "Confirmar")); },                 // Marcos, gerente, mas vale (ele nao opera)
-            d => { /* so se abrir outra */ });
+        checar(linhaNinho.Qtd.Milesimos == 2000, "CT-8 Cancelar na leitura do gerente: a linha fica como estava");
+        leitorUi.Leituras.Enqueue(Captura.Reconhecida("winbio:ui:op"));
+        leitorUi.Leituras.Enqueue(Captura.Reconhecida("winbio:ui:ger"));
+        var leiturasAntes = leitorUi.Identificacoes;
         Clicar(BotaoDaComanda(tela, "Diminuir " + ninho.Nome));
         host.UpdateLayout();
+        var janelasPin = leitorUi.Identificacoes - leiturasAntes;
         checar(janelasPin == 2 && linhaNinho.Qtd.Milesimos == 1000 && linhaNinho.CozinhaMilesimos == 1000,
-            $"CT-8 PIN errado avisa e reabre; o PIN de outro gerente tira: 2 -> 1 e a marca baixa junto ({janelasPin} janelas, qtd {linhaNinho.Qtd.Milesimos})");
+            $"CT-8 digital da operadora nao vale; a do gerente tira: 2 -> 1 e a marca baixa junto ({janelasPin} leituras, qtd {linhaNinho.Qtd.Milesimos})");
+        using (var cx = Banco.Abrir())
+            checar(cx.ExecuteScalar<string>("SELECT detalhe FROM auditoria WHERE evento='autorizacao_gerente' ORDER BY id DESC LIMIT 1")?.Contains("digital do gerente Marcos") == true,
+                "CT-8 a auditoria diz quem autorizou e por qual via (digital do gerente Marcos)");
         using (var cx = Banco.Abrir())
             checar(cx.ExecuteScalar<int>("SELECT COUNT(*) FROM auditoria WHERE evento='conta_item_retirado_apos_cozinha'") == 1
                    && ContasAbertas.Ler(cx, contaId)!.Itens.First(i => i.ProdutoId == Ninho).QtdMilesimos == 1000,
@@ -666,19 +675,19 @@ public static class TestesComandaTela
                 "CT-16 'Guardar e abrir a N': o carrinho solto vira uma conta automatica guardada e a N e carregada; rascunho vazio");
         }
 
-        // cancelar a conta na tela: motivo + PIN de outro gerente
+        // cancelar a conta na tela: motivo + a digital de outro gerente (1.0.55)
         var cancelarRotulo = ContasAbertas.Textos.CancelarComanda(Conta()!.Numero);
+        leitorUi.Leituras.Enqueue(Captura.Reconhecida("winbio:ui:ger2"));
         Roteiro(host,
             d => Clicar(Botao(d, cancelarRotulo)),
-            d => { Descendentes<TextBox>(d).First().Text = "cliente foi embora"; Clicar(Botao(d, "Confirmar")); },
-            d => { Senha(d, "9753"); Clicar(Botao(d, "Confirmar")); });
+            d => { Descendentes<TextBox>(d).First().Text = "cliente foi embora"; Clicar(Botao(d, "Confirmar")); });
         Invocar(tela, "AbrirDialogoComandas");
         host.UpdateLayout();
         using (var cx = Banco.Abrir())
         {
             var c = ContasAbertas.Ler(cx, naTvId)!;
             checar(c.Status == "cancelada" && c.CancelMotivo == "cliente foi embora" && c.CancelAutorizador == "ger-ui-2" && Conta() is null && comanda.Count == 0,
-                $"CT-17 Cancelar comanda com item: motivo e PIN de outro gerente, a tela volta ao balcao ({c.Status}, {c.CancelMotivo}, {c.CancelAutorizador})");
+                $"CT-17 Cancelar comanda com item: motivo e a digital de outro gerente, a tela volta ao balcao ({c.Status}, {c.CancelMotivo}, {c.CancelAutorizador})");
         }
 
         // Mandar de novo, de dentro da lista
@@ -884,6 +893,18 @@ public static class TestesComandaTela
     /// <summary>O texto da sub-linha do unitario da primeira linha daquele produto ("3 × R$ 12,00 · 2 na cozinha").</summary>
     private static string? SubLinha(Pdv.Telas.Venda tela, string nomeProduto)
         => Descendentes<TextBlock>(Campo<ItemsControl>(tela, "ListaComanda")).FirstOrDefault(t => AutomationProperties.GetName(t) == "Unitario " + nomeProduto)?.Text;
+
+    /// <summary>O leitor de mentira da tela (1.0.55): as leituras em fila; sem fila = cancelada.</summary>
+    private sealed class LeitorRoteiro : ILeitorDigital
+    {
+        public readonly Queue<Captura> Leituras = new();
+        public int Identificacoes;
+        public string Nome => "roteiro";
+        public Task<SondaLeitor> SondarAsync(CancellationToken ct) => Task.FromResult(new SondaLeitor(EstadoLeitor.Pronto, "roteiro", new[] { "#1 roteiro" }));
+        public Task<Captura> IdentificarAsync(CancellationToken ct) { Identificacoes++; return Task.FromResult(Leituras.Count > 0 ? Leituras.Dequeue() : Captura.Cancelada); }
+        public Task<Cadastro> CadastrarAsync(int vaga, IProgress<int>? amostra, CancellationToken ct) => Task.FromResult(Cadastro.Cancelado);
+        public Task<bool> ApagarAsync(string chave, CancellationToken ct) => Task.FromResult(true);
+    }
 
     private static void Senha(DependencyObject d, string pin)
     {

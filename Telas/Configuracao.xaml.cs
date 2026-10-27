@@ -396,10 +396,8 @@ public partial class Configuracao : UserControl
     /// <summary>A lista das digitais deste caixa e a chave da loja. O leitor e conferido pelo botao (demora).</summary>
     private void PintarDigital(Microsoft.Data.Sqlite.SqliteConnection cx)
     {
-        var ligada = Biometria.Ligada(cx);
         var lista = Digitais.Listar(cx);
-        TxtDigitalEstado.Text = (ligada ? "Digital LIGADA nesta loja." : "Digital DESLIGADA nesta loja (painel).")
-            + " Toque em Conferir o leitor para ver o leitor do Windows.";
+        TxtDigitalEstado.Text = "Digital obrigatória nesta loja. Toque em Conferir o leitor para ver o leitor do Windows.";
         TxtDigitalLista.Text = lista.Count == 0
             ? "Nenhuma digital cadastrada neste caixa."
             : $"Cadastradas ({lista.Count} de {Biometria.Vagas}): " + string.Join("; ",
@@ -417,9 +415,7 @@ public partial class Configuracao : UserControl
             // que o dono fotografa e manda.
             var versao = typeof(Configuracao).Assembly.GetName().Version?.ToString(3) ?? "?";
             var linhas = await DiagnosticoLeitor.ColherAsync(Servicos.Leitor(), Servicos.ApiHid(), versao);
-            bool ligada;
-            using (var cx = Banco.Abrir()) ligada = Biometria.Ligada(cx);
-            TxtDigitalEstado.Text = (ligada ? "Digital LIGADA nesta loja. " : "Digital DESLIGADA nesta loja (painel). ") + (linhas.Count > 1 ? linhas[1] : "");
+            TxtDigitalEstado.Text = "Digital obrigatória nesta loja. " + (linhas.Count > 1 ? linhas[1] : "");
             try { HospedeWebView2.Anotar("configuracao.txt", "leitor de digital: " + string.Join(" | ", linhas), TimeSpan.Zero); } catch { }
             if (Window.GetWindow(this) is { } dono)
                 Dialogo.Relatorio(dono, "Leitor de digital", string.Join("\n", linhas));

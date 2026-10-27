@@ -135,9 +135,7 @@ public partial class AberturaCaixa : UserControl
         // conexao: a leitura espera o dedo.
         AssinaturaDigital? assinatura = null;
         var quemFecha = _operador;
-        bool digital;
-        using (var cxd = Banco.Abrir()) digital = Biometria.Ligada(cxd);
-        if (digital)
+        // 1.0.55: a biometria e obrigatoria; o fechamento sempre passa pelo portao
         {
             var d = await PortaoDigitalDaTela.IdentificarAsync(dono, "fechamento", ofertaPrimeiraVez: false);
             if (!d.Entrou)
@@ -256,25 +254,25 @@ public partial class AberturaCaixa : UserControl
         Sessao? aberta = null;
         var papeis = new List<(string Descricao, IReadOnlyList<string> Linhas)>();
         var destino = default(Impressao.Destino);
-        try
-        {
-            using var cx = Banco.Abrir();
-            destino = Impressao.DestinoCupom(Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"));
-            var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
 
-            // Caixa de OUTRO DIA preso aberto: o "Abrir" confronta em vez de só falhar.
-            // O caminho normal é fechar aquele turno (contagem cega de sempre); pular a
-            // contagem existe, mas custa o PIN do gerente e fica auditado com nome —
-            // porque pular contagem é exatamente onde quebra de caixa se esconde.
-            var presa = Caixa.SessaoAberta(cx);
-            if (presa is not null && presa.BusinessDate != Caixa.DiaOperacional())
+        // Caixa de OUTRO DIA preso aberto: o "Abrir" confronta em vez de só falhar. O caminho
+        // normal é fechar aquele turno (contagem cega de sempre); pular a contagem existe, mas
+        // custa a DIGITAL DO GERENTE ou o CÓDIGO do gerente geral ou do dono (1.0.55, no lugar do
+        // PIN) e fica auditado com quem autorizou e por qual via. A autorização vem ANTES de abrir
+        // a conexão: a leitura e o código esperam a pessoa, e conexão não atravessa await.
+        Operador? supSemContar = null;
+        string? presaPularId = null;
+        {
+            Sessao? presa0;
+            using (var cx0 = Banco.Abrir()) presa0 = Caixa.SessaoAberta(cx0);
+            if (presa0 is not null && presa0.BusinessDate != Caixa.DiaOperacional())
             {
                 var dono = Window.GetWindow(this)!;
-                if (Dialogo.Confirmar(dono, $"Caixa de {DataBr(presa.BusinessDate)} em aberto",
-                        $"O caixa de {DataBr(presa.BusinessDate)} ficou aberto ({presa.OperadorNome}). " +
+                if (Dialogo.Confirmar(dono, $"Caixa de {DataBr(presa0.BusinessDate)} em aberto",
+                        $"O caixa de {DataBr(presa0.BusinessDate)} ficou aberto ({presa0.OperadorNome}). " +
                         "Se abrir o de hoje por cima, as vendas dos dois dias se misturam.\n\n" +
                         "O certo é fechar aquele caixa agora, contando a gaveta. Fechar sem contar " +
-                        "precisa do PIN do gerente e fica registrado no nome dele.",
+                        "precisa da digital ou do código do gerente e fica registrado no nome dele.",
                         // Rótulos curtos de propósito: o botão do diálogo é fixo em
                         // ~200px e texto de botão CORTA (não quebra linha).
                         "Contar e fechar", "Fechar sem contar"))
@@ -282,25 +280,26 @@ public partial class AberturaCaixa : UserControl
                     FecharAntigo(sender, e);
                     return;
                 }
+                supSemContar = await PortaoGerenteDaTela.AutorizarAsync(dono, Autorizacao.TipoCaixaSemContagem,
+                    Autorizacao.ReferenciaCaixaSemContagem(presa0.Id), "fechar sem contar", _operador, exigeOutro: false,
+                    detalhe: $"caixa de {DataBr(presa0.BusinessDate)} sem contar a gaveta");
+                if (supSemContar is null) return;
+                presaPularId = presa0.Id;
+            }
+        }
 
-                // Pular o fechamento de um caixa antigo SEMPRE exige o PIN do gerente
-                // (o modo de homologacao, que dispensava, saiu com a operacao no ar).
-                Operador? sup;
-                {
-                    // "sem contar a gaveta" é o que de fato acontece aqui — o caixa
-                    // FECHA; o que se pula é a contagem. O texto antigo ("pular o
-                    // fechamento") descrevia outra coisa.
-                    var pin = PedirSenha.Mostrar(dono, "Autorização do gerente",
-                        $"PIN do gerente para fechar o caixa de {DataBr(presa.BusinessDate)} sem contar a gaveta");
-                    if (pin is null) return;
-                    sup = Operadores.AutorizarSupervisor(cx, pin);
-                }
-                if (sup is null)
-                {
-                    Dialogo.Avisar(dono, "PIN não confere",
-                        "Esse PIN não é de gerente, ou saiu errado. Peça para o gerente digitar de novo.", "erro");
-                    return;
-                }
+        try
+        {
+            using var cx = Banco.Abrir();
+            destino = Impressao.DestinoCupom(Vendas.Config(cx, "impressora"), Vendas.Config(cx, "papel_mm"));
+            var loja = cx.ExecuteScalar<string>("SELECT loja_nome FROM terminal LIMIT 1") ?? "";
+
+            var presa = Caixa.SessaoAberta(cx);
+            if (presa is not null && presa.BusinessDate != Caixa.DiaOperacional())
+            {
+                // o gerente autorizou ESTE turno antes da conexao; outro turno preso (corrida) = nao fecha
+                if (supSemContar is null || presa.Id != presaPularId) { Aviso("O caixa preso mudou. Toque em Abrir de novo."); return; }
+                var sup = supSemContar;
                 var linhasSem = Caixa.FecharSemConferencia(cx, presa, _operador, sup);
                 // Fechamento sem contagem é o que mais precisa de assinatura: turno de
                 // outro dia, fechado por quem não estava lá. O papel diz isso com todas

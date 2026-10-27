@@ -150,7 +150,7 @@ public static class ContasAbertas
         public const string Cobrar = "Cobrar";
         public const string MandarDeNovo = "Mandar de novo";
         public const string ItemJaPedido = "Item já pedido";
-        public const string PinDeOutroGerente = "Esse item já foi para a cozinha. PIN de outro gerente para tirar.";
+        public const string PinDeOutroGerente = "Esse item já foi para a cozinha. Digital ou código de outro gerente para tirar.";
         public const string PinNaoConfere = "PIN não confere";
         public const string ChameOutroGerente = "Quem opera não autoriza. Chame outro gerente.";
         public const string Motivo = "Motivo";
@@ -185,7 +185,7 @@ public static class ContasAbertas
         public const string DicaBotaoComandas = "Comandas abertas: mesas e clientes";
         public const string DicaGuardar = "Guardar a comanda e voltar ao balcão";
         public const string DicaCozinha = "Mandar para a cozinha o que ainda não foi pedido";
-        public const string AvisoAutorizador = "PIN de outro gerente";
+        public const string AvisoAutorizador = "Digital ou código de outro gerente";
 
         public static string ComandaAberta(long n) => $"Comanda {n} aberta.";
         public static string CozinhaN(long pendentes) => $"Cozinha {pendentes}";

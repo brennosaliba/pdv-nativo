@@ -40,8 +40,9 @@ namespace Pdv.Nucleo;
 //     reconhecer, dedo machucado) = o FUNCIONARIO digita o proprio CPF (confere
 //     contra os operadores ativos da loja; sem pedir codigo se nao conferir) e o
 //     gerente geral ou o dono autoriza com o codigo ('turno_sem_digital'), na
-//     abertura e no fechamento. Com a biometria DESLIGADA no painel, toda
-//     entrada e pela reserva (o caixa nao tem senha);
+//     abertura e no fechamento. 1.0.55: a biometria e OBRIGATORIA (o painel
+//     nao desliga mais); o que pedia o PIN do gerente pede a digital do
+//     gerente ou o codigo (PortaoGerente.cs);
 //   · PRIMEIRO CADASTRO: quem ainda nao tem digital neste caixa. O mesmo
 //     comeco: o funcionario digita o CPF, o gerente geral ou o dono autoriza com
 //     o codigo ('digital_cadastro', nivel gerente, SQL 225) e o caixa le o dedo
@@ -276,9 +277,6 @@ public static class Biometria
     public const string BotaoPrimeiraVez = "Primeira vez: código do gerente";
     /// <summary>O botao da leitura que leva a reserva.</summary>
     public const string BotaoSemDigital = "Sem digital: código do gerente";
-    /// <summary>A linha e o botao da entrada com a biometria desligada no painel (toda entrada e pela reserva).</summary>
-    public const string TituloSemBiometria = "Entrada com o código do gerente";
-    public const string BotaoSemBiometria = "Entrar com o código do gerente";
     /// <summary>Os titulos do campo de CPF (ajuste do dono, 27/10: o funcionario digita o proprio CPF).</summary>
     public const string TituloCpfEntrada = "Digite seu CPF";
     public const string TituloCpfFechamento = "Fechamento: digite seu CPF";
@@ -287,8 +285,6 @@ public static class Biometria
     public const string AvisoCpfNaoEhFuncionario = "Esse CPF não é de funcionário ativo desta loja.";
     /// <summary>O motivo de auditoria do primeiro cadastro (quem autorizou vai em MotivoAuditado).</summary>
     public const string MotivoPrimeiroCadastro = "primeiro cadastro";
-    /// <summary>A causa da reserva quando o painel desligou a biometria da loja.</summary>
-    public const string CausaDesligada = "biometria desligada na loja";
 
     /// <summary>A mascara do campo de CPF enquanto digita: "529.982.2", "529.982.247-25"; vazio = "___.___.___-__".</summary>
     public static string MascaraCpf(string? digitos)
@@ -305,8 +301,9 @@ public static class Biometria
     /// <summary>O mesmo dedo ja esta guardado em outra pessoa (motor hid, 1.0.53).</summary>
     public static string AvisoDigitalDeOutro(string nome) => $"Essa digital já está cadastrada para {nome}.";
 
-    /// <summary>Ligada por padrao: so a chave "0" desliga.</summary>
-    public static bool Ligada(SqliteConnection cx) => Vendas.Config(cx, ChaveLigada) != "0";
+    // 1.0.55 (27/10, decisao do dono): BIOMETRIA OBRIGATORIA. Nao ha mais "desligada": o caixa nao
+    // le a chave biometria_turno (o painel deixou de ter o botao). Entrada e fechamento sempre pela
+    // digital, ou pela reserva (CPF do funcionario + codigo do gerente geral ou do dono).
 
     /// <summary>O painel ja mandou a chave (= o SQL 224 esta no ar e as colunas do turno existem na nuvem).</summary>
     public static bool PainelConhece(SqliteConnection cx) => Vendas.Config(cx, ChavePainelEm) is not null;
@@ -783,19 +780,14 @@ public static class PortaoDigital
     }
 
     /// <summary>
-    /// A ENTRADA DO CAIXA, SO DIGITAL (1.0.54, decisao do dono de 27/10). Nao existe senha:
-    ///  · biometria DESLIGADA no painel: toda entrada e pela reserva (CPF do funcionario + codigo
-    ///    do gerente ou do dono), com a causa "biometria desligada na loja";
-    ///  · ligada: a digital (IdentificarAsync, com o botao Primeira vez); problema no leitor cai
-    ///    na reserva; Primeira vez segue para o PRIMEIRO CADASTRO (PrimeiroCadastroAsync).
+    /// A ENTRADA DO CAIXA, SO DIGITAL (1.0.54) E OBRIGATORIA (1.0.55, decisao do dono de 27/10). Nao
+    /// existe senha nem biometria desligada: a digital (IdentificarAsync, com o botao Primeira vez);
+    /// problema no leitor cai na reserva; Primeira vez segue para o PRIMEIRO CADASTRO.
     /// </summary>
-    public static async Task<DesfechoDigital> EntrarAsync(bool biometriaLigada, ILeitorDigital leitor, ITelaDigital tela,
+    public static async Task<DesfechoDigital> EntrarAsync(ILeitorDigital leitor, ITelaDigital tela,
         IGuardaDigital guarda, Func<string, Operador?> porChave,
         IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal, Func<DateTime>? agora = null, CancellationToken ct = default)
     {
-        if (!biometriaLigada)
-            return await ReservaAsync(tela, guarda.PorCpf, remota, telaTotp, terminal, "entrada", Biometria.CausaDesligada, agora, ct);
-
         var d = await IdentificarAsync(leitor, tela, porChave, guarda.Cpf, guarda.PorCpf, remota, telaTotp, terminal, "entrada",
             ofertaPrimeiraVez: true, agora, ct);
         if (!d.PrimeiraVez) return d;

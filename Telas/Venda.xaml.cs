@@ -4408,7 +4408,7 @@ public partial class Venda : UserControl
 
     private void Suprimento(object sender, RoutedEventArgs e) => Movimento("suprimento");
 
-    private void Movimento(string tipo)
+    private async void Movimento(string tipo)
     {
         var dono = Window.GetWindow(this)!;
         var sangria = tipo == "sangria";
@@ -4425,33 +4425,14 @@ public partial class Venda : UserControl
         string? autorizador = null;
         if (tipo == "sangria")
         {
-            // Supervisor autoriza com o PIN DELE — e o nome fica no registro.
-            // Autorização sem nome não serve de nada numa auditoria.
-            using var cxa = Banco.Abrir();
-            Operador? sup;
-            {
-                // "gerente" na tela: é como o balcão chama quem autoriza, e é a
-                // mesma palavra da abertura de caixa. O perfil no banco (supervisor
-                // ou gerente) segue igual — quem decide é ESupervisor.
-                var pin = PedirSenha.Mostrar(dono, "Autorização", "PIN do gerente");
-                if (pin is null) return;
-                sup = Operadores.AutorizarSupervisor(cxa, pin);
-            }
-            if (sup is null)
-            {
-                Dialogo.Avisar(dono, "PIN não confere",
-                    "Esse PIN não é de gerente, ou saiu errado. Peça para o gerente digitar de novo.", "erro");
-                return;
-            }
-            // Segundo par de olhos NÃO pode ser o próprio: um gerente que opera o
-            // caixa não autoriza a própria sangria — isso é sangria fantasma com
-            // aval de si mesmo, o furto que a autorização existe pra impedir.
-            if (sup.Id == _operador.Id)
-            {
-                Dialogo.Avisar(dono, "Precisa de outro gerente",
-                    "Você não pode autorizar a sua própria sangria. Chame OUTRO gerente para digitar o PIN dele.", "erro");
-                return;
-            }
+            // 1.0.55 (decisao do dono): a DIGITAL do gerente (papel gerente no cadastro do painel) ou o
+            // CODIGO do gerente geral ou do dono, no lugar do PIN. Segundo par de olhos NAO pode ser o
+            // proprio: a digital de quem opera nao autoriza a propria sangria. O nome e a via ficam no
+            // registro (autorizacao_gerente). Sem conexao aberta: a leitura e o codigo esperam a pessoa.
+            var sup = await PortaoGerenteDaTela.AutorizarAsync(dono, Autorizacao.TipoSangria,
+                Autorizacao.ReferenciaSangria(_sessao.Id, DateTime.Now), "sangria", _operador, exigeOutro: true,
+                detalhe: $"sangria {valor.Value.Formatado()} · {motivo}");
+            if (sup is null) return;
             autorizador = sup.Id;
         }
 
@@ -4513,9 +4494,7 @@ public partial class Venda : UserControl
             // caixa continua aberto.
             AssinaturaDigital? assinaturaFechamento = null;
             var quemFecha = _operador;
-            bool digital;
-            using (var cxd = Banco.Abrir()) digital = Biometria.Ligada(cxd);
-            if (digital)
+            // 1.0.55: a biometria e obrigatoria; o fechamento sempre passa pelo portao
             {
                 var d = await PortaoDigitalDaTela.IdentificarAsync(dono, "fechamento", ofertaPrimeiraVez: false);
                 if (!d.Entrou)

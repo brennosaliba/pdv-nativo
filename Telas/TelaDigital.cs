@@ -239,14 +239,14 @@ public static class PortaoDigitalDaTela
     /// A ENTRADA DO CAIXA (1.0.54): so digital, sem senha. A regra mora em PortaoDigital.EntrarAsync
     /// (digital; reserva; primeiro cadastro pelo codigo do gerente; biometria desligada = reserva).
     /// </summary>
-    public static Task<DesfechoDigital> EntrarAsync(Window dono, bool biometriaLigada)
+    public static Task<DesfechoDigital> EntrarAsync(Window dono)
     {
         string terminal;
         using (var cx = Banco.Abrir()) terminal = Autorizacao.NomeDoTerminal(cx);
         IAutorizacaoRemota? remota;
         try { remota = Servicos.Autorizador(); } catch { remota = null; }
         var guarda = new GuardaDigitalSqlite(() => Banco.Abrir(), Servicos.MotorDoLeitor);
-        return PortaoDigital.EntrarAsync(biometriaLigada, Servicos.Leitor(), new TelaDigital(dono), guarda,
+        return PortaoDigital.EntrarAsync(Servicos.Leitor(), new TelaDigital(dono), guarda,
             chave => { using var c = Banco.Abrir(); return Digitais.OperadorDaChave(c, chave); },
             remota, new TelaAutorizacao(dono), terminal);
     }
@@ -317,6 +317,45 @@ public static class PortaoDigitalDaTela
                 Dialogo.Avisar(dono, "Digital", "O leitor falhou (" + cad.Motivo + "). Tente de novo.", "erro");
                 return null;
         }
+    }
+}
+
+/// <summary>
+/// A AUTORIZACAO DO GERENTE nas telas (1.0.55): a digital do gerente ou o codigo do gerente geral
+/// ou do dono, no lugar do PIN. Registra a trilha (quem e por qual via) e devolve o gerente como
+/// Operador (pelo codigo, id "totp:xxxxxxxx" e o nome de quem aprovou), ou null com a tela avisada.
+/// </summary>
+public static class PortaoGerenteDaTela
+{
+    /// <summary>So a suite (a tela de verdade no HostWpf) troca o leitor; null = o leitor do PC.</summary>
+    public static ILeitorDigital? LeitorDeTeste { get; set; }
+
+    /// <param name="quemOpera">quem opera o caixa; com <paramref name="exigeOutro"/>, a digital dele nao autoriza.</param>
+    public static async Task<Operador?> AutorizarAsync(Window dono, string tipo, string referencia, string acao,
+        Operador? quemOpera, bool exigeOutro, string? detalhe = null)
+    {
+        string terminal;
+        using (var cx = Banco.Abrir()) terminal = Autorizacao.NomeDoTerminal(cx);
+        IAutorizacaoRemota? remota;
+        try { remota = Servicos.Autorizador(); } catch { remota = null; }
+        var pedido = new PedidoAutorizacao(terminal, referencia, 0) { Tipo = tipo, Nivel = Autorizacao.NivelGerente, Operador = detalhe ?? quemOpera?.Nome };
+        Func<Operador, bool>? mesma = exigeOutro && quemOpera is not null
+            ? op => { using var c = Banco.Abrir(); return Operadores.IdCanonico(c, op.Id) == Operadores.IdCanonico(c, quemOpera.Id); }
+            : null;
+        var a = await PortaoGerente.AutorizarAsync(LeitorDeTeste ?? Servicos.Leitor(), new TelaDigital(dono),
+            chave => { using var c = Banco.Abrir(); return Digitais.OperadorDaChave(c, chave); },
+            mesma, remota, new TelaAutorizacao(dono), pedido, acao);
+        using (var cx = Banco.Abrir())
+        {
+            if (a.Autorizado) PortaoGerente.Registrar(cx, a, tipo, quemOpera?.Id);
+            else Caixa.Auditar(cx, null, "autorizacao_gerente_negada", quemOpera?.Id, null, $"{tipo} · {a.Motivo}");
+        }
+        if (!a.Autorizado)
+        {
+            if (!a.Avisado) Dialogo.Avisar(dono, "Autorização do gerente", a.Motivo, "erro");
+            return null;
+        }
+        return a.Gerente;
     }
 }
 

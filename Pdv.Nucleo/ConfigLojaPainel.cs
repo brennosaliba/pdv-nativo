@@ -163,12 +163,12 @@ public static class ConfigLojaPainel
         // dono): o painel so serve para desligar. Campo ausente (servidor sem o 224) = fica como
         // esta (ligada por padrao), e a marca do painel nao e gravada: e ela que diz ao caixa que
         // a nuvem ja tem as colunas do turno e a RPC de registro.
-        if (l.BiometriaTurno is { } bio)
+        // 1.0.55 (27/10, decisao do dono): BIOMETRIA OBRIGATORIA. O valor do campo NAO desliga mais
+        // nada; ele so prova que o SQL 224 esta no ar (a marca do painel). A chave antiga sai.
+        if (l.BiometriaTurno is not null)
         {
-            var bioAntes = Biometria.Ligada(cx);
-            Vendas.GravarConfig(cx, Biometria.ChaveLigada, bio ? "1" : "0");
+            Gravar(cx, Biometria.ChaveLigada, null);
             Vendas.GravarConfig(cx, Biometria.ChavePainelEm, agora.ToString("o"));
-            if (bioAntes != bio) mudou.Add(bio ? "digital ligada" : "digital desligada");
         }
 
         return string.Join(", ", mudou);

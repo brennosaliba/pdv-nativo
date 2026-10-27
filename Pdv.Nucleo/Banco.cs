@@ -724,6 +724,15 @@ public static class Banco
           cadastrada_por TEXT,
           registrada_em  TEXT                    -- quando o ERP ficou sabendo (SQL 224)
         );
+        -- 1.0.55: quem autorizou pelo CODIGO do gerente (id "totp:xxxxxxxx" no lugar do operador,
+        -- que ele nao e): a fila da sangria e o papel leem o nome daqui.
+        CREATE TABLE IF NOT EXISTS autorizador_codigo (
+          id        TEXT PRIMARY KEY,
+          nome      TEXT NOT NULL,
+          registro  TEXT,
+          nivel     TEXT,
+          em        TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS digital_removida (
           id             INTEGER PRIMARY KEY AUTOINCREMENT,
           chave          TEXT NOT NULL,

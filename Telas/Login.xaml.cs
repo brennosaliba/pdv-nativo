@@ -16,7 +16,7 @@ namespace Pdv.Telas;
 ///    auditada "pela reserva";
 ///  · primeira vez de cada funcionario neste caixa: o funcionario digita o CPF, o gerente
 ///    autoriza com o codigo e o caixa le o dedo 3 vezes; dali em diante so digital;
-///  · biometria DESLIGADA no painel da loja: nao ha senha, entao toda entrada e pela reserva.
+///  · 1.0.55: a biometria e OBRIGATORIA (o painel nao desliga mais).
 ///
 /// A tela de CPF e senha e o PIN legado sairam daqui (os dados continuam no banco). O usuario
 /// master da rede nao e operador de turno: o botao Configuracao no rodape continua pedindo a
@@ -27,8 +27,6 @@ public partial class Login : UserControl
     public event Action<Operador>? Entrou;
     public event Action? PediuConfig;
 
-    /// <summary>A chave da loja (pdv_loja_config.biometria_turno, nasce ligada).</summary>
-    private bool _ligada = true;
     private bool _entrando;
 
     public Login(string nomeLoja)
@@ -41,18 +39,17 @@ public partial class Login : UserControl
             // Enquanto ninguem encosta o dedo, o caixa vai buscando quem entrou na folha: o CPF
             // da reserva e do primeiro cadastro confere contra os operadores desta loja.
             _ = Task.Run(async () => { try { await BaixarOperadoresAsync(); } catch { } });
-            using (var cx = Banco.Abrir()) _ligada = Biometria.Ligada(cx);
             Pintar();
-            // com a digital, a leitura ja abre; sem ela, o codigo espera o toque no botao
-            if (_ligada) _ = EntrarAsync();
+            // 1.0.55: a biometria e obrigatoria; a leitura ja abre
+            _ = EntrarAsync();
         };
         Pintar();
     }
 
     private void Pintar()
     {
-        TxtEtapa.Text = _ligada ? Biometria.TituloEntrada : Biometria.TituloSemBiometria;
-        BtnDigital.Content = _ligada ? Biometria.TituloEntrada : Biometria.BotaoSemBiometria;
+        TxtEtapa.Text = Biometria.TituloEntrada;
+        BtnDigital.Content = Biometria.TituloEntrada;
     }
 
     /// <summary>
@@ -83,7 +80,7 @@ public partial class Login : UserControl
         try
         {
             TxtErro.Text = "";
-            var d = await PortaoDigitalDaTela.EntrarAsync(dono, _ligada);
+            var d = await PortaoDigitalDaTela.EntrarAsync(dono);
             if (!d.Entrou)
             {
                 if (!d.Avisado) TxtErro.Text = d.Motivo;

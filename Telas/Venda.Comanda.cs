@@ -426,18 +426,18 @@ public partial class Venda
         catch { return null; }
     }
 
-    // ── tirar item ja pedido: PIN de OUTRO gerente, numa janela so ──────────
+    // ── tirar item ja pedido: OUTRO gerente (digital ou codigo, 1.0.55) ──────
 
     /// <summary>
     /// O toque cruzou para baixo do que ja foi para a cozinha. UMA janela de PIN: Cancelar volta,
     /// PIN errado (ou do proprio operador) avisa e REABRE a janela. Autorizado: o nucleo baixa a
     /// quantidade e a marca, refaz o lote que ainda esta na fila, audita e enfileira o rastro.
     /// </summary>
-    private void TirarProduzido(ItemComanda item, long novaQtdMilesimos)
+    private async void TirarProduzido(ItemComanda item, long novaQtdMilesimos)
     {
         var conta = _contaAberta;
         if (conta is null) return;
-        var sup = PedirOutroGerente(ContasAbertas.Textos.ItemJaPedido, ContasAbertas.Textos.PinDeOutroGerente);
+        var sup = await PedirOutroGerenteAsync(conta.Id, "item", item.Produto.Nome);
         if (sup is null) return;
         var dono = Window.GetWindow(this)!;
         try
@@ -457,32 +457,13 @@ public partial class Venda
     }
 
     /// <summary>
-    /// PIN de gerente que NAO seja quem opera (a regra da sangria), numa janela so: PIN errado ou
-    /// do proprio operador avisa e pergunta de novo; Cancelar devolve null.
+    /// OUTRO gerente autoriza (a regra da sangria). 1.0.55 (decisao do dono): a DIGITAL do gerente
+    /// (papel gerente no cadastro; a de quem opera nao vale) ou o CODIGO do gerente geral ou do dono,
+    /// no lugar do PIN. Desistiu ou recusado: null, com a tela ja avisada.
     /// </summary>
-    private Operador? PedirOutroGerente(string titulo, string rotulo)
-    {
-        var dono = Window.GetWindow(this)!;
-        while (true)
-        {
-            var pin = PedirSenha.Mostrar(dono, titulo, rotulo);
-            if (pin is null) return null;
-            Operador? sup;
-            using (var cx = Banco.Abrir()) sup = Operadores.AutorizarSupervisor(cx, pin);
-            if (sup is null)
-            {
-                Dialogo.Avisar(dono, ContasAbertas.Textos.PinNaoConfere,
-                    "Esse PIN não é de gerente, ou saiu errado. Peça para o gerente digitar de novo.", "erro");
-                continue;
-            }
-            if (sup.Id == _operador.Id)
-            {
-                Dialogo.Avisar(dono, "Precisa de outro gerente", ContasAbertas.Textos.ChameOutroGerente, "erro");
-                continue;
-            }
-            return sup;
-        }
-    }
+    private Task<Operador?> PedirOutroGerenteAsync(string contaId, string ato, string detalhe)
+        => PortaoGerenteDaTela.AutorizarAsync(Window.GetWindow(this)!, Autorizacao.TipoComandaGerente,
+            Autorizacao.ReferenciaComanda(contaId, ato, DateTime.Now), "comanda", _operador, exigeOutro: true, detalhe: detalhe);
 
     // ── pedir a cozinha ─────────────────────────────────────────────────────
 
@@ -668,7 +649,7 @@ public partial class Venda
     /// grava, audita e enfileira o rastro; o lote ainda na fila e descartado pelo dreno antes do
     /// POST, e o que ja esta na TV e aviso de boca.
     /// </summary>
-    private void CancelarContaComAutorizacao(string id)
+    private async void CancelarContaComAutorizacao(string id)
     {
         var dono = Window.GetWindow(this)!;
         ContaAberta? conta;
@@ -692,7 +673,7 @@ public partial class Venda
                 var motivo = PedirTexto.Mostrar(dono, ContasAbertas.Textos.CancelarComanda(numero),
                     ContasAbertas.Textos.MotivoDoCancelamento, "", seVazio: ContasAbertas.Textos.MotivoObrigatorio);
                 if (string.IsNullOrWhiteSpace(motivo)) return;
-                var sup = PedirOutroGerente(ContasAbertas.Textos.CancelarComanda(numero), ContasAbertas.Textos.AvisoAutorizador);
+                var sup = await PedirOutroGerenteAsync(id, "cancelar", $"comanda {numero}");
                 if (sup is null) return;
                 if (naTela) GravarNaConta();   // o rastro leva o que esta na tela agora
                 using var cx = Banco.Abrir();

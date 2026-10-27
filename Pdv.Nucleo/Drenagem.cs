@@ -743,6 +743,7 @@ public sealed class Drenagem : IDisposable
                     "SELECT nome FROM operador WHERE id = @Id", new { Id = (string)m.operador_id });
                 autorizadorNome = m.autorizado_por is string ap
                     ? cx.ExecuteScalar<string?>("SELECT nome FROM operador WHERE id = @Id", new { Id = ap })
+                      ?? PortaoGerente.NomeDoCodigo(cx, ap)   // 1.0.55: autorizado pelo codigo do gerente
                     : null;
                 var t = cx.QueryFirstOrDefault("SELECT terminal_uuid, loja_nome FROM terminal LIMIT 1");
                 loja = t?.loja_nome as string;

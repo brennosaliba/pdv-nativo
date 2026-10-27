@@ -266,6 +266,21 @@ public static class Autorizacao
     /// </summary>
     public const string TipoDigitalCadastro = "digital_cadastro";
 
+    /// <summary>
+    /// 1.0.55 (27/10, SQL 225): o que pedia o PIN do gerente passa a aceitar a digital do gerente ou
+    /// o codigo do gerente geral ou do dono (nivel gerente). Um tipo por ato, para o log dizer qual.
+    /// </summary>
+    public const string TipoSangria = "sangria";
+    public const string TipoCaixaSemContagem = "caixa_sem_contagem";
+    public const string TipoComandaGerente = "comanda_gerente";
+
+    /// <summary>"sangria:(sessao):(aaaammddhhmmss)", "semcontagem:(sessao)", "comanda:(conta):(ato):(aaaammddhhmmss)".</summary>
+    public static string ReferenciaSangria(string sessaoId, DateTime agora) => "sangria:" + Limpo(sessaoId, 48) + ":" + agora.ToString("yyyyMMddHHmmss");
+    public static string ReferenciaCaixaSemContagem(string sessaoId) => "semcontagem:" + Limpo(sessaoId, 48);
+    public static string ReferenciaComanda(string contaId, string ato, DateTime agora)
+        => "comanda:" + Limpo(contaId, 48) + ":" + Limpo(ato, 20) + ":" + agora.ToString("yyyyMMddHHmmss");
+    private static string Limpo(string? s, int max) => new((s ?? "").Where(c => char.IsLetterOrDigit(c) || c == '-').Take(max).ToArray());
+
     /// <summary>A referencia do log do primeiro cadastro: "cadastro:(terminal):(aaaammddhhmmss)".</summary>
     public static string ReferenciaDigitalCadastro(string terminal, DateTime agora)
         => "cadastro:" + new string((terminal ?? "").Where(char.IsLetterOrDigit).Take(40).ToArray()) + ":" + agora.ToString("yyyyMMddHHmmss");
@@ -356,6 +371,9 @@ public static class Autorizacao
             TipoTurnoSemDigital => ("Entrada sem digital", "não autorizada."),
             TipoDigitalRecadastro => ("Recadastro da digital", "não autorizado."),
             TipoDigitalCadastro => ("Cadastro da digital", "não autorizado."),
+            TipoSangria => ("Sangria", "não autorizada."),
+            TipoCaixaSemContagem => ("Fechar sem contar", "não autorizado."),
+            TipoComandaGerente => ("Comanda", "não autorizada."),
             _ => ("Estorno", "não autorizado."),
         };
         var papel = Papel(pedido.Nivel);
