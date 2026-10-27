@@ -709,7 +709,7 @@
                                    FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
                         <TextBlock x:Name="TxtDigitalEstado" Text="" Foreground="{DynamicResource Texto}" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,6"/>
                         <TextBlock x:Name="TxtDigitalLista" Text="" Foreground="{DynamicResource TextoFraco}" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                        <TextBlock Text="A primeira entrada de cada funcionário cadastra a digital sozinha (CPF e senha, depois 3 leituras). Aqui só o recadastro ou o apagar, com o código do gerente ou do dono. Ligar e desligar por loja: painel, Configurações, cartão Biometria."
+                        <TextBlock Text="O primeiro cadastro de cada funcionário é na entrada: ele digita o CPF, o gerente digita o código e o caixa lê o dedo 3 vezes. Aqui só o recadastro ou o apagar, com o código do gerente ou do dono. Ligar e desligar por loja: painel, Configurações, cartão Biometria."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                             <Button x:Name="BtnConferirLeitor" Click="ConferirLeitor" Style="{StaticResource BotaoBase}"

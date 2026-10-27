@@ -22,7 +22,11 @@ namespace Pdv.Testes;
 ///  · o registro no ERP: corpo da RPC sem CPF em claro, 404 = fica pendente;
 ///  · o WinBio de verdade carrega nesta maquina (enumeracao sem travar; sem leitor = vazio);
 ///  · o diagnostico do driver (U.are.U 4500, USB 05BA) e puro e diz a frase certa;
-///  · os textos de tela sem travessao, e a versao 1.0.52.
+///  · os textos de tela sem travessao, e a versao;
+///  · N. SO DIGITAL (1.0.54, 27/10): nenhuma senha entra; biometria desligada = reserva em toda
+///    entrada; na reserva e no primeiro cadastro o funcionario digita o CPF (operador ativo da
+///    loja; o que nao confere e recusado sem pedir codigo) e o gerente geral ou o dono autoriza
+///    (turno_sem_digital / digital_cadastro, nivel gerente); o master segue na Configuracao.
 /// </summary>
 public static class TestesBiometria
 {
@@ -78,8 +82,11 @@ public static class TestesBiometria
         public readonly List<(string Titulo, string Texto)> AvisosDeCaixa = new();
         public readonly List<string> Progresso = new();
         public Queue<EscolhaNaLeitura> Escolhas = new();
-        public Func<IReadOnlyList<Operador>, Operador?> AoEscolher = l => l.FirstOrDefault();
-        public int VezesEscolheu;
+        /// <summary>O CPF que o funcionario digita (ajuste do dono, 27/10). Fila primeiro; vazia = CpfPadrao (null = desistiu).</summary>
+        public Queue<string?> Cpfs = new();
+        public string? CpfPadrao = CpfAna;
+        public int VezesPediuCpf;
+        public readonly List<string?> AvisosCpf = new();
 
         public async Task<LeituraNaTela> LerAsync(string titulo, string? aviso, bool ofertaPrimeiraVez, Func<CancellationToken, Task<Captura>> ler)
         {
@@ -97,11 +104,12 @@ public static class TestesBiometria
             return cadastrar(new PortaoDigital.ProgressoDireto<string>(Progresso.Add), CancellationToken.None);
         }
 
-        public Task<Operador?> EscolherFuncionarioAsync(string titulo, IReadOnlyList<Operador> lista)
+        public Task<string?> PedirCpfAsync(string titulo, string? aviso)
         {
-            VezesEscolheu++;
+            VezesPediuCpf++;
             Titulos.Add(titulo);
-            return Task.FromResult(AoEscolher(lista));
+            AvisosCpf.Add(aviso);
+            return Task.FromResult(Cpfs.Count > 0 ? Cpfs.Dequeue() : CpfPadrao);
         }
 
         public void Avisar(string titulo, string texto) => AvisosDeCaixa.Add((titulo, texto));
@@ -157,7 +165,7 @@ public static class TestesBiometria
     private static Task<DesfechoDigital> Rodar(LeitorFalso leitor, TelaFalsa tela, SqliteConnection cx, RemotaFalsa? remota,
         TelaTotpFalsa totp, string finalidade = "entrada", bool primeiraVez = true)
         => PortaoDigital.IdentificarAsync(leitor, tela, ch => Digitais.OperadorDaChave(cx, ch), op => Digitais.CpfDoOperador(cx, op.Id),
-            Digitais.ListaDaReserva(cx), remota, totp, "CAIXA-01", finalidade, primeiraVez, () => new DateTime(2026, 10, 26, 9, 0, 0));
+            cpf => Digitais.OperadorDoCpf(cx, cpf), remota, totp, "CAIXA-01", finalidade, primeiraVez, () => new DateTime(2026, 10, 26, 9, 0, 0));
 
     public static async Task RodarAsync(Action<bool, string> checar)
     {
@@ -208,7 +216,7 @@ public static class TestesBiometria
             checar(d.Via == ViaDigital.Digital && d.Operador?.Id == Ana.Id && d.Cpf == CpfAna && d.Entrou, "B-01 digital reconhecida entra como a ANA");
             checar(d.CpfHash == Digitais.CpfHash(CpfAna) && d.ViaTexto == "digital", "B-02 o desfecho carrega o hash e a via para o turno");
             checar(tela.Titulos[0] == Biometria.TituloEntrada && tela.Avisos[0] is null && tela.OfertasPrimeiraVez[0], "B-03 a tela de uma linha: Encoste o dedo no leitor, com Primeira vez");
-            checar(totp.Pedidos == 0 && remota.Chamadas.Count == 0 && tela.VezesEscolheu == 0, "B-04 reconhecida nao pede codigo nem lista");
+            checar(totp.Pedidos == 0 && remota.Chamadas.Count == 0 && tela.VezesPediuCpf == 0, "B-04 reconhecida nao pede codigo nem CPF");
             checar(leitor.Sondas == 1 && leitor.Identificacoes == 1, "B-05 uma sonda, uma leitura");
 
             // fechamento: outro titulo, sem Primeira vez
@@ -217,17 +225,36 @@ public static class TestesBiometria
             d = await Rodar(leitor, tela, cx, remota, totp, "fechamento", primeiraVez: false);
             checar(d.Via == ViaDigital.Digital && tela.Titulos[0] == Biometria.TituloFechamento && !tela.OfertasPrimeiraVez[0], "B-06 no fechamento o titulo muda e nao ha Primeira vez");
 
-            // ── C. tres leituras sem reconhecer -> reserva (codigo do gerente + lista) ──
-            leitor = new LeitorFalso(); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
-            tela.AoEscolher = l => l.First(o => o.Id == Bia.Id);
+            // ── C. tres leituras sem reconhecer -> reserva (o funcionario digita o CPF + codigo do gerente) ──
+            leitor = new LeitorFalso(); tela = new TelaFalsa { CpfPadrao = "111.444.777-35" }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, remota, totp);
-            checar(d.Via == ViaDigital.Reserva && d.Operador?.Id == Bia.Id && d.Cpf == CpfBia, "C-01 3 sem reconhecer: a reserva entra com quem foi escolhido");
+            checar(d.Via == ViaDigital.Reserva && d.Operador?.Id == Bia.Id && d.Cpf == CpfBia, "C-01 3 sem reconhecer: a reserva entra com o CPF que a BIA digitou");
             checar(leitor.Identificacoes == 3 && tela.Avisos[1] == Biometria.AvisoNaoReconheci(1) && tela.Avisos[2] == Biometria.AvisoNaoReconheci(2), "C-02 tres leituras, com o aviso N de 3 entre elas");
             checar(remota.Chamadas.Count == 1 && remota.Chamadas[0].Tipo == Autorizacao.TipoTurnoSemDigital && remota.Chamadas[0].Nivel == Autorizacao.NivelGerente, "C-03 a reserva e o TOTP tipo turno_sem_digital no nivel gerente");
             checar(remota.Chamadas[0].Referencia == "turno:CAIXA01:entrada:20261026090000", "C-04 a referencia do log amarra terminal, finalidade e hora");
             checar(d.Motivo == "pela reserva: 3 leituras sem reconhecer" && d.Autorizador == "Marcos" && d.Registro == "log-0001-abcd", "C-05 o motivo diz pela reserva e a trilha leva quem aprovou");
             checar(tela.AvisosDeCaixa.Count == 1 && tela.AvisosDeCaixa[0].Texto.Contains("Entrada pela reserva"), "C-06 um aviso de uma linha antes da reserva");
-            checar(AssinaturaDigital.De(d).Via == "reserva" && AssinaturaDigital.De(d).Motivo == d.Motivo && AssinaturaDigital.De(d).CpfHash == Digitais.CpfHash(CpfBia), "C-07 a assinatura do turno leva via, hash e motivo");
+            checar(AssinaturaDigital.De(d).Via == "reserva" && AssinaturaDigital.De(d).Motivo == "pela reserva: 3 leituras sem reconhecer · autorizado por Marcos (codigo nivel gerente)"
+                   && AssinaturaDigital.De(d).CpfHash == Digitais.CpfHash(CpfBia), "C-07 a assinatura do turno leva via, hash, motivo e quem autorizou com o nivel do codigo");
+            checar(tela.VezesPediuCpf == 1 && tela.Titulos.Contains(Biometria.TituloCpfEntrada) && remota.Chamadas[0].Referencia.StartsWith("turno:"), "C-08 o CPF vem antes do codigo, com o titulo Digite seu CPF");
+            var linhaAud = d.LinhaDeAuditoria;
+            checar(linhaAud.Contains("BIA") && linhaAud.Contains("cpf " + Digitais.CpfHash(CpfBia)[..12]) && !linhaAud.Contains(CpfBia) && linhaAud.Contains("pela reserva: 3 leituras sem reconhecer")
+                   && linhaAud.Contains("autorizado por Marcos (codigo nivel gerente)"), "C-09 a auditoria leva nome, hash do CPF (nunca o CPF), pela reserva, motivo e quem autorizou");
+
+            // CPF que nao e operador ativo desta loja: recusa em uma linha e NAO pede codigo
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa { CpfPadrao = "390.533.447-05" }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Rodar(leitor, tela, cx, remota, totp);
+            checar(!d.Entrou && d.Motivo == Biometria.AvisoCpfNaoEhFuncionario && !d.Avisado && remota.Chamadas.Count == 0 && totp.Pedidos == 0
+                   && tela.VezesPediuCpf == Biometria.MaxTentativas && tela.AvisosCpf[1] == Biometria.AvisoCpfNaoEhFuncionario, "C-10 CPF de quem nao e funcionario ativo: recusa em uma linha, sem pedir codigo");
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); tela.Cpfs.Enqueue("52998224700"); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Rodar(leitor, tela, cx, remota, totp);
+            checar(d.Via == ViaDigital.Reserva && d.Operador?.Id == Ana.Id && tela.AvisosCpf[1] == Biometria.AvisoCpfInvalido && remota.Chamadas.Count == 1, "C-11 digito errado: Esse CPF nao confere, e o certo na segunda entra");
+            checar(Biometria.MascaraCpf("") == "___.___.___-__" && Biometria.MascaraCpf("5299822") == "529.982.2" && Biometria.MascaraCpf(CpfAna) == "529.982.247-25"
+                   && Biometria.MascaraCpf("529982247251") == "529.982.247-25", "C-12 a mascara do campo: 000.000.000-00, enquanto digita");
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Rodar(leitor, tela, cx, remota, totp, "fechamento", primeiraVez: false);
+            checar(d.Via == ViaDigital.Reserva && tela.Titulos.Contains(Biometria.TituloCpfFechamento) && remota.Chamadas[0].Referencia == "turno:CAIXA01:fechamento:20261026090000"
+                   && remota.Chamadas[0].Nivel == Autorizacao.NivelGerente, "C-13 no fechamento: Fechamento: digite seu CPF, e o codigo do gerente geral ou do dono");
 
             // ── D. leitor ausente / sem driver / sem servico -> reserva direto ─────────
             foreach (var (estado, aviso, causa) in new[] {
@@ -244,16 +271,16 @@ public static class TestesBiometria
             // ── E. a reserva recusada: sem internet, codigo errado 3x, desistiu, ninguem escolhido ──
             leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); remota = new RemotaFalsa { SemInternet = true }; totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, remota, totp);
-            checar(d.Via == ViaDigital.Cancelado && !d.Entrou && d.Motivo.Contains("Sem internet") && tela.VezesEscolheu == 0, "E-01 sem internet nao ha reserva: ninguem entra");
+            checar(d.Via == ViaDigital.Cancelado && !d.Entrou && d.Motivo.Contains("Sem internet") && tela.VezesPediuCpf == 1, "E-01 sem internet nao ha reserva: ninguem entra");
             leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); remota = new RemotaFalsa { Aprova = false }; totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, remota, totp);
             checar(d.Via == ViaDigital.Cancelado && totp.Pedidos == Autorizacao.MaxTentativas && d.Motivo.Contains("3 vezes"), "E-02 codigo errado 3 vezes: recusa");
             leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa { Codigo = null };
             d = await Rodar(leitor, tela, cx, remota, totp);
             checar(d.Via == ViaDigital.Cancelado && d.Avisado, "E-03 desistiu do codigo: cancelado e a tela ja avisou");
-            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa { AoEscolher = _ => null }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa { CpfPadrao = null }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, remota, totp);
-            checar(d.Via == ViaDigital.Cancelado && d.Motivo.Contains("ninguem escolhido"), "E-04 codigo certo mas ninguem escolhido: cancelado");
+            checar(d.Via == ViaDigital.Cancelado && d.Avisado && remota.Chamadas.Count == 0, "E-04 desistiu do CPF: cancelado, nenhum codigo pedido");
             leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa(); totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, null, totp);
             checar(d.Via == ViaDigital.Cancelado && d.Motivo.Contains("nuvem"), "E-05 caixa sem nuvem: a reserva nao existe");
@@ -264,7 +291,7 @@ public static class TestesBiometria
             checar(d.Via == ViaDigital.Cancelado && d.Avisado && !d.PrimeiraVez && remota.Chamadas.Count == 0, "F-01 Cancelar na tela: a leitura e cancelada e ninguem entra");
             leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa(); tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, remota, totp);
-            checar(d.Via == ViaDigital.Cancelado && d.PrimeiraVez && d.Avisado, "F-02 Primeira vez: devolve o sinal para a tela seguir com CPF e senha");
+            checar(d.Via == ViaDigital.Cancelado && d.PrimeiraVez && d.Avisado, "F-02 Primeira vez: devolve o sinal para o primeiro cadastro");
             leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa(); tela.Escolhas.Enqueue(EscolhaNaLeitura.SemDigital); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, remota, totp);
             checar(d.Via == ViaDigital.Reserva && d.Motivo == "pela reserva: o operador pediu a reserva", "F-03 Sem digital: vai para a reserva na hora");
@@ -276,9 +303,9 @@ public static class TestesBiometria
             checar(d.Via == ViaDigital.Digital && tela.Avisos[1] == Biometria.AvisoDigitalDesconhecida, "F-05 digital que o Windows conhece mas o caixa nao: avisa e tenta de novo");
             cx.Execute("UPDATE operador SET ativo = 0 WHERE id = 'op-ana'");
             leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:aabb:dedo:1")); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
-            tela.AoEscolher = _ => null;
             d = await Rodar(leitor, tela, cx, remota, totp);
-            checar(d.Via == ViaDigital.Cancelado && tela.Avisos[1] == Biometria.AvisoDigitalDesconhecida && !Digitais.ListaDaReserva(cx).Any(o => o.Id == Ana.Id), "F-06 demitida no painel: a digital guardada nao entra e ela sai da lista da reserva");
+            checar(d.Via == ViaDigital.Cancelado && tela.Avisos[1] == Biometria.AvisoDigitalDesconhecida && !Digitais.ListaDaReserva(cx).Any(o => o.Id == Ana.Id)
+                   && d.Motivo == Biometria.AvisoCpfNaoEhFuncionario && remota.Chamadas.Count == 0, "F-06 demitida no painel: a digital guardada nao entra e o CPF dela nao passa na reserva");
             cx.Execute("UPDATE operador SET ativo = 1 WHERE id = 'op-ana'");
             leitor = new LeitorFalso(); leitor.Leituras.Enqueue(new Captura(ResultadoCaptura.SemLeitor)); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
             d = await Rodar(leitor, tela, cx, remota, totp);
@@ -381,6 +408,111 @@ public static class TestesBiometria
             var lidos = DriverDigitalPersona.LerAparelhos();
             checar(lidos is not null, $"L-07 o registro desta maquina le sem lancar ({lidos!.Count} aparelho(s) 05BA)");
 
+            // ── N. SO DIGITAL (1.0.54, 27/10/2026, decisao do dono) ─────────────────────
+            cx.Execute("DELETE FROM digital; DELETE FROM digital_removida;");
+            Digitais.Guardar(cx, "winbio:3:12:bbbb:dedo:2", CpfBia, Bia.Id, Bia.Nome, 2, null);
+            var guarda = new GuardaDigitalSqlite(() => Banco.Abrir(arquivo), () => "winbio");
+            var agora27 = () => new DateTime(2026, 10, 27, 9, 0, 0);
+            Task<DesfechoDigital> Entrar(bool ligada, LeitorFalso l, TelaFalsa t, RemotaFalsa? r, TelaTotpFalsa tt)
+                => PortaoDigital.EntrarAsync(ligada, l, t, guarda, ch => Digitais.OperadorDaChave(cx, ch), r, tt, "CAIXA-01", agora27);
+
+            // N1. biometria desligada: o caixa nao tem senha, toda entrada e a reserva (CPF + codigo)
+            leitor = new LeitorFalso(); tela = new TelaFalsa { CpfPadrao = CpfAna }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(false, leitor, tela, remota, totp);
+            checar(d.Via == ViaDigital.Reserva && d.Operador?.Id == Ana.Id && d.Motivo == "pela reserva: biometria desligada na loja", "N-01 biometria desligada: a ANA digita o CPF e entra pela reserva");
+            checar(leitor.Sondas == 0 && leitor.Identificacoes == 0 && remota.Chamadas.Count == 1 && remota.Chamadas[0].Tipo == Autorizacao.TipoTurnoSemDigital
+                   && remota.Chamadas[0].Nivel == Autorizacao.NivelGerente && totp.Niveis.SequenceEqual(new[] { "gerente" }), "N-02 desligada nem toca o leitor; o codigo e turno_sem_digital no nivel gerente");
+            checar(AssinaturaDigital.De(d).Via == "reserva" && AssinaturaDigital.De(d).Motivo == "pela reserva: biometria desligada na loja · autorizado por Marcos (codigo nivel gerente)", "N-03 o turno grava reserva, o motivo e quem autorizou");
+            leitor = new LeitorFalso(); tela = new TelaFalsa(); remota = new RemotaFalsa { SemInternet = true }; totp = new TelaTotpFalsa();
+            d = await Entrar(false, leitor, tela, remota, totp);
+            checar(!d.Entrou && d.Via == ViaDigital.Cancelado && tela.VezesPediuCpf == 1, "N-04 desligada e sem internet: ninguem entra (nao existe senha de volta)");
+
+            // N2. ligada: a digital reconhecida entra sem codigo
+            leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:bbbb:dedo:2")); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(d.Via == ViaDigital.Digital && d.Operador?.Id == Bia.Id && !d.PrimeiroCadastro && remota.Chamadas.Count == 0 && totp.Pedidos == 0 && tela.VezesPediuCpf == 0,
+                "N-05 ligada: a digital da BIA entra sem CPF e sem codigo");
+            checar(tela.OfertasPrimeiraVez[0] && d.LinhaDeAuditoria == "BIA (digital)", "N-06 a entrada oferece Primeira vez; a auditoria da digital e o nome");
+
+            // N3. ligada, leitor com problema: a reserva
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemDriver }; tela = new TelaFalsa { CpfPadrao = CpfBia }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(d.Via == ViaDigital.Reserva && d.Operador?.Id == Bia.Id && d.Motivo.StartsWith("pela reserva: leitor sem driver") && remota.Chamadas[0].Tipo == Autorizacao.TipoTurnoSemDigital, "N-07 ligada e leitor sem driver: a reserva com o CPF dela");
+            leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa { CpfPadrao = CpfBia }; tela.Escolhas.Enqueue(EscolhaNaLeitura.SemDigital); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(d.Via == ViaDigital.Reserva && d.Motivo == "pela reserva: o operador pediu a reserva", "N-08 dedo machucado (Sem digital): a reserva");
+
+            // N4. o PRIMEIRO CADASTRO: o funcionario digita o CPF, codigo do gerente, 3 leituras, guarda
+            leitor = new LeitorFalso { EsperaCancelamento = true, ProximoCadastro = Cadastro.Feito("winbio:3:12:aaaa:dedo:1", 3) };
+            tela = new TelaFalsa { CpfPadrao = "529.982.247-25" }; tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(d.Entrou && d.Via == ViaDigital.Digital && d.PrimeiroCadastro && d.Operador?.Id == Ana.Id && d.Cpf == CpfAna, "N-09 primeira vez: a ANA entra pelo primeiro cadastro");
+            checar(remota.Chamadas.Count == 1 && remota.Chamadas[0].Tipo == "digital_cadastro" && remota.Chamadas[0].Tipo == Autorizacao.TipoDigitalCadastro
+                   && remota.Chamadas[0].Nivel == Autorizacao.NivelGerente && remota.Chamadas[0].Referencia == "cadastro:CAIXA01:20261027090000", "N-10 o codigo e digital_cadastro, nivel gerente, referencia com terminal e hora");
+            checar(tela.VezesPediuCpf == 1 && tela.Titulos.IndexOf(Biometria.TituloCpfCadastro) >= 0 && tela.Titulos.IndexOf(Biometria.TituloCpfCadastro) < tela.Titulos.IndexOf(Biometria.TituloPrimeiraVez),
+                "N-11 o mesmo comeco da reserva: Primeira vez: digite seu CPF, antes das leituras");
+            checar(leitor.Cadastros == 1 && leitor.VagasPedidas[0] == 1 && tela.Progresso.Count == 3, "N-12 o caixa le o dedo 3 vezes na vaga livre");
+            var daAna = Digitais.PorCpf(cx, CpfAna);
+            checar(daAna is { Chave: "winbio:3:12:aaaa:dedo:1", CadastradaPor: "Marcos" } && daAna.Vaga == 1, "N-13 a digital fica guardada ligada ao CPF, com quem autorizou");
+            checar(d.Motivo == Biometria.MotivoPrimeiroCadastro && d.Autorizador == "Marcos" && d.Registro == "log-0001-abcd"
+                   && d.MotivoAuditado == "primeiro cadastro · autorizado por Marcos (codigo nivel gerente)"
+                   && AssinaturaDigital.De(d).Via == "digital" && AssinaturaDigital.De(d).Motivo == d.MotivoAuditado, "N-14 o turno grava digital, e o motivo diz primeiro cadastro e quem autorizou");
+            leitor = new LeitorFalso(); leitor.Leituras.Enqueue(Captura.Reconhecida("winbio:3:12:aaaa:dedo:1")); tela = new TelaFalsa(); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(d.Via == ViaDigital.Digital && d.Operador?.Id == Ana.Id && !d.PrimeiroCadastro && remota.Chamadas.Count == 0, "N-15 depois do cadastro, so digital: a ANA entra sem codigo");
+
+            // N5. o primeiro cadastro recusado ou sem saida: nada guardado, nunca senha
+            leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa { CpfPadrao = CpfAna }; tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(!d.Entrou && d.Motivo == Biometria.AvisoJaTemDigital && remota.Chamadas.Count == 0 && leitor.Cadastros == 0, "N-16 CPF de quem ja tem digital: recusa e nem pede o codigo");
+            leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa { CpfPadrao = "390.533.447-05" }; tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(!d.Entrou && d.Motivo == Biometria.AvisoCpfNaoEhFuncionario && remota.Chamadas.Count == 0 && leitor.Cadastros == 0, "N-17 primeiro cadastro com CPF de fora da loja: recusa em uma linha, sem codigo");
+            cx.Execute("DELETE FROM digital WHERE cpf_hash = @H", new { H = Digitais.CpfHash(CpfAna) });
+            leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa { CpfPadrao = CpfAna }; tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); remota = new RemotaFalsa { Aprova = false }; totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(!d.Entrou && leitor.Cadastros == 0 && Digitais.PorCpf(cx, CpfAna) is null && d.Motivo.Contains("Cadastro da digital não autorizado") && tela.VezesPediuCpf == 1, "N-18 codigo recusado: nao cadastra nem entra");
+            leitor = new LeitorFalso { EsperaCancelamento = true, ProximoCadastro = Cadastro.Cancelado }; tela = new TelaFalsa { CpfPadrao = CpfAna }; tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(!d.Entrou && Digitais.PorCpf(cx, CpfAna) is null && tela.AvisosDeCaixa.Any(a => a.Texto == Biometria.AvisoCadastroCancelado), "N-19 leitura do cadastro cancelada: nada guardado");
+            leitor = new LeitorFalso { EsperaCancelamento = true, ProximoCadastro = Cadastro.Feito("winbio:3:12:bbbb:dedo:2", 3) with { ChaveParecida = "winbio:3:12:bbbb:dedo:2" } };
+            tela = new TelaFalsa { CpfPadrao = CpfAna }; tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(!d.Entrou && Digitais.PorCpf(cx, CpfAna) is null && Digitais.PorCpf(cx, CpfBia) is not null && tela.AvisosDeCaixa.Any(a => a.Texto == Biometria.AvisoDigitalDeOutro("BIA")), "N-20 o dedo ja e da BIA: barra e nao mexe na digital dela");
+            leitor = new LeitorFalso { EsperaCancelamento = true }; tela = new TelaFalsa { CpfPadrao = null }; tela.Escolhas.Enqueue(EscolhaNaLeitura.PrimeiraVez); remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await Entrar(true, leitor, tela, remota, totp);
+            checar(!d.Entrou && d.Avisado && leitor.Cadastros == 0 && remota.Chamadas.Count == 0, "N-21 desistiu do CPF: nada, e nenhum codigo pedido");
+            leitor = new LeitorFalso { Estado = EstadoLeitor.SemLeitor }; tela = new TelaFalsa { CpfPadrao = CpfAna }; remota = new RemotaFalsa(); totp = new TelaTotpFalsa();
+            d = await PortaoDigital.PrimeiroCadastroAsync(leitor, tela, guarda, remota, totp, "CAIXA-01", agora27);
+            checar(d.Via == ViaDigital.Reserva && remota.Chamadas.Count == 1 && remota.Chamadas[0].Tipo == Autorizacao.TipoTurnoSemDigital && leitor.Cadastros == 0, "N-22 primeiro cadastro sem leitor: cai na reserva, um codigo so");
+            cx.Execute("UPDATE operador SET cpf = NULL WHERE id = 'op-ana'");
+            checar(guarda.PorCpf(CpfAna) is null && guarda.PorCpf(CpfBia)?.Id == Bia.Id, "N-23 sem CPF no cadastro do painel o CPF digitado nao acha ninguem");
+            cx.Execute("UPDATE operador SET cpf = @C WHERE id = 'op-ana'", new { C = CpfAna });
+            var guardaHid = new GuardaDigitalSqlite(() => Banco.Abrir(arquivo), () => LeitorHidUareU.MotorTexto);
+            checar(!guardaHid.JaTem(CpfBia) && guarda.JaTem(CpfBia), "N-24 digital do WinBio nao serve no leitor da HID: ali a BIA pode cadastrar");
+
+            // N6. nenhuma senha no caminho do turno; o master segue na Configuracao
+            var fonteLoginN = File.ReadAllText(Caminho("Telas/Login.xaml.cs"));
+            var xamlLogin = File.ReadAllText(Caminho("Telas/Login.xaml"));
+            checar(!fonteLoginN.Contains("Operadores.Entrar") && !fonteLoginN.Contains("EntrarComCpf") && !fonteLoginN.Contains("_senha") && !fonteLoginN.Contains("PinValido"),
+                "N-25 a tela de entrada nao confere senha nem PIN de operador (CPF e senha e PIN legado fora do caixa)");
+            checar(!xamlLogin.Contains("TecladoNumerico") && !xamlLogin.Contains("TxtPin") && !xamlLogin.Contains("BtnEntrar") && xamlLogin.Contains("BtnConfig"),
+                "N-26 a tela nao tem teclado nem campo de senha; o botao Configuracao continua");
+            var fonteMain = File.ReadAllText(Caminho("MainWindow.xaml.cs"));
+            checar(fonteMain.Contains("t.PediuConfig += AbrirConfigProtegida") && fonteMain.Contains("AcessoDoMaster(\"Configuração do PDV\"") && fonteMain.Contains("UsuarioMaster.Conferir(cx, senha)"),
+                "N-27 o master (admin da rede, nao e operador de turno) entra na Configuracao pela senha dele, como antes");
+            var (mh, ms) = HashDeSenha.Gerar("98765432");
+            UsuarioMaster.Aplicar(cx, new UsuarioMaster.Master("Brenno", mh, ms, new DateTime(2026, 10, 27, 12, 0, 0, DateTimeKind.Utc)));
+            checar(Biometria.Ligada(cx) && UsuarioMaster.Conferir(cx, "98765432").Liberado && !UsuarioMaster.Conferir(cx, "4725").Liberado,
+                "N-28 com a digital ligada a senha do master abre a Configuracao e a senha de operador nao abre");
+            var textosN = new[] { Biometria.BotaoPrimeiraVez, Biometria.BotaoSemDigital, Biometria.TituloSemBiometria, Biometria.BotaoSemBiometria,
+                Biometria.TituloCpfEntrada, Biometria.TituloCpfFechamento, Biometria.TituloCpfCadastro, Biometria.AvisoCpfInvalido, Biometria.AvisoCpfNaoEhFuncionario, Biometria.TituloEntrada, Biometria.TituloFechamento, Biometria.TituloPrimeiraVez };
+            checar(textosN.All(t => !t.Contains("senha", StringComparison.OrdinalIgnoreCase) && t.Split('\n').Length == 1 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)),
+                "N-29 os textos da entrada sao de uma linha, sem travessao e sem a palavra senha");
+            checar(!File.ReadAllText(Caminho("Telas/TelaDigital.cs")).Contains("CPF e senha"), "N-30 a tela da leitura nao oferece mais CPF e senha");
+            var fonteAutN = File.ReadAllText(Caminho("Pdv.Nucleo/Autorizacao.cs"));
+            checar(fonteAutN.Contains("TipoDigitalCadastro => (\"Cadastro da digital\""), "N-31 a recusa do codigo diz Cadastro da digital nao autorizado");
+
             // ── M. textos de tela sem travessao; a versao ───────────────────────────────
             var textos = new[] { Biometria.TituloEntrada, Biometria.TituloFechamento, Biometria.TituloPrimeiraVez, Biometria.TituloRecadastro,
                 Biometria.AvisoSemLeitor, Biometria.AvisoSemDriver, Biometria.AvisoSemServico, Biometria.AvisoDigitalDesconhecida, Biometria.AvisoJaTemDigital,
@@ -390,16 +522,17 @@ public static class TestesBiometria
             var novos = new[] { "Pdv.Nucleo/Biometria.cs", "Pdv.Nucleo/LeitorWinBio.cs", "Pdv.Nucleo/RegistroDigital.cs", "Telas/TelaDigital.cs", "Pdv.Testes/TestesBiometria.cs" }
                 .Select(a => File.Exists(Caminho(a)) ? File.ReadAllText(Caminho(a)) : "").ToList();
             checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)), "M-03 os arquivos novos existem e nao tem travessao");
-            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.53</Version>"), "M-04 a versao do caixa e 1.0.53 (o leitor pelo runtime da HID)");
+            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.54</Version>"), "M-04 a versao do caixa e 1.0.54 (so digital)");
             var fonteAut = File.ReadAllText(Caminho("Pdv.Nucleo/Autorizacao.cs"));
             checar(fonteAut.Contains("TipoTurnoSemDigital => (\"Entrada sem digital\"") && Autorizacao.TipoTurnoSemDigital == "turno_sem_digital" && Autorizacao.TipoDigitalRecadastro == "digital_recadastro", "M-05 os tipos novos do TOTP e a frase da recusa");
             var fonteLogin = File.ReadAllText(Caminho("Telas/Login.xaml.cs"));
             var fonteVenda = File.ReadAllText(Caminho("Telas/Venda.xaml.cs"));
             var fonteAbert = File.ReadAllText(Caminho("Telas/AberturaCaixa.xaml.cs"));
-            checar(fonteLogin.Contains("PortaoDigitalDaTela.IdentificarAsync(dono, \"entrada\"") && fonteLogin.Contains("Biometria.Ligada("), "M-06 a entrada passa pelo portao da digital quando ligada");
+            checar(fonteLogin.Contains("PortaoDigitalDaTela.EntrarAsync(dono, _ligada)") && fonteLogin.Contains("Biometria.Ligada("), "M-06 a entrada passa pelo portao (so digital; desligada = reserva)");
             checar(fonteVenda.Contains("PortaoDigitalDaTela.IdentificarAsync(dono, \"fechamento\"") && fonteVenda.Contains("Biometria.Ligada("), "M-07 o fechamento do caixa passa pelo portao");
             checar(fonteAbert.Contains("PortaoDigitalDaTela.IdentificarAsync(dono, \"fechamento\"") && fonteAbert.Contains("EntradaDigital.Tomar()"), "M-08 fechar o caixa esquecido (na abertura) tambem passa pelo portao");
-            checar(fonteLogin.Contains("Biometria.AvisoJaTemDigital"), "M-09 quem ja tem digital nao entra mais pela senha");
+            var fonteTelaDig = File.ReadAllText(Caminho("Telas/TelaDigital.cs"));
+            checar(fonteTelaDig.Contains("new GuardaDigitalSqlite(") && fonteTelaDig.Contains("Servicos.MotorDoLeitor"), "M-09 o primeiro cadastro usa a guarda de verdade e o motor em uso");
         }
         finally
         {

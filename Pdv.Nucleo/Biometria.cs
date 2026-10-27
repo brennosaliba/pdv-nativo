@@ -33,7 +33,27 @@ namespace Pdv.Nucleo;
 //  leitor entra por ILeitorDigital (LeitorWinBio e o de verdade; a suite usa um
 //  de mentira) e a tela por ITelaDigital.
 //
-//  Testes: Pdv.Testes/TestesBiometria.cs
+//  SO DIGITAL (1.0.54, 27/10/2026, decisao do dono): o caixa NAO usa mais senha
+//  de operador para entrar nem para fechar o turno. Tres caminhos, e so eles:
+//   · DIGITAL: o leitor reconhece (entrada e fechamento);
+//   · RESERVA: problema no leitor (ausente, sem driver, 3 leituras sem
+//     reconhecer, dedo machucado) = o FUNCIONARIO digita o proprio CPF (confere
+//     contra os operadores ativos da loja; sem pedir codigo se nao conferir) e o
+//     gerente geral ou o dono autoriza com o codigo ('turno_sem_digital'), na
+//     abertura e no fechamento. Com a biometria DESLIGADA no painel, toda
+//     entrada e pela reserva (o caixa nao tem senha);
+//   · PRIMEIRO CADASTRO: quem ainda nao tem digital neste caixa. O mesmo
+//     comeco: o funcionario digita o CPF, o gerente geral ou o dono autoriza com
+//     o codigo ('digital_cadastro', nivel gerente, SQL 225) e o caixa le o dedo
+//     3 vezes. Dali em diante, so digital.
+//  Auditoria: hash do CPF, nome, "pela reserva: motivo" ou "primeiro cadastro",
+//  e quem autorizou com o nivel do codigo (DesfechoDigital.MotivoAuditado).
+//  A tela de CPF e senha e o PIN legado sairam do caixa (os dados ficam). O
+//  usuario MASTER (admin da rede) nao e operador de turno: continua abrindo a
+//  Configuracao pela senha dele (UsuarioMaster.Conferir), como antes.
+//  Regra: PortaoDigital.EntrarAsync e PortaoDigital.PrimeiroCadastroAsync.
+//
+//  Testes: Pdv.Testes/TestesBiometria.cs (N. so digital)
 // ════════════════════════════════════════════════════════════════════════════
 
 /// <summary>O que a sonda do leitor devolve antes de qualquer leitura.</summary>
@@ -139,8 +159,12 @@ public interface ITelaDigital
     /// </summary>
     Task<Cadastro> CadastrarAsync(string titulo, Func<IProgress<string>, CancellationToken, Task<Cadastro>> cadastrar);
 
-    /// <summary>A lista de funcionarios da reserva. null = desistiu.</summary>
-    Task<Operador?> EscolherFuncionarioAsync(string titulo, IReadOnlyList<Operador> lista);
+    /// <summary>
+    /// O funcionario digita o proprio CPF (campo com mascara 000.000.000-00), na reserva e no
+    /// primeiro cadastro (ajuste do dono, 27/10). <paramref name="aviso"/> e a linha vermelha da
+    /// tentativa anterior. Devolve os digitos, ou null = desistiu.
+    /// </summary>
+    Task<string?> PedirCpfAsync(string titulo, string? aviso);
 
     /// <summary>Uma caixa de aviso de uma linha.</summary>
     void Avisar(string titulo, string texto);
@@ -151,7 +175,7 @@ public enum ViaDigital
 {
     /// <summary>O leitor reconheceu a digital.</summary>
     Digital,
-    /// <summary>Codigo do gerente ou do dono mais a escolha na lista.</summary>
+    /// <summary>O funcionario digita o CPF e o gerente geral ou o dono autoriza com o codigo.</summary>
     Reserva,
     /// <summary>Ninguem entrou: desistiu, codigo recusado, ou pediu a primeira vez (ver <see cref="DesfechoDigital.PrimeiraVez"/>).</summary>
     Cancelado,
@@ -167,8 +191,11 @@ public sealed record DesfechoDigital(ViaDigital Via, Operador? Operador, string?
 {
     public bool Entrou => Via != ViaDigital.Cancelado && Operador is not null;
 
-    /// <summary>O operador tocou em "Primeira vez": a tela segue para CPF e senha e depois cadastra.</summary>
+    /// <summary>O operador tocou em "Primeira vez": o portao segue para o primeiro cadastro (codigo do gerente, 1.0.54).</summary>
     public bool PrimeiraVez { get; init; }
+
+    /// <summary>Entrou pelo primeiro cadastro (codigo do gerente + 3 leituras). Via = Digital. 1.0.54.</summary>
+    public bool PrimeiroCadastro { get; init; }
 
     /// <summary>A tela ja explicou por que nao seguiu (ele cancelou): nao avisar de novo.</summary>
     public bool Avisado { get; init; }
@@ -178,6 +205,22 @@ public sealed record DesfechoDigital(ViaDigital Via, Operador? Operador, string?
 
     /// <summary>O hash do CPF para o turno e a nuvem (null sem CPF).</summary>
     public string? CpfHash => Cpf is null ? null : Digitais.CpfHash(Cpf);
+
+    /// <summary>O nivel do codigo que autorizou ("gerente" = gerente geral ou dono; "dono"). Null sem codigo.</summary>
+    public string? NivelCodigo { get; init; }
+
+    /// <summary>
+    /// O motivo com quem autorizou (vai no via_motivo do turno e na auditoria):
+    /// "pela reserva: sem leitor · autorizado por Marcos (codigo nivel gerente)".
+    /// </summary>
+    public string MotivoAuditado => Autorizador is null || (Via != ViaDigital.Reserva && !PrimeiroCadastro)
+        ? Motivo
+        : $"{Motivo} · autorizado por {Autorizador} (codigo nivel {NivelCodigo ?? "gerente"})";
+
+    /// <summary>A linha da auditoria da entrada: nome, hash curto do CPF e o motivo auditado.</summary>
+    public string LinhaDeAuditoria => Operador is null ? Motivo
+        : Via == ViaDigital.Digital && !PrimeiroCadastro ? $"{Operador.Nome} (digital)"
+        : $"{Operador.Nome} · cpf {(CpfHash is null ? "?" : CpfHash[..12])} · {MotivoAuditado}";
 }
 
 /// <summary>Uma linha da tabela local `digital`.</summary>
@@ -227,6 +270,37 @@ public static class Biometria
     public const string AvisoJaTemDigital = "Voce ja tem digital neste caixa. Encoste o dedo no leitor.";
     public const string AvisoCadastroCancelado = "Cadastro da digital cancelado. Entre de novo.";
     public const string AvisoVagasEsgotadas = "Este caixa ja tem 10 digitais cadastradas. Apague uma na Configuracao.";
+
+    // 1.0.54 (27/10): so digital. Uma linha cada, sem travessao, sem a palavra senha.
+    /// <summary>O botao da leitura que leva ao primeiro cadastro.</summary>
+    public const string BotaoPrimeiraVez = "Primeira vez: código do gerente";
+    /// <summary>O botao da leitura que leva a reserva.</summary>
+    public const string BotaoSemDigital = "Sem digital: código do gerente";
+    /// <summary>A linha e o botao da entrada com a biometria desligada no painel (toda entrada e pela reserva).</summary>
+    public const string TituloSemBiometria = "Entrada com o código do gerente";
+    public const string BotaoSemBiometria = "Entrar com o código do gerente";
+    /// <summary>Os titulos do campo de CPF (ajuste do dono, 27/10: o funcionario digita o proprio CPF).</summary>
+    public const string TituloCpfEntrada = "Digite seu CPF";
+    public const string TituloCpfFechamento = "Fechamento: digite seu CPF";
+    public const string TituloCpfCadastro = "Primeira vez: digite seu CPF";
+    public const string AvisoCpfInvalido = "Esse CPF não confere. Confira os números.";
+    public const string AvisoCpfNaoEhFuncionario = "Esse CPF não é de funcionário ativo desta loja.";
+    /// <summary>O motivo de auditoria do primeiro cadastro (quem autorizou vai em MotivoAuditado).</summary>
+    public const string MotivoPrimeiroCadastro = "primeiro cadastro";
+    /// <summary>A causa da reserva quando o painel desligou a biometria da loja.</summary>
+    public const string CausaDesligada = "biometria desligada na loja";
+
+    /// <summary>A mascara do campo de CPF enquanto digita: "529.982.2", "529.982.247-25"; vazio = "___.___.___-__".</summary>
+    public static string MascaraCpf(string? digitos)
+    {
+        var d = new string((digitos ?? "").Where(char.IsDigit).Take(11).ToArray());
+        if (d.Length == 0) return "___.___.___-__";
+        var s = d;
+        if (s.Length > 3) s = s.Insert(3, ".");
+        if (s.Length > 7) s = s.Insert(7, ".");
+        if (s.Length > 11) s = s.Insert(11, "-");
+        return s;
+    }
 
     /// <summary>O mesmo dedo ja esta guardado em outra pessoa (motor hid, 1.0.53).</summary>
     public static string AvisoDigitalDeOutro(string nome) => $"Essa digital já está cadastrada para {nome}.";
@@ -515,10 +589,78 @@ public static class Digitais
 }
 
 /// <summary>
-/// A MAQUINA DE ESTADOS DO PORTAO. Todo caminho termina em Digital (o leitor reconheceu),
-/// Reserva (codigo do gerente ou do dono e escolha na lista) ou Cancelado. Nenhum await
-/// aqui leva ConfigureAwait(false): quem chama e a thread de UI e as continuacoes encostam
-/// em janela (mesma regra de Autorizacao.ResolverAsync).
+/// O que o portao precisa da guarda (1.0.54). A real e <see cref="GuardaDigitalSqlite"/>; a
+/// interface existe para o portao rodar sem segurar conexao do SQLite atravessando await.
+/// </summary>
+public interface IGuardaDigital
+{
+    /// <summary>O operador ATIVO desta loja com esse CPF (o cadastro local e o da loja); null = nao e funcionario ativo.</summary>
+    Operador? PorCpf(string cpf);
+
+    /// <summary>O CPF ja tem digital no leitor em uso neste caixa?</summary>
+    bool JaTem(string cpf);
+
+    /// <summary>O CPF (11 digitos) do operador; null sem CPF valido.</summary>
+    string? Cpf(Operador op);
+
+    /// <summary>A vaga do CPF (a dele, se ja teve) ou a primeira livre; null = dez ocupadas.</summary>
+    int? Vaga(string cpf);
+
+    /// <summary>Guarda o cadastro ligado ao CPF. null = guardou; texto = o aviso de uma linha (o dedo e de outra pessoa).</summary>
+    string? Guardar(Operador op, string cpf, int vaga, Cadastro cad, string? por);
+}
+
+/// <summary>A guarda de verdade: cada chamada abre e fecha a propria conexao.</summary>
+public sealed class GuardaDigitalSqlite : IGuardaDigital
+{
+    private readonly Func<SqliteConnection> _abrir;
+    private readonly Func<string?> _motor;
+
+    /// <param name="motor">o motor em uso depois da sonda ("winbio", "hid"; null = qualquer um).</param>
+    public GuardaDigitalSqlite(Func<SqliteConnection> abrir, Func<string?> motor)
+    {
+        _abrir = abrir;
+        _motor = motor;
+    }
+
+    public Operador? PorCpf(string cpf)
+    {
+        using var cx = _abrir();
+        return Digitais.OperadorDoCpf(cx, cpf);
+    }
+
+    public bool JaTem(string cpf)
+    {
+        using var cx = _abrir();
+        return Digitais.JaTem(cx, cpf, _motor());
+    }
+
+    public string? Cpf(Operador op)
+    {
+        using var cx = _abrir();
+        return Digitais.CpfDoOperador(cx, op.Id);
+    }
+
+    public int? Vaga(string cpf)
+    {
+        using var cx = _abrir();
+        return Digitais.PorCpf(cx, cpf)?.Vaga ?? Digitais.ProximaVaga(cx);
+    }
+
+    public string? Guardar(Operador op, string cpf, int vaga, Cadastro cad, string? por)
+    {
+        using var cx = _abrir();
+        if (Digitais.DonoDaParecida(cx, cad, cpf) is { } outro) return Biometria.AvisoDigitalDeOutro(outro);
+        Digitais.Guardar(cx, cad.Chave!, cpf, op.Id, op.Nome, vaga, por, null, cad.Motor, cad.Molde);
+        return null;
+    }
+}
+
+/// <summary>
+/// A MAQUINA DE ESTADOS DO PORTAO. Todo caminho termina em Digital (o leitor reconheceu, ou o
+/// primeiro cadastro), Reserva (o funcionario digita o CPF e o gerente geral ou o dono autoriza
+/// com o codigo) ou Cancelado. Nenhum await aqui leva ConfigureAwait(false): quem chama e a
+/// thread de UI e as continuacoes encostam em janela (mesma regra de Autorizacao.ResolverAsync).
 /// </summary>
 public static class PortaoDigital
 {
@@ -526,11 +668,11 @@ public static class PortaoDigital
     /// Identifica quem esta no caixa pela digital.
     /// </summary>
     /// <param name="porChave">chave do Windows -> operador ativo (null = digital desconhecida ou pessoa demitida).</param>
-    /// <param name="lista">a lista da reserva (quem pode ser escolhido).</param>
+    /// <param name="porCpf">CPF digitado na reserva -> operador ativo desta loja (null = recusa sem pedir codigo).</param>
     /// <param name="finalidade">"entrada" ou "fechamento": muda o titulo e vai na referencia do TOTP.</param>
-    /// <param name="ofertaPrimeiraVez">so na entrada: o botao que leva ao CPF e senha de hoje.</param>
+    /// <param name="ofertaPrimeiraVez">so na entrada: o botao Primeira vez, que leva ao primeiro cadastro pelo codigo do gerente (1.0.54).</param>
     public static async Task<DesfechoDigital> IdentificarAsync(ILeitorDigital leitor, ITelaDigital tela,
-        Func<string, Operador?> porChave, Func<Operador, string?> cpfDe, IReadOnlyList<Operador> lista,
+        Func<string, Operador?> porChave, Func<Operador, string?> cpfDe, Func<string, Operador?> porCpf,
         IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal, string finalidade,
         bool ofertaPrimeiraVez, Func<DateTime>? agora = null, CancellationToken ct = default)
     {
@@ -539,7 +681,7 @@ public static class PortaoDigital
         if (!sonda.Pronto)
         {
             tela.Avisar("Leitor de digital", Biometria.AvisoDoEstado(sonda.Estado));
-            return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade,
+            return await ReservaAsync(tela, porCpf, remota, telaTotp, terminal, finalidade,
                 Biometria.CausaDoEstado(sonda.Estado), agora, ct);
         }
 
@@ -550,9 +692,9 @@ public static class PortaoDigital
             switch (leitura.Escolha)
             {
                 case EscolhaNaLeitura.PrimeiraVez:
-                    return new DesfechoDigital(ViaDigital.Cancelado, null, null, "primeira vez: CPF e senha") { PrimeiraVez = true, Avisado = true };
+                    return new DesfechoDigital(ViaDigital.Cancelado, null, null, "primeira vez: codigo do gerente") { PrimeiraVez = true, Avisado = true };
                 case EscolhaNaLeitura.SemDigital:
-                    return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade, "o operador pediu a reserva", agora, ct);
+                    return await ReservaAsync(tela, porCpf, remota, telaTotp, terminal, finalidade, "o operador pediu a reserva", agora, ct);
                 case EscolhaNaLeitura.Desistiu:
                     return new DesfechoDigital(ViaDigital.Cancelado, null, null, "o operador desistiu") { Avisado = true };
             }
@@ -570,7 +712,7 @@ public static class PortaoDigital
                 }
                 case ResultadoCaptura.SemLeitor:
                     tela.Avisar("Leitor de digital", Biometria.AvisoSemLeitor);
-                    return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade, "o leitor sumiu no meio", agora, ct);
+                    return await ReservaAsync(tela, porCpf, remota, telaTotp, terminal, finalidade, "o leitor sumiu no meio", agora, ct);
                 case ResultadoCaptura.Cancelado:
                     return new DesfechoDigital(ViaDigital.Cancelado, null, null, "o operador desistiu") { Avisado = true };
                 case ResultadoCaptura.Falha:
@@ -583,34 +725,142 @@ public static class PortaoDigital
         }
 
         tela.Avisar("Digital nao reconhecida", $"{Biometria.MaxTentativas} leituras sem reconhecer. Entrada pela reserva: codigo do gerente ou do dono.");
-        return await ReservaAsync(tela, lista, cpfDe, remota, telaTotp, terminal, finalidade,
+        return await ReservaAsync(tela, porCpf, remota, telaTotp, terminal, finalidade,
             $"{Biometria.MaxTentativas} leituras sem reconhecer", agora, ct);
     }
 
     /// <summary>
-    /// A RESERVA: codigo do autenticador do gerente ou do dono (tipo 'turno_sem_digital', nivel
-    /// gerente) e a escolha do funcionario na lista. Sem o SQL 224 a nuvem so aceita o codigo do
-    /// dono (mesma regra do 203 para fechar_pdv). Sem internet nao ha reserva: a regra do TOTP.
+    /// O CPF do funcionario, digitado por ele (ajuste do dono, 27/10). Confere o digito e o
+    /// cadastro de operadores ATIVOS desta loja; o que nao confere volta na mesma tela com uma
+    /// linha vermelha, ate <see cref="Biometria.MaxTentativas"/> vezes. Nenhum codigo e pedido
+    /// antes de o CPF conferir. Devolve (operador, cpf) ou (null, motivo).
     /// </summary>
-    public static async Task<DesfechoDigital> ReservaAsync(ITelaDigital tela, IReadOnlyList<Operador> lista,
-        Func<Operador, string?> cpfDe, IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal,
+    public static async Task<(Operador? Op, string? Cpf, string? Recusa, bool Desistiu)> CpfDoFuncionarioAsync(
+        ITelaDigital tela, string titulo, Func<string, Operador?> porCpf)
+    {
+        string? aviso = null;
+        for (var tentativa = 1; tentativa <= Biometria.MaxTentativas; tentativa++)
+        {
+            var digitado = await tela.PedirCpfAsync(titulo, aviso);
+            if (digitado is null) return (null, null, "o funcionario desistiu do CPF", true);
+            var cpf = Operadores.CpfChave(digitado);
+            if (cpf is null || !Documentos.CpfValido(cpf)) { aviso = Biometria.AvisoCpfInvalido; continue; }
+            var op = porCpf(cpf);
+            if (op is null) { aviso = Biometria.AvisoCpfNaoEhFuncionario; continue; }
+            return (op, cpf, null, false);
+        }
+        return (null, null, aviso ?? Biometria.AvisoCpfNaoEhFuncionario, false);
+    }
+
+    /// <summary>
+    /// A RESERVA (ajuste do dono, 27/10): o FUNCIONARIO digita o proprio CPF (confere contra os
+    /// operadores ativos desta loja; o que nao confere e recusado sem pedir codigo) e o caixa pede
+    /// o codigo do autenticador do GERENTE GERAL ou do DONO (tipo 'turno_sem_digital', nivel
+    /// gerente), na abertura e no fechamento. Sem o SQL 224 a nuvem so aceita o codigo do dono.
+    /// Sem internet nao ha reserva: a regra do TOTP. Nunca senha.
+    /// </summary>
+    public static async Task<DesfechoDigital> ReservaAsync(ITelaDigital tela, Func<string, Operador?> porCpf,
+        IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal,
         string finalidade, string causa, Func<DateTime>? agora = null, CancellationToken ct = default)
     {
+        var titulo = finalidade == "fechamento" ? Biometria.TituloCpfFechamento : Biometria.TituloCpfEntrada;
+        var (op, cpf, recusa, desistiu) = await CpfDoFuncionarioAsync(tela, titulo, porCpf);
+        if (op is null)
+            return new DesfechoDigital(ViaDigital.Cancelado, null, null, desistiu ? Biometria.MotivoReserva(causa) + " · " + recusa : recusa!) { Avisado = desistiu };
+
         var pedido = new PedidoAutorizacao(terminal, Autorizacao.ReferenciaTurnoSemDigital(terminal, finalidade, (agora ?? (() => DateTime.Now))()), 0)
         {
             Tipo = Autorizacao.TipoTurnoSemDigital,
             Nivel = Autorizacao.NivelGerente,
-            Operador = causa,
+            Operador = $"{op.Nome} ({causa})",
         };
         var aut = await Autorizacao.ResolverAsync(remota, pedido, telaTotp, ct);
         if (!aut.Autorizado)
             return new DesfechoDigital(ViaDigital.Cancelado, null, null, Biometria.MotivoReserva(causa) + " · " + aut.Motivo) { Avisado = aut.Avisado };
 
-        var escolhido = await tela.EscolherFuncionarioAsync(finalidade == "fechamento" ? "Quem esta fechando o caixa?" : "Quem esta entrando?", lista);
-        if (escolhido is null)
-            return new DesfechoDigital(ViaDigital.Cancelado, null, null, Biometria.MotivoReserva(causa) + " · ninguem escolhido") { Avisado = true };
-        return new DesfechoDigital(ViaDigital.Reserva, escolhido, cpfDe(escolhido), Biometria.MotivoReserva(causa),
-            aut.AprovadoPor, aut.TokenId);
+        return new DesfechoDigital(ViaDigital.Reserva, op, cpf, Biometria.MotivoReserva(causa), aut.AprovadoPor, aut.TokenId)
+            { NivelCodigo = aut.Nivel ?? Autorizacao.NivelGerente };
+    }
+
+    /// <summary>
+    /// A ENTRADA DO CAIXA, SO DIGITAL (1.0.54, decisao do dono de 27/10). Nao existe senha:
+    ///  · biometria DESLIGADA no painel: toda entrada e pela reserva (CPF do funcionario + codigo
+    ///    do gerente ou do dono), com a causa "biometria desligada na loja";
+    ///  · ligada: a digital (IdentificarAsync, com o botao Primeira vez); problema no leitor cai
+    ///    na reserva; Primeira vez segue para o PRIMEIRO CADASTRO (PrimeiroCadastroAsync).
+    /// </summary>
+    public static async Task<DesfechoDigital> EntrarAsync(bool biometriaLigada, ILeitorDigital leitor, ITelaDigital tela,
+        IGuardaDigital guarda, Func<string, Operador?> porChave,
+        IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal, Func<DateTime>? agora = null, CancellationToken ct = default)
+    {
+        if (!biometriaLigada)
+            return await ReservaAsync(tela, guarda.PorCpf, remota, telaTotp, terminal, "entrada", Biometria.CausaDesligada, agora, ct);
+
+        var d = await IdentificarAsync(leitor, tela, porChave, guarda.Cpf, guarda.PorCpf, remota, telaTotp, terminal, "entrada",
+            ofertaPrimeiraVez: true, agora, ct);
+        if (!d.PrimeiraVez) return d;
+        return await PrimeiroCadastroAsync(leitor, tela, guarda, remota, telaTotp, terminal, agora, ct);
+    }
+
+    /// <summary>
+    /// O PRIMEIRO CADASTRO (1.0.54): quem ainda nao tem digital neste caixa. Sem senha e com o
+    /// mesmo comeco da reserva (ajuste do dono, 27/10): o FUNCIONARIO digita o CPF (operador ativo
+    /// desta loja, ainda sem digital no leitor em uso), o gerente geral ou o dono autoriza com o
+    /// codigo (tipo 'digital_cadastro', nivel gerente; antes do SQL 225 a nuvem so aceita o do
+    /// dono) e o caixa le o dedo 3 vezes, guarda ligado ao CPF e entra. Leitor com problema antes
+    /// de comecar: a reserva (um codigo so, nao dois).
+    /// </summary>
+    public static async Task<DesfechoDigital> PrimeiroCadastroAsync(ILeitorDigital leitor, ITelaDigital tela, IGuardaDigital guarda,
+        IAutorizacaoRemota? remota, ITelaAutorizacao telaTotp, string terminal,
+        Func<DateTime>? agora = null, CancellationToken ct = default)
+    {
+        static DesfechoDigital Nao(string motivo, bool avisado = true) => new(ViaDigital.Cancelado, null, null, motivo) { Avisado = avisado };
+
+        var sonda = await leitor.SondarAsync(ct);
+        if (!sonda.Pronto)
+        {
+            tela.Avisar("Leitor de digital", Biometria.AvisoDoEstado(sonda.Estado));
+            return await ReservaAsync(tela, guarda.PorCpf, remota, telaTotp, terminal, "entrada",
+                Biometria.CausaDoEstado(sonda.Estado), agora, ct);
+        }
+
+        var (op, cpf, recusa, desistiu) = await CpfDoFuncionarioAsync(tela, Biometria.TituloCpfCadastro, guarda.PorCpf);
+        if (op is null || cpf is null) return Nao(desistiu ? "primeiro cadastro: " + recusa : recusa!, desistiu);
+        // quem ja tem digital entra pela digital: o codigo do gerente nao e gasto
+        if (guarda.JaTem(cpf)) return Nao(Biometria.AvisoJaTemDigital, false);
+        var vaga = guarda.Vaga(cpf);
+        if (vaga is null) return Nao(Biometria.AvisoVagasEsgotadas, false);
+
+        var pedido = new PedidoAutorizacao(terminal, Autorizacao.ReferenciaDigitalCadastro(terminal, (agora ?? (() => DateTime.Now))()), 0)
+        {
+            Tipo = Autorizacao.TipoDigitalCadastro,
+            Nivel = Autorizacao.NivelGerente,
+            Operador = $"{op.Nome} (primeiro cadastro)",
+        };
+        var aut = await Autorizacao.ResolverAsync(remota, pedido, telaTotp, ct);
+        if (!aut.Autorizado) return Nao("primeiro cadastro · " + aut.Motivo, aut.Avisado);
+
+        var cad = await CadastrarAsync(leitor, tela, Biometria.TituloPrimeiraVez, vaga.Value, ct);
+        switch (cad.Resultado)
+        {
+            case ResultadoCadastro.Ok:
+                if (guarda.Guardar(op, cpf, vaga.Value, cad, aut.AprovadoPor) is { } erro)
+                {
+                    tela.Avisar("Digital", erro);
+                    return Nao("primeiro cadastro: " + erro);
+                }
+                return new DesfechoDigital(ViaDigital.Digital, op, cpf, Biometria.MotivoPrimeiroCadastro,
+                    aut.AprovadoPor, aut.TokenId) { PrimeiroCadastro = true, NivelCodigo = aut.Nivel ?? Autorizacao.NivelGerente };
+            case ResultadoCadastro.Cancelado:
+                tela.Avisar("Digital", Biometria.AvisoCadastroCancelado);
+                return Nao("primeiro cadastro: cancelado");
+            case ResultadoCadastro.SemLeitor:
+                tela.Avisar("Digital", Biometria.AvisoSemLeitor);
+                return Nao("primeiro cadastro: sem leitor");
+            default:
+                tela.Avisar("Digital", "O leitor falhou (" + cad.Motivo + "). Tente de novo.");
+                return Nao("primeiro cadastro: o leitor falhou");
+        }
     }
 
     /// <summary>

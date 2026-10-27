@@ -478,7 +478,7 @@ public static class TestesLoginGestor
         checar(Regex.Matches(tela, @"!!window\.kcContext \|\| /partners-auth\\\.ifood/i\.test\(String\(location\.host \|\| ''\)\)").Count >= 2
                && tela.Contains("var r = { tipo: 'pdvsbdiag', id: id, login: !!document.querySelector('input[type=\"password\"]') || !!window.kcContext };", StringComparison.Ordinal),
             "LG-30f a leitura do login (naolidas, diag) reconhece o Keycloak do iFood (kcContext ou o host partners-auth); o pdvsbdiag so pelo kcContext");
-        checar(Ler("Pdv.csproj").Contains("<Version>1.0.53</Version>", StringComparison.Ordinal), "LG-31 a versao do caixa e 1.0.53");
+        checar(Ler("Pdv.csproj").Contains("<Version>1.0.54</Version>", StringComparison.Ordinal), "LG-31 a versao do caixa e 1.0.54");
         var novos = new[] { servico, nucleo, testes };
         checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)), "LG-32 os arquivos novos nao tem travessao");
         var script = TestesScriptSendbird.ExtrairRaw(tela, "ScriptLogin") ?? "";

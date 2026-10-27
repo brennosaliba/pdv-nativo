@@ -18,7 +18,7 @@ public sealed record Operador(string Id, string Nome, string Perfil)
 public sealed record AssinaturaDigital(string Via, string? CpfHash, string? Motivo = null)
 {
     public static AssinaturaDigital De(DesfechoDigital d)
-        => new(d.ViaTexto, d.CpfHash, d.Via == ViaDigital.Reserva ? d.Motivo : null);
+        => new(d.ViaTexto, d.CpfHash, d.Via == ViaDigital.Reserva || d.PrimeiroCadastro ? d.MotivoAuditado : null);
 }
 
 /// <summary>

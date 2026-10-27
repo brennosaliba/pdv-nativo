@@ -10,8 +10,8 @@ namespace Pdv.Telas;
 /// O lado de WPF da digital (1.0.52): e isto que a maquina de estados do nucleo
 /// (<see cref="PortaoDigital"/>) chama quando precisa de janela. Tres janelas, todas de uma
 /// linha: "Encoste o dedo no leitor" (com os botoes Primeira vez, Sem digital e Cancelar),
-/// "Primeira vez: encoste o dedo 3 vezes" (com o contador) e a lista de funcionarios da
-/// reserva. As duas primeiras sao NAO modais (como <see cref="Espera"/>): o leitor esta
+/// "Primeira vez: encoste o dedo 3 vezes" (com o contador) e o CPF digitado pelo proprio
+/// funcionario na reserva e no primeiro cadastro (1.0.54). As duas primeiras sao NAO modais (como <see cref="Espera"/>): o leitor esta
 /// bloqueado esperando o dedo numa thread de trabalho, e a tela precisa seguir desenhando
 /// e aceitando o toque nos botoes.
 /// </summary>
@@ -56,8 +56,9 @@ public sealed class TelaDigital : ITelaDigital
             b.Click += (_, _) => { escolha = e; cts.Cancel(); };
             pilha.Children.Add(b);
         }
-        if (ofertaPrimeiraVez) Botao("Primeira vez: CPF e senha", EscolhaNaLeitura.PrimeiraVez);
-        Botao("Sem digital: codigo do gerente", EscolhaNaLeitura.SemDigital);
+        // 1.0.54: sem senha. A primeira vez e a reserva passam pelo codigo do gerente.
+        if (ofertaPrimeiraVez) Botao(Biometria.BotaoPrimeiraVez, EscolhaNaLeitura.PrimeiraVez);
+        Botao(Biometria.BotaoSemDigital, EscolhaNaLeitura.SemDigital);
         Botao("Cancelar", EscolhaNaLeitura.Desistiu);
 
         janela.Content = Dialogo.Moldura(pilha);
@@ -112,6 +113,73 @@ public sealed class TelaDigital : ITelaDigital
         }
     }
 
+    /// <summary>
+    /// O CPF digitado pelo proprio funcionario (reserva e primeiro cadastro, ajuste do dono de
+    /// 27/10): visor com a mascara 000.000.000-00, teclado na tela e o fisico, Continuar so com
+    /// 11 digitos. A linha vermelha e o aviso da tentativa anterior.
+    /// </summary>
+    public Task<string?> PedirCpfAsync(string titulo, string? aviso)
+    {
+        var digitos = "";
+        string? resultado = null;
+        var janela = Dialogo.Base(_dono, 440);
+        var pilha = new StackPanel();
+        pilha.Children.Add(PedirValor.Cabecalho(janela, titulo));
+        var visor = new TextBlock
+        {
+            FontSize = 34, FontWeight = FontWeights.Bold, Foreground = R("Texto"),
+            HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 4),
+        };
+        pilha.Children.Add(visor);
+        pilha.Children.Add(new TextBlock
+        {
+            Text = aviso ?? "", FontSize = 15, TextWrapping = TextWrapping.Wrap, Foreground = R("Erro"),
+            TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 0, 0, 10), MinHeight = 20,
+        });
+        var ok = PedirValor.Botao("Continuar", true);
+        void Pinta()
+        {
+            visor.Text = Biometria.MascaraCpf(digitos);
+            ok.IsEnabled = digitos.Length == 11;
+        }
+        var teclado = new TecladoNumerico();
+        teclado.Digitou += d => { if (digitos.Length < 11) { digitos += d[0]; Pinta(); } };
+        teclado.Apagou += () => { if (digitos.Length > 0) { digitos = digitos[..^1]; Pinta(); } };
+        teclado.Limpou += () => { digitos = ""; Pinta(); };
+        pilha.Children.Add(teclado);
+
+        var linha = new Grid { Margin = new Thickness(0, 14, 0, 0) };
+        linha.ColumnDefinitions.Add(new ColumnDefinition());
+        linha.ColumnDefinitions.Add(new ColumnDefinition());
+        var cancelar = PedirValor.Botao("Cancelar", false);
+        cancelar.Margin = new Thickness(0, 0, 4, 0);
+        ok.Margin = new Thickness(4, 0, 0, 0);
+        cancelar.Click += (_, _) => janela.Close();
+        ok.Click += (_, _) => { resultado = digitos; janela.Close(); };
+        Grid.SetColumn(cancelar, 0); Grid.SetColumn(ok, 1);
+        linha.Children.Add(cancelar); linha.Children.Add(ok);
+        pilha.Children.Add(linha);
+
+        janela.KeyDown += (_, e) =>
+        {
+            var d = e.Key is >= Key.D0 and <= Key.D9 ? (char)('0' + (e.Key - Key.D0))
+                  : e.Key is >= Key.NumPad0 and <= Key.NumPad9 ? (char)('0' + (e.Key - Key.NumPad0)) : '\0';
+            if (d != '\0' && digitos.Length < 11) { digitos += d; Pinta(); }
+            else if (e.Key == Key.Back && digitos.Length > 0) { digitos = digitos[..^1]; Pinta(); }
+            else if (e.Key == Key.Enter && ok.IsEnabled) { resultado = digitos; janela.Close(); }
+            else if (e.Key == Key.Escape) janela.Close();
+        };
+        Pinta();
+        janela.Content = Dialogo.Moldura(pilha);
+        janela.ShowDialog();
+        return Task.FromResult(resultado);
+    }
+
+    /// <summary>
+    /// A lista de funcionarios, so na CONFIGURACAO (recadastrar ou apagar uma digital, atras da
+    /// senha do master e do codigo do gerente). Na entrada e no fechamento do turno nao ha lista
+    /// desde a 1.0.54: o funcionario digita o proprio CPF (PedirCpfAsync).
+    /// </summary>
     public Task<Operador?> EscolherFuncionarioAsync(string titulo, IReadOnlyList<Operador> lista)
     {
         Operador? escolhido = null;
@@ -156,19 +224,31 @@ public static class PortaoDigitalDaTela
 {
     public static Task<DesfechoDigital> IdentificarAsync(Window dono, string finalidade, bool ofertaPrimeiraVez)
     {
-        IReadOnlyList<Operador> lista;
         string terminal;
-        using (var cx = Banco.Abrir())
-        {
-            lista = Digitais.ListaDaReserva(cx);
-            terminal = Autorizacao.NomeDoTerminal(cx);
-        }
+        using (var cx = Banco.Abrir()) terminal = Autorizacao.NomeDoTerminal(cx);
         IAutorizacaoRemota? remota;
         try { remota = Servicos.Autorizador(); } catch { remota = null; }
         return PortaoDigital.IdentificarAsync(Servicos.Leitor(), new TelaDigital(dono),
             chave => { using var c = Banco.Abrir(); return Digitais.OperadorDaChave(c, chave); },
             op => { using var c = Banco.Abrir(); return Digitais.CpfDoOperador(c, op.Id); },
-            lista, remota, new TelaAutorizacao(dono), terminal, finalidade, ofertaPrimeiraVez);
+            cpf => { using var c = Banco.Abrir(); return Digitais.OperadorDoCpf(c, cpf); },
+            remota, new TelaAutorizacao(dono), terminal, finalidade, ofertaPrimeiraVez);
+    }
+
+    /// <summary>
+    /// A ENTRADA DO CAIXA (1.0.54): so digital, sem senha. A regra mora em PortaoDigital.EntrarAsync
+    /// (digital; reserva; primeiro cadastro pelo codigo do gerente; biometria desligada = reserva).
+    /// </summary>
+    public static Task<DesfechoDigital> EntrarAsync(Window dono, bool biometriaLigada)
+    {
+        string terminal;
+        using (var cx = Banco.Abrir()) terminal = Autorizacao.NomeDoTerminal(cx);
+        IAutorizacaoRemota? remota;
+        try { remota = Servicos.Autorizador(); } catch { remota = null; }
+        var guarda = new GuardaDigitalSqlite(() => Banco.Abrir(), Servicos.MotorDoLeitor);
+        return PortaoDigital.EntrarAsync(biometriaLigada, Servicos.Leitor(), new TelaDigital(dono), guarda,
+            chave => { using var c = Banco.Abrir(); return Digitais.OperadorDaChave(c, chave); },
+            remota, new TelaAutorizacao(dono), terminal);
     }
 
     /// <summary>

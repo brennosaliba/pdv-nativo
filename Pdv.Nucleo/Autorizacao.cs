@@ -260,6 +260,16 @@ public static class Autorizacao
     /// <summary>1.0.52: recadastrar ou apagar uma digital na Configuracao pede o mesmo codigo (nivel gerente).</summary>
     public const string TipoDigitalRecadastro = "digital_recadastro";
 
+    /// <summary>
+    /// 1.0.54 (27/10, SQL 225): o PRIMEIRO CADASTRO da digital, sem senha. O gerente geral ou o dono
+    /// autoriza com o codigo (nivel gerente) e escolhe o funcionario. Antes do 225 so o do dono vale.
+    /// </summary>
+    public const string TipoDigitalCadastro = "digital_cadastro";
+
+    /// <summary>A referencia do log do primeiro cadastro: "cadastro:(terminal):(aaaammddhhmmss)".</summary>
+    public static string ReferenciaDigitalCadastro(string terminal, DateTime agora)
+        => "cadastro:" + new string((terminal ?? "").Where(char.IsLetterOrDigit).Take(40).ToArray()) + ":" + agora.ToString("yyyyMMddHHmmss");
+
     /// <summary>A referencia do log da reserva: "turno:(terminal):(entrada|fechamento):(aaaammddhhmmss)".</summary>
     public static string ReferenciaTurnoSemDigital(string terminal, string finalidade, DateTime agora)
         => "turno:" + new string((terminal ?? "").Where(char.IsLetterOrDigit).Take(40).ToArray())
@@ -345,6 +355,7 @@ public static class Autorizacao
             TipoGestorInteiro => ("Acesso ao Gestor", "não autorizado."),
             TipoTurnoSemDigital => ("Entrada sem digital", "não autorizada."),
             TipoDigitalRecadastro => ("Recadastro da digital", "não autorizado."),
+            TipoDigitalCadastro => ("Cadastro da digital", "não autorizado."),
             _ => ("Estorno", "não autorizado."),
         };
         var papel = Papel(pedido.Nivel);

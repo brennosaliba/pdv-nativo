@@ -283,7 +283,7 @@ public static class TestesLeitorHid
             api.Capturas.Enqueue(Boa(4, 4, 4));
             auto = new LeitorAutomatico(new WindowsFalso(), new LeitorHidUareU(api, () => Digitais.Moldes(cx)));
             var d = await PortaoDigital.IdentificarAsync(auto, new TelaQueLe(), ch => Digitais.OperadorDaChave(cx, ch), op => Digitais.CpfDoOperador(cx, op.Id),
-                Digitais.ListaDaReserva(cx), null, new TotpNada(), "CAIXA-01", "entrada", true);
+                cpf => Digitais.OperadorDoCpf(cx, cpf), null, new TotpNada(), "CAIXA-01", "entrada", true);
             checar(d.Via == ViaDigital.Digital && d.Operador?.Id == "op-ana" && d.Cpf == CpfAna, "P-10 o portao com o leitor da HID: a ANA entra pela digital");
             cx.Execute("DELETE FROM digital");
 
@@ -406,10 +406,11 @@ public static class TestesLeitorHid
             var telaDig = File.ReadAllText(Caminho("Telas/TelaDigital.cs"));
             checar(telaDig.Contains("cad.Motor") && telaDig.Contains("cad.Molde") && telaDig.Contains("Digitais.DonoDaParecida("), "S-02 o cadastro guarda motor e molde e barra a digital de outra pessoa");
             var login = File.ReadAllText(Caminho("Telas/Login.xaml.cs"));
-            checar(login.Contains("Digitais.JaTem(") && login.Contains("Servicos.MotorDoLeitor()"), "S-03 ja tem digital olha o motor em uso");
+            var bio = File.ReadAllText(Caminho("Pdv.Nucleo/Biometria.cs"));
+            checar(bio.Contains("Digitais.JaTem(cx, cpf, _motor())") && telaDig.Contains("Servicos.MotorDoLeitor") && login.Contains("PortaoDigitalDaTela.EntrarAsync("), "S-03 ja tem digital olha o motor em uso (o primeiro cadastro, 1.0.54)");
             var conf = File.ReadAllText(Caminho("Telas/Configuracao.xaml.cs"));
             checar(conf.Contains("DiagnosticoLeitor.ColherAsync(") && conf.Contains("Dialogo.Relatorio("), "S-04 Conferir o leitor mostra o diagnostico completo numa janela para fotografar");
-            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.53</Version>"), "S-05 a versao do caixa e 1.0.53 (o leitor pelo runtime da HID)");
+            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.54</Version>"), "S-05 a versao do caixa e 1.0.54 (so digital)");
             var novos = new[] { "Pdv.Nucleo/LeitorHidUareU.cs", "Pdv.Nucleo/LeitorAutomatico.cs", "Pdv.Testes/TestesLeitorHid.cs" }.Select(a => File.ReadAllText(Caminho(a)));
             checar(novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)), "S-06 os arquivos novos nao tem travessao");
         }
@@ -438,7 +439,7 @@ public static class TestesLeitorHid
         public async Task<LeituraNaTela> LerAsync(string titulo, string? aviso, bool ofertaPrimeiraVez, Func<CancellationToken, Task<Captura>> ler)
             => new(await ler(CancellationToken.None));
         public Task<Cadastro> CadastrarAsync(string titulo, Func<IProgress<string>, CancellationToken, Task<Cadastro>> cadastrar) => cadastrar(new Progress<string>(), CancellationToken.None);
-        public Task<Operador?> EscolherFuncionarioAsync(string titulo, IReadOnlyList<Operador> lista) => Task.FromResult<Operador?>(null);
+        public Task<string?> PedirCpfAsync(string titulo, string? aviso) => Task.FromResult<string?>(null);
         public void Avisar(string titulo, string texto) { }
     }
 

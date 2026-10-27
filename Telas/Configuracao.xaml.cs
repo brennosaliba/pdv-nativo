@@ -481,7 +481,7 @@ public partial class Configuracao : UserControl
                 Digitais.Apagar(cx, d.Cpf, aut.AprovadoPor);
                 PintarDigital(cx);
             }
-            Dialogo.Avisar(dono, "Digital", $"Digital de {d.Nome} apagada. Na proxima entrada ela cadastra de novo com CPF e senha.", "ok");
+            Dialogo.Avisar(dono, "Digital", $"Digital de {d.Nome} apagada. Na proxima entrada, o primeiro cadastro de novo (codigo do gerente).", "ok");
         }
         catch (Exception ex) { Dialogo.Avisar(dono, "Digital", "Nao deu para apagar (" + ex.Message + ").", "erro"); }
         finally { BtnApagarDigital.IsEnabled = true; }
