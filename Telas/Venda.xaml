@@ -5,6 +5,9 @@
     <UserControl.Resources>
         <!-- Botão de texto puro: "Limpar tudo", atalhos. Não compete com os alvos de toque. -->
         <Style x:Key="BotaoTexto" TargetType="Button">
+            <!-- 29/10/2026 (foto do Castelo no modo escuro): sem Foreground o texto saia preto do sistema
+                 nos dois temas e sumia no fundo escuro. A cor vem do tema. -->
+            <Setter Property="Foreground" Value="{DynamicResource Texto}"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -634,7 +637,14 @@
              então o operador precisa ver isso sem abrir menu nenhum. ══ -->
         <Border Grid.Row="3" Background="{DynamicResource BarraDegrade}" Padding="16,7"
                 BorderBrush="{DynamicResource Borda}" BorderThickness="0,1,0,0">
+            <!-- 29/10/2026 (foto do Castelo): o texto do meio era centralizado na largura TODA e passava por
+                 baixo do "configuração". Agora tem coluna própria entre o selo e os botões e corta com "...". -->
             <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
                 <Border x:Name="ChipRede" CornerRadius="11" Padding="11,4,13,5" HorizontalAlignment="Left"
                         Background="{DynamicResource ChipOkFundo}" BorderBrush="{DynamicResource ChipOkBorda}" BorderThickness="1">
                     <StackPanel Orientation="Horizontal">
@@ -643,9 +653,10 @@
                                    FontSize="11" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Border>
-                <TextBlock x:Name="TxtRodape" Foreground="{DynamicResource TextoFraco}" FontSize="11.5"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <TextBlock x:Name="TxtRodape" Grid.Column="1" Foreground="{DynamicResource TextoFraco}" FontSize="11.5"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,0,12,0"
+                           TextTrimming="CharacterEllipsis"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <!-- Atalho do turno: a loja muda de luz às 18h e ninguém vai abrir
                          configuração no meio da fila. Texto puro, sem competir com os
                          alvos de toque da barra de cima. -->

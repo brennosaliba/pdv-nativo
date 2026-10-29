@@ -167,6 +167,13 @@ public static class TestesBarraWindows
                && conf.Contains("if (_barraWindowsAntes is not null || barraQuer != _barraWindowsMarcada)")
                && conf.Contains("(Window.GetWindow(this) as MainWindow)?.BarraWindows.Reavaliar()"),
             "BW-39 a Configuração: nasce pela regra, sem mexer continua automático, salvar aplica na hora");
+        var venda = Fonte(Path.Combine("Telas", "Venda.xaml")) ?? "";
+        checar(venda.Contains("<TextBlock x:Name=\"TxtRodape\" Grid.Column=\"1\"")
+               && venda.Contains("<StackPanel Grid.Column=\"2\" Orientation=\"Horizontal\" HorizontalAlignment=\"Right\""),
+            "BW-42 o texto do rodapé da venda (loja, série, versão) tem coluna própria e não passa por baixo do configuração");
+        var estiloTexto = venda[venda.IndexOf("<Style x:Key=\"BotaoTexto\"", StringComparison.Ordinal)..];
+        checar(estiloTexto[..estiloTexto.IndexOf("</Style>", StringComparison.Ordinal)].Contains("<Setter Property=\"Foreground\" Value=\"{DynamicResource Texto}\"/>"),
+            "BW-43 os botões de texto da venda (configuração, modo claro, música) pegam a cor do tema, não o preto do sistema");
         checar(!(barra + wifi + som + nucleo).Contains('—') && !(barra + wifi + som + nucleo).Contains('–')
                && !TrechoNovoDaConfiguracao(confXaml).Contains('—') && !TrechoNovoDaConfiguracao(confXaml).Contains('–'),
             "BW-40 nenhum texto com travessão");

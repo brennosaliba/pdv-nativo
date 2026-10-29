@@ -113,7 +113,7 @@ public static class TestesReinicioDoPc
             "RP-40 o Escolher quebra o rótulo em duas linhas pelo molde, com o Content ainda string (três opções com 'Reiniciar o computador' cabem a 1024; a suíte acha o botão pelo texto)");
 
         var csproj = Fonte("Pdv.csproj") ?? "";
-        checar(csproj.Contains("<Version>1.0.58</Version>", StringComparison.Ordinal), "RP-41 a versão do caixa é 1.0.58 (barra do Wi-Fi e som)");
+        checar(csproj.Contains("<Version>1.0.59</Version>", StringComparison.Ordinal), "RP-41 a versão do caixa é 1.0.59 (rodape da venda)");
 
         // ── 8. A SAÍDA DE SOM (follow-up da 1.0.42) ──────────────────────────────
         checar(SaidaDeSom.Aviso(new SaidaDeSom.Leitura(false, null, null)) == "Sem saída de som ativa no Windows.", "SS-1 nenhuma saída: o aviso do follow-up");
