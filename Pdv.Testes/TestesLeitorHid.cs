@@ -468,7 +468,7 @@ public static class TestesLeitorHid
             checar(bio.Contains("Digitais.JaTem(cx, cpf, _motor())") && telaDig.Contains("Servicos.MotorDoLeitor") && login.Contains("PortaoDigitalDaTela.EntrarAsync("), "S-03 ja tem digital olha o motor em uso (o primeiro cadastro, 1.0.54)");
             var conf = File.ReadAllText(Caminho("Telas/Configuracao.xaml.cs"));
             checar(conf.Contains("DiagnosticoLeitor.ColherAsync(") && conf.Contains("Dialogo.Relatorio("), "S-04 Conferir o leitor mostra o diagnostico completo numa janela para fotografar");
-            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.57</Version>"), "S-05 a versao do caixa e 1.0.57 (texto do leitor)");
+            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.58</Version>"), "S-05 a versao do caixa e 1.0.58 (barra do Wi-Fi e som)");
             var novos = new[] { "Pdv.Nucleo/LeitorHidUareU.cs", "Pdv.Nucleo/LeitorAutomatico.cs", "Pdv.Testes/TestesLeitorHid.cs" }.Select(a => File.ReadAllText(Caminho(a)));
             checar(novos.All(t => !t.Contains((char)0x2014) && !t.Contains((char)0x2013)), "S-06 os arquivos novos nao tem travessao");
         }

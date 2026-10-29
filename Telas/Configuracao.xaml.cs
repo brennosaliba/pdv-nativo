@@ -38,6 +38,9 @@ public partial class Configuracao : UserControl
 {
     public event Action? Concluiu;
     private readonly bool _jaConfigurado;
+    // 1.0.58: a barra do Wi-Fi e do som como estava ao abrir (null = automatico) e a caixa que a tela mostrou
+    private string? _barraWindowsAntes;
+    private bool _barraWindowsMarcada;
     private string? _pfxEscolhido;
 
     /// <summary>Passo na tela. A trilha e os botões do rodapé derivam daqui.</summary>
@@ -132,6 +135,10 @@ public partial class Configuracao : UserControl
         ChkQuiosque.IsChecked = Quiosque.Ligado;
         ChkTravarAtalhos.IsChecked = Quiosque.Travado;
         BtnSairWindows.Visibility = Se(Quiosque.Ligado);
+        // 1.0.58: a barra com o Wi-Fi e o som; sem escolha, marcada se o quiosque estiver ligado
+        _barraWindowsAntes = Vendas.Config(cx, BarraDoWindows.Chave);
+        ChkBarraWindows.IsChecked = BarraDoWindows.MarcadaNaConfiguracao(_barraWindowsAntes, Quiosque.Ligado);
+        _barraWindowsMarcada = ChkBarraWindows.IsChecked == true;
         // Spotify escondido: a opção e o que este PC tem (instalado? aberto?).
         ChkSpotifyEscondido.IsChecked = Vendas.Config(cx, SpotifyNoCaixa.Chave) == "1";
         // 1.0.37: diz também se o Spotify deste PC está logado (sem login ele não vira aparelho da loja)
@@ -1828,6 +1835,16 @@ public partial class Configuracao : UserControl
                 }
                 else SpotifyNoCaixa.Parar();
             }
+            // 1.0.58: a barra do Wi-Fi e do som. Sem mexer na caixa, continua no automático.
+            var barraQuer = ChkBarraWindows.IsChecked == true;
+            if (_barraWindowsAntes is not null || barraQuer != _barraWindowsMarcada)
+            {
+                Vendas.GravarConfig(cx, BarraDoWindows.Chave, barraQuer ? "1" : "0");
+                if (_barraWindowsAntes != (barraQuer ? "1" : "0"))
+                    Caixa.Auditar(cx, null, barraQuer ? "barra_windows_ligada" : "barra_windows_desligada", null, null, null);
+            }
+            // aplica na hora, depois de gravar (o relogio da barra pegaria em 5 s de qualquer jeito)
+            Dispatcher.BeginInvoke(() => (Window.GetWindow(this) as MainWindow)?.BarraWindows.Reavaliar());
             // 1.0.33: os programas da inicialização do Windows que o PDV abre no quiosque
             Vendas.GravarConfig(cx, InicioDoWindows.ChaveLigado, ChkInicioWindows.IsChecked == true ? "1" : "0");
             Vendas.GravarConfig(cx, InicioDoWindows.ChaveMarcados, InicioDoWindows.EscreverLista(

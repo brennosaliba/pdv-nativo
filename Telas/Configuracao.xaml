@@ -735,6 +735,11 @@
                                    FontWeight="Bold" FontSize="13" Margin="0,8,0,8"/>
                         <CheckBox x:Name="ChkQuiosque" Content="Abrir o Windows direto no PDV, sem área de trabalho, barra ou outros programas"
                                   Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,0,0,6"/>
+                        <!-- 1.0.58 (29/10/2026, pedido do dono): a barra do PDV com so o Wi-Fi e o som (BarraWindows) -->
+                        <CheckBox x:Name="ChkBarraWindows" Content="Mostrar embaixo da tela uma barra com o Wi-Fi e o som do Windows"
+                                  Foreground="{DynamicResource Texto}" FontSize="14" Margin="0,0,0,6"/>
+                        <TextBlock Text="Sem menu Iniciar nem programas: só trocar de rede Wi-Fi e mexer no volume. Qualquer operador usa. Sem marcar nada, ela aparece sozinha quando o Windows está sem a barra dele."
+                                   Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <TextBlock Text="Vale para este usuário do Windows a partir da próxima entrada. Para o caixa ligar sozinho, o Windows precisa entrar sem pedir senha (netplwiz, desmarque 'os usuários devem digitar um nome e senha'). Dos outros programas, só abrem os marcados logo abaixo. Para voltar ao normal, desmarque aqui ou use o botão abaixo."
                                    Foreground="{DynamicResource TextoFraco}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <!-- 1.0.33 (14/10/2026, pedido do dono): o Ctrl+Alt+Del sem opcoes (Quiosque.Travar) -->

@@ -191,6 +191,12 @@ if (args.Length >= 4 && args[0] == "--foto-codigo")
 if (args.Length >= 2 && args[0] == "--foto-resgate")
     return FotoResgate.Rodar(args);
 
+// Modo FOTO da barra do Wi-Fi e do som (1.0.58, ver Pdv.Testes/FotoBarra.cs): banco temporario com a opcao
+// marcada, o Wi-Fi e o volume deste PC, a barra e as duas janelinhas abertas.
+//   Pdv.Testes.exe --foto-barra docs/barra-fotos [claro|escuro] [largura]
+if (args.Length >= 2 && args[0] == "--foto-barra")
+    return FotoBarra.Rodar(args);
+
 // Modo FOTO da COMANDA ABERTA (ver Pdv.Testes/FotoComanda.cs): a tela de venda com a comanda "12 · Mesa 5",
 // o dialogo Comandas (lista e Nova comanda), o Pagamento da comanda e a janela do PIN, nos tres tamanhos
 // da rede (1024x768, 1366x768, 1920x1080; "escuro" so 1024). Copia do banco do caixa, nuvem morta. Mede
@@ -921,6 +927,15 @@ if (args.Length >= 1 && args[0] == "--so-kds")
     return falhas == 0 ? 0 : 1;
 }
 
+// MODO DE DESENVOLVIMENTO (29/10/2026, 1.0.58): so a barra do Wi-Fi e do som. NAO e o gate.
+//   Pdv.Testes.exe --so-barra
+if (args.Length >= 1 && args[0] == "--so-barra")
+{
+    TestesBarraWindows.Rodar((cond, nome) => Check("barra-windows: " + nome, cond));
+    Console.WriteLine();
+    Console.WriteLine($"=== (so barra) {ok} OK, {falhas} falhas ===");
+    return falhas == 0 ? 0 : 1;
+}
 // MODO DE DESENVOLVIMENTO (15/10/2026, 1.0.37): so as suites do Spotify no quiosque (abrir, esconder, tocar
 // sozinho com confirmacao), da inicializacao do Windows e da janela da musica. NAO e o gate.
 //   Pdv.Testes.exe --so-spotify
@@ -1636,6 +1651,8 @@ TestesRetiradaCofre.Rodar((cond, nome) => Check("retirada-cofre: " + nome, cond)
 TestesSpotifyNoCaixa.Rodar((cond, nome) => Check("spotify-caixa: " + nome, cond));
 TestesSubitensIfood.Rodar((cond, nome) => Check("subitens-ifood: " + nome, cond));
 TestesQuiosque.Rodar((cond, nome) => Check("quiosque: " + nome, cond));
+// 1.0.58: a barra do PDV com so o Wi-Fi e o som (quiosque sem a barra do Windows)
+TestesBarraWindows.Rodar((cond, nome) => Check("barra-windows: " + nome, cond));
 TestesTravaCtrlAltDel.Rodar((cond, nome) => Check("trava-ctrl-alt-del: " + nome, cond));
 TestesDesfazerQuiosque.Rodar((cond, nome) => Check("desfazer-quiosque: " + nome, cond));
 TestesReabrirOCaixa.Rodar((cond, nome) => Check("reabrir-o-caixa: " + nome, cond));

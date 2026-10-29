@@ -10,6 +10,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- faixa do modo de homologação -->
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>   <!-- barra do Windows: Wi-Fi e som (1.0.58) -->
         </Grid.RowDefinitions>
 
         <!-- ══ MODO DE HOMOLOGAÇÃO: o aviso que não sai da tela ══════════════════
@@ -85,5 +86,10 @@
                     Background="Transparent" BorderThickness="0" Cursor="Hand"
                     Foreground="{DynamicResource TextoFraco}" ToolTip="Fechar o PDV"/>
         </StackPanel>
+
+        <!-- BARRA DO WINDOWS (1.0.58, 29/10/2026, pedido do dono): no quiosque nao existe a barra de
+             tarefas, nem o Wi-Fi e o volume dela. Esta faixa embaixo tem so os dois (Telas/BarraWindows,
+             regra em Pdv.Nucleo/BarraDoWindows). Linha propria: empurra o caixa para cima, nada a cobre. -->
+        <telas:BarraWindows Grid.Row="2" x:Name="BarraWindows"/>
     </Grid>
 </Window>
