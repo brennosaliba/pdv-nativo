@@ -716,12 +716,14 @@ public static class ServicoConversaChat
                     l.Diag($"saida={s.Id} plano b=recarregou em {segDaRecarga:0} s, tentativa {tentativa}: sem tempo (a reserva venceu), falhou");
                 }
                 else l.Diag($"saida={s.Id} tentativa {tentativa}: sem tempo (a reserva venceu), falhou");
+                l.Portao.Esquecer(s); // 1.0.63: nao saiu, a nova reserva desta mensagem nao e eco
                 await l.Relatar(s.Id, "falhou", "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
                 return;
             }
             var ponte = l.Ponte();
             if (ponte is null)
             {
+                l.Portao.Esquecer(s); // 1.0.63: nao saiu, a nova reserva desta mensagem nao e eco
                 await l.Relatar(s.Id, "falhou", "sdk_ausente", s, null).ConfigureAwait(false);
                 return;
             }
@@ -746,10 +748,12 @@ public static class ServicoConversaChat
                     }
                     var det = rastro.Detalhe() ?? new JsonObject();
                     det["abrir"] = ab.Erro;
+                    l.Portao.Esquecer(s); // 1.0.63: nao saiu, a nova reserva desta mensagem nao e eco
                     await l.Relatar(s.Id, "falhou", "canal_inexistente", s, det).ConfigureAwait(false);
                     return;
                 }
                 l.Diag($"saida={s.Id} canal inexistente (o chat do pedido ainda nao foi aberto): falha definitiva, sem nova tentativa");
+                l.Portao.Esquecer(s); // 1.0.63: nao saiu, a nova reserva desta mensagem nao e eco
                 await l.Relatar(s.Id, "falhou", "canal_inexistente", s, rastro.Detalhe()).ConfigureAwait(false);
                 return;
             }
@@ -780,6 +784,7 @@ public static class ServicoConversaChat
             if (!HaTempoParaOutraTentativa(recebida, l.Agora()))
             {
                 l.Diag($"saida={s.Id} erro={erro}: sem tempo para a tentativa {tentativa + 1} (reserva de {PortaoDeEnvio.PrazoDaReserva.TotalSeconds:0} s), falhou");
+                l.Portao.Esquecer(s); // 1.0.63: nao saiu, a nova reserva desta mensagem nao e eco
                 await l.Relatar(s.Id, "falhou", "erro_envio", s, rastro.Detalhe()).ConfigureAwait(false);
                 return;
             }
@@ -788,6 +793,7 @@ public static class ServicoConversaChat
             l.Diag($"saida={s.Id} erro={erro}: aqueceu={aqueceu}, tenta de novo em {RespiroEntreTentativas.TotalSeconds:0} s");
             await l.Esperar(RespiroEntreTentativas).ConfigureAwait(false);
         }
+        l.Portao.Esquecer(s); // 1.0.63: nao saiu, a nova reserva desta mensagem nao e eco
         await l.Relatar(s.Id, "falhou", ErroDoRelato(erro, depoisDaRecarga is not null), s, rastro.Detalhe()).ConfigureAwait(false);
     }
 

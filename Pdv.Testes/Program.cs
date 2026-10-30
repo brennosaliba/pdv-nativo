@@ -2338,6 +2338,8 @@ await TestesSinalMorto.RodarAsync((cond, nome) => Check("sinal-morto: " + nome, 
 Console.WriteLine();
 Console.WriteLine("--- Abrir a conversa do pedido: o cliente que nunca escreveu recebe as mensagens do pedido ---");
 await TestesAberturaDaConversa.RodarAsync((cond, nome) => Check("abrir-conversa: " + nome, cond));
+// -- 30/10/2026: A MENSAGEM QUE FALHOU NAO VIRA ECO (caixa 1.0.63) --
+await TestesEcoDepoisDaFalha.RodarAsync((cond, nome) => Check("eco depois da falha: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Socket sem usuario: o livro aprende pelo LOGI e pelo canal de cliente ---");
 TestesSocketSemUsuario.Rodar((cond, nome) => Check("socket-usuario: " + nome, cond));

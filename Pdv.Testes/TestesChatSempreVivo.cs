@@ -62,7 +62,7 @@ public static class TestesChatSempreVivo
         // 1.0.35: o laco mora em EnviarComTentativasAsync (portas trocaveis, a bateria roda o mesmo laco em
         // TestesPlanoBDoEnvio); EnviarUmaAsync so liga as portas de verdade
         var iEnviar = servico.IndexOf("public static async Task EnviarComTentativasAsync(", StringComparison.Ordinal);
-        var enviar = iEnviar < 0 ? "" : servico.Substring(iEnviar, Math.Min(12000, servico.Length - iEnviar));
+        var enviar = iEnviar < 0 ? "" : servico.Substring(iEnviar, Math.Min(14000, servico.Length - iEnviar));
         // 1.0.35 (revisao): o limite comeca em TentativasDeEnvio e so ganha +1 com a recarga do plano B; no fim,
         // o erro do relato passa por ErroDoRelato (o SDK frio depois da recarga nao vira canal_errado)
         checar(enviar.Contains("var limite = TentativasDeEnvio;")

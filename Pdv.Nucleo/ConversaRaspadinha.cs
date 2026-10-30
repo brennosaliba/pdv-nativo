@@ -1770,6 +1770,15 @@ public sealed class MemoriaDeEco
             return _visto.TryGetValue(Chave(canal, texto), out var em) && em > agora - Validade;
     }
 
+    /// <summary>
+    /// 1.0.63: tira o registro de um texto que com certeza NAO saiu (o envio falhou antes ou no SDK). Sem isso a
+    /// nova tentativa da mesma mensagem (outra reserva do ERP) batia no eco da primeira e virava "incerta/eco".
+    /// </summary>
+    public void Esquecer(string canal, string texto)
+    {
+        lock (_trava) _visto.Remove(Chave(canal, texto));
+    }
+
     private static string Chave(string canal, string texto) => canal + "|" + ConversaRaspadinha.HashTexto(texto);
 }
 
@@ -2068,6 +2077,18 @@ public sealed class PortaoDeEnvio
     }
 
     public static string NovoToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+    /// <summary>
+    /// 1.0.63 (Savassi 30/10/2026, 15:36 as 17:11): o envio que com certeza nao saiu (relato "falhou") sai da memoria
+    /// do eco. Antes, a nova reserva do ERP para a mesma mensagem batia no eco da tentativa que falhou e a mensagem
+    /// virava "incerta/eco" (final, sem sair): 51 das 64 mensagens do pedido da Savassi naquela tarde. O que saiu, ou
+    /// pode ter saido ("incerta"), continua na memoria e nunca sai duas vezes.
+    /// </summary>
+    public void Esquecer(SaidaConversa s)
+    {
+        if (s.Canal is not { Length: > 0 } canal || s.Texto is null) return;
+        lock (_trava) _eco.Esquecer(canal, s.Texto);
+    }
 
     /// <summary>
     /// 1.0.25 (08/10/2026): a segunda ou terceira tentativa da MESMA saida, depois de o script dizer
