@@ -54,6 +54,12 @@ public sealed class PonteDoChat
     /// operador. Opcional: sem ela, o envio é o de hoje.
     /// </summary>
     public Func<string?, string?, Task<string>>? RecarregarParaEnvio { get; init; }
+    /// <summary>
+    /// 1.0.62 (30/10/2026): (uuid do pedido, customer.id, texto) → abre a conversa do pedido mandando a primeira
+    /// mensagem pela API do proprio Gestor, como o botao do Gestor faz (<see cref="AberturaDaConversa"/>). So no
+    /// canal_inexistente de uma mensagem do pedido. Opcional: sem ela, o canal_inexistente falha como antes.
+    /// </summary>
+    public Func<string, string, string, Task<AberturaResultado>>? AbrirConversaComMensagem { get; init; }
 }
 
 /// <summary>
@@ -725,6 +731,24 @@ public static class ServicoConversaChat
             // tentativa, fora das falhas seguidas (antes: 3 tentativas, erro_envio, e o ERP pausava as mensagens do pedido)
             if (vez.Desfecho == DesfechoDaTentativa.Falhou && ConversaRaspadinha.CanalInexistente(s, vez.Erro, vez.Detalhe))
             {
+                // 1.0.62 (30/10/2026): o cliente que nunca escreveu nao tem canal. A mensagem do pedido que traz o
+                // cliente abre a conversa pela API do Gestor (a primeira mensagem cria o canal), uma vez so
+                if (ponte.AbrirConversaComMensagem is { } abrir && AberturaDaConversa.Cabe(s.IfoodOrderId, s.ClienteIfoodId, s.Texto))
+                {
+                    AberturaResultado ab;
+                    try { ab = await abrir(s.IfoodOrderId!, s.ClienteIfoodId!, s.Texto).ConfigureAwait(false); }
+                    catch (Exception ex) { ab = new AberturaResultado(false, "abrir_" + ex.GetType().Name, null, new JsonObject { ["via"] = "abriu_conversa" }); }
+                    l.Diag($"saida={s.Id} canal inexistente: abrir a conversa pelo Gestor {(ab.Ok ? "ok" : ab.Erro)}");
+                    if (ab.Ok)
+                    {
+                        await l.Relatar(s.Id, "enviada", null, s, ab.Detalhe).ConfigureAwait(false);
+                        return;
+                    }
+                    var det = rastro.Detalhe() ?? new JsonObject();
+                    det["abrir"] = ab.Erro;
+                    await l.Relatar(s.Id, "falhou", "canal_inexistente", s, det).ConfigureAwait(false);
+                    return;
+                }
                 l.Diag($"saida={s.Id} canal inexistente (o chat do pedido ainda nao foi aberto): falha definitiva, sem nova tentativa");
                 await l.Relatar(s.Id, "falhou", "canal_inexistente", s, rastro.Detalhe()).ConfigureAwait(false);
                 return;

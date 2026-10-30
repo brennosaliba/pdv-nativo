@@ -406,6 +406,8 @@ public partial class ChatIfood : UserControl
                 AquecerConversa = AquecerConversaAsync,
                 // 1.0.35: o plano B do envio (recarrega o Gestor escondido; nunca com ele na frente)
                 RecarregarParaEnvio = RecarregarParaEnvioAsync,
+                // 1.0.62: o cliente que nunca escreveu (canal inexistente): a primeira mensagem abre a conversa
+                AbrirConversaComMensagem = AbrirConversaComMensagemAsync,
             });
             // 1.0.41 (pedido 2029): a recuperação pelo histórico do Sendbird. Cada quadro recuperado entra
             // no MESMO funil do webSocketFrameReceived, menos o que é da conexão (ver EntregarRecuperado).
@@ -1131,6 +1133,13 @@ public partial class ChatIfood : UserControl
                 if (url is null) return;
                 if (url.Contains("/chat/v1.0/auth"))
                     _authRequestId = d.RootElement.TryGetProperty("requestId", out var ri) ? ri.GetString() : null;
+                // 1.0.62: o token da loja que o Gestor manda para as APIs dele (so em memoria; nunca em log nem no diag)
+                if (AberturaDaConversa.EhApiDoGestor(url) && req.TryGetProperty("headers", out var hg)
+                    && TokenDeHeaders(hg) is { Length: > 20 } tg)
+                {
+                    _tokenDoGestor = tg;
+                    _tokenDoGestorEm = DateTime.Now;
+                }
                 // o JWT também viaja no header Authorization das chamadas de chat
                 if (url.Contains("/chat/") && req.TryGetProperty("headers", out var h))
                 {
@@ -1594,6 +1603,47 @@ public partial class ChatIfood : UserControl
         if (!ok) try { Clipboard.SetText(texto); } catch { /* a área de transferência pode estar presa */ }
         TxtEstado.Text = ok ? "Resposta colada na conversa. Confira e aperte Enviar." : ConversaRaspadinha.TextoAbraECole(numero);
         return ok;
+    }
+
+    // 1.0.62: o token do Gestor para as APIs dele (Authorization das chamadas do proprio Gestor). So em memoria.
+    private string? _tokenDoGestor;
+    private DateTime _tokenDoGestorEm;
+
+    /// <summary>
+    /// 1.0.62 (30/10/2026): abre a conversa do pedido mandando a primeira mensagem, pelo mesmo pedido que o Gestor faz
+    /// (POST /orderManager/v1.0/chat/orders/{pedido} com o cliente e o texto), de dentro da pagina e com o token dele.
+    /// Sem token recente, sem pagina ou com a pagina presa: nao tenta. Nunca lanca; o token nao vai para o diag.
+    /// </summary>
+    private async Task<AberturaResultado> AbrirConversaComMensagemAsync(string orderUuid, string clienteId, string texto)
+    {
+        if (!Dispatcher.CheckAccess())
+            return await HospedeWebView2.NaTela(Dispatcher, () => AbrirConversaComMensagemAsync(orderUuid, clienteId, texto));
+        var sem = new JsonObject { ["via"] = "abriu_conversa" };
+        try
+        {
+            var core = _pronto ? Web.CoreWebView2 : null;
+            if (core is null) return new AberturaResultado(false, "abrir_sem_pagina", null, sem);
+            var token = _tokenDoGestor;
+            if (token is null || DateTime.Now - _tokenDoGestorEm > AberturaDaConversa.IdadeMaximaDoToken)
+                return new AberturaResultado(false, "abrir_sem_token", null, sem);
+            if (!AberturaDaConversa.Cabe(orderUuid, clienteId, texto)) return new AberturaResultado(false, "abrir_sem_dados", null, sem);
+            var cdp = core.CallDevToolsProtocolMethodAsync("Runtime.evaluate", JsonSerializer.Serialize(new
+            {
+                expression = AberturaDaConversa.Script(orderUuid, clienteId, texto, token),
+                awaitPromise = true,
+                returnByValue = true,
+            }));
+            var fim = await Task.WhenAny(cdp, Task.Delay(TimeSpan.FromSeconds(15)));
+            if (fim != cdp) return new AberturaResultado(false, "abrir_sem_resposta", null, sem);
+            var r = AberturaDaConversa.Ler(await cdp);
+            DiagRaspadinha($"abrir a conversa do pedido: {(r.Ok ? "ok" : r.Erro)}");
+            return r;
+        }
+        catch (Exception ex)
+        {
+            DiagRaspadinha("abrir a conversa do pedido: " + ex.GetType().Name);
+            return new AberturaResultado(false, "abrir_" + ex.GetType().Name, null, sem);
+        }
     }
 
     private static string? TokenDeHeaders(JsonElement headers)

@@ -43,8 +43,10 @@ public enum StatusConversa
 /// 1.0.20 (aprovação pelo WhatsApp do dono): a saída passou pelo OK do dono. Ela só sai pelo SDK,
 /// reservada a este terminal; NUNCA vira texto para a pessoa colar, nem quando o envio falha.
 /// </param>
+/// <summary>1.0.62: <c>ClienteIfoodId</c> (o customer.id do pedido, SQL 246) so vem nas mensagens do pedido; com ele, o canal
+/// que ainda nao existe e aberto pela primeira mensagem (<see cref="AberturaDaConversa"/>).</summary>
 public sealed record SaidaConversa(long Id, string Etapa, int Ordem, string Texto, string Como, string Estado,
-    string? Canal, string? IfoodOrderId, string? PedidoNumero, bool PeloDono = false);
+    string? Canal, string? IfoodOrderId, string? PedidoNumero, bool PeloDono = false, string? ClienteIfoodId = null);
 
 /// <summary>O que o caixa faz com uma saída que o ERP mandou (1.0.20).</summary>
 public enum DestinoDaSaida
@@ -968,7 +970,7 @@ public static class ConversaRaspadinha
             lista.Add(new SaidaConversa(id, Texto(s, "etapa") ?? "", (int)(Numero(s, "ordem") ?? 1), texto,
                 (Texto(s, "como") ?? "").ToLowerInvariant(), (Texto(s, "estado") ?? "").ToLowerInvariant(),
                 Texto(s, "canal"), Texto(s, "ifood_order_id"), TextoOuNumero(s, "pedido_numero"),
-                Bool(s, "pelo_dono")));
+                Bool(s, "pelo_dono"), Texto(s, "cliente_ifood_id")));
         }
         return lista;
     }

@@ -2331,6 +2331,13 @@ TestesRelogioCorrigido.Rodar((cond, nome) => Check("relogio-corrigido: " + nome,
 Console.WriteLine();
 Console.WriteLine("--- Sinal morto: a reproducao da InvalidOperationException, o sinal minimo e o canal inexistente ---");
 await TestesSinalMorto.RodarAsync((cond, nome) => Check("sinal-morto: " + nome, cond));
+
+// -- 30/10/2026: A PRIMEIRA MENSAGEM PARA QUEM NUNCA ABRIU O CHAT (caixa 1.0.62, SQL 246) -----------------
+// O canal do pedido so existe depois da primeira mensagem: a mensagem do pedido com o cliente abre a conversa
+// pela API do proprio Gestor (POST /orderManager/v1.0/chat/orders/{pedido}).
+Console.WriteLine();
+Console.WriteLine("--- Abrir a conversa do pedido: o cliente que nunca escreveu recebe as mensagens do pedido ---");
+await TestesAberturaDaConversa.RodarAsync((cond, nome) => Check("abrir-conversa: " + nome, cond));
 Console.WriteLine();
 Console.WriteLine("--- Socket sem usuario: o livro aprende pelo LOGI e pelo canal de cliente ---");
 TestesSocketSemUsuario.Rodar((cond, nome) => Check("socket-usuario: " + nome, cond));
