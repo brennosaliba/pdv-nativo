@@ -580,7 +580,7 @@ public partial class ChatIfood : UserControl
             if (r.Recarregar)
             {
                 Diag("vigia: pagina muda, recarregando uma vez");
-                try { Web.CoreWebView2?.Reload(); }
+                try { if (Web.CoreWebView2 is { } cw) RecarregarNoInicio(cw); }
                 catch (Exception ex) { Diag("vigia recarregar: " + ex.GetType().Name); }
             }
             // o controle que ainda está abrindo é do vigia da inicialização (não recria em dobro)
@@ -786,6 +786,10 @@ public partial class ChatIfood : UserControl
             {
                 // 1.0.43: duas reaberturas seguidas que nao pegaram: a vigia se desliga ate a proxima navegacao
                 Diag("vigia do painel: desligada (laco)");
+            }
+            else if (tipo == "saiudaajuda")
+            {
+                Diag("pagina: saiu da ajuda do Gestor (voltou para a expedicao)");
             }
             else if (tipo == "ajuda")
             {
@@ -1809,7 +1813,7 @@ public partial class ChatIfood : UserControl
             TxtEstado.Text = "Recarregando o Gestor…";
             var como = await LimparCacheDoGestorAsync(core);
             Diag($"recarga forte ({motivo}): cache e service worker limpos por {como}");
-            core.Reload();
+            RecarregarNoInicio(core);
         }
         catch (Exception ex) { Diag("recarregar: " + ex.GetType().Name); _ = RecriarAsync("recarregar com o navegador morto"); }
     }
@@ -1842,6 +1846,13 @@ public partial class ChatIfood : UserControl
     internal const string JsTirarServiceWorker =
         "(function(){ try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) navigator.serviceWorker.getRegistrations().then(function(rs){ rs.forEach(function(r){ try { r.unregister(); } catch (e) {} }); }); " +
         "if (window.caches && caches.keys) caches.keys().then(function(ks){ ks.forEach(function(k){ try { caches.delete(k); } catch (e) {} }); }); } catch (e) {} return true; })()";
+
+    /// <summary>
+    /// RECARREGAR = VOLTAR AO INICIO DO GESTOR (1.0.60, 30/10/2026). O Reload repetia o endereco da pagina; com o
+    /// Gestor parado na ajuda da impressora (#/home/help?entry=howToConfigurePrinter, spinner para sempre), cada
+    /// Recarregar voltava para a mesma ajuda e o chat girava sem fim. Navegar para a raiz (sem o #) e carga inteira.
+    /// </summary>
+    internal static void RecarregarNoInicio(CoreWebView2 core) => core.Navigate(UrlGestor);
 
     private void Voltar(object sender, RoutedEventArgs e) => Voltou?.Invoke();
 
@@ -2085,6 +2096,26 @@ public partial class ChatIfood : UserControl
       if (window.__pdvChat) return; window.__pdvChat = true;
       function envia(o){ try{ window.chrome.webview.postMessage(JSON.stringify(o)); }catch(e){} }
 
+      // (0.5) A AJUDA QUE NAO ABRE (1.0.60, 30/10/2026). O Gestor 9.351 ganhou um aviso da impressora
+      // cujo "saiba mais" leva para #/home/help?entry=howToConfigurePrinter, e essa pagina fica no
+      // spinner para sempre (Savassi, 12:45). No modo so o chat ninguem tem por que estar ali: a
+      // pagina volta para a expedicao. Com o Gestor inteiro liberado, ou logo depois do Fale com o
+      // iFood, quem manda e o operador.
+      function saiDaAjuda(){
+        try {
+          if (window.__pdvSemHolofote) return false;
+          if (window.__pdvFaleEm && Date.now() - window.__pdvFaleEm < 120000) return false;
+          if (!/^#\/home\/help/i.test(String(location.hash || ''))) return false;
+          location.hash = '#/home/order-display/expedition';
+          envia({ tipo: 'saiudaajuda' });
+          return true;
+        } catch (e) { return false; }
+      }
+      window.pdvSaiDaAjuda = saiDaAjuda;
+      window.addEventListener('hashchange', saiDaAjuda);
+      setInterval(saiDaAjuda, 3000);
+      saiDaAjuda();
+
       // (1) NÃO LIDAS: acha o melhor candidato de texto e manda cru pro C#.
       window.pdvContar = function () {
         try {
@@ -2126,6 +2157,15 @@ public partial class ChatIfood : UserControl
       // um ícone na ponta direita da barra de cima (o leitor de tela mostra um
       // nome porque deduz do tooltip, mas o DOM não tem). Por isso a busca é por
       // POSIÇÃO, com o seletor por rótulo antes, de graça, caso um dia exista.
+      // 1.0.60: o aviso da impressora do Gestor 9.351 (com o link da ajuda) pode cair no canto de cima
+      // a direita, onde o clique pela posicao procura o botao do chat. Aviso e link da ajuda nao contam.
+      function avisoOuAjuda(el){
+        try {
+          if (el.closest && el.closest('[role="alert"],[role="status"],[class*="toast"],[class*="Toast"],[class*="feedback"],[class*="Feedback"],a[href*="help"]')) return true;
+          if (el.querySelector && el.querySelector('a[href*="help"]')) return true;
+        } catch (e) {}
+        return false;
+      }
       window.pdvAbrirConversas = function () {
         try {
           // 1) pelo ICONE do chat (classe estavel do design system do iFood, achada pelo
@@ -2139,6 +2179,7 @@ public partial class ChatIfood : UserControl
           var alvo = null, melhorX = -1;
           var cands = document.querySelectorAll('button,[role="button"],div');
           for (var i = 0; i < cands.length; i++) {
+            if (avisoOuAjuda(cands[i])) continue;
             var r = cands[i].getBoundingClientRect();
             if (r.top < 60 && r.width >= 40 && r.height >= 40 &&
                 r.left > window.innerWidth - 120 && r.left > melhorX) { melhorX = r.left; alvo = cands[i]; }
@@ -2786,6 +2827,7 @@ public partial class ChatIfood : UserControl
       }
       var __pdvBuscaAjuda = null;
       window.pdvFaleComIfood = function (numero) {
+        window.__pdvFaleEm = Date.now();
         var n = String(numero || '').replace(/\D/g, '');
         if (!n) return false;
         try {

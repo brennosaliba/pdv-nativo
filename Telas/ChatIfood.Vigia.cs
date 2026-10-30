@@ -64,7 +64,7 @@ public partial class ChatIfood
     {
         if (Web?.CoreWebView2 is not { } c) { _ = RecriarAsync("vigia: " + motivo + " sem navegador"); return; }
         if (forte) await RecarregarForteAsync("vigia: " + motivo);
-        else { Diag("vigia: recarregar (" + motivo + ")"); c.Reload(); }
+        else { Diag("vigia: recarregar (" + motivo + ")"); RecarregarNoInicio(c); }
     });
 
     /// <summary>gestor_inteiro / so_a_conversa, sem a senha (quem manda e o servidor ou o dono pelo ERP).</summary>

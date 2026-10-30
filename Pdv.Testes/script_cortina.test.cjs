@@ -330,5 +330,33 @@ function gaveta(root, El, nova) {
   checar(!w.cortina(), 'F-03 e ela caiu sozinha em 20 s (sem pedido achado)');
 }
 
+// ── 9. 1.0.60: a ajuda da impressora (Gestor 9.351) prendia o chat no spinner ──
+{
+  const w = mundo(function (body, El) { return gestor(body, El); });
+  w.ctx.location.hash = '#/home/help?entry=howToConfigurePrinter';
+  w.avancar(3500);
+  checar(w.ctx.location.hash === '#/home/order-display/expedition', 'H-01 no modo so o chat a pagina sai da ajuda presa e volta para a expedicao');
+  checar(w.das('saiudaajuda').length === 1, 'H-02 e avisa o C# uma vez');
+  const w2 = mundo(function (body, El) { return gestor(body, El); });
+  w2.roda('window.__pdvSemHolofote = true');
+  w2.ctx.location.hash = '#/home/help?entry=howToConfigurePrinter';
+  w2.avancar(6500);
+  checar(w2.ctx.location.hash === '#/home/help?entry=howToConfigurePrinter', 'H-03 com o Gestor inteiro liberado a ajuda fica');
+  const w3 = mundo(function (body, El) { return gestor(body, El); });
+  w3.roda('window.pdvFaleComIfood("1234")');
+  w3.ctx.location.hash = '#/home/help';
+  w3.avancar(6500);
+  checar(w3.das('saiudaajuda').length === 0, 'H-04 logo depois do Fale com o iFood a trava da ajuda nao age (quem manda e o Fale com o iFood)');
+  const w4 = mundo(function (body, El) {
+    const p = gestor(body, El, { botaoAttrs: {} });
+    const aviso = p.topo.appendChild(new El('div', { className: 'printing-feedback-toast', rect: { left: 1316, top: 4, width: 50, height: 48 } }));
+    p.link = aviso.appendChild(new El('a', { attrs: { href: '#/home/help?entry=howToConfigurePrinter' }, rect: { left: 1320, top: 10, width: 44, height: 40 } }));
+    p.aviso = aviso;
+    return p;
+  });
+  checar(w4.roda('window.pdvAbrirConversas()') === true && w4.partes.botao.clicks >= 1 && w4.partes.aviso.clicks === 0 && w4.partes.link.clicks === 0,
+    'H-05 o clique pela posicao acha o botao do chat e nunca o aviso da impressora mais a direita');
+}
+
 console.log(JSON.stringify(res));
 process.exit(res.every(function (r) { return r.ok; }) ? 0 : 1);

@@ -61,7 +61,7 @@ public static class TestesScriptCortina
         checar(recarregar.Contains("CoreWebView2BrowsingDataKinds.DiskCache | CoreWebView2BrowsingDataKinds.CacheStorage | CoreWebView2BrowsingDataKinds.ServiceWorkers")
                && !recarregar.Contains("Cookies") && !recarregar.Contains("LocalStorage") && !recarregar.Contains("AllSite"),
             "CT-17 a recarga forte limpa cache de disco, Cache Storage e service workers do perfil, e nunca cookies nem localStorage (o login)");
-        checar(recarregar.Contains("Network.clearBrowserCache") && recarregar.Contains("core.Reload();") && recarregar.Contains("getRegistrations()") && recarregar.Contains("r.unregister()"),
+        checar(recarregar.Contains("Network.clearBrowserCache") && recarregar.Contains("RecarregarNoInicio(core);") && recarregar.Contains("getRegistrations()") && recarregar.Contains("r.unregister()"),
             "CT-18 com prazo, pela pagina (unregister + caches.delete), pelo perfil, e pelo CDP se o perfil faltar; depois recarrega");
         checar(recarregar.Contains("Task.WhenAny(js, Task.Delay(3000))"), "CT-19 o script da pagina tem prazo de 3 s (pagina presa nao segura o Recarregar)");
         var diag = Entre(fonte, "private async void Diagnostico(object sender", "private const string ScriptDiagnostico");
@@ -72,7 +72,18 @@ public static class TestesScriptCortina
         checar(scriptDiag.Contains("casca_do_gestor=") && scriptDiag.Contains("root_filhos=") && scriptDiag.Contains("cortina=") && scriptDiag.Contains("aviso_do_gestor"),
             "CT-22 a primeira linha do diag diz se a casca do Gestor segue na tela, se o app montou, a cortina e o aviso do Gestor");
         var csproj = TestesScriptSendbird.LerSeExiste(Path.Combine(raiz, "Pdv.csproj"));
-        checar(csproj.Contains("<Version>1.0.59</Version>", StringComparison.Ordinal), "CT-23 a versao e 1.0.59 (rodape da venda)");
+        checar(csproj.Contains("<Version>1.0.60</Version>", StringComparison.Ordinal), "CT-23 a versao e 1.0.60 (chat sai da ajuda presa)");
+
+        // ── 1.0.60 (30/10/2026): a ajuda da impressora do Gestor 9.351 prendia o chat no spinner ──
+        checar(fonte.Contains("internal static void RecarregarNoInicio(CoreWebView2 core) => core.Navigate(UrlGestor);"),
+            "CT-24 recarregar e navegar para a raiz do Gestor (o Reload repetia a ajuda presa)");
+        var vigia = TestesScriptSendbird.LerSeExiste(Path.Combine(raiz, "Telas", "ChatIfood.Vigia.cs"));
+        checar(vigia.Contains("RecarregarNoInicio(c);") && !vigia.Contains("c.Reload();"), "CT-25 a vigia tambem recarrega pela raiz");
+        checar(script.Contains("function saiDaAjuda()") && script.Contains("location.hash = '#/home/order-display/expedition';")
+               && script.Contains("if (window.__pdvSemHolofote) return false;"),
+            "CT-26 no modo so o chat a pagina sai sozinha de #/home/help para a expedicao; com o Gestor inteiro nao");
+        checar(script.Contains("if (avisoOuAjuda(cands[i])) continue;"), "CT-27 o clique pela posicao pula aviso e link da ajuda");
+        checar(fonte.Contains("else if (tipo == \"saiudaajuda\")"), "CT-28 a saida da ajuda fica no diagnostico do chat");
 
         // ── o node ──
         var harness = Path.Combine(raiz, "Pdv.Testes", "script_cortina.test.cjs");
