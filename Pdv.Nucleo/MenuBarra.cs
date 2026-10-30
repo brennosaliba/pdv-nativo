@@ -34,18 +34,21 @@ public static class MenuBarra
     public const string Estornar = "estornar";
     public const string Reimprimir = "reimprimir";
     public const string Impressora = "impressora";
+    public const string NotaIfood = "nota_ifood";
+    public const string LinkNotaIfood = "link_nota_ifood";
     public const string FecharCaixa = "fechar";
     public const string Sair = "sair";
     public const string ReiniciarPc = "reiniciar_pc";
 
     /// <summary>
-    /// Menu "Cancelar / Imprimir": cancelar venda, estornar, reimpressão e a
-    /// configuração da impressora, NESTA ordem.
+    /// Menu "Cancelar / Imprimir": cancelar venda, estornar, reimpressão, a nota do
+    /// iFood (reimprimir e copiar o link, 1.0.61) e a configuração da impressora, NESTA ordem.
     ///
     /// Estornar e reimprimir só existem com maquininha INTEGRADA (é a regra que
     /// já valia no menu antigo: em loja de maquininha avulsa o estorno é na mão e
     /// não há comprovante do PDV para reimprimir). Sem TEF eles saem da lista e a
-    /// ordem dos que ficam não muda.
+    /// ordem dos que ficam não muda. Os dois da nota do iFood ficam com e sem TEF: a nota
+    /// é da nuvem e não passa pela maquininha.
     /// </summary>
     public static IReadOnlyList<Item> CancelarImprimir(bool temTef)
     {
@@ -55,6 +58,8 @@ public static class MenuBarra
             itens.Add(new("Estornar", "💳", Estornar));
             itens.Add(new("Reimpressão", "🧾", Reimprimir));
         }
+        itens.Add(new("Reimprimir nota do iFood", "🛵", NotaIfood));
+        itens.Add(new("Copiar link da nota iFood", "🔗", LinkNotaIfood));
         itens.Add(new("Configuração da impressora", "🖨", Impressora));
         return itens;
     }

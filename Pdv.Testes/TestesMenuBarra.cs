@@ -20,17 +20,17 @@ public static class TestesMenuBarra
         // ── 1. Cancelar / Imprimir: exatamente estes, nesta ordem ───────────
         var comTef = MenuBarra.CancelarImprimir(temTef: true);
         checar(comTef.Select(i => i.Rotulo).SequenceEqual(
-                   new[] { "Cancelar venda", "Estornar", "Reimpressão", "Configuração da impressora" }),
-            "Cancelar / Imprimir lista: Cancelar venda, Estornar, Reimpressão, Configuração da impressora (nesta ordem)");
+                   new[] { "Cancelar venda", "Estornar", "Reimpressão", "Reimprimir nota do iFood", "Copiar link da nota iFood", "Configuração da impressora" }),
+            "Cancelar / Imprimir lista: Cancelar venda, Estornar, Reimpressão, Reimprimir nota do iFood, Copiar link da nota iFood, Configuração da impressora (nesta ordem; os dois do iFood são da 1.0.61)");
         checar(comTef.Select(i => i.Acao).SequenceEqual(
-                   new[] { MenuBarra.Cancelar, MenuBarra.Estornar, MenuBarra.Reimprimir, MenuBarra.Impressora }),
+                   new[] { MenuBarra.Cancelar, MenuBarra.Estornar, MenuBarra.Reimprimir, MenuBarra.NotaIfood, MenuBarra.LinkNotaIfood, MenuBarra.Impressora }),
             "cada item do Cancelar / Imprimir aponta para a sua chave de ação");
 
         // Sem maquininha integrada estorno e reimpressão saem (regra que já valia no
         // menu antigo: maquininha avulsa estorna na mão); a ordem dos que ficam não muda.
         var semTef = MenuBarra.CancelarImprimir(temTef: false);
-        checar(semTef.Select(i => i.Acao).SequenceEqual(new[] { MenuBarra.Cancelar, MenuBarra.Impressora }),
-            "sem TEF: Cancelar venda e Configuração da impressora, nessa ordem (estorno e reimpressão só com maquininha integrada)");
+        checar(semTef.Select(i => i.Acao).SequenceEqual(new[] { MenuBarra.Cancelar, MenuBarra.NotaIfood, MenuBarra.LinkNotaIfood, MenuBarra.Impressora }),
+            "sem TEF: Cancelar venda, as duas da nota do iFood e Configuração da impressora, nessa ordem (estorno e reimpressão só com maquininha integrada; a nota do iFood é da nuvem)");
 
         // ── 2. Fechar / Sair ────────────────────────────────────────────────
         var fecharSair = MenuBarra.FecharSair();
@@ -130,6 +130,13 @@ public static class TestesMenuBarra
             "trocar a impressora não exige comanda vazia (a bobina acaba no meio da venda)");
         checar(Ordem(menu, "Comanda aberta", "case MenuBarra.Cancelar"),
             "cancelar, estornar e reimprimir continuam exigindo comanda vazia");
+        // 1.0.61: a nota do iFood é da nuvem, não mexe na venda aberta nem na maquininha
+        checar(Regex.IsMatch(menu, @"acao == MenuBarra\.NotaIfood\) \{ await ReimprimirNotaIfoodAsync\(dono\)")
+               && Regex.IsMatch(menu, @"acao == MenuBarra\.LinkNotaIfood\) \{ await CopiarLinkNotaIfoodAsync\(dono\)"),
+            "Reimprimir nota do iFood -> ReimprimirNotaIfoodAsync; Copiar link -> CopiarLinkNotaIfoodAsync");
+        checar(Ordem(menu, "MenuBarra.NotaIfood", "Comanda aberta") && Ordem(menu, "MenuBarra.LinkNotaIfood", "Comanda aberta")
+               && Ordem(menu, "MenuBarra.LinkNotaIfood", "_tefOcupado = true"),
+            "a nota do iFood não exige comanda vazia nem trava a maquininha (sai antes das travas)");
         checar(Regex.Matches(menu, @"AbrirMenu\(").Count == 1, "sem submenu: o Cancelar / Imprimir abre UM véu");
         checar(!menu.Contains("EscolherOpcao(", StringComparison.Ordinal),
             "o menu da barra não usa mais a janela EscolherOpcao (moldura do Windows, não fechava ao tocar fora)");

@@ -603,7 +603,7 @@ public static class TestesBiometria
             var novos = new[] { "Pdv.Nucleo/Biometria.cs", "Pdv.Nucleo/LeitorWinBio.cs", "Pdv.Nucleo/RegistroDigital.cs", "Telas/TelaDigital.cs", "Pdv.Testes/TestesBiometria.cs" }
                 .Select(a => File.Exists(Caminho(a)) ? File.ReadAllText(Caminho(a)) : "").ToList();
             checar(novos.All(t => t.Length > 0 && !t.Contains((char)0x2014) && !t.Contains((char)0x2013)), "M-03 os arquivos novos existem e nao tem travessao");
-            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.60</Version>"), "M-04 a versao do caixa e 1.0.60 (chat sai da ajuda presa)");
+            checar(File.ReadAllText(Caminho("Pdv.csproj")).Contains("<Version>1.0.61</Version>"), "M-04 a versao do caixa e 1.0.61 (nota do iFood)");
             var fonteAut = File.ReadAllText(Caminho("Pdv.Nucleo/Autorizacao.cs"));
             checar(fonteAut.Contains("TipoTurnoSemDigital => (\"Entrada sem digital\"") && Autorizacao.TipoTurnoSemDigital == "turno_sem_digital" && Autorizacao.TipoDigitalRecadastro == "digital_recadastro", "M-05 os tipos novos do TOTP e a frase da recusa");
             var fonteLogin = File.ReadAllText(Caminho("Telas/Login.xaml.cs"));

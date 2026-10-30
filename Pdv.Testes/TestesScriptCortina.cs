@@ -72,7 +72,7 @@ public static class TestesScriptCortina
         checar(scriptDiag.Contains("casca_do_gestor=") && scriptDiag.Contains("root_filhos=") && scriptDiag.Contains("cortina=") && scriptDiag.Contains("aviso_do_gestor"),
             "CT-22 a primeira linha do diag diz se a casca do Gestor segue na tela, se o app montou, a cortina e o aviso do Gestor");
         var csproj = TestesScriptSendbird.LerSeExiste(Path.Combine(raiz, "Pdv.csproj"));
-        checar(csproj.Contains("<Version>1.0.60</Version>", StringComparison.Ordinal), "CT-23 a versao e 1.0.60 (chat sai da ajuda presa)");
+        checar(csproj.Contains("<Version>1.0.61</Version>", StringComparison.Ordinal), "CT-23 a versao e 1.0.61 (nota do iFood)");
 
         // ── 1.0.60 (30/10/2026): a ajuda da impressora do Gestor 9.351 prendia o chat no spinner ──
         checar(fonte.Contains("internal static void RecarregarNoInicio(CoreWebView2 core) => core.Navigate(UrlGestor);"),

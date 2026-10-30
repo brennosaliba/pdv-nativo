@@ -26,6 +26,15 @@ namespace Pdv.Nucleo;
 /// </summary>
 public sealed record PapelNotaIfood(string OrderId, DadosCupom Cupom);
 
+/// <summary>
+/// Resposta da reimpressão pelo número do pedido (1.0.61, SQL 245): o papel, ou a frase
+/// do servidor dizendo por que não tem (cancelada, ainda sem nota, de outra loja...).
+/// </summary>
+public sealed record NotaIfoodDoPedido(bool Ok, string Mensagem, string? Pedido, PapelNotaIfood? Papel);
+
+/// <summary>O link público da nota (americanday.delivery/n/CODIGO), ou a frase do servidor.</summary>
+public sealed record LinkDaNotaIfood(bool Ok, string Mensagem, string? Pedido, string? Url);
+
 public static class NotaIfoodPapel
 {
     /// <summary>RPC que entrega o que falta imprimir (e reserva por 2 minutos).</summary>
@@ -33,6 +42,83 @@ public static class NotaIfoodPapel
 
     /// <summary>RPC que confirma o papel, ou conta por que ele não saiu.</summary>
     public const string RpcConfirmar = "nfce_ifood_papel_impresso";
+
+    /// <summary>1.0.61 (SQL 245): a nota do pedido pelo número curto, para reimprimir.</summary>
+    public const string RpcDoPedido = "nfce_ifood_nota_do_pedido";
+
+    /// <summary>1.0.61 (SQL 245): o link público da nota, para mandar ao cliente.</summary>
+    public const string RpcLink = "nfce_ifood_link_gerar";
+
+    /// <summary>O único endereço que o caixa aceita copiar (o servidor monta; aqui só confere).</summary>
+    public const string BaseDoLink = "https://americanday.delivery/n/";
+
+    /// <summary>Quando a nuvem não respondeu (sem internet, sessão caída, erro do servidor).</summary>
+    public const string SemResposta = "Não consegui falar com a nuvem agora. Confira a internet e tente de novo.";
+
+    /// <summary>
+    /// O número que o operador digitou, como o servidor procura: só os dígitos, sem zeros
+    /// à esquerda ("#0055" vira "55"). Vazio ou maior que 12 dígitos é null (nem pergunta).
+    /// </summary>
+    public static string? NumeroDoPedido(string? digitado)
+    {
+        var d = new string((digitado ?? "").Where(char.IsDigit).ToArray()).TrimStart('0');
+        return d.Length is > 0 and <= 12 ? d : null;
+    }
+
+    private static (bool Ok, string Mensagem, string? Pedido, JsonElement Raiz, JsonDocument? Doc) Abrir(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return (false, SemResposta, null, default, null);
+        try
+        {
+            var doc = JsonDocument.Parse(json);
+            var raiz = doc.RootElement;
+            if (raiz.ValueKind != JsonValueKind.Object) { doc.Dispose(); return (false, SemResposta, null, default, null); }
+            var ok = raiz.TryGetProperty("ok", out var o) && o.ValueKind == JsonValueKind.True;
+            var msg = Texto(raiz, "mensagem");
+            var pedido = Texto(raiz, "display_id");
+            return (ok, string.IsNullOrWhiteSpace(msg) ? (ok ? "" : SemResposta) : msg!, pedido, raiz, doc);
+        }
+        catch { return (false, SemResposta, null, default, null); }
+    }
+
+    /// <summary>
+    /// Lê a resposta de <see cref="RpcDoPedido"/>: {ok, display_id, papeis:[linha]} com a
+    /// MESMA linha de <see cref="Rpc"/>, que <see cref="Ler"/> já transforma em cupom. Ok sem
+    /// papel que dê para imprimir vira falha (nunca "imprimi" sem papel).
+    /// </summary>
+    public static NotaIfoodDoPedido LerDoPedido(string? json)
+    {
+        var (ok, msg, pedido, raiz, doc) = Abrir(json);
+        using (doc)
+        {
+            if (!ok) return new NotaIfoodDoPedido(false, msg, pedido, null);
+            var papeis = raiz.TryGetProperty("papeis", out var p) && p.ValueKind == JsonValueKind.Array
+                ? Ler(p.GetRawText()) : Array.Empty<PapelNotaIfood>();
+            return papeis.Count == 0
+                ? new NotaIfoodDoPedido(false, SemResposta, pedido, null)
+                : new NotaIfoodDoPedido(true, "", pedido, papeis[0]);
+        }
+    }
+
+    /// <summary>
+    /// Lê a resposta de <see cref="RpcLink"/>. Só aceita um link que comece em
+    /// <see cref="BaseDoLink"/> e termine num código de 10 caracteres: o caixa nunca põe na
+    /// área de transferência um endereço que não seja o da nossa página.
+    /// </summary>
+    public static LinkDaNotaIfood LerLink(string? json)
+    {
+        var (ok, msg, pedido, raiz, doc) = Abrir(json);
+        using (doc)
+        {
+            if (!ok) return new LinkDaNotaIfood(false, msg, pedido, null);
+            var url = Texto(raiz, "url") ?? "";
+            var codigo = url.StartsWith(BaseDoLink, StringComparison.Ordinal) ? url[BaseDoLink.Length..] : "";
+            var valido = codigo.Length == 10 && codigo.All(ch => "23456789ABCDEFGHJKMNPQRSTUVWXYZ".Contains(ch));
+            return valido
+                ? new LinkDaNotaIfood(true, "", pedido, url)
+                : new LinkDaNotaIfood(false, SemResposta, pedido, null);
+        }
+    }
 
     /// <summary>
     /// tPag da NFC-e em português. Os códigos são os da Receita; o que o cliente lê no

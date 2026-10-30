@@ -16,6 +16,8 @@ namespace Pdv.Testes;
 /// tentativa). Sem ele, é a tela da primeira tentativa. `-` = sem aviso.
 /// `gerente` (05/09, qualquer posição) fotografa a tela com o rótulo do autenticador
 /// do gerente (promoção com 2FA de gerente).
+/// `pedido` (1.0.61, qualquer posição) fotografa a janela do número do pedido do iFood
+/// (Telas/PedirNumeroPedido.cs, Reimprimir nota do iFood) no lugar da do código.
 ///
 /// Mesma segurança do --foto-venda: cópia do banco do caixa, nuvem apontada para
 /// endereço morto, nada é gravado no banco de verdade. O diálogo é modal: a foto
@@ -24,10 +26,14 @@ namespace Pdv.Testes;
 /// </summary>
 public static class FotoCodigo
 {
+    private static bool _pedido;
+
     public static int Rodar(string[] args)
     {
         var gerente = args.Any(a => a.Equals("gerente", StringComparison.OrdinalIgnoreCase));
-        args = args.Where(a => !a.Equals("gerente", StringComparison.OrdinalIgnoreCase)).ToArray();
+        _pedido = args.Any(a => a.Equals("pedido", StringComparison.OrdinalIgnoreCase));
+        args = args.Where(a => !a.Equals("gerente", StringComparison.OrdinalIgnoreCase)
+                            && !a.Equals("pedido", StringComparison.OrdinalIgnoreCase)).ToArray();
         var saida = Path.GetFullPath(args[1]);
         var w = int.Parse(args[2]);
         var h = int.Parse(args[3]);
@@ -122,7 +128,9 @@ public static class FotoCodigo
                 };
                 foto.Start();
                 // Bloqueia no ShowDialog até o timer acima fechar o diálogo.
-                var digitado = Pdv.Telas.PedirCodigo.Mostrar(janela, aviso, nivel);
+                var digitado = _pedido
+                    ? Pdv.Telas.PedirNumeroPedido.Mostrar(janela, "Reimprimir nota do iFood", "Imprimir")
+                    : Pdv.Telas.PedirCodigo.Mostrar(janela, aviso, nivel);
                 if (digitado is not null) erros.Add("o diálogo devolveu um código sem ninguém digitar");
                 foreach (var e in erros.Distinct()) Console.WriteLine("  aviso: " + e);
                 codigo = salvo ? 0 : 1;

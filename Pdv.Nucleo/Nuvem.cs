@@ -827,6 +827,29 @@ public sealed class Nuvem
     }
 
     /// <summary>
+    /// 1.0.61 (SQL 245): a nota do iFood de UM pedido, pelo numero curto, so da loja deste
+    /// caixa (RpcDoPedido para reimprimir, RpcLink para o link do cliente). Devolve o corpo
+    /// cru para NotaIfoodPapel.LerDoPedido / LerLink; null quando nao deu (sem sessao, rede,
+    /// erro do servidor), que a tela mostra como "nao consegui falar com a nuvem".
+    /// </summary>
+    public async Task<string?> NotaIfoodDoPedidoAsync(string rpc, string loja, string numero)
+    {
+        try
+        {
+            // so as duas RPCs do SQL 245 (os nomes moram em NotaIfoodPapel, no projeto do caixa)
+            if (rpc is not ("nfce_ifood_nota_do_pedido" or "nfce_ifood_link_gerar")) return null;
+            if (string.IsNullOrWhiteSpace(loja) || string.IsNullOrWhiteSpace(numero)
+                || !await SessaoOkAsync().ConfigureAwait(false)) return null;
+            using var req = Montar(HttpMethod.Post, "/rest/v1/rpc/" + rpc);
+            req.Content = new StringContent(
+                JsonSerializer.Serialize(new { _loja = loja, _numero = numero }), Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+            return resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync().ConfigureAwait(false) : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
     /// Confirma que o papel saiu, ou conta por que nao saiu (ai o servidor solta a
     /// reserva e a proxima puxada tenta de novo). Falha de rede aqui apenas deixa a
     /// reserva vencer sozinha: o papel volta, nao some.

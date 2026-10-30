@@ -1004,6 +1004,62 @@ public static class Servicos
     }
 
     /// <summary>
+    /// 1.0.61 (SQL 245, pedido do dono: "reimprimir nfe ifood ai funcionario digita numero do
+    /// pedido e imprime"). Busca na nuvem a nota AUTORIZADA daquele pedido do iFood, só da loja
+    /// deste caixa, e imprime com o mesmo desenho do cupom do balcão. Não mexe na rodada de
+    /// conferência no papel (o servidor não reserva nada). Nunca lança: devolve o que a tela
+    /// mostra (Ok e a frase).
+    /// </summary>
+    public static async Task<(bool Ok, string Mensagem)> ReimprimirNotaDoIfoodAsync(string numeroDigitado)
+    {
+        var numero = Pdv.Nucleo.NotaIfoodPapel.NumeroDoPedido(numeroDigitado);
+        if (numero is null) return (false, "Digite o número do pedido do iFood.");
+        if (!TemContaDeNuvem()) return (false, "Este caixa não está ligado à nuvem, então não acha as notas do iFood.");
+        try
+        {
+            string loja; string? impressora;
+            using (var cx = Banco.Abrir())
+            {
+                loja = (cx.QueryFirstOrDefault("SELECT loja_nome FROM terminal LIMIT 1")?.loja_nome as string) ?? "";
+                impressora = Vendas.Config(cx, "impressora");
+            }
+            if (string.IsNullOrWhiteSpace(loja)) return (false, "Este caixa não sabe de qual loja ele é. Confira a Configuração.");
+
+            var r = Pdv.Nucleo.NotaIfoodPapel.LerDoPedido(await Nuvem()
+                .NotaIfoodDoPedidoAsync(Pdv.Nucleo.NotaIfoodPapel.RpcDoPedido, loja, numero).ConfigureAwait(false));
+            if (!r.Ok || r.Papel is null) return (false, r.Mensagem);
+
+            var erro = await Impressao.ImprimirAsync(r.Papel.Cupom, impressora).ConfigureAwait(false);
+            return erro is null
+                ? (true, $"A nota do pedido {r.Pedido ?? numero} saiu na impressora.")
+                : (false, $"Achei a nota do pedido {r.Pedido ?? numero}, mas ela não saiu: {erro}");
+        }
+        catch { return (false, Pdv.Nucleo.NotaIfoodPapel.SemResposta); }
+    }
+
+    /// <summary>
+    /// 1.0.61 (SQL 245, pedido do dono: "copiar link da danfe hospedada pra mandar pro
+    /// cliente"). Pede à nuvem o link público da nota do pedido (americanday.delivery/n/...):
+    /// o cliente abre sem login e baixa o PDF. Pedir de novo devolve o mesmo link.
+    /// </summary>
+    public static async Task<Pdv.Nucleo.LinkDaNotaIfood> LinkDaNotaDoIfoodAsync(string numeroDigitado)
+    {
+        var numero = Pdv.Nucleo.NotaIfoodPapel.NumeroDoPedido(numeroDigitado);
+        if (numero is null) return new(false, "Digite o número do pedido do iFood.", null, null);
+        if (!TemContaDeNuvem()) return new(false, "Este caixa não está ligado à nuvem, então não acha as notas do iFood.", null, null);
+        try
+        {
+            string loja;
+            using (var cx = Banco.Abrir())
+                loja = (cx.QueryFirstOrDefault("SELECT loja_nome FROM terminal LIMIT 1")?.loja_nome as string) ?? "";
+            if (string.IsNullOrWhiteSpace(loja)) return new(false, "Este caixa não sabe de qual loja ele é. Confira a Configuração.", null, null);
+            return Pdv.Nucleo.NotaIfoodPapel.LerLink(await Nuvem()
+                .NotaIfoodDoPedidoAsync(Pdv.Nucleo.NotaIfoodPapel.RpcLink, loja, numero).ConfigureAwait(false));
+        }
+        catch { return new(false, Pdv.Nucleo.NotaIfoodPapel.SemResposta, null, null); }
+    }
+
+    /// <summary>
     /// De quem é a via que saiu da rede. <see cref="Unica"/> é o bloco que sobrou sem a rede
     /// dizer de quem ele é (via única 029, ou o cupom reduzido num 737 que só pediu a via da
     /// loja): o papel que sobra é o que vai para a MÃO DO CLIENTE.

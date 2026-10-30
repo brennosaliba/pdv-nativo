@@ -154,6 +154,69 @@ public static class TestesNotaIfoodPapel
         checar(negativo.Count == 1 && negativo[0].Cupom.Itens[0].Total.Centavos == 2190
                && negativo[0].Cupom.Itens[0].Desconto.Centavos == 0,
                "desconto negativo e ignorado, nao aumenta o item");
+
+        ReimprimirELink(checar);
+    }
+
+    /// <summary>
+    /// 1.0.61 (SQL 245): reimprimir a nota pelo número do pedido e copiar o link para o
+    /// cliente. A resposta do servidor é a MESMA linha da conferência no papel, dentro de
+    /// {ok, display_id, papeis}; o link só passa se for o da nossa página.
+    /// </summary>
+    private static void ReimprimirELink(Action<bool, string> checar)
+    {
+        checar(NotaIfoodPapel.NumeroDoPedido("4851") == "4851" && NotaIfoodPapel.NumeroDoPedido(" #0055 ") == "55"
+               && NotaIfoodPapel.NumeroDoPedido("") is null && NotaIfoodPapel.NumeroDoPedido("000") is null
+               && NotaIfoodPapel.NumeroDoPedido(null) is null && NotaIfoodPapel.NumeroDoPedido("1234567890123") is null,
+               "NI-01 número do pedido: só dígitos, sem zero à esquerda; vazio ou comprido demais nem pergunta à nuvem");
+
+        var achou = NotaIfoodPapel.LerDoPedido("{\"ok\":true,\"display_id\":\"4412\",\"papeis\":" + UmaLinha.Trim() + "}");
+        checar(achou.Ok && achou.Pedido == "4412" && achou.Papel is not null && achou.Papel.OrderId == "abc-123"
+               && achou.Papel.Cupom.Chave == "31260912345678000199650010000044121000044120"
+               && achou.Papel.Cupom.Operador == "iFood",
+               "NI-02 a nota do pedido vira o mesmo cupom da conferência no papel (chave, emitente, origem iFood)");
+
+        var cancelada = NotaIfoodPapel.LerDoPedido("{\"ok\":false,\"motivo\":\"cancelada\",\"mensagem\":\"A nota do pedido 0055 foi cancelada.\"}");
+        checar(!cancelada.Ok && cancelada.Papel is null && cancelada.Mensagem == "A nota do pedido 0055 foi cancelada.",
+               "NI-03 sem nota (cancelada, de outra loja...): a frase do servidor vai para a tela, sem papel");
+
+        checar(!NotaIfoodPapel.LerDoPedido(null).Ok && NotaIfoodPapel.LerDoPedido(null).Mensagem == NotaIfoodPapel.SemResposta
+               && !NotaIfoodPapel.LerDoPedido("{lixo").Ok && !NotaIfoodPapel.LerDoPedido("[]").Ok,
+               "NI-04 sem resposta ou resposta torta: \"não consegui falar com a nuvem\", nunca derruba o caixa");
+        checar(!NotaIfoodPapel.LerDoPedido("{\"ok\":true,\"papeis\":[]}").Ok,
+               "NI-05 ok sem papel que dê para imprimir é falha (nunca diz que imprimiu sem papel)");
+
+        var link = NotaIfoodPapel.LerLink("{\"ok\":true,\"display_id\":\"4851\",\"codigo\":\"HX4U5NDCZE\",\"url\":\"https://americanday.delivery/n/HX4U5NDCZE\"}");
+        checar(link.Ok && link.Url == "https://americanday.delivery/n/HX4U5NDCZE" && link.Pedido == "4851",
+               "NI-06 o link da nota é o da nossa página, americanday.delivery/n/ e o código");
+        checar(!NotaIfoodPapel.LerLink("{\"ok\":true,\"url\":\"https://golpe.com/n/HX4U5NDCZE\"}").Ok
+               && !NotaIfoodPapel.LerLink("{\"ok\":true,\"url\":\"https://americanday.delivery/n/HX4U5NDCZ0\"}").Ok
+               && !NotaIfoodPapel.LerLink("{\"ok\":true,\"url\":\"https://americanday.delivery/n/HX4U5NDCZE/../x\"}").Ok,
+               "NI-07 endereço que não é o da nossa página (ou código torto) não vai para a área de transferência");
+        var semLink = NotaIfoodPapel.LerLink("{\"ok\":false,\"mensagem\":\"O pedido 777 ainda não tem nota.\"}");
+        checar(!semLink.Ok && semLink.Url is null && semLink.Mensagem == "O pedido 777 ainda não tem nota.",
+               "NI-08 pedido sem nota: a frase do servidor, sem link");
+
+        // a tela: as duas ações saem pelo menu e pedem o número na janela de uma linha
+        var venda = Fonte(Path.Combine("Telas", "Venda.xaml.cs")) ?? "";
+        var pedir = Fonte(Path.Combine("Telas", "PedirNumeroPedido.cs")) ?? "";
+        var servicos = Fonte("Servicos.cs") ?? "";
+        checar(venda.Contains("PedirNumeroPedido.Mostrar(dono, \"Reimprimir nota do iFood\", \"Imprimir\")", StringComparison.Ordinal)
+               && venda.Contains("Servicos.ReimprimirNotaDoIfoodAsync(numero)", StringComparison.Ordinal),
+               "NI-09 Reimprimir nota do iFood: pede o número e chama o serviço que imprime");
+        checar(venda.Contains("PedirNumeroPedido.Mostrar(dono, \"Link da nota do iFood\", \"Copiar link\")", StringComparison.Ordinal)
+               && venda.Contains("Clipboard.SetText(r.Url)", StringComparison.Ordinal)
+               && venda.Contains("{r.Url}", StringComparison.Ordinal),
+               "NI-10 Copiar link: copia para a área de transferência e mostra o link inteiro (se a cópia falhar, dá para ler)");
+        checar(pedir.Contains("new TecladoNumerico", StringComparison.Ordinal) && pedir.Contains("MaximoDigitos = 8", StringComparison.Ordinal),
+               "NI-11 a janela do número usa o teclado da tela (toque) e aceita até 8 dígitos");
+        checar(servicos.Contains("NotaIfoodPapel.RpcDoPedido, loja, numero", StringComparison.Ordinal)
+               && servicos.Contains("NotaIfoodPapel.RpcLink, loja, numero", StringComparison.Ordinal)
+               && servicos.Contains("Impressao.ImprimirAsync(r.Papel.Cupom, impressora)", StringComparison.Ordinal),
+               "NI-12 o serviço manda a loja deste caixa e imprime com a mesma Impressao do cupom do balcão");
+        checar(NotaIfoodPapel.SemResposta.IndexOfAny(new[] { '—', '–' }) < 0
+               && pedir.IndexOfAny(new[] { '—', '–' }) < 0,
+               "NI-13 sem travessão nos textos novos");
     }
 
     private static int ContaVezes(string texto, string trecho)

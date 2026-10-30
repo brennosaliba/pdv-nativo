@@ -3594,6 +3594,11 @@ public partial class Venda : UserControl
         // não pede comanda vazia nem maquininha livre, então sai antes das travas.
         if (acao == MenuBarra.Impressora) { await TrocarImpressoraAsync(); return; }
 
+        // A nota do iFood (1.0.61, SQL 245) é da nuvem: não mexe na venda aberta nem na
+        // maquininha, então também sai antes das travas.
+        if (acao == MenuBarra.NotaIfood) { await ReimprimirNotaIfoodAsync(dono); return; }
+        if (acao == MenuBarra.LinkNotaIfood) { await CopiarLinkNotaIfoodAsync(dono); return; }
+
         // COMANDA ABERTA (13/10/2026): a comanda carregada e GUARDADA (ela ja esta no banco);
         // a trava de baixo fica so para o carrinho solto do balcao.
         if (_contaAberta is not null) GuardarConta();
@@ -3631,6 +3636,42 @@ public partial class Venda : UserControl
             }
         }
         finally { _tefOcupado = false; BtnCancelar.IsEnabled = true; }
+    }
+
+    /// <summary>
+    /// 1.0.61 (SQL 245): o operador digita o número do pedido do iFood e a nota autorizada
+    /// sai na impressora deste caixa, com o desenho do cupom do balcão.
+    /// </summary>
+    private static async Task ReimprimirNotaIfoodAsync(Window dono)
+    {
+        var numero = PedirNumeroPedido.Mostrar(dono, "Reimprimir nota do iFood", "Imprimir");
+        if (numero is null) return;
+        (bool Ok, string Mensagem) r;
+        using (new Espera(dono, "Buscando a nota do pedido..."))
+            r = await Servicos.ReimprimirNotaDoIfoodAsync(numero);
+        Dialogo.Avisar(dono, r.Ok ? "Nota impressa" : "Nota do iFood", r.Mensagem, r.Ok ? "ok" : "erro");
+    }
+
+    /// <summary>
+    /// 1.0.61 (SQL 245): o link público da nota do pedido (americanday.delivery/n/...) vai
+    /// para a área de transferência, para colar no chat do cliente. O link aparece inteiro na
+    /// tela também: se a cópia falhar, dá para ler e digitar.
+    /// </summary>
+    private static async Task CopiarLinkNotaIfoodAsync(Window dono)
+    {
+        var numero = PedirNumeroPedido.Mostrar(dono, "Link da nota do iFood", "Copiar link");
+        if (numero is null) return;
+        Pdv.Nucleo.LinkDaNotaIfood r;
+        using (new Espera(dono, "Buscando a nota do pedido..."))
+            r = await Servicos.LinkDaNotaDoIfoodAsync(numero);
+        if (!r.Ok || r.Url is null) { Dialogo.Avisar(dono, "Nota do iFood", r.Mensagem, "erro"); return; }
+
+        var copiou = false;
+        try { Clipboard.SetText(r.Url); copiou = true; } catch { /* a área de transferência pode estar presa */ }
+        Dialogo.Avisar(dono, copiou ? "Link copiado" : "Link da nota",
+            (copiou ? "Agora é só colar no chat do cliente." : "Não deu para copiar. Mande este link para o cliente:")
+            + $"\n\n{r.Url}\n\nO cliente abre sem login e baixa a nota em PDF. O link vale 180 dias.",
+            "ok");
     }
 
     private static void GuardarPasso(string numero, string? intencao, string resultado)
